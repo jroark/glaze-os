@@ -4,7 +4,8 @@
  *   MIPS IP2 <- VR4131 ICU SYSINT1 bit 8 (GIU) <- GIU line 0
  *            <- VRC4173 GIRQ0 status 0x0A000004: bit 1 buttons, bit 9 touch
  *
- * GIRQ0 bit 0 is the PCMCIA card, the NE2000 when one is inserted.
+ * GIRQ0 bit 0 is the PCMCIA card, the NE2000 when one is inserted; bit 8 is
+ * wave output (audio.c), whose source is cleared in its own block.
  *
  * (doc: Interrupt Topology; same flow as the Linux port's irq.c.)
  */
@@ -46,5 +47,7 @@ void irq_dispatch_ip2(void)
         input_irq((uint16_t)pending);
         if (pending & KJ_INT_CF)
             ne2000_irq();
+        if (pending & KJ_INT_AUDIO)
+            audio_irq();
     }
 }

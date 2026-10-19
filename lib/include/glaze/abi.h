@@ -47,6 +47,11 @@ enum {
     SYS_SEM_POST,
     SYS_SEM_DESTROY,
     SYS_INPUT_STATUS,       /* GZ_INPUT_* capability bits */
+    SYS_AUDIO_BIND,
+    SYS_AUDIO_START,
+    SYS_AUDIO_WRITE,
+    SYS_AUDIO_STOP,
+    SYS_AUDIO_STATUS,
     SYS_COUNT
 };
 
@@ -91,6 +96,7 @@ struct gz_msg {
 #define GZ_NOTIFY_INPUT     0x80000000u
 #define GZ_NOTIFY_CHILD     0x40000000u
 #define GZ_NOTIFY_NET       0x20000000u     /* frames waiting (SYS_NET_RECV) */
+#define GZ_NOTIFY_AUDIO     0x10000000u     /* PCM ring below half full */
 
 /* Input events (SYS_INPUT_READ). */
 enum {
@@ -162,6 +168,20 @@ struct gz_netif_info {
     uint32_t rx_frames, tx_frames;
     uint32_t rx_dropped;        /* kernel queue full or bad frames */
     uint32_t overruns;          /* card ring overflows */
+};
+
+/* Wave output (SYS_AUDIO_*, audio server only). Samples are signed 16-bit
+ * little-endian, interleaved when stereo. The hardware plays 8000, 11025,
+ * 16000, 22050, 32000 and 44100 Hz. */
+#define GZ_AUDIO_RING   65536   /* bytes of PCM the kernel buffers */
+
+struct gz_audio_status {
+    uint32_t running;
+    uint32_t rate;
+    uint32_t channels;
+    uint32_t queued;            /* bytes waiting in the ring */
+    uint32_t frames_played;     /* ring frames played since boot */
+    uint32_t underruns;         /* buffers padded with silence while running */
 };
 
 #define GZ_FB_WIDTH     240
