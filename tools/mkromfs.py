@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""Build the Glaze romfs archive (see kernel/romfs.c for the format).
+"""Build the Glaze romfs archive (see kernel/romfs.c for the format), or an
+app package, which is the same container with the magic "GZPK" (see
+lib/include/glaze/pkg.h).
 
-usage: mkromfs.py OUT NAME=PATH [NAME=PATH ...]
+usage: mkromfs.py [--package] OUT NAME=PATH [NAME=PATH ...]
 """
 
 import struct
 import sys
 
 ENTRY = struct.Struct("<48sII")
-ALIGN = 4096
 
 
 def main() -> int:
-    out = sys.argv[1]
+    args = sys.argv[1:]
+    package = args[:1] == ["--package"]
+    if package:
+        args = args[1:]
+    # romfs files are page-aligned so the kernel can map them; a package is
+    # only ever read, so word alignment will do.
+    magic, align = (b"GZPK", 4) if package else (b"GZRF", 4096)
+    out = args[0]
     files = []
-    for arg in sys.argv[2:]:
+    for arg in args[1:]:
         name, path = arg.split("=", 1)
         if len(name.encode()) >= 48:
             raise SystemExit(f"romfs name too long: {name}")
@@ -22,16 +30,17 @@ def main() -> int:
     files.sort()
 
     header_len = 8 + ENTRY.size * len(files)
-    offset = (header_len + ALIGN - 1) // ALIGN * ALIGN
-    table = bytearray(b"GZRF" + struct.pack("<I", len(files)))
+    offset = (header_len + align - 1) // align * align
+    table = bytearray(magic + struct.pack("<I", len(files)))
     blobs = bytearray()
     for name, data in files:
         table += ENTRY.pack(name.encode(), offset + len(blobs), len(data))
         blobs += data
-        blobs += b"\0" * (-len(blobs) % ALIGN)
+        blobs += b"\0" * (-len(blobs) % align)
     image = table + b"\0" * (offset - len(table)) + blobs
     open(out, "wb").write(image)
-    print(f"[mkromfs] {out}: {len(files)} files, {len(image) // 1024} KiB")
+    kind = "mkpkg" if package else "mkromfs"
+    print(f"[{kind}] {out}: {len(files)} files, {len(image) // 1024} KiB")
     return 0
 
 
