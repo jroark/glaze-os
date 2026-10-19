@@ -200,6 +200,11 @@ static void stopwatch_press(int b)
 /* ---- timer -------------------------------------------------------------- */
 
 static int tm_hours, tm_minutes = 5;
+/* The timer ends at a wall-clock time (ui_now_secs) and is also posted to
+ * SpringBoard as notification TIMER_NOTE, which fires it after Clock has
+ * gone and lets a relaunched Clock pick the countdown up again. */
+#define TIMER_NOTE  1
+
 static bool tm_running, tm_done;
 static uint32_t tm_end;
 static gfx_rect step_rects[4], alert_ok;
@@ -224,8 +229,8 @@ static void draw_timer(gfx_surface *s)
 
     gfx_vgradient(s, gfx_r(0, y0, UI_W, UI_H - UI_TAB_H - y0), 0x3A3A3A, 0x121212, 255);
     if (tm_running) {
-        int32_t left = (int32_t)(tm_end - gz_time_ms());
-        uint32_t secs = left > 0 ? ((uint32_t)left + 999) / 1000 : 0;
+        int32_t left = (int32_t)(tm_end - ui_now_secs());
+        uint32_t secs = left > 0 ? (uint32_t)left : 0;
         snprintf(buf, sizeof(buf), "%u:%02u:%02u", secs / 3600, secs / 60 % 60, secs % 60);
         gfx_text_center(s, 0, y0 + 50, UI_W, big, buf, 0xFFFFFF, 255);
     } else {
@@ -265,9 +270,11 @@ static void timer_press(int b)
     case B_LEFT:
         if (tm_running) {
             tm_running = false;
+            ui_notify_cancel(TIMER_NOTE);
         } else if (tm_hours || tm_minutes) {
-            tm_end = gz_time_ms() + (uint32_t)(tm_hours * 3600 + tm_minutes * 60) * 1000u;
+            tm_end = ui_now_secs() + (uint32_t)(tm_hours * 3600 + tm_minutes * 60);
             tm_running = true;
+            ui_notify_post(TIMER_NOTE, tm_end, "Timer Done", "Clock", 1);
         }
         break;
     case B_H_DOWN: tm_hours = (tm_hours + 23) % 24; break;
@@ -316,6 +323,11 @@ int main(void)
 {
     ui_init(SB_STATUS_BLACK);
     pref_get("set.tz", &tz_offset, sizeof(tz_offset));
+    ui_set_badge(0);
+    if ((tm_end = ui_notify_pending(TIMER_NOTE)) != 0) {
+        tm_running = true;
+        tab = TAB_TIMER;
+    }
     draw();
 
     for (;;) {
@@ -341,14 +353,17 @@ int main(void)
                         timer_press(pressed);
                 }
                 pressed = -1;
+            } else if (ev.type == GZ_EV_APP_NOTIFY && ev.code == TIMER_NOTE && tm_running) {
+                tm_end = ui_now_secs();         /* SpringBoard's clock got there first */
             } else {
                 continue;
             }
         }
-        if (tm_running && (int32_t)(tm_end - gz_time_ms()) <= 0) {
+        if (tm_running && (int32_t)(tm_end - ui_now_secs()) <= 0) {
             tm_running = false;
             tm_done = true;
             tab = TAB_TIMER;
+            ui_notify_cancel(TIMER_NOTE);       /* in front: no banner or badge */
         }
         draw();
     }

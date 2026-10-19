@@ -1,0 +1,12 @@
+# Clock's timer outlives Clock: start a one-minute timer, go Home, and the
+# notification fires from SpringBoard (banner, then a badge on Clock).
+# Boot it for about 80 s (tests/run.sh tests/t_notify.txt 80).
+3000 drag 40 280 235 280 500
+4500 tap 150 48
+6500 tap 200 303
+7500 tap 148 197
+8000 tap 148 197
+8500 tap 148 197
+9000 tap 148 197
+10000 tap 120 252
+11500 key home

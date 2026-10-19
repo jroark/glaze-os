@@ -12,6 +12,6 @@
     shutdown; getsockname; getpeername; getsockopt; setsockopt; close; read; write;
     poll; fcntl; getaddrinfo; freeaddrinfo; gai_strerror; gethostbyname;
     inet_addr; inet_aton; inet_ntoa; inet_ntop; inet_pton; htons; ntohs; htonl; ntohl;
-    audio_*; res_map; dlopen; dlsym; dlclose; dlerror;
+    audio_*; sb_badge_set_for; sb_note_post_for; sb_note_cancel_for; res_map; dlopen; dlsym; dlclose; dlerror;
   local: *;
 };

@@ -27,7 +27,7 @@ const char *const sb_wallpapers[] = { "wall_aqua.gzi", "wall_dusk.gzi", "wall_me
 const int sb_num_wallpapers = 3;
 bool sb_24h;
 
-static gfx_image icons[16];
+static gfx_image icons[SB_MAX_APPS];
 static gfx_image walls[3];
 static gfx_image knob;
 static bool walls_ok[3];
@@ -170,9 +170,82 @@ void sb_draw_lock_track(gfx_surface *s, const struct sb_view *v)
     gfx_draw_image(s, track.x + 2 + v->knob_x, track.y + 2, &knob, 255);
 }
 
+/* Copies str into out, cut with an ellipsis to fit in w pixels. */
+static const char *fit_text(const gfx_font *f, const char *str, int w, char *out, int n)
+{
+    int len = (int)strlen(str);
+
+    if (gfx_text_width(f, str) <= w)
+        return str;
+    int ell = gfx_text_width(f, GFX_CH_ELLIPSIS);
+    while (len > 0 && (len + 2 > n || gfx_text_width_n(f, str, len) + ell > w))
+        len--;
+    while (len > 0 && str[len - 1] == ' ')
+        len--;
+    memcpy(out, str, (size_t)len);
+    strcpy(out + len, GFX_CH_ELLIPSIS);
+    return out;
+}
+
+/* Nearest-neighbour scaled image with its alpha, for small icons. */
+static void draw_image_scaled(gfx_surface *s, int x, int y, int size, const gfx_image *img)
+{
+    gfx_rect c;
+
+    if (!img->px || !gfx_rect_intersect(gfx_r(x, y, size, size), s->clip, &c))
+        return;
+    for (int dy = c.y; dy < c.y + c.h; dy++) {
+        int sy = (dy - y) * img->h / size;
+        uint16_t *row = s->px + dy * s->stride;
+        for (int dx = c.x; dx < c.x + c.w; dx++) {
+            int i = sy * img->w + (dx - x) * img->w / size;
+            int a = img->alpha ? img->alpha[i] : 255;
+            if (a)
+                row[dx] = a == 255 ? img->px[i] : gfx_blend565(row[dx], img->px[i], a);
+        }
+    }
+}
+
+static void draw_note_text(gfx_surface *s, int x, int y, int w, const struct sb_note *n, const gfx_font *tf,
+                           const gfx_font *bf, int gap, uint32_t body_rgb)
+{
+    char buf[sizeof(n->body) + 4];
+
+    gfx_text(s, x, y, tf, fit_text(tf, n->title[0] ? n->title : sb_apps[n->app].label, w, buf, sizeof(buf)),
+             0xFFFFFF, 255);
+    if (n->body[0])
+        gfx_text(s, x, y + gap, bf, fit_text(bf, n->body, w, buf, sizeof(buf)), body_rgb, 255);
+}
+
+/* Notes delivered while locked, newest first, between the two panels. */
+static void draw_lock_notes(gfx_surface *s, const struct sb_view *v)
+{
+    for (int i = 0; i < v->num_lock_notes && i < SB_LOCK_NOTES; i++) {
+        const struct sb_note *n = &v->lock_notes[i];
+        gfx_rect r = gfx_r(0, SB_STATUS_H + LOCK_TOP_H + 2 + i * (LOCK_NOTE_H + 1), SCREEN_W, LOCK_NOTE_H);
+        glass_panel(s, r);
+        draw_image_scaled(s, r.x + 6, r.y + 4, 24, &icons[n->app]);
+        draw_note_text(s, r.x + 36, r.y + 2, r.w - 42, n, ui_font(FONT_B11), ui_font(FONT_R11), 15, 0xD0D0D0);
+    }
+}
+
+void sb_draw_banner(gfx_surface *s, const struct sb_note *n)
+{
+    gfx_rect r = gfx_r(0, SB_STATUS_H, SCREEN_W, BANNER_H);
+
+    gfx_fill_alpha(s, r, 0x000000, 215);
+    gfx_vgradient(s, gfx_r(r.x, r.y, r.w, r.h / 2), 0xFFFFFF, 0xFFFFFF, 26);
+    gfx_fill(s, gfx_r(r.x, r.y + r.h - 1, r.w, 1), 0x000000);
+    draw_image_scaled(s, r.x + 6, r.y + 6, 32, &icons[n->app]);
+    draw_note_text(s, r.x + 46, r.y + 5, r.w - 52, n, ui_font(FONT_B12), ui_font(FONT_R12), 18, 0xD8D8D8);
+}
+
 void sb_draw_lock(gfx_surface *s, const struct sb_view *v, int open)
 {
     gfx_rect saved = s->clip, part;
+
+    if (open == 0 && v->num_lock_notes > 0)
+        draw_lock_notes(s, v);
 
     /* Top: status bar plus the clock panel, sliding up by `open`. */
     if (gfx_rect_intersect(gfx_r(0, 0, SCREEN_W, SB_STATUS_H + LOCK_TOP_H - open), saved, &part)) {
@@ -258,6 +331,23 @@ int sb_hit_icon(int x, int y, int scroll_x)
     return -1;
 }
 
+/* Red count at the icon's top-right corner, like iPhone OS. */
+static void draw_badge(gfx_surface *s, gfx_rect icon, unsigned count)
+{
+    const gfx_font *f = ui_font(FONT_B10);
+    char buf[8];
+
+    snprintf(buf, sizeof(buf), count > 99 ? "99+" : "%u", count);
+    int h = 18, w = gfx_text_width(f, buf) + 10;
+    if (w < h)
+        w = h;
+    gfx_rect b = gfx_r(icon.x + icon.w - w + 6, icon.y - 5, w, h);
+    gfx_round_rect(s, gfx_r(b.x, b.y + 1, b.w, b.h), h / 2, 0x000000, 70);    /* shadow */
+    gfx_round_rect(s, b, h / 2, 0xFFFFFF, 255);
+    gfx_round_rect_vgradient(s, gfx_r(b.x + 2, b.y + 2, b.w - 4, b.h - 4), h / 2 - 2, 0xF2443A, 0xC0140C, 255);
+    gfx_text_center(s, b.x, b.y + (h - f->line_height) / 2, b.w, f, buf, 0xFFFFFF, 255);
+}
+
 static void draw_icon(gfx_surface *s, const struct sb_view *v, int app, gfx_rect r)
 {
     const gfx_font *lab = ui_font(FONT_B9);
@@ -272,6 +362,8 @@ static void draw_icon(gfx_surface *s, const struct sb_view *v, int app, gfx_rect
     }
     if (v->pressed == app)
         gfx_round_rect(s, r, 8, 0x000000, 110);
+    if (v->badges && v->badges[app])
+        draw_badge(s, r, v->badges[app]);
     int tw = gfx_text_width(lab, sb_apps[app].label);
     gfx_text_shadow(s, r.x + (r.w - tw) / 2, r.y + r.h + 2, lab, sb_apps[app].label, 0xFFFFFF, 0x000000, 1, 255);
 }

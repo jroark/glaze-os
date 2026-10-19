@@ -36,8 +36,21 @@ struct sb_app_info {
     bool dock;
 };
 
+#define SB_MAX_APPS     16
+#define SB_MAX_NOTES    16          /* scheduled, all apps together */
+#define SB_LOCK_NOTES   4           /* shown on the lock screen */
+#define LOCK_NOTE_H     32
+#define BANNER_H        44          /* below the status bar */
+
 extern const struct sb_app_info sb_apps[];
 extern const int sb_num_apps;
+
+struct sb_note {
+    int app;                    /* index into sb_apps */
+    uint32_t id, when, badge;   /* when: glaze/notify.h seconds */
+    char title[32];
+    char body[96];
+};
 
 struct sb_clock {
     char status[12];            /* "9:41 AM" */
@@ -54,6 +67,9 @@ struct sb_view {
     int shimmer_x;              /* centre of the slide-to-unlock highlight */
     int scroll_x;               /* home pages scroll position in pixels */
     int pressed;                /* app index under the finger, or -1 */
+    const uint16_t *badges;     /* per app, or NULL */
+    const struct sb_note *lock_notes;   /* delivered while locked, newest first */
+    int num_lock_notes;
 };
 
 extern bool sb_24h;
@@ -71,5 +87,26 @@ void sb_draw_home(gfx_surface *s, const struct sb_view *v);
 int sb_num_pages(void);
 gfx_rect sb_icon_rect(int app, int scroll_x);
 int sb_hit_icon(int x, int y, int scroll_x);
+/* Notification banner over the top of the screen, below the status bar. */
+void sb_draw_banner(gfx_surface *s, const struct sb_note *n);
+
+/* notify.c: badges, scheduled notes, notes delivered while locked. */
+extern uint16_t sb_badges[SB_MAX_APPS];
+extern struct sb_note sb_delivered[SB_LOCK_NOTES];
+extern int sb_num_delivered;
+
+void notify_load(void);
+int notify_app_for_path(const char *path);
+void notify_set_badge(int app, uint32_t count);
+void notify_add_badge(int app, uint32_t n);
+int notify_post(int app, uint32_t id, uint32_t when, uint32_t badge, const char *title, const char *body);
+int notify_cancel(int app, uint32_t id);
+uint32_t notify_pending(int app, uint32_t id);
+/* ms until the next note is due (capped at an hour), or -1 if none. */
+int notify_next_ms(uint32_t now);
+/* Removes and returns the earliest note due at `now`. */
+bool notify_pop_due(uint32_t now, struct sb_note *out);
+void notify_deliver_locked(const struct sb_note *n);
+void notify_clear_delivered(void);
 
 #endif

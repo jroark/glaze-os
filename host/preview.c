@@ -35,5 +35,26 @@ int main(void)
     v.wallpaper = 1;
     sb_draw_home(&s, &v);
     host_write_bmp("home_dusk_pressed.bmp", &s);
+
+    static uint16_t badges[SB_MAX_APPS] = { [0] = 1, [2] = 12, [5] = 120 };
+    v.badges = badges;
+    v.pressed = -1;
+    v.wallpaper = 0;
+    sb_draw_home(&s, &v);
+    host_write_bmp("home_badges.bmp", &s);
+
+    struct sb_note b = { .app = 2, .title = "Timer Done", .body = "Clock" };
+    sb_draw_banner(&s, &b);
+    host_write_bmp("home_banner.bmp", &s);
+
+    static const struct sb_note notes[] = {
+        { .app = 2, .title = "Timer Done", .body = "Clock" },
+        { .app = 0, .title = "Reminder", .body = "Thursday, January 1, with a body too long for one line" },
+    };
+    v.lock_notes = notes;
+    v.num_lock_notes = 2;
+    sb_draw_wallpaper(&s, &v, gfx_r(0, 0, 240, 320));
+    sb_draw_lock(&s, &v, 0);
+    host_write_bmp("lock_notes.bmp", &s);
     return 0;
 }

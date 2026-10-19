@@ -11,6 +11,19 @@
  * Input travels the other way through the event ring in the shared header:
  * SpringBoard appends events (in surface coordinates) and notifies the
  * app's port with SB_NOTIFY_EVENTS, so SpringBoard never blocks on an app.
+ *
+ * Badges and notifications are SpringBoard's, so they outlive the app: the
+ * front app sets its icon badge and posts notifications, optionally for a
+ * later wall-clock time (glaze/notify.h seconds), and SpringBoard keeps them
+ * in preferences across reboots. A note fires as a banner, on the lock
+ * screen, or as GZ_EV_APP_NOTIFY when its own app is in front. The SB_*
+ * requests carry the sender's pid in w3 and are accepted only from the
+ * current app; their text travels in sb_shared.req.
+ *
+ * Other processes (servers) post for an app named by its romfs path through
+ * the *_FOR requests, after SB_CLIENT_OPEN hands them a request page of their
+ * own (client in lib/libc/notify.c). The kernel does not identify senders,
+ * so these are not authenticated: any process may badge or notify any app.
  */
 #ifndef GLAZE_SB_H
 #define GLAZE_SB_H
@@ -26,6 +39,14 @@ enum {
     SB_HELLO = 1,           /* w1 = app event port, w2 = status style; reply w4 = GZ_INPUT_* */
     SB_PRESENT,             /* w1..w4 = dirty x, y, w, h */
     SB_SET_STATUS,          /* w1 = status style */
+    SB_BADGE_SET,           /* w1 = count (0 clears) */
+    SB_NOTE_POST,           /* w1 = fire time (0 = now), w2 = id, w4 = badge increment */
+    SB_NOTE_CANCEL,         /* w1 = id */
+    SB_NOTE_PENDING,        /* w1 = id; reply w1 = fire time, 0 if none */
+    SB_CLIENT_OPEN,         /* reply w1 = shm id of a struct sb_note_req */
+    SB_BADGE_SET_FOR,       /* as SB_BADGE_SET, for req.path */
+    SB_NOTE_POST_FOR,       /* as SB_NOTE_POST, for req.path */
+    SB_NOTE_CANCEL_FOR,     /* as SB_NOTE_CANCEL, for req.path */
 };
 
 enum {
@@ -37,15 +58,24 @@ enum {
 
 #define SB_RING             64
 
+/* Text of a notification request; path is used only by the *_FOR requests. */
+struct sb_note_req {
+    char path[48];                  /* romfs binary, "bin/clock" */
+    char title[32];
+    char body[96];
+};
+
 struct sb_shared {
     volatile uint32_t head;         /* written by SpringBoard */
     volatile uint32_t tail;         /* written by the app */
     struct gz_input_event ev[SB_RING];
     uint32_t surface_offset;        /* bytes from the start of the shm */
     uint32_t stride;                /* pixels */
+    struct sb_note_req req;         /* written by the app before a request */
 };
 
 /* App-level events beyond the kernel's input codes. */
 #define GZ_EV_APP_ACTIVATE  0x100
+#define GZ_EV_APP_NOTIFY    0x101   /* code = low 16 bits of the note's id */
 
 #endif
