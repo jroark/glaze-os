@@ -2,7 +2,7 @@
 CC ?= cc
 CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -I../lib/include -I.
 GFX := ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c ../lib/gfx/res.c
-SB := ../servers/springboard/draw.c
+SB := ../servers/springboard/draw.c ../lib/ui/keypad.c
 
 # The file server's flash stack, against a fault-injecting RAM NAND.
 FS := ../servers/fs/ftl.c ../third_party/littlefs/lfs.c ../third_party/littlefs/lfs_util.c \

@@ -7,6 +7,7 @@
 #include "sb_internal.h"
 
 #include <glaze/notify.h>
+#include <glaze/passcode.h>
 #include <glaze/prefs.h>
 #include <glaze/res.h>
 #include <glaze/sys.h>
@@ -16,6 +17,7 @@
 
 enum state {
     ST_LOCK,
+    ST_PASSCODE,        /* keypad after the slide, when a passcode is set */
     ST_UNLOCK,          /* lock bars sliding apart */
     ST_HOME,
     ST_LAUNCH_WAIT,     /* app spawned, waiting for its first frame */
@@ -32,6 +34,9 @@ enum state {
 #define FLING_MS        150     /* how far a released knob coasts */
 #define LAUNCH_TIMEOUT  3000
 #define BANNER_MS       4000
+#define PIN_FREE_TRIES  5       /* wrong passcodes before entry is disabled */
+#define PIN_WAIT_MS     60000   /* for this long, doubling per further miss */
+#define PIN_WAIT_MAX    (15 * 60000)
 #define MAX_CLIENTS     4
 #define SURFACE_BYTES   (SB_APP_W * SB_APP_H * 2)
 #define SHM_HEADER      4096
@@ -76,6 +81,13 @@ static struct sb_note banner;
 static bool banner_queued, banner_visible, banner_touch;
 static uint32_t banner_until;
 static int launch_after_home = -1;
+
+/* Passcode entry. Wrong tries are counted until the right one, in RAM. */
+static char pin[UI_PASSCODE_LEN + 1];
+static int pin_fails;
+static bool pin_wait;
+static uint32_t pin_until;
+static char pin_msg[40];
 
 /* Request pages of processes that notify for other apps (SB_CLIENT_OPEN). */
 static struct {
@@ -174,6 +186,13 @@ static void render_lock(void)
     view.num_lock_notes = sb_num_delivered;
     sb_draw_wallpaper(&bb, &view, gfx_r(0, 0, SCREEN_W, SCREEN_H));
     sb_draw_lock(&bb, &view, 0);
+    flush_all();
+}
+
+static void render_passcode(void)
+{
+    view.pin.digits = (int)strlen(pin);
+    sb_draw_passcode(&bb, &view);
     flush_all();
 }
 
@@ -371,6 +390,133 @@ static void begin_unlock(void)
     anim_start(0, SCREEN_H / 2, UNLOCK_MS);
 }
 
+/* ---- passcode ----------------------------------------------------------- */
+
+/* "Try again in N minutes" while entry is disabled; true if it changed. */
+static bool pin_message(void)
+{
+    char buf[sizeof(pin_msg)];
+
+    if (!pin_wait)
+        return false;
+    if ((int)(now_ms() - pin_until) >= 0) {
+        pin_wait = false;
+        view.pin.msg = NULL;
+        return true;
+    }
+    unsigned min = (pin_until - now_ms() + 59999) / 60000;
+    snprintf(buf, sizeof(buf), "Try again in %u minute%s", min, min == 1 ? "" : "s");
+    if (view.pin.msg == pin_msg && !strcmp(buf, pin_msg))
+        return false;
+    strcpy(pin_msg, buf);
+    view.pin.msg = pin_msg;
+    return true;
+}
+
+static void begin_passcode(void)
+{
+    state = ST_PASSCODE;
+    anim.active = false;
+    view.knob_x = 0;
+    memset(pin, 0, sizeof(pin));
+    view.pin = (struct ui_passcode){ .title = "Enter Passcode", .cancel = "Cancel", .pressed = -1 };
+    pin_message();
+    render_passcode();
+}
+
+/* Back to slide to unlock, keeping whatever was in front. */
+static void cancel_passcode(void)
+{
+    memset(pin, 0, sizeof(pin));
+    state = ST_LOCK;
+    view.knob_x = 0;
+    dragging_knob = false;
+    touching = false;
+    render_lock();
+}
+
+static void wrong_passcode(void)
+{
+    view.pin.msg = "Wrong Passcode";
+    if (++pin_fails < PIN_FREE_TRIES)
+        return;
+    int extra = pin_fails - PIN_FREE_TRIES;
+    uint32_t wait = PIN_WAIT_MS << (extra > 4 ? 4 : extra);
+    pin_wait = true;
+    pin_until = now_ms() + (wait > PIN_WAIT_MAX ? PIN_WAIT_MAX : wait);
+    pin_message();
+}
+
+static void passcode_key(int k)
+{
+    size_t n = strlen(pin);
+
+    if (k == UI_PASSCODE_CANCEL) {
+        cancel_passcode();
+        return;
+    }
+    if (pin_wait)
+        return;
+    if (k == '\b' && n > 0) {
+        pin[n - 1] = 0;
+    } else if (k >= '0' && k <= '9' && n < UI_PASSCODE_LEN) {
+        pin[n++] = (char)k;
+        if (n == UI_PASSCODE_LEN) {
+            render_passcode();              /* show the last dot */
+            bool ok = passcode_check(pin);
+            memset(pin, 0, sizeof(pin));
+            if (ok) {
+                pin_fails = 0;
+                begin_unlock();
+                return;
+            }
+            wrong_passcode();
+        }
+    } else {
+        return;
+    }
+    render_passcode();
+}
+
+static void passcode_touch(const struct gz_input_event *e)
+{
+    int k = ui_passcode_hit(sb_passcode_area(), &view.pin, e->x, e->y);
+
+    if (pin_wait && k != UI_PASSCODE_CANCEL)
+        k = -1;
+    switch (e->type) {
+    case GZ_EV_TOUCH_DOWN:
+        view.pin.pressed = k;
+        if (k >= 0)
+            render_passcode();
+        break;
+    case GZ_EV_TOUCH_MOVE:
+        if (view.pin.pressed >= 0 && k != view.pin.pressed) {
+            view.pin.pressed = -1;
+            render_passcode();
+        }
+        break;
+    case GZ_EV_TOUCH_UP: {
+        int p = view.pin.pressed;
+        view.pin.pressed = -1;
+        if (p >= 0 && p == k)
+            passcode_key(p);
+        else if (p >= 0)
+            render_passcode();
+        break;
+    }
+    }
+}
+
+/* The knob reached the end: unlock, or ask for the passcode first. */
+static void slide_done(void)
+{
+    if (passcode_enabled())
+        begin_passcode();
+    else
+        begin_unlock();
+}
+
 /* ---- input -------------------------------------------------------------- */
 
 /* Horizontal speed in px per 100 ms, smoothed. Uses the event timestamps:
@@ -417,7 +563,7 @@ static void lock_touch(const struct gz_input_event *e)
         /* The panel is sampled, so a quick slide can lift off before the
          * last sample reaches the end; carry it on by its speed. */
         if (view.knob_x + velocity * FLING_MS / 100 >= KNOB_TRAVEL - 6)
-            begin_unlock();
+            slide_done();
         else
             anim_start(view.knob_x, 0, SPRING_MS);
         break;
@@ -506,6 +652,13 @@ static void handle_key(const struct gz_input_event *e)
             send_event(e);
         return;
     }
+    if (state == ST_PASSCODE) {
+        if (e->code == GZ_KEY_POWER || e->code == GZ_KEY_ESC)
+            cancel_passcode();
+        else if (e->code == GZ_KEY_BACKSPACE)
+            passcode_key('\b');
+        return;
+    }
     switch (e->code) {
     case GZ_KEY_POWER:
         if (state == ST_HOME || state == ST_APP)
@@ -566,6 +719,8 @@ static void handle_input(void)
             if (e->type == GZ_EV_TEXT) {
                 if (state == ST_APP)
                     send_event(e);
+                else if (state == ST_PASSCODE && e->code >= '0' && e->code <= '9')
+                    passcode_key(e->code);
                 continue;
             }
             if (banner_touch_event(e))
@@ -573,6 +728,9 @@ static void handle_input(void)
             switch (state) {
             case ST_LOCK:
                 lock_touch(e);
+                break;
+            case ST_PASSCODE:
+                passcode_touch(e);
                 break;
             case ST_HOME:
                 home_touch(e);
@@ -603,9 +761,9 @@ static void fire(const struct sb_note *n)
         return;
     }
     notify_add_badge(n->app, n->badge);
-    if (state == ST_LOCK) {
+    if (state == ST_LOCK || state == ST_PASSCODE) {
         notify_deliver_locked(n);
-        if (!dragging_knob && !anim.active)
+        if (state == ST_LOCK && !dragging_knob && !anim.active)
             render_lock();
         return;
     }
@@ -892,6 +1050,8 @@ int main(void)
         } else if (state == ST_LAUNCH_WAIT || app_index >= 0) {
             timeout = MIN(timeout, 250);    /* watch the app process */
         }
+        if (pin_wait)
+            timeout = MIN(timeout, 1000);   /* count down "Try again" */
         int due = notify_next_ms(now_secs());
         if (due >= 0)
             timeout = MIN(timeout, due);
@@ -938,6 +1098,9 @@ int main(void)
                 render_home();
             }
         }
+
+        if (pin_message() && state == ST_PASSCODE)
+            render_passcode();
 
         fire_due();
         show_queued_banner();

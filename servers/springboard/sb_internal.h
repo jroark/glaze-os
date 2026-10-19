@@ -4,6 +4,7 @@
 
 #include <glaze/gfx.h>
 #include <glaze/sb.h>
+#include <glaze/ui.h>
 
 /* Layout (240 x 320 screen). */
 #define SCREEN_W        240
@@ -70,6 +71,7 @@ struct sb_view {
     const uint16_t *badges;     /* per app, or NULL */
     const struct sb_note *lock_notes;   /* delivered while locked, newest first */
     int num_lock_notes;
+    struct ui_passcode pin;     /* passcode entry after the slide */
 };
 
 extern bool sb_24h;
@@ -83,6 +85,9 @@ void sb_draw_wallpaper(gfx_surface *s, const struct sb_view *v, gfx_rect r);
 /* Lock UI: top and bottom bars shifted apart by `open` pixels. */
 void sb_draw_lock(gfx_surface *s, const struct sb_view *v, int open);
 void sb_draw_lock_track(gfx_surface *s, const struct sb_view *v);
+/* Passcode keypad over the dimmed wallpaper, below the status bar. */
+void sb_draw_passcode(gfx_surface *s, const struct sb_view *v);
+gfx_rect sb_passcode_area(void);
 void sb_draw_home(gfx_surface *s, const struct sb_view *v);
 int sb_num_pages(void);
 gfx_rect sb_icon_rect(int app, int scroll_x);

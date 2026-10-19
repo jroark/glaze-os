@@ -272,6 +272,19 @@ void sb_draw_lock(gfx_surface *s, const struct sb_view *v, int open)
     s->clip = saved;
 }
 
+gfx_rect sb_passcode_area(void)
+{
+    return gfx_r(0, SB_STATUS_H, SCREEN_W, SCREEN_H - SB_STATUS_H);
+}
+
+void sb_draw_passcode(gfx_surface *s, const struct sb_view *v)
+{
+    sb_draw_wallpaper(s, v, gfx_r(0, 0, SCREEN_W, SCREEN_H));
+    gfx_fill_alpha(s, gfx_r(0, 0, SCREEN_W, SCREEN_H), 0x000000, 150);
+    sb_draw_status(s, &v->clk, -1, true);
+    ui_draw_passcode(s, sb_passcode_area(), &v->pin);
+}
+
 /* ---- home screen -------------------------------------------------------- */
 
 static int grid_index(int app)

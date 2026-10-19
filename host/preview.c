@@ -56,5 +56,16 @@ int main(void)
     sb_draw_wallpaper(&s, &v, gfx_r(0, 0, 240, 320));
     sb_draw_lock(&s, &v, 0);
     host_write_bmp("lock_notes.bmp", &s);
+
+    v.num_lock_notes = 0;
+    v.pin = (struct ui_passcode){ .title = "Enter Passcode", .cancel = "Cancel", .digits = 2, .pressed = '5' };
+    sb_draw_passcode(&s, &v);
+    host_write_bmp("passcode.bmp", &s);
+
+    v.pin.digits = 0;
+    v.pin.pressed = -1;
+    v.pin.msg = "Wrong Passcode";
+    sb_draw_passcode(&s, &v);
+    host_write_bmp("passcode_wrong.bmp", &s);
     return 0;
 }
