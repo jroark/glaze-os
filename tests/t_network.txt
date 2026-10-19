@@ -1,0 +1,5 @@
+# Settings > Network, then ping the router. Boot with --ne2000.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 72
+8500 tap 120 280

@@ -1,0 +1,4 @@
+# Open Web and load the saved (or default) address. Boot with --ne2000.
+3000 drag 40 280 235 280 500
+4500 tap 90 120
+6500 tap 212 36
