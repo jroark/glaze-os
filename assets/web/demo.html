@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>What Web can show</title>
+<style>
+  body { font-family: sans-serif; margin: 10px; }
+  h1 { color: #2E3A4E; font-size: 24px; margin-top: 4px; }
+  .card { border: 1px solid #C4C9D1; background: #F7F8FA; padding: 8px; margin: 10px 0; }
+  .shot { text-align: center; }
+  table { width: 100%; }
+  th { background: #4C566C; color: white; }
+  td, th { padding: 3px 5px; }
+  tr.odd td { background: #EEF1F5; }
+  code { background: #EEE; }
+</style>
+</head>
+<body>
+<p><a href="start.html">&lsaquo; Start</a></p>
+<h1>What Web can show</h1>
+<p>Web lays pages out for this <b>240-pixel</b> screen: text <i>wraps</i>, wide tables become
+lists, and pictures shrink to fit. It speaks <code>HTTP/1.1</code> with
+<a href="http://info.cern.ch/">cookies, redirects and gzip</a>, and understands a useful part of CSS.</p>
+
+<div class="card shot">
+  <img src="springboard.jpg" alt="SpringBoard">
+  <br><small>A JPEG, scaled to fit</small>
+</div>
+
+<p><img src="globe.png" alt="globe" align="left"> A PNG with transparency sits on the
+text's baseline, next to a GIF: <img src="lock.gif" width="32" alt="lock"> &mdash; and a
+missing image shows its alt text: <img src="nothing.png" alt="[no picture]">.</p>
+
+<h2>Lists</h2>
+<ol>
+  <li>Numbered items</li>
+  <li>With <em>nested</em> bullets:
+    <ul><li>disc</li><li>and so on</li></ul></li>
+</ol>
+
+<h2>Tables</h2>
+<table cellspacing="0">
+  <tr><th>App</th><th>Uses</th></tr>
+  <tr class="odd"><td>Notes</td><td>Key/value store</td></tr>
+  <tr><td>Files</td><td>littlefs on Dhara</td></tr>
+  <tr class="odd"><td>Web</td><td>lwIP sockets</td></tr>
+</table>
+
+<h2>Forms</h2>
+<form action="http://example.com/" method="get">
+  <p>Name: <input type="text" name="name" size="14"></p>
+  <p><input type="checkbox" name="news" checked> Send news &nbsp;
+     <input type="radio" name="size" value="s"> S <input type="radio" name="size" value="l" checked> L</p>
+  <p><select name="fruit"><option>Apple</option><option>Banana</option><option>Cherry</option></select>
+     <input type="submit" value="Send"></p>
+</form>
+<p style="text-align:center;color:#8A8F99"><small>Bitstream Vera fonts &bull; stb_image &bull; lwIP</small></p>
+</body>
+</html>
