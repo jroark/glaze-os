@@ -27,6 +27,7 @@ int proc_count(void)
 struct proc *proc_spawn(const char *path, int parent, uint32_t flags)
 {
     uint32_t size, entry;
+    struct gz_ld_start start;
     const void *image = romfs_find(path, &size);
     struct proc *p = NULL;
     int slot;
@@ -58,14 +59,23 @@ struct proc *proc_spawn(const char *path, int parent, uint32_t flags)
     }
     strncpy(p->name, base, sizeof(p->name) - 1);
 
-    if (elf_load(&p->as, image, size, &entry) ||
-        as_alloc_region(&p->as, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE, REGION_OWNED))
+    int load_error = elf_load(&p->as, image, size, &entry, &start);
+    if (load_error) { kprintf("proc: cannot load %s (%d)\n", path, load_error); goto fail; }
+    if (as_alloc_region(&p->as, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE, REGION_OWNED))
         goto fail;
 
+    uint32_t sp = USER_STACK_TOP - 16, boot = 0;
+    if (start.abi) {
+        start.pid = (uint32_t)p->pid;
+        boot = USER_STACK_TOP - ALIGN_UP(sizeof(start), 16u);
+        if (copy_to_as(&p->as, boot, &start, sizeof(start))) goto fail;
+        sp = boot - 32;
+    }
     int prio = (flags & PROC_PRIVILEGED) ? PRIO_HIGH : PRIO_NORMAL;
-    p->main = thread_create_user(p, entry, USER_STACK_TOP - 16, (uint32_t)p->pid, prio);
+    p->main = thread_create_user(p, entry, sp, (uint32_t)p->pid, prio);
     if (!p->main)
         goto fail;
+    p->main->tf->regs[R_A1] = boot;
     thread_make_runnable(p->main);
     kprintf("proc: spawned %s pid %d\n", p->name, p->pid);
     return p;

@@ -110,8 +110,10 @@ struct thread *thread_create_user(struct proc *p, uint32_t entry, uint32_t sp, u
 {
     struct thread *t = thread_setup(p, prio, ST_IM2 | ST_IM7 | ST_KSU_USER | ST_EXL | ST_IE, entry, sp);
 
-    if (t)
+    if (t) {
         t->tf->regs[R_A0] = arg;
+        t->tf->regs[25] = entry; /* MIPS O32 PIC prologues derive gp from t9. */
+    }
     return t;
 }
 

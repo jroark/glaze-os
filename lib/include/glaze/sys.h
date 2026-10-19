@@ -3,6 +3,7 @@
 #define GLAZE_SYS_H
 
 #include <glaze/abi.h>
+#include <glaze/loader.h>
 
 static inline int __gz_sc(int n, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 {
@@ -78,6 +79,14 @@ static inline int gz_net_info(struct gz_netif_info *info) { return GZ_SC1(SYS_NE
 static inline int gz_net_bind(int port) { return GZ_SC1(SYS_NET_BIND, port); }
 static inline int gz_net_send(const void *frame, uint32_t len) { return GZ_SC2(SYS_NET_SEND, frame, len); }
 static inline int gz_net_recv(void *frame, uint32_t max) { return GZ_SC2(SYS_NET_RECV, frame, max); }
+
+static inline int gz_image_map(const void *source, uint32_t size, uint32_t flags, struct gz_image_info *out) {
+    return __gz_sc(SYS_IMAGE_MAP, (uint32_t)source, size, flags, (uint32_t)out);
+}
+static inline int gz_image_release(uint32_t base) { return GZ_SC1(SYS_IMAGE_RELEASE, base); }
+static inline int gz_image_seal(uint32_t base) { return GZ_SC1(SYS_IMAGE_SEAL, base); }
+static inline int gz_image_query(const void *addr, struct gz_image_page *out) { return GZ_SC2(SYS_IMAGE_QUERY, addr, out); }
+static inline int gz_image_stats(struct gz_image_stats *out) { return GZ_SC1(SYS_IMAGE_STATS, out); }
 
 /* Threads and semaphores; lib/include/glaze/thread.h has the libc layer. */
 static inline int gz_thread_spawn(void (*entry)(void *), void *arg) { return GZ_SC2(SYS_THREAD_CREATE, entry, arg); }

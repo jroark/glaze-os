@@ -38,10 +38,15 @@ browse: browse.c hostres.c $(GFX) $(WEB) ../apps/browser/web.h
 	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB)
 
 clean:
-	rm -f sheet preview fstest mkfsimg browse stowaway-test *.bmp *.png
+	rm -f sheet preview fstest mkfsimg browse stowaway-test elf-test *.bmp *.png
 
 # Byte decoder and shared text editing, with ASan/UBSan.
 stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $^
 	./$@
 .PHONY: stowaway-test
+
+elf-test: ../tests/elf.c ../lib/include/glaze/elf.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ ../tests/elf.c
+	./$@
+.PHONY: elf-test
