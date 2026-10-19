@@ -73,8 +73,15 @@ $(OUT)/third_party/%.o: third_party/%.c
 	    -O2 -ffunction-sections -fdata-sections -MMD -g -Ilib/include -Ilib/libc/include \
 	    $(TP_INC) -c -o $@ $<
 
+# The Helix fixed-point MP3 decoder, built into libmedia with lib/media.
+HELIX_INC := -Ithird_party/helix-mp3/pub
+HELIX_SRCS := $(wildcard third_party/helix-mp3/*.c third_party/helix-mp3/real/*.c)
+HELIX_OBJS := $(patsubst %.c,$(OUT)/%.o,$(HELIX_SRCS))
+LIBMEDIA_SRCS := $(wildcard lib/media/*.c)
+
 $(FSSTACK_OBJS): TP_INC := $(FS_INC)
 $(NETSTACK_OBJS): TP_INC := $(NET_INC)
+$(HELIX_OBJS): TP_INC := $(HELIX_INC)
 
 $(OUT)/lib/libfsstack.a: $(FSSTACK_OBJS)
 	@mkdir -p $(dir $@)
@@ -86,12 +93,19 @@ $(OUT)/lib/libnetstack.a: $(NETSTACK_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
+$(OUT)/lib/libmedia.a: $(patsubst lib/%.c,$(OUT)/lib/%.o,$(LIBMEDIA_SRCS)) $(HELIX_OBJS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
+
 $(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
 $(OUT)/servers/net/%.o: USER_CFLAGS += $(NET_INC)
+$(OUT)/servers/audio/%.o: USER_CFLAGS += $(HELIX_INC)
 $(OUT)/apps/browser/%.o: USER_CFLAGS += -Ithird_party/stb
+$(OUT)/apps/video/%.o: USER_CFLAGS += -Ithird_party/stb
 
-USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a \
-    $(OUT)/lib/libnetstack.a
+USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libc.a \
+    $(OUT)/lib/libfsstack.a $(OUT)/lib/libnetstack.a
 
 # ---- user programs ----------------------------------------------------------
 

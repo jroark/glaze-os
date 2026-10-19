@@ -15,7 +15,13 @@ FS_CFLAGS := -std=gnu11 -O2 -g -Wall -I../servers/fs -I../third_party/littlefs -
 WEB := $(filter-out ../apps/browser/main.c,$(wildcard ../apps/browser/*.c))
 WEB_CFLAGS := $(CFLAGS) -I../third_party/stb -fsanitize=address,undefined
 
-all: sheet preview fstest mkfsimg browse
+# libmedia and the Helix MP3 decoder (the audio server's and Video app's
+# decoding), compared against ffmpeg by tests/mediatest.py.
+MEDIA := $(wildcard ../lib/media/*.c ../third_party/helix-mp3/*.c ../third_party/helix-mp3/real/*.c)
+MEDIA_CFLAGS := $(CFLAGS) -Wno-unused-but-set-variable -I../third_party/helix-mp3/pub -I../third_party/stb \
+    -fsanitize=address,undefined -fno-sanitize=shift
+
+all: sheet preview fstest mkfsimg browse mediatest
 
 sheet: sheet.c hostres.c $(GFX)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -37,8 +43,11 @@ mkfsimg: mkfsimg.c $(FS)
 browse: browse.c hostres.c $(GFX) $(WEB) ../apps/browser/web.h
 	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB)
 
+mediatest: mediatest.c $(MEDIA)
+	$(CC) $(MEDIA_CFLAGS) -o $@ $^ -lm
+
 clean:
-	rm -f sheet preview fstest mkfsimg browse stowaway-test *.bmp *.png
+	rm -f sheet preview fstest mkfsimg browse mediatest stowaway-test *.bmp *.png
 
 # Byte decoder and shared text editing, with ASan/UBSan.
 stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c
