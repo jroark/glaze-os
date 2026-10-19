@@ -1,0 +1,4 @@
+id=hello
+name=Hello
+version=1.0
+exec=app

@@ -5,7 +5,10 @@
  * into it and writes the raw region out. tools/mk_nand.py places it at
  * FLASH_FS_OFFSET, so the first boot mounts it instead of formatting.
  *
- *   mkfsimg <dir> <blocks> <out>
+ *   mkfsimg <dir> <blocks> <out> [/volume/path=file ...]
+ *
+ * The extra arguments add single build products, such as app packages,
+ * that don't belong in the checked-in tree.
  */
 
 #include <dirent.h>
@@ -114,8 +117,8 @@ static void copy_tree(const char *src, const char *dst)
 
 int main(int argc, char **argv)
 {
-    if (argc != 4) {
-        fprintf(stderr, "usage: mkfsimg <dir> <blocks> <out>\n");
+    if (argc < 4) {
+        fprintf(stderr, "usage: mkfsimg <dir> <blocks> <out> [/volume/path=file ...]\n");
         return 2;
     }
     blocks = (uint32_t)strtoul(argv[2], NULL, 0);
@@ -132,6 +135,13 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < sizeof(fs_standard_folders) / sizeof(fs_standard_folders[0]); i++)
         lfs_mkdir(&lfs, fs_standard_folders[i]);
     copy_tree(argv[1], "");
+    for (int i = 4; i < argc; i++) {        /* build products, such as packages */
+        char *eq = strchr(argv[i], '=');
+        if (!eq || argv[i][0] != '/')
+            die("bad file argument", argv[i], 0);
+        *eq = 0;
+        copy_file(eq + 1, argv[i]);
+    }
     lfs_unmount(&lfs);
 
     FILE *out = fopen(argv[3], "wb");
