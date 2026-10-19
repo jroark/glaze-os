@@ -34,6 +34,9 @@ enum {
     SYS_GETPID,
     SYS_ROMFS_MAP,
     SYS_PROC_ALIVE,
+    SYS_FLASH_READ,
+    SYS_FLASH_PROG,
+    SYS_FLASH_ERASE,
     SYS_COUNT
 };
 
@@ -107,6 +110,11 @@ struct gz_sysinfo {
     uint32_t cpu_prid;
     char build[32];
 };
+
+/* SYS_FLASH_*: the file server's NAND region (10 MiB from 0x600000). */
+#define GZ_FLASH_PAGE_SIZE      512
+#define GZ_FLASH_PAGES_PER_BLOCK 32
+#define GZ_FLASH_BLOCKS         640
 
 #define GZ_FB_WIDTH     240
 #define GZ_FB_HEIGHT    320

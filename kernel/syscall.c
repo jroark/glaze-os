@@ -51,6 +51,7 @@ static int sys_spawn(uint32_t upath, uint32_t flags)
 
     if (copy_str_from_as(AS, path, upath, sizeof(path)) < 0)
         return GZ_EINVAL;
+    flags &= PROC_PRIVILEGED;     /* other flags are kernel-granted */
     if ((flags & PROC_PRIVILEGED) && !PRIV())
         return GZ_EPERM;
     struct proc *p = proc_spawn(path, cur->proc->pid, flags);
@@ -193,6 +194,9 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_GETPID:        rv = cur->proc->pid; break;
     case SYS_ROMFS_MAP:     rv = sys_romfs_map(a0, a1); break;
     case SYS_PROC_ALIVE:    rv = sys_proc_alive(a0); break;
+    case SYS_FLASH_READ:    rv = sys_flash_read(cur->proc, a0, a1); break;
+    case SYS_FLASH_PROG:    rv = sys_flash_prog(cur->proc, a0, a1); break;
+    case SYS_FLASH_ERASE:   rv = sys_flash_erase(cur->proc, a0); break;
     default:                rv = GZ_EINVAL; break;
     }
     if (rv != SYSRET_BLOCKED)

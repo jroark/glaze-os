@@ -348,6 +348,23 @@ func makeIcons() {
         ctx.fillPath(using: .evenOdd)
     }
 
+    icon("files") { ctx in
+        vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 44), 0x5AA0F0, 0x1A56B8)
+        // Back of the folder with its tab, a sheet of paper, then the front.
+        let back = CGMutablePath()
+        back.addPath(rr(CGRect(x: 7, y: 10, width: 13, height: 7), 2))
+        back.addPath(rr(CGRect(x: 7, y: 13, width: 30, height: 22), 2.5))
+        fill(ctx, back, col(0xB97E22))
+        fill(ctx, CGPath(rect: CGRect(x: 10, y: 15.5, width: 24, height: 10), transform: nil), col(0xFFFFFF))
+        let front = CGRect(x: 6, y: 18, width: 32, height: 17)
+        fill(ctx, rr(front.offsetBy(dx: 0, dy: 1), 2.5), col(0x000000, 0.3))
+        ctx.saveGState()
+        ctx.addPath(rr(front, 2.5))
+        ctx.clip()
+        vgrad(ctx, front, 0xFFDB7A, 0xE9A93C)
+        ctx.restoreGState()
+    }
+
     icon("calendar") { ctx in
         vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 44), 0xFFFFFF, 0xDCDCDC)
         vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 13), 0xF0544A, 0xB51D15)

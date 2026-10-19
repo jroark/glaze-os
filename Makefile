@@ -50,7 +50,28 @@ $(eval $(call LIB_template,c,$(LIBC_SRCS)))
 $(eval $(call LIB_template,gfx,$(LIBGFX_SRCS)))
 $(eval $(call LIB_template,ui,$(LIBUI_SRCS)))
 
-USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libc.a
+# littlefs and Dhara for the file server (third_party/README.md).
+FS_INC := -Ithird_party/littlefs -Ithird_party/dhara -DLFS_NO_DEBUG -DLFS_NO_WARN \
+    -DLFS_NO_ERROR -DLFS_NO_ASSERT
+FSSTACK_SRCS := third_party/littlefs/lfs.c third_party/littlefs/lfs_util.c \
+    third_party/dhara/dhara/map.c third_party/dhara/dhara/journal.c \
+    third_party/dhara/dhara/error.c third_party/dhara/ecc/bch.c third_party/dhara/ecc/gf13.c
+FSSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(FSSTACK_SRCS))
+
+$(OUT)/third_party/%.o: third_party/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(ARCHFLAGS) -std=gnu11 -ffreestanding -fno-builtin -nostdlib -fno-stack-protector \
+	    -O2 -ffunction-sections -fdata-sections -MMD -g -Ilib/include -Ilib/libc/include \
+	    $(FS_INC) -c -o $@ $<
+
+$(OUT)/lib/libfsstack.a: $(FSSTACK_OBJS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+$(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
+
+USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a
 
 # ---- user programs ----------------------------------------------------------
 

@@ -67,6 +67,11 @@ static inline uint16_t *gz_fb_map(void)
 static inline int gz_input_bind(int port) { return GZ_SC1(SYS_INPUT_BIND, port); }
 static inline int gz_input_read(struct gz_input_event *ev, uint32_t max) { return GZ_SC2(SYS_INPUT_READ, ev, max); }
 
+/* File server only (see servers/fs). */
+static inline int gz_flash_read(uint32_t page, void *buf) { return GZ_SC2(SYS_FLASH_READ, page, buf); }
+static inline int gz_flash_prog(uint32_t page, const void *buf) { return GZ_SC2(SYS_FLASH_PROG, page, buf); }
+static inline int gz_flash_erase(uint32_t block) { return GZ_SC1(SYS_FLASH_ERASE, block); }
+
 static inline int gz_kv_get(const char *key, void *buf, uint32_t len) { return GZ_SC3(SYS_KV_GET, key, buf, len); }
 static inline int gz_kv_put(const char *key, const void *buf, uint32_t len) { return GZ_SC3(SYS_KV_PUT, key, buf, len); }
 static inline int gz_sysinfo(struct gz_sysinfo *si) { return GZ_SC1(SYS_SYSINFO, si); }

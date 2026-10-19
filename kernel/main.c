@@ -31,6 +31,9 @@ void kmain(void)
     sched_init();
     romfs_list();
 
+    /* The file server owns the flash above the key/value store. */
+    if (!proc_spawn("bin/fs", 0, PROC_FLASH))
+        kputs("fs: no file server\n");
     if (!proc_spawn(GLAZE_INIT, 0, PROC_PRIVILEGED))
         panic("cannot start %s", GLAZE_INIT);
 

@@ -160,6 +160,35 @@ char *strrchr(const char *s, int c)
     }
 }
 
+void *memchr(const void *s, int c, size_t n)
+{
+    const unsigned char *p = s;
+
+    for (; n; n--, p++) {
+        if (*p == (unsigned char)c)
+            return (void *)p;
+    }
+    return NULL;
+}
+
+size_t strspn(const char *s, const char *accept)
+{
+    size_t n = 0;
+
+    while (s[n] && strchr(accept, s[n]))
+        n++;
+    return n;
+}
+
+size_t strcspn(const char *s, const char *reject)
+{
+    size_t n = 0;
+
+    while (s[n] && !strchr(reject, s[n]))
+        n++;
+    return n;
+}
+
 char *strstr(const char *h, const char *n)
 {
     size_t len = strlen(n);
