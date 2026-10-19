@@ -1,4 +1,5 @@
 #include <string.h>
+#include <strings.h>
 #include <glaze/types.h>
 
 void *memset(void *d, int c, size_t n)
@@ -198,4 +199,33 @@ char *strstr(const char *h, const char *n)
             return (char *)h;
     }
     return len ? NULL : (char *)h;
+}
+
+size_t strnlen(const char *s, size_t max)
+{
+    size_t n = 0;
+
+    while (n < max && s[n])
+        n++;
+    return n;
+}
+
+static int fold(int c)
+{
+    return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c;
+}
+
+int strncasecmp(const char *a, const char *b, size_t n)
+{
+    for (; n; n--, a++, b++) {
+        int d = fold((unsigned char)*a) - fold((unsigned char)*b);
+        if (d || !*a)
+            return d;
+    }
+    return 0;
+}
+
+int strcasecmp(const char *a, const char *b)
+{
+    return strncasecmp(a, b, (size_t)-1);
 }

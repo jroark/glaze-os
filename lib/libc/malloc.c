@@ -1,9 +1,11 @@
 /*
  * First-fit allocator with coalescing, grown in 64 KiB+ chunks from
  * SYS_MMAP_ANON. Blocks carry an 8-byte header; sizes are 8-byte aligned.
+ * One lock covers the heap once the process has threads.
  */
 
 #include <glaze/sys.h>
+#include <glaze/thread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,6 +19,7 @@ struct block {
 #define MIN_SPLIT   32u
 
 static struct block *free_list;
+static struct gz_mutex lock = GZ_MUTEX_INIT;
 
 static void insert_free(struct block *b)
 {
@@ -54,7 +57,7 @@ static bool grow(size_t need)
     return true;
 }
 
-void *malloc(size_t n)
+static void *malloc_unlocked(size_t n)
 {
     if (!n)
         n = 1;
@@ -81,10 +84,25 @@ void *malloc(size_t n)
     return NULL;
 }
 
-void free(void *p)
+static void free_unlocked(void *p)
 {
     if (p)
         insert_free((struct block *)((char *)p - HDR));
+}
+
+void *malloc(size_t n)
+{
+    gz_mutex_lock(&lock);
+    void *p = malloc_unlocked(n);
+    gz_mutex_unlock(&lock);
+    return p;
+}
+
+void free(void *p)
+{
+    gz_mutex_lock(&lock);
+    free_unlocked(p);
+    gz_mutex_unlock(&lock);
 }
 
 void *calloc(size_t n, size_t m)

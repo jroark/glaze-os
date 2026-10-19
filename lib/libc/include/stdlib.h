@@ -10,6 +10,8 @@ void free(void *p);
 void exit(int code) __attribute__((noreturn));
 int abs(int v);
 int atoi(const char *s);
+long strtol(const char *s, char **end, int base);
+unsigned long strtoul(const char *s, char **end, int base);
 void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
 
 #endif

@@ -1,12 +1,20 @@
 /* Kernel self-test: IPC round trips, notifications, sleep, shm, malloc, faults,
- * the key/value store, the file server and, with an NE2000, the network. */
+ * threads and semaphores, the key/value store, the file server and, with an
+ * NE2000, the network. */
 
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <glaze/fs.h>
 #include <glaze/net.h>
 #include <glaze/sys.h>
+#include <glaze/thread.h>
+#include <netdb.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static int failures;
 
@@ -22,6 +30,158 @@ static bool fs_raw_denied(void)
     if (cond) printf("ktest: PASS %s\n", what); \
     else { printf("ktest: FAIL %s\n", what); failures++; } \
 } while (0)
+
+/* ---- threads -------------------------------------------------------------- */
+
+static int sem_go, sem_done;
+static volatile int counter;
+static struct gz_mutex counter_lock = GZ_MUTEX_INIT;
+static volatile int thread_ok;
+
+static void handoff(void *arg)
+{
+    if (gz_sem_wait(sem_go, 1000) == 0 && arg == (void *)0x1234)
+        thread_ok = gz_thread_id();
+    gz_sem_post(sem_done);
+}
+
+static void increment(void *arg)
+{
+    for (int i = 0; i < 2000; i++) {
+        gz_mutex_lock(&counter_lock);
+        gz_mutex_lock(&counter_lock);       /* recursive */
+        int v = counter;
+        if (i % 97 == 0)
+            gz_yield();                     /* let others contend */
+        counter = v + 1;
+        gz_mutex_unlock(&counter_lock);
+        gz_mutex_unlock(&counter_lock);
+    }
+    gz_sem_post(sem_done);
+}
+
+static void own_errno(void *arg)
+{
+    errno = (int)(uintptr_t)arg;
+    gz_sleep_ms(20);
+    if (errno == (int)(uintptr_t)arg)
+        thread_ok++;
+    gz_sem_post(sem_done);
+}
+
+static void churn(void *arg)
+{
+    uint32_t seed = (uint32_t)(uintptr_t)arg;
+    bool ok = true;
+
+    for (int i = 0; i < 300 && ok; i++) {
+        seed = seed * 1103515245u + 12345u;
+        size_t n = 16 + (seed >> 16) % 3000;
+        uint8_t *p = malloc(n);
+        if (!p) {
+            ok = false;
+            break;
+        }
+        memset(p, (int)(seed >> 24), n);
+        if (i % 13 == 0)
+            gz_yield();
+        for (size_t k = 0; k < n; k++)
+            ok &= p[k] == (uint8_t)(seed >> 24);
+        free(p);
+    }
+    if (!ok)
+        thread_ok = -1000;
+    gz_sem_post(sem_done);
+}
+
+static void quick(void *arg)
+{
+    gz_sem_post(sem_done);
+}
+
+static void wait_forever(void *arg)
+{
+    *(volatile int *)arg = gz_sem_wait(sem_go, -1);
+    gz_sem_post(sem_done);
+}
+
+static bool wait_n(int n, int timeout_ms)
+{
+    for (int i = 0; i < n; i++)
+        if (gz_sem_wait(sem_done, timeout_ms))
+            return false;
+    return true;
+}
+
+static void test_threads(void)
+{
+    int s = gz_sem_create(0);
+    CHECK(s > 0 && gz_sem_wait(s, 0) == GZ_ETIMEDOUT && gz_sem_post(s) == 0 && gz_sem_wait(s, 0) == 0,
+          "sem try/post");
+    uint32_t t0 = gz_time_ms();
+    int rv = gz_sem_wait(s, 50);
+    uint32_t dt = gz_time_ms() - t0;
+    CHECK(rv == GZ_ETIMEDOUT && dt >= 50 && dt < 100, "sem wait timeout");
+    gz_sem_destroy(s);
+    CHECK(gz_sem_post(s) == GZ_EINVAL, "sem destroyed");
+
+    sem_go = gz_sem_create(0);
+    sem_done = gz_sem_create(0);
+    int tid = gz_thread_create(handoff, (void *)0x1234);
+    CHECK(tid > 0 && tid != gz_thread_id(), "thread create");
+    gz_sem_post(sem_go);
+    CHECK(gz_sem_wait(sem_done, 1000) == 0 && thread_ok == tid, "thread handoff");
+
+    counter = 0;
+    t0 = gz_time_ms();
+    for (int i = 0; i < 4; i++)
+        gz_thread_create(increment, NULL);
+    CHECK(wait_n(4, 5000) && counter == 8000, "mutex under contention (4 threads)");
+    printf("ktest: 8000 locked increments in %u ms\n", gz_time_ms() - t0);
+
+    thread_ok = 0;
+    errno = 7;
+    for (int i = 0; i < 3; i++)
+        gz_thread_create(own_errno, (void *)(uintptr_t)(100 + i));
+    CHECK(wait_n(3, 1000) && thread_ok == 3 && errno == 7, "errno per thread");
+
+    thread_ok = 0;
+    for (int i = 0; i < 4; i++)
+        gz_thread_create(churn, (void *)(uintptr_t)(i + 1));
+    CHECK(wait_n(4, 10000) && thread_ok == 0, "malloc from 4 threads");
+
+    /* More threads than stack slots, one after another: slots are reused. */
+    bool ok = true;
+    for (int i = 0; i < 80 && ok; i++)
+        ok = gz_thread_create(quick, NULL) > 0 && gz_sem_wait(sem_done, 1000) == 0;
+    CHECK(ok, "thread exit and reuse x80");
+
+    volatile int woke = 1;
+    gz_thread_create(wait_forever, (void *)&woke);
+    gz_sleep_ms(10);
+    gz_sem_destroy(sem_go);
+    CHECK(gz_sem_wait(sem_done, 1000) == 0 && woke == GZ_EDEAD, "sem destroy wakes waiters");
+    sem_go = gz_sem_create(0);
+
+    /* A process exiting with threads blocked on semaphores is reaped. */
+    struct gz_sysinfo si0, si1;
+    gz_sysinfo(&si0);
+    int pong = gz_spawn("bin/ktest_pong", 0);
+    int port;
+    for (int i = 0; (port = gz_port_lookup("pong")) < 0 && i < 500; i++)
+        gz_sleep_ms(2);
+    struct gz_msg m, r;
+    memset(&m, 0, sizeof(m));
+    m.w[0] = 0xFFFFFFFC;
+    rv = gz_send(port, &m, &r);
+    for (int i = 0; gz_proc_alive(pong) && i < 100; i++)
+        gz_sleep_ms(5);
+    gz_sysinfo(&si1);
+    printf("ktest: blocked-exit rv %d threads %u alive %d pages %u -> %u\n", rv, r.w[0], gz_proc_alive(pong),
+           si0.free_pages, si1.free_pages);
+    CHECK(rv == 0 && r.w[0] == 3 && !gz_proc_alive(pong) && si1.free_pages + 2 >= si0.free_pages,
+          "exit with blocked threads");
+}
 
 static void test_fs(void)
 {
@@ -107,6 +267,118 @@ static int http_get(uint32_t addr, uint16_t port, const char *host, char *out, u
     return rv < 0 ? rv : n;
 }
 
+static const char *strerror_or(int e)
+{
+    static char b[16];
+
+    snprintf(b, sizeof(b), "errno %d", e);
+    return b;
+}
+
+/* BSD sockets (libc) over the server's lwIP sockets, to ourselves. */
+static void test_bsd(uint32_t self)
+{
+    struct sockaddr_in sa, peer;
+    socklen_t len = sizeof(sa);
+    char buf[64];
+    int one = 1;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(7010);
+    int l = socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(l >= 0 && setsockopt(l, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) == 0 &&
+          bind(l, (struct sockaddr *)&sa, sizeof(sa)) == 0 && listen(l, 4) == 0 &&
+          getsockname(l, (struct sockaddr *)&sa, &len) == 0 && ntohs(sa.sin_port) == 7010, "bsd listen");
+
+    int c = socket(AF_INET, SOCK_STREAM, 0);
+    fcntl(c, F_SETFL, fcntl(c, F_GETFL, 0) | O_NONBLOCK);
+    sa.sin_addr.s_addr = self;
+    int rv = connect(c, (struct sockaddr *)&sa, sizeof(sa));
+    CHECK(rv == -1 && errno == EINPROGRESS, "bsd non-blocking connect");
+    struct pollfd pf = { c, POLLOUT, 0 };
+    int err = -1;
+    len = sizeof(err);
+    CHECK(poll(&pf, 1, 2000) == 1 && (pf.revents & POLLOUT) &&
+          getsockopt(c, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == 0, "bsd poll for connect");
+    fcntl(c, F_SETFL, 0);
+    len = sizeof(peer);
+    int a = accept(l, (struct sockaddr *)&peer, &len);
+    CHECK(a >= 0 && peer.sin_addr.s_addr == self, "bsd accept");
+    CHECK(send(c, "ping", 4, 0) == 4 && recv(a, buf, sizeof(buf), 0) == 4 && !memcmp(buf, "ping", 4),
+          "bsd send/recv");
+    CHECK(recv(a, buf, sizeof(buf), MSG_DONTWAIT) == -1 && errno == EWOULDBLOCK, "bsd recv MSG_DONTWAIT");
+    struct timeval tv = { 0, 100000 };
+    setsockopt(a, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    uint32_t t0 = gz_time_ms();
+    rv = recv(a, buf, sizeof(buf), 0);
+    uint32_t dt = gz_time_ms() - t0;
+    CHECK(rv == -1 && errno == EAGAIN && dt >= 100 && dt < 400, "bsd SO_RCVTIMEO");
+    pf = (struct pollfd){ a, POLLIN, 0 };
+    CHECK(poll(&pf, 1, 50) == 0, "bsd poll timeout");
+    write(c, "bye", 3);
+    CHECK(read(a, buf, sizeof(buf)) == 3, "bsd read/write");
+    close(c);
+    tv.tv_sec = 2;
+    setsockopt(a, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    CHECK(recv(a, buf, sizeof(buf), 0) == 0, "bsd end of stream");
+    close(a);
+    close(l);
+    CHECK(close(l) == -1 && errno == EBADF, "bsd close twice");
+
+    c = socket(AF_INET, SOCK_STREAM, 0);
+    sa.sin_port = htons(7011);
+    rv = connect(c, (struct sockaddr *)&sa, sizeof(sa));
+    CHECK(rv == -1 && errno == ECONNREFUSED, "bsd connect refused");
+    close(c);
+
+    int u1 = socket(AF_INET, SOCK_DGRAM, 0), u2 = socket(AF_INET, SOCK_DGRAM, 0);
+    sa.sin_addr.s_addr = INADDR_ANY;
+    sa.sin_port = htons(7012);
+    bind(u1, (struct sockaddr *)&sa, sizeof(sa));
+    sa.sin_addr.s_addr = self;
+    len = sizeof(peer);
+    CHECK(sendto(u2, "hi", 2, 0, (struct sockaddr *)&sa, sizeof(sa)) == 2 &&
+          recvfrom(u1, buf, sizeof(buf), 0, (struct sockaddr *)&peer, &len) == 2 && !memcmp(buf, "hi", 2) &&
+          peer.sin_addr.s_addr == self, "bsd udp sendto/recvfrom");
+    CHECK(connect(u2, (struct sockaddr *)&sa, sizeof(sa)) == 0 && send(u2, "yo", 2, 0) == 2 &&
+          recv(u1, buf, sizeof(buf), 0) == 2 && !memcmp(buf, "yo", 2), "bsd connected udp");
+    close(u1);
+    close(u2);
+
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_socktype = SOCK_STREAM;
+    char a1[16];
+    CHECK(getaddrinfo("10.1.2.3", "http", &hints, &res) == 0 &&
+          !strcmp(inet_ntop(AF_INET, &((struct sockaddr_in *)res->ai_addr)->sin_addr, a1, sizeof(a1)), "10.1.2.3") &&
+          ntohs(((struct sockaddr_in *)res->ai_addr)->sin_port) == 80, "bsd getaddrinfo literal");
+    freeaddrinfo(res);
+    CHECK(getaddrinfo("localhost", "80", &hints, &res) == 0 &&
+          ((struct sockaddr_in *)res->ai_addr)->sin_addr.s_addr == htonl(INADDR_LOOPBACK), "bsd getaddrinfo name");
+    freeaddrinfo(res);
+
+    /* HTTP over BSD sockets, if the internet is reachable. */
+    if (getaddrinfo("example.com", "80", &hints, &res) == 0) {
+        int s = socket(res->ai_family, res->ai_socktype, 0);
+        static char page[2048];
+        int n = 0;
+        if (connect(s, res->ai_addr, res->ai_addrlen) == 0) {
+            const char *req = "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n";
+            send(s, req, strlen(req), 0);
+            tv = (struct timeval){ 5, 0 };
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            while (n < (int)sizeof(page) - 1 && (rv = (int)recv(s, page + n, sizeof(page) - 1 - (size_t)n, 0)) > 0)
+                n += rv;
+        }
+        page[n] = 0;
+        page[strcspn(page, "\r\n")] = 0;
+        printf("ktest: INFO bsd example.com: %s\n", n ? page : strerror_or(errno));
+        close(s);
+        freeaddrinfo(res);
+    }
+}
+
 static void test_net(void)
 {
     static uint8_t frame[64], data[20000], back[20000];
@@ -184,6 +456,8 @@ static void test_net(void)
     CHECK(net_recvfrom(u1, dg, sizeof(dg), NULL, NULL, 50) == GZ_ETIMEDOUT, "udp recv timeout");
     net_close(u1);
     net_close(u2);
+
+    test_bsd(st.addr);
 
     /* An HTTP/1.0 GET through the router; the wider internet may not be
      * reachable from where the emulator runs. */
@@ -302,6 +576,7 @@ int main(void)
     uint32_t boots2 = 0;
     CHECK(gz_kv_get("ktest.boots", &boots2, sizeof(boots2)) == 4 && boots2 == boots, "kv counter after compaction");
 
+    test_threads();
     test_fs();
     test_net();
 

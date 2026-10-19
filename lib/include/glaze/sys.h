@@ -78,6 +78,16 @@ static inline int gz_net_bind(int port) { return GZ_SC1(SYS_NET_BIND, port); }
 static inline int gz_net_send(const void *frame, uint32_t len) { return GZ_SC2(SYS_NET_SEND, frame, len); }
 static inline int gz_net_recv(void *frame, uint32_t max) { return GZ_SC2(SYS_NET_RECV, frame, max); }
 
+/* Threads and semaphores; lib/include/glaze/thread.h has the libc layer. */
+static inline int gz_thread_spawn(void (*entry)(void *), void *arg) { return GZ_SC2(SYS_THREAD_CREATE, entry, arg); }
+static inline void gz_thread_exit(void) { GZ_SC0(SYS_THREAD_EXIT); for (;;) ; }
+static inline int gz_gettid(void) { return GZ_SC0(SYS_GETTID); }
+static inline int gz_sem_create(int count) { return GZ_SC1(SYS_SEM_CREATE, count); }
+/* 0, or GZ_ETIMEDOUT (timeout_ms 0 = try, -1 = forever). */
+static inline int gz_sem_wait(int sem, int timeout_ms) { return GZ_SC2(SYS_SEM_WAIT, sem, timeout_ms); }
+static inline int gz_sem_post(int sem) { return GZ_SC1(SYS_SEM_POST, sem); }
+static inline int gz_sem_destroy(int sem) { return GZ_SC1(SYS_SEM_DESTROY, sem); }
+
 static inline int gz_kv_get(const char *key, void *buf, uint32_t len) { return GZ_SC3(SYS_KV_GET, key, buf, len); }
 static inline int gz_kv_put(const char *key, const void *buf, uint32_t len) { return GZ_SC3(SYS_KV_PUT, key, buf, len); }
 static inline int gz_sysinfo(struct gz_sysinfo *si) { return GZ_SC1(SYS_SYSINFO, si); }

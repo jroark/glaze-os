@@ -2,10 +2,22 @@
 
 #include <glaze/fs.h>
 #include <glaze/sys.h>
+#include <glaze/thread.h>
 #include <string.h>
 
 static int port, session = -1;
 static uint8_t *buf;
+
+/* One call at a time per process: the shared buffer is the session's. */
+static struct gz_mutex session_lock = GZ_MUTEX_INIT;
+
+static void release(struct gz_mutex **m)
+{
+    gz_mutex_unlock(*m);
+}
+
+#define SESSION_LOCKED() \
+    struct gz_mutex *held_ __attribute__((cleanup(release))) = (gz_mutex_lock(&session_lock), &session_lock)
 
 /* Connects on first use. The file server mounts the flash before it
  * registers its port, so wait a little for it after boot. */
@@ -70,11 +82,13 @@ static int path_call(uint32_t op, const char *path, uint32_t a)
 
 int fs_open(const char *path, int flags)
 {
+    SESSION_LOCKED();
     return path_call(FS_OPEN, path, (uint32_t)flags);
 }
 
 int fs_read(int fd, void *dst, uint32_t len)
 {
+    SESSION_LOCKED();
     uint32_t done = 0;
     int rv = connect();
 
@@ -95,6 +109,7 @@ int fs_read(int fd, void *dst, uint32_t len)
 
 int fs_write(int fd, const void *src, uint32_t len)
 {
+    SESSION_LOCKED();
     uint32_t done = 0;
     int rv = connect();
 
@@ -113,6 +128,7 @@ int fs_write(int fd, const void *src, uint32_t len)
 
 int fs_seek(int fd, int32_t offset, int whence)
 {
+    SESSION_LOCKED();
     int rv = connect();
 
     return rv ? rv : call(FS_SEEK, (uint32_t)fd, (uint32_t)offset, (uint32_t)whence, NULL);
@@ -120,6 +136,7 @@ int fs_seek(int fd, int32_t offset, int whence)
 
 int fs_close(int fd)
 {
+    SESSION_LOCKED();
     int rv = connect();
 
     return rv ? rv : call(FS_CLOSE, (uint32_t)fd, 0, 0, NULL);
@@ -127,6 +144,7 @@ int fs_close(int fd)
 
 int fs_stat(const char *path, struct fs_stat *st)
 {
+    SESSION_LOCKED();
     int rv = path_call(FS_STAT, path, 0);
 
     if (rv >= 0 && st)
@@ -136,6 +154,7 @@ int fs_stat(const char *path, struct fs_stat *st)
 
 int fs_list(const char *path, uint32_t skip, struct fs_dirent *out, int max)
 {
+    SESSION_LOCKED();
     int total = 0, rv = connect();
     struct gz_msg r;
 
@@ -157,16 +176,19 @@ int fs_list(const char *path, uint32_t skip, struct fs_dirent *out, int max)
 
 int fs_mkdir(const char *path)
 {
+    SESSION_LOCKED();
     return path_call(FS_MKDIR, path, 0);
 }
 
 int fs_remove(const char *path)
 {
+    SESSION_LOCKED();
     return path_call(FS_REMOVE, path, 0);
 }
 
 int fs_rename(const char *from, const char *to)
 {
+    SESSION_LOCKED();
     int rv = connect();
 
     if (!rv)
@@ -178,6 +200,7 @@ int fs_rename(const char *from, const char *to)
 
 int fs_statfs(struct fs_info *info)
 {
+    SESSION_LOCKED();
     int rv = connect();
 
     if (!rv)
@@ -189,6 +212,7 @@ int fs_statfs(struct fs_info *info)
 
 int fs_format(void)
 {
+    SESSION_LOCKED();
     int rv = connect();
 
     return rv ? rv : call(FS_FORMAT, 0, 0, 0, NULL);
@@ -196,6 +220,7 @@ int fs_format(void)
 
 int fs_read_file(const char *path, void *dst, uint32_t max)
 {
+    SESSION_LOCKED();
     int fd = fs_open(path, FS_O_READ);
 
     if (fd < 0)
@@ -207,6 +232,7 @@ int fs_read_file(const char *path, void *dst, uint32_t max)
 
 int fs_write_file(const char *path, const void *src, uint32_t len)
 {
+    SESSION_LOCKED();
     int fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
 
     if (fd < 0)
