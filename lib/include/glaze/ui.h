@@ -147,6 +147,24 @@ int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
 void ui_draw_alert(gfx_surface *s, const char *title, const char *msg, const char *b1, const char *b2,
                    gfx_rect *r1, gfx_rect *r2, int pressed);
 
+/* ---- passcode keypad ---------------------------------------------------- */
+
+#define UI_PASSCODE_LEN     4
+#define UI_PASSCODE_CANCEL  0x1B    /* ui_passcode_hit's return for `cancel` */
+
+struct ui_passcode {
+    const char *title, *msg;
+    const char *cancel;     /* label of the bottom-left key, or NULL */
+    int digits;             /* boxes filled */
+    int pressed;            /* key under the finger (a hit value), or -1 */
+    bool dark;              /* dark text, for a light background */
+};
+
+/* Title, digit boxes and message at the top of `area`, keypad at its bottom. */
+void ui_draw_passcode(gfx_surface *s, gfx_rect area, const struct ui_passcode *pc);
+/* '0'..'9', '\b', UI_PASSCODE_CANCEL, or -1. */
+int ui_passcode_hit(gfx_rect area, const struct ui_passcode *pc, int x, int y);
+
 /* ---- navigation transition ------------------------------------------------ */
 
 /* Slide from the current surface to the view drawn by draw_new (forward =

@@ -73,6 +73,7 @@ and shared text editor.
 - An app sends `SB_HELLO` and receives a shared-memory 240x304 surface; the top 16 rows of the screen are SpringBoard's status bar.
 - The app draws into the surface and calls `ui_present()`, which blocks until the dirty rectangle is on screen.
 - The Home button kills the app, so apps must save state eagerly (Notes debounces its saves).
+- Passcode lock: with the `sb.passcode` preference set (salted hash, `glaze/passcode.h`, set from Settings → Passcode Lock), slide to unlock leads to `ST_PASSCODE`, a keypad drawn by libui's `ui_draw_passcode`; five wrong codes disable entry for a minute, doubling. `tests/t_passcode.txt` exercises it.
 - The home-screen app list is the `sb_apps[]` table in `servers/springboard/draw.c`; icons are `assets/gen/icon_*.gzi`.
 - Badges and notifications belong to SpringBoard (`servers/springboard/notify.c`), so they outlive the app. The front app calls `ui_set_badge` and `ui_notify_post/cancel/pending` (`lib/ui/notify.c`). Text travels in `sb_shared.req`, and fire times are `glaze/notify.h` wall-clock seconds. A note fires as a banner, on the lock screen when locked, or as `GZ_EV_APP_NOTIFY` with no badge when its own app is in front. Badges and pending notes persist as the `sb.badges`/`sb.notes` preferences, keyed by binary path. Other processes post for an app by path through `sb_*_for` (`lib/libc/notify.c`), which is unauthenticated because the kernel does not identify senders. Clock's timer and Calendar's reminders use it; `tests/t_notify.txt` exercises it.
 

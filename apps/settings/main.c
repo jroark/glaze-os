@@ -1,19 +1,20 @@
-/* Settings: network, wallpaper, date & time, about. */
+/* Settings: network, wallpaper, date & time, passcode lock, about. */
 
 #include <glaze/net.h>
+#include <glaze/passcode.h>
 #include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
 #include <string.h>
 
-enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK };
+enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
     R_TZ_DOWN, R_TZ_UP, R_FIELD_DOWN, R_FIELD_UP = R_FIELD_DOWN + 8,
     R_WALL0 = R_FIELD_UP + 8, R_PREV_CANCEL = R_WALL0 + 8, R_PREV_SET, R_BACK,
-    R_NETWORK, R_PING,
+    R_NETWORK, R_PING, R_PASSCODE, R_PIN_ON, R_PIN_OFF, R_PIN_CHANGE, R_PIN_CANCEL,
 };
 
 struct hit {
@@ -27,6 +28,14 @@ static int nhits;
 static int pressed = R_NONE;
 static int preview_wall;
 static char ping_result[24];
+
+/* Passcode entry: turning it on asks for a new code twice, changing it
+ * asks for the old one first, turning it off asks for the old one only. */
+enum pin_step { PIN_OLD, PIN_NEW, PIN_CONFIRM };
+static int pin_mode;            /* R_PIN_ON, R_PIN_OFF or R_PIN_CHANGE */
+static enum pin_step pin_step;
+static char pin_entry[UI_PASSCODE_LEN + 1], pin_new[UI_PASSCODE_LEN + 1];
+static struct ui_passcode pin_pc = { .pressed = -1, .dark = true };
 
 static const char *const wall_names[] = { "wall_aqua.gzi", "wall_dusk.gzi", "wall_meadow.gzi" };
 static gfx_image walls[3];
@@ -145,7 +154,8 @@ static void draw_root(gfx_surface *s)
     cell(s, 0, "Network", net_state_name(st.state), true, R_NETWORK);
     section_gap();
     cell(s, 1, "Wallpaper", NULL, true, R_WALLPAPER);
-    cell(s, 3, "Date & Time", NULL, true, R_DATETIME);
+    cell(s, 2, "Date & Time", NULL, true, R_DATETIME);
+    cell(s, 3, "Passcode Lock", passcode_enabled() ? "On" : "Off", true, R_PASSCODE);
     section_gap();
     cell(s, 0, "About", NULL, true, R_ABOUT);
 }
@@ -281,6 +291,45 @@ static void draw_network(gfx_surface *s)
     cell(s, 0, "Ping Router", ping_result, up, up ? R_PING : 0);
 }
 
+static void draw_passcode(gfx_surface *s)
+{
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Passcode Lock", "Settings", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    if (passcode_enabled()) {
+        cell(s, 1, "Turn Passcode Off", NULL, true, R_PIN_OFF);
+        cell(s, 3, "Change Passcode", NULL, true, R_PIN_CHANGE);
+    } else {
+        cell(s, 0, "Turn Passcode On", NULL, true, R_PIN_ON);
+    }
+    gfx_text_center(s, 0, section_y + 10, UI_W, ui_font(FONT_R12),
+                    "Asked for after slide to unlock.", 0x4C566C, 255);
+}
+
+static gfx_rect pin_area(void)
+{
+    return gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
+}
+
+static void draw_pin(gfx_surface *s)
+{
+    static const char *const prompts[3] = {
+        "Enter your passcode", "Enter a new passcode", "Re-enter your passcode",
+    };
+    const char *title = pin_mode == R_PIN_ON ? "Set Passcode" : pin_mode == R_PIN_OFF ? "Turn Off Passcode"
+                                                                                     : "Change Passcode";
+
+    nhits = 0;
+    ui_draw_pinstripes(s, pin_area());
+    ui_draw_navbar(s, title, NULL, NULL, 0);
+    add_hit(ui_draw_bar_button(s, "Cancel", true, pressed == R_PIN_CANCEL, false, 0), R_PIN_CANCEL);
+    pin_pc.title = pin_step == PIN_OLD && pin_mode == R_PIN_CHANGE ? "Enter your old passcode" : prompts[pin_step];
+    pin_pc.digits = (int)strlen(pin_entry);
+    ui_draw_passcode(s, pin_area(), &pin_pc);
+}
+
 static void draw_view(gfx_surface *s, enum view v)
 {
     switch (v) {
@@ -290,6 +339,8 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_DATETIME: draw_datetime(s); break;
     case V_ABOUT: draw_about(s); break;
     case V_NETWORK: draw_network(s); break;
+    case V_PASSCODE: draw_passcode(s); break;
+    case V_PIN: draw_pin(s); break;
     }
 }
 
@@ -339,10 +390,70 @@ static void adjust_field(int field, int delta)
     gz_rtc_set(&dt);
 }
 
+static void pin_start(int mode)
+{
+    pin_mode = mode;
+    pin_step = mode == R_PIN_ON ? PIN_NEW : PIN_OLD;
+    memset(pin_entry, 0, sizeof(pin_entry));
+    pin_pc.msg = NULL;
+    pin_pc.pressed = -1;
+    go(V_PIN, true);
+}
+
+/* A full code was entered at the current step. */
+static void pin_complete(void)
+{
+    switch (pin_step) {
+    case PIN_OLD:
+        if (!passcode_check(pin_entry)) {
+            pin_pc.msg = "Wrong passcode. Try again.";
+            break;
+        }
+        if (pin_mode == R_PIN_OFF) {
+            passcode_set(NULL);
+            go(V_PASSCODE, false);
+            return;
+        }
+        pin_step = PIN_NEW;
+        pin_pc.msg = NULL;
+        break;
+    case PIN_NEW:
+        strcpy(pin_new, pin_entry);
+        pin_step = PIN_CONFIRM;
+        pin_pc.msg = NULL;
+        break;
+    case PIN_CONFIRM:
+        if (!strcmp(pin_new, pin_entry)) {
+            passcode_set(pin_new);
+            go(V_PASSCODE, false);
+            return;
+        }
+        pin_step = PIN_NEW;
+        pin_pc.msg = "Passcodes did not match. Try again.";
+        break;
+    }
+    memset(pin_entry, 0, sizeof(pin_entry));
+}
+
+static void pin_key(int k)
+{
+    size_t n = strlen(pin_entry);
+
+    if (k == '\b' && n > 0) {
+        pin_entry[n - 1] = 0;
+    } else if (k >= '0' && k <= '9' && n < UI_PASSCODE_LEN) {
+        pin_entry[n++] = (char)k;
+        if (n == UI_PASSCODE_LEN) {
+            redraw();               /* show the last dot */
+            pin_complete();
+        }
+    }
+}
+
 static void activate(int id)
 {
-    if (id == R_BACK) {
-        go(view == V_PREVIEW ? V_WALLPAPER : V_ROOT, false);
+    if (id == R_BACK || id == R_PIN_CANCEL) {
+        go(view == V_PREVIEW ? V_WALLPAPER : view == V_PIN ? V_PASSCODE : V_ROOT, false);
         return;
     }
     switch (id) {
@@ -360,6 +471,12 @@ static void activate(int id)
     case R_WALLPAPER: go(V_WALLPAPER, true); return;
     case R_DATETIME: go(V_DATETIME, true); return;
     case R_ABOUT: go(V_ABOUT, true); return;
+    case R_PASSCODE: go(V_PASSCODE, true); return;
+    case R_PIN_ON:
+    case R_PIN_OFF:
+    case R_PIN_CHANGE:
+        pin_start(id);
+        return;
     case R_NETWORK:
         ping_result[0] = 0;
         go(V_NETWORK, true);
@@ -397,6 +514,30 @@ static void activate(int id)
     }
 }
 
+/* Touches on the passcode keypad; false if the event is not for it. */
+static bool pin_touch(const struct gz_input_event *ev)
+{
+    int k = ui_passcode_hit(pin_area(), &pin_pc, ev->x, ev->y);
+
+    if (view != V_PIN || (pin_pc.pressed < 0 && (ev->type != GZ_EV_TOUCH_DOWN || k < 0)))
+        return false;
+    if (ev->type == GZ_EV_TOUCH_DOWN) {
+        pin_pc.pressed = k;
+    } else if (ev->type == GZ_EV_TOUCH_MOVE) {
+        if (k == pin_pc.pressed)
+            return true;
+        pin_pc.pressed = -1;
+    } else if (ev->type == GZ_EV_TOUCH_UP) {
+        int p = pin_pc.pressed;
+        pin_pc.pressed = -1;
+        if (p == k)
+            pin_key(p);
+    }
+    if (view == V_PIN)
+        redraw();
+    return true;
+}
+
 static int hit_test(int x, int y)
 {
     /* Later entries (buttons inside cells) take priority. */
@@ -422,6 +563,14 @@ int main(void)
             redraw();               /* live uptime / clock */
             continue;
         }
+        if (pin_touch(&ev))
+            continue;
+        if (view == V_PIN && ev.type == GZ_EV_TEXT) {
+            pin_key(ev.code);
+            if (view == V_PIN)
+                redraw();
+            continue;
+        }
         if (ev.type == GZ_EV_TOUCH_DOWN) {
             pressed = hit_test(ev.x, ev.y);
             redraw();
@@ -438,6 +587,9 @@ int main(void)
             redraw();
         } else if (ev.type == GZ_EV_KEY_DOWN && ev.code == GZ_KEY_ESC && view != V_ROOT) {
             activate(R_BACK);
+            redraw();
+        } else if (ev.type == GZ_EV_KEY_DOWN && ev.code == GZ_KEY_BACKSPACE && view == V_PIN) {
+            pin_key('\b');
             redraw();
         }
     }
