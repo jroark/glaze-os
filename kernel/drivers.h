@@ -27,6 +27,10 @@ int sys_rtc_set(struct addrspace *as, uint32_t uin);
 
 /* input.c: touch panel and buttons. */
 void input_init(void);
+void input_push(uint16_t type, uint16_t code, int x, int y);
+void stowaway_init(void);
+void stowaway_poll(void);
+int stowaway_status(void);
 void input_irq(uint16_t kj_status);
 void input_poll(void);
 int input_bind(int port);

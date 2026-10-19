@@ -79,6 +79,7 @@ static struct ctl *press_ctl;
 static struct ctl *focus;           /* form field with the keyboard */
 static struct ui_keyboard kb;
 static char edit_url[URL_MAX];
+static int url_cursor;
 static bool edit_fresh;             /* the first key replaces the whole address */
 static struct ui_scroll list_scroll;
 static bool in_keyboard;
@@ -171,7 +172,7 @@ void plat_resolve_cancel(int id)
 
 static int view_h(void)
 {
-    return mode == M_BROWSE ? VIEW_H : KB_Y - VIEW_Y;
+    return mode == M_BROWSE ? VIEW_H : UI_H - ui_keyboard_height() - VIEW_Y;
 }
 
 static void save_state(void)
@@ -380,13 +381,14 @@ static void draw_field(gfx_surface *s, bool editing)
         gfx_rect old = s->clip;
         gfx_set_clip(s, gfx_r(r.x + 6, r.y, text_w, r.h));
         int tw = gfx_text_width(f, edit_url);
-        int x = tw > text_w ? r.x + 6 + text_w - tw : r.x + 6;
+        int cw = gfx_text_width_n(f, edit_url, url_cursor);
+        int x = r.x + 6 - MAX(0, (edit_fresh ? tw : cw) - text_w + 3);
         if (edit_fresh && tw)
             gfx_fill(s, gfx_r(x - 1, r.y + 4, MIN(tw, text_w) + 2, r.h - 8), 0xB4D2F7);
         gfx_text(s, x, r.y + (r.h - f->line_height) / 2, f, edit_url, 0x111111, 255);
-        s->clip = old;
         if (!edit_fresh)
-            gfx_fill(s, gfx_r(x + MIN(tw, text_w) + 1, r.y + 4, 2, r.h - 8), 0x3B7DDD);
+            gfx_fill(s, gfx_r(x + cw + 1, r.y + 4, 2, r.h - 8), 0x3B7DDD);
+        s->clip = old;
         return;
     }
     if (ld.state != LS_IDLE) {
@@ -537,7 +539,7 @@ static void draw_browser(gfx_surface *s)
     draw_bar(s);
     if (mode == M_BROWSE)
         draw_toolbar(s);
-    else
+    else if (!ui_has_hardware_keyboard())
         ui_draw_keyboard(s, &kb, KB_Y);
     draw_toast(s);
 }
@@ -667,6 +669,7 @@ static void activate_ctl(struct ctl *c)
     case C_PASSWORD:
     case C_TEXTAREA:
         focus = c;
+        c->cursor = c->len;
         mode = M_FIELD;
         ui_keyboard_init(&kb);
         kb.shift = false;
@@ -693,28 +696,32 @@ static void activate_ctl(struct ctl *c)
     }
 }
 
-static void field_key(int ch)
+static struct gz_input_event char_event(int ch)
+{
+    struct gz_input_event e = { .type = GZ_EV_TEXT, .code = (uint16_t)ch };
+    if (ch == '\b' || ch == '\n') {
+        e.type = GZ_EV_KEY_DOWN;
+        e.code = ch == '\b' ? GZ_KEY_BACKSPACE : GZ_KEY_ENTER;
+    }
+    return e;
+}
+
+static void field_input(const struct gz_input_event *e)
 {
     struct ctl *c = focus;
-
-    if (!c)
+    if (!c) return;
+    if (ui_input_char(e) == '\n' && c->type != C_TEXTAREA) {
+        submit(c->form, NULL);
         return;
-    if (ch == '\b') {
-        if (c->len)
-            c->value[--c->len] = 0;
-    } else if (ch == '\n') {
-        if (c->type == C_TEXTAREA) {
-            if (c->len + 1 < c->cap) {
-                c->value[c->len++] = '\n';
-                c->value[c->len] = 0;
-            }
-        } else {
-            submit(c->form, NULL);      /* implicit submission */
-        }
-    } else if (ch >= ' ' && ch < 0x7F && c->len + 1 < c->cap) {
-        c->value[c->len++] = (char)ch;
-        c->value[c->len] = 0;
     }
+    ui_edit_input(c->value, c->cap, &c->cursor, e, c->type == C_TEXTAREA);
+    c->len = (int)strlen(c->value);
+}
+
+static void field_key(int ch)
+{
+    struct gz_input_event e = char_event(ch);
+    field_input(&e);
 }
 
 /* ---- the address field ------------------------------------------------------------------ */
@@ -728,6 +735,7 @@ static void start_url_edit(void)
     kb.shift = false;
     snprintf(edit_url, sizeof(edit_url), "%s", page ? page->url : "");
     edit_fresh = true;
+    url_cursor = (int)strlen(edit_url);
     sc.view_h = view_h();
 }
 
@@ -752,30 +760,30 @@ static void finish_url_edit(bool go_there)
     free(abs);
 }
 
+static void url_input(const struct gz_input_event *e)
+{
+    int ch = ui_input_char(e);
+    if (ch == '\n') { finish_url_edit(true); return; }
+    if (edit_fresh && (ch || (e->type == GZ_EV_KEY_DOWN && e->code == GZ_KEY_DELETE))) {
+        edit_fresh = false;
+        edit_url[0] = 0;
+        url_cursor = 0;
+        if (ch == '\b' || e->code == GZ_KEY_DELETE) return;
+    }
+    if (e->type == GZ_EV_KEY_DOWN) edit_fresh = false;
+    if (ch != ' ') ui_edit_input(edit_url, sizeof(edit_url), &url_cursor, e, false);
+}
+
 static void url_key(int ch)
 {
-    size_t n = strlen(edit_url);
-
-    if (ch == '\n') {
-        finish_url_edit(true);
-        return;
-    }
-    if (edit_fresh && ch != 0) {
-        edit_fresh = false;
-        if (ch != '\b' || n)
-            edit_url[n = 0] = 0;
-        if (ch == '\b')
-            return;
-    }
-    if (ch == '\b') {
-        if (n)
-            edit_url[n - 1] = 0;
-    } else if (ch == UI_KEY_DOTCOM) {
-        if (n + 4 < sizeof(edit_url))
-            strcat(edit_url, ".com");
-    } else if (ch > ' ' && ch < 0x7F && n + 1 < sizeof(edit_url)) {
-        edit_url[n] = (char)ch;
-        edit_url[n + 1] = 0;
+    if (ch == UI_KEY_DOTCOM) {
+        for (const char *p = ".com"; *p; p++) {
+            struct gz_input_event e = char_event(*p);
+            url_input(&e);
+        }
+    } else {
+        struct gz_input_event e = char_event(ch);
+        url_input(&e);
     }
 }
 
@@ -859,7 +867,7 @@ static void content_tap(int x, int y)
 static void browser_event(const struct gz_input_event *e)
 {
     /* The keyboard, when up, owns its area. */
-    if (mode != M_BROWSE && (e->y >= KB_Y || in_keyboard) && pressed == P_NONE) {
+    if (!ui_has_hardware_keyboard() && mode != M_BROWSE && (e->y >= KB_Y || in_keyboard) && pressed == P_NONE) {
         bool changed;
         if (e->type == GZ_EV_TOUCH_DOWN)
             in_keyboard = true;
@@ -1012,6 +1020,25 @@ static void back_key(void)
 
 static void key_event(const struct gz_input_event *e)
 {
+    if (view == V_PAGE && page && e->type == GZ_EV_KEY_DOWN && e->code == GZ_KEY_TAB) {
+        struct ctl *first = NULL, *next = NULL;
+        bool after = focus == NULL;
+        for (struct ctl *c = page->ctls; c; c = c->next) {
+            if (!c->disabled && (c->type == C_TEXT || c->type == C_PASSWORD || c->type == C_TEXTAREA)) {
+                if (!first) first = c;
+                if (after && !next) next = c;
+            }
+            if (c == focus) after = true;
+        }
+        if (next || first) activate_ctl(next ? next : first);
+        return;
+    }
+    if (view == V_PAGE && mode != M_BROWSE &&
+        (e->type == GZ_EV_TEXT || (e->type == GZ_EV_KEY_DOWN && e->code != GZ_KEY_ESC))) {
+        if (mode == M_URL) url_input(e);
+        else field_input(e);
+        return;
+    }
     if (e->type != GZ_EV_KEY_DOWN)
         return;
     switch (e->code) {
@@ -1020,9 +1047,11 @@ static void key_event(const struct gz_input_event *e)
         break;
     case GZ_KEY_UP:
     case GZ_KEY_DOWN:
+    case GZ_KEY_PAGEUP:
+    case GZ_KEY_PAGEDOWN:
         if (view == V_PAGE && page) {
             sc.animating = false;
-            sc.offset += e->code == GZ_KEY_UP ? -VIEW_H * 3 / 4 : VIEW_H * 3 / 4;
+            sc.offset += (e->code == GZ_KEY_UP || e->code == GZ_KEY_PAGEUP) ? -view_h() * 3 / 4 : view_h() * 3 / 4;
             sc.offset = MAX(0, MIN(sc.offset, ui_scroll_max(&sc)));
             scroll_changed = gz_time_ms();
         }
@@ -1076,7 +1105,7 @@ int main(void)
 
         if (ui_next_event(&ev, timeout)) {
             do {
-                if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
+                if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP || ev.type == GZ_EV_TEXT)
                     key_event(&ev);
                 else if (ev.type == GZ_EV_APP_ACTIVATE)
                     ;

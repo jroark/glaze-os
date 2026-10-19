@@ -30,7 +30,7 @@ static bool pen_down;
 static int pen_x, pen_y;
 static uint8_t keys1, keys2;
 
-static void push(uint16_t type, uint16_t code, int x, int y)
+void input_push(uint16_t type, uint16_t code, int x, int y)
 {
     uint32_t now = (uint32_t)(time_us() / 1000u);
 
@@ -104,7 +104,7 @@ static void read_page(uint32_t base)
     /* The panel keeps sampling a resting pen; only report movement. */
     if (pen_down && x == pen_x && y == pen_y)
         return;
-    push(pen_down ? GZ_EV_TOUCH_MOVE : GZ_EV_TOUCH_DOWN, 0, x, y);
+    input_push(pen_down ? GZ_EV_TOUCH_MOVE : GZ_EV_TOUCH_DOWN, 0, x, y);
     pen_down = true;
     pen_x = x;
     pen_y = y;
@@ -130,7 +130,7 @@ static void touch_irq(void)
     if (active & PIUINT_PENCHG) {
         if (!(PIU_CNT & PIUCNT_PENDOWN) && pen_down) {
             pen_down = false;
-            push(GZ_EV_TOUCH_UP, 0, pen_x, pen_y);
+            input_push(GZ_EV_TOUCH_UP, 0, pen_x, pen_y);
         }
         ack |= PIUINT_PENCHG;
     }
@@ -150,7 +150,7 @@ static void touch_irq(void)
 static void key_edges(uint8_t now, uint8_t prev, uint8_t bit, uint16_t code)
 {
     if ((now ^ prev) & bit)
-        push((now & bit) ? GZ_EV_KEY_DOWN : GZ_EV_KEY_UP, code, 0, 0);
+        input_push((now & bit) ? GZ_EV_KEY_DOWN : GZ_EV_KEY_UP, code, 0, 0);
 }
 
 #ifdef GLAZE_INPUT_SCRIPT
@@ -160,6 +160,7 @@ void input_script_poll(void);
 
 void input_poll(void)
 {
+    stowaway_poll();
 #ifdef GLAZE_INPUT_SCRIPT
     input_script_poll();
 #endif
@@ -202,6 +203,7 @@ void input_init(void)
     PIU_STBL = 0x00C8;
     PIU_INT = (PIUINT_PENCHG | PIUINT_DATALOST | PIUINT_PAGE0 | PIUINT_PAGE1) << 8;
     PIU_CNT = PIU_SCAN;
+    stowaway_init();
 #ifdef GLAZE_INPUT_SCRIPT
     input_script_load();
 #endif
@@ -331,7 +333,7 @@ void input_script_poll(void)
 
     while (script_pos < script_n && script[script_pos].t <= now) {
         const struct script_ev *e = &script[script_pos++];
-        push(e->type, e->code, e->x, e->y);
+        input_push(e->type, e->code, e->x, e->y);
     }
 }
 #endif

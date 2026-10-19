@@ -41,7 +41,7 @@ static enum view view = V_LIST;
 static int cur = -1;                /* index into notes[] */
 static char text[MAX_TEXT + 1];
 static int cursor;
-static bool editing;                /* keyboard visible */
+static bool editing;                /* editor has input focus */
 static bool dirty;
 static uint32_t last_edit;
 static struct ui_keyboard kb;
@@ -234,7 +234,7 @@ static void refresh_titles(void)
 
 static int paper_h(void)
 {
-    return UI_H - UI_NAV_H - (editing ? UI_KB_H : TOOLBAR_H);
+    return UI_H - UI_NAV_H - (editing ? ui_keyboard_height() : TOOLBAR_H);
 }
 
 static int text_top(void)
@@ -326,9 +326,10 @@ static void draw_edit(gfx_surface *s)
         done_rect = ui_draw_bar_button(s, "Done", true, pressed_done, true, NAV_STYLE);
     else
         done_rect = gfx_r(0, 0, 0, 0);
-    if (editing)
-        ui_draw_keyboard(s, &kb, UI_H - UI_KB_H);
-    else
+    if (editing) {
+        if (!ui_has_hardware_keyboard())
+            ui_draw_keyboard(s, &kb, UI_H - UI_KB_H);
+    } else
         draw_toolbar(s);
     if (alert_open) {
         ui_draw_alert(s, "Delete Note", "This note will be deleted.", "Cancel", "Delete", &alert_cancel,
@@ -495,7 +496,7 @@ static void edit_event(const struct gz_input_event *e)
     }
 
     if (e->type == GZ_EV_TOUCH_DOWN) {
-        in_keyboard = editing && e->y >= kb_y;
+        in_keyboard = editing && !ui_has_hardware_keyboard() && e->y >= kb_y;
         pressed_done = editing && gfx_rect_contains(done_rect, e->x, e->y);
         pressed_trash = !editing && gfx_rect_contains(trash_rect, e->x, e->y);
     }
@@ -548,6 +549,37 @@ static void edit_event(const struct gz_input_event *e)
     }
 }
 
+static void physical_event(const struct gz_input_event *e)
+{
+    if (e->type == GZ_EV_KEY_DOWN && e->code == GZ_KEY_ESC && view == V_EDIT) {
+        if (alert_open) { alert_open = false; redraw(); }
+        else back_to_list();
+        return;
+    }
+    if (view != V_EDIT || !editing || alert_open)
+        return;
+    if (e->type == GZ_EV_KEY_DOWN && (e->code == GZ_KEY_UP || e->code == GZ_KEY_DOWN)) {
+        int l = cursor_line(), target = l + (e->code == GZ_KEY_UP ? -1 : 1);
+        if (target >= 0 && target < nlines) {
+            int x = gfx_text_width_n(ui_font(FONT_R14), text + line_starts[l], cursor - line_starts[l]);
+            cursor = ui_text_hit(ui_font(FONT_R14), text, line_starts, nlines, target, x);
+        }
+        keep_cursor_visible();
+        redraw();
+        return;
+    }
+    int oldlen = (int)strlen(text), oldcursor = cursor;
+    if (ui_edit_input(text, sizeof(text), &cursor, e, true)) {
+        if ((int)strlen(text) != oldlen) {
+            dirty = true;
+            last_edit = gz_time_ms();
+        }
+        layout();
+        keep_cursor_visible();
+        if (cursor != oldcursor || dirty) redraw();
+    }
+}
+
 int main(void)
 {
     ui_init(SB_STATUS_GRAY);
@@ -561,8 +593,8 @@ int main(void)
         struct gz_input_event ev;
 
         if (ui_next_event(&ev, timeout)) {
-            if (ev.type == GZ_EV_KEY_DOWN && ev.code == GZ_KEY_ESC && view == V_EDIT)
-                back_to_list();
+            if (ev.type == GZ_EV_TEXT || ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
+                physical_event(&ev);
             else if (view == V_LIST)
                 list_event(&ev);
             else

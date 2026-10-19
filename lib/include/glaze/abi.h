@@ -46,6 +46,7 @@ enum {
     SYS_SEM_WAIT,
     SYS_SEM_POST,
     SYS_SEM_DESTROY,
+    SYS_INPUT_STATUS,       /* GZ_INPUT_* capability bits */
     SYS_COUNT
 };
 
@@ -98,6 +99,7 @@ enum {
     GZ_EV_TOUCH_UP,
     GZ_EV_KEY_DOWN,
     GZ_EV_KEY_UP,
+    GZ_EV_TEXT,             /* code = ASCII character; no touch coordinates */
 };
 
 enum {
@@ -109,7 +111,17 @@ enum {
     GZ_KEY_RIGHT,
     GZ_KEY_HOME,        /* "Rocket" button */
     GZ_KEY_POWER,
+    GZ_KEY_ENTER,
+    GZ_KEY_TAB,
+    GZ_KEY_BACKSPACE,
+    GZ_KEY_DELETE,
+    GZ_KEY_KBD_HOME,         /* text Home, distinct from Rocket */
+    GZ_KEY_END,
+    GZ_KEY_PAGEUP,
+    GZ_KEY_PAGEDOWN,
 };
+
+#define GZ_INPUT_STOWAWAY   0x1u
 
 struct gz_input_event {
     uint16_t type;

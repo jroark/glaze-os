@@ -50,7 +50,7 @@ static gfx_rect alert_r1, alert_r2;
 
 /* Name sheet (new folder / rename). */
 static bool naming_new;
-static int naming_row;
+static int naming_row, name_cursor;
 static char name_buf[FS_NAME_MAX];
 static struct ui_keyboard kb;
 
@@ -409,7 +409,7 @@ static void draw_name(gfx_surface *s)
     const gfx_font *f = ui_font(FONT_R14);
     gfx_rect field = gfx_r(MARGIN, UI_NAV_H + 16, UI_W - MARGIN * 2, 30);
 
-    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H - UI_KB_H));
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H - ui_keyboard_height()));
     ui_draw_navbar(s, naming_new ? "New Folder" : "Rename", NULL, NULL, 0);
     cancel_rect = ui_draw_bar_button(s, "Cancel", false, pressed == P_CANCEL, false, 0);
     save_rect = ui_draw_bar_button(s, "Save", true, pressed == P_SAVE, name_valid(), 0);
@@ -417,7 +417,7 @@ static void draw_name(gfx_surface *s)
     gfx_round_rect(s, field, 6, 0x9AA0A8, 255);
     gfx_round_rect(s, gfx_r(field.x + 1, field.y + 1, field.w - 2, field.h - 2), 5, 0xFFFFFF, 255);
     int tx = field.x + 8, ty = field.y + (field.h - f->line_height) / 2;
-    int w = gfx_text_width(f, name_buf), maxw = field.w - 20;
+    int w = gfx_text_width_n(f, name_buf, name_cursor), maxw = field.w - 20;
     /* Keep the end of a long name (and the cursor) in view. */
     gfx_set_clip(s, gfx_r(field.x + 4, field.y, field.w - 8, field.h));
     int shift = w > maxw ? w - maxw : 0;
@@ -427,7 +427,8 @@ static void draw_name(gfx_surface *s)
         gfx_text(s, tx, ty, f, naming_new ? "Folder name" : "Name", 0xB0B0B0, 255);
     gfx_fill(s, gfx_r(tx - shift + w + 1, field.y + 6, 2, field.h - 12), 0x3B6FD8);
     gfx_reset_clip(s);
-    ui_draw_keyboard(s, &kb, UI_H - UI_KB_H);
+    if (!ui_has_hardware_keyboard())
+        ui_draw_keyboard(s, &kb, UI_H - UI_KB_H);
 }
 
 /* ---- drawing: viewers ----------------------------------------------------------- */
@@ -573,6 +574,7 @@ static void start_naming(bool is_new, int row)
     naming_new = is_new;
     naming_row = row;
     strlcpy(name_buf, is_new ? "" : ents[row].name, sizeof(name_buf));
+    name_cursor = (int)strlen(name_buf);
     ui_keyboard_init(&kb);
     kb.shift = is_new;
     confirm_row = -1;
@@ -731,25 +733,29 @@ static void list_event(const struct gz_input_event *e)
     }
 }
 
+static void name_input(const struct gz_input_event *e)
+{
+    int ch = ui_input_char(e);
+    if (ch == '\n') {
+        if (name_valid()) finish_naming(true);
+    } else if (ch != '/') {
+        ui_edit_input(name_buf, sizeof(name_buf), &name_cursor, e, false);
+        if (ch >= ' ') kb.shift = false;
+    }
+}
+
 static void name_event(const struct gz_input_event *e)
 {
     int kb_y = UI_H - UI_KB_H;
-
-    if (e->y >= kb_y && pressed == P_NONE) {
+    if (!ui_has_hardware_keyboard() && e->y >= kb_y && pressed == P_NONE) {
         bool changed;
         int ch = ui_keyboard_event(&kb, e, kb_y, &changed);
-        size_t n = strlen(name_buf);
-        if (ch == '\b' && n) {
-            name_buf[n - 1] = 0;
-        } else if (ch == '\n') {
-            if (name_valid())
-                finish_naming(true);
-            return;
-        } else if (ch >= ' ' && ch < 0x7F && ch != '/' && n + 1 < sizeof(name_buf)) {
-            name_buf[n] = (char)ch;
-            name_buf[n + 1] = 0;
-            kb.shift = false;
+        struct gz_input_event key = { .type = GZ_EV_TEXT, .code = (uint16_t)ch };
+        if (ch == '\b' || ch == '\n') {
+            key.type = GZ_EV_KEY_DOWN;
+            key.code = ch == '\b' ? GZ_KEY_BACKSPACE : GZ_KEY_ENTER;
         }
+        if (ch) name_input(&key);
         return;
     }
     if (e->type == GZ_EV_TOUCH_DOWN) {
@@ -814,7 +820,9 @@ int main(void)
         if (ui_next_event(&ev, sc->animating ? 30 : -1)) {
             if (ev.type == GZ_EV_KEY_DOWN && ev.code == GZ_KEY_ESC)
                 back_key();
-            else if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP || ev.type == GZ_EV_APP_ACTIVATE)
+            else if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP || ev.type == GZ_EV_TEXT) {
+                if (!alert_open && view == V_NAME) name_input(&ev);
+            } else if (ev.type == GZ_EV_APP_ACTIVATE)
                 ;
             else if (alert_open)
                 alert_event(&ev);

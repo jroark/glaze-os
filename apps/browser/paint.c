@@ -52,49 +52,73 @@ static void paint_ctl(gfx_surface *s, gfx_rect r, const struct ctl *c, bool focu
             const char *ph = node_attr(c->node, "placeholder");
             if (ph)
                 field_text(s, in, f, ph, (int)strlen(ph), 0x9A9A9A);
-        } else if (c->type == C_PASSWORD) {
-            char dots[96];
-            int n = 0;
-            for (int i = 0; i < c->len && n + 1 < (int)sizeof(dots); i++)
-                dots[n++] = GFX_CH_BULLET[0];
-            field_text(s, in, f, dots, n, ink);
         } else {
-            field_text(s, in, f, c->value, c->len, ink);
-        }
-        if (focused) {
-            int w = gfx_text_width_n(f, c->value, c->len);
-            int x = in.x + (w > in.w ? in.w : w) + 1;
-            gfx_fill(s, gfx_r(x, r.y + 3, 2, r.h - 6), CTL_FOCUS);
+            char dots[96];
+            const char *value = c->value;
+            int n = c->len, pos = MIN(c->cursor, n);
+            if (c->type == C_PASSWORD) {
+                n = MIN(n, (int)sizeof(dots));
+                for (int i = 0; i < n; i++) dots[i] = GFX_CH_BULLET[0];
+                value = dots;
+                pos = MIN(pos, n);
+            }
+            if (!focused) field_text(s, in, f, value, n, ink);
+            else {
+                gfx_rect old = s->clip, clip;
+                if (gfx_rect_intersect(old, in, &clip)) {
+                    s->clip = clip;
+                    int cw = gfx_text_width_n(f, value, pos);
+                    int x = in.x - MAX(0, cw - in.w + 3);
+                    gfx_text_n(s, x, r.y + (r.h - f->line_height) / 2, f, value, n, ink, 255);
+                    gfx_fill(s, gfx_r(x + cw + 1, r.y + 3, 2, r.h - 6), CTL_FOCUS);
+                    s->clip = old;
+                }
+            }
         }
         break;
     }
     case C_TEXTAREA: {
         gfx_fill(s, r, 0xFFFFFF);
-        frame(s, r, focused ? CTL_FOCUS : CTL_BORDER, focused ? 2 : 1);
+        frame(s, r, focused ? CTL_FOCUS : CTL_BORDER, 1);
         gfx_rect old = s->clip, cl;
         if (!gfx_rect_intersect(old, gfx_r(r.x + 3, r.y + 2, r.w - 6, r.h - 4), &cl))
             break;
         s->clip = cl;
-        /* Greedy wrap at spaces or anywhere. */
-        int y = r.y + 3, i = 0, maxw = r.w - 8;
-        while (i < c->len && y < r.y + r.h) {
-            int start = i, last_space = -1, j = i;
-            while (j < c->len && c->value[j] != '\n' &&
-                   gfx_text_width_n(f, c->value + start, j - start + 1) <= maxw) {
-                if (c->value[j] == ' ')
-                    last_space = j;
-                j++;
+        /* First locate the cursor's wrapped line, then keep it in view. */
+        int maxw = MAX(1, r.w - 8), caret_line = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            int i = 0, line = 0;
+            int skip = focused ? MAX(0, caret_line - MAX(1, (r.h - 6) / f->line_height) + 1) : 0;
+            while (i <= c->len) {
+                int start = i, last_space = -1, j = i;
+                while (j < c->len && c->value[j] != '\n' &&
+                       gfx_text_width_n(f, c->value + start, j - start + 1) <= maxw) {
+                    if (c->value[j] == ' ') last_space = j;
+                    j++;
+                }
+                int end = j;
+                if (j < c->len && c->value[j] != '\n' && last_space > start)
+                    end = last_space + 1;
+                if (end == start && j < c->len && c->value[j] != '\n') end++;
+                bool caret = c->cursor >= start &&
+                    (c->cursor < end || (c->cursor == end && (end == c->len || c->value[end] == '\n')));
+                if (!pass && caret) caret_line = line;
+                if (pass) {
+                    int y = r.y + 3 + (line - skip) * f->line_height;
+                    if (y >= r.y + r.h) break;
+                    if (y + f->line_height > r.y) {
+                        gfx_text_n(s, r.x + 4, y, f, c->value + start, end - start, ink, 255);
+                        if (focused && caret) {
+                            int cx = r.x + 4 + gfx_text_width_n(f, c->value + start, c->cursor - start);
+                            gfx_fill(s, gfx_r(cx, y, 2, f->line_height), CTL_FOCUS);
+                        }
+                    }
+                }
+                if (end == c->len) break;
+                i = end;
+                if (c->value[i] == '\n') i++;
+                line++;
             }
-            int end = j;
-            if (j < c->len && c->value[j] != '\n' && last_space > start)
-                end = last_space + 1;
-            if (end == start)
-                end = start + 1;
-            gfx_text_n(s, r.x + 4, y, f, c->value + start, end - start, ink, 255);
-            i = end;
-            if (i < c->len && c->value[i] == '\n')
-                i++;
-            y += f->line_height;
         }
         s->clip = old;
         break;

@@ -27,6 +27,7 @@ void ui_init(int status_style)
         puts("ui: SpringBoard refused HELLO");
         exit(1);
     }
+    ui.hardware_keyboard = (r.w[4] & GZ_INPUT_STOWAWAY) != 0;
     uint8_t *base = gz_shm_map((int)r.w[1]);
     if (!base)
         exit(1);

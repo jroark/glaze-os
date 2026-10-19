@@ -64,6 +64,7 @@ static inline uint16_t *gz_fb_map(void)
     int r = GZ_SC0(SYS_FB_MAP);
     return r < 0 ? NULL : (uint16_t *)r;
 }
+static inline int gz_input_status(void) { return GZ_SC0(SYS_INPUT_STATUS); }
 static inline int gz_input_bind(int port) { return GZ_SC1(SYS_INPUT_BIND, port); }
 static inline int gz_input_read(struct gz_input_event *ev, uint32_t max) { return GZ_SC2(SYS_INPUT_READ, ev, max); }
 

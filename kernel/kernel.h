@@ -7,6 +7,7 @@
 
 /* console.c */
 void uart_putc(char c);
+void console_use_debug_uart(void);
 void kputs(const char *s);
 void kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void kvprintf(const char *fmt, va_list ap);
