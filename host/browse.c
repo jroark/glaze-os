@@ -3,7 +3,8 @@
  * the real loader (HTTP over the host's sockets, file paths, res: from
  * assets/web) and writes the whole laid-out document to a BMP, 240 px wide.
  *
- * usage: browse <url | file.html> [out.bmp]     BROWSE_DUMP=1 prints the styled tree
+ * usage: browse <url | file.html> [out.bmp]     BROWSE_DUMP=1 prints the styled tree,
+ * BROWSE_ROOTS=roots.der replaces the trusted roots (concatenated DER certificates)
  */
 #include "hostres.h"
 #include "../apps/browser/load.h"
@@ -108,6 +109,44 @@ int plat_resolve_poll(int id, uint32_t *addr)
 void plat_resolve_cancel(int id)
 {
     lookups[id].used = false;
+}
+
+const void *plat_roots(uint32_t *size)
+{
+    static uint8_t *roots;
+    static int n;
+    const char *path = getenv("BROWSE_ROOTS");
+
+    if (!roots && read_all(path ? path : "../assets/ssl/roots.der", &roots, &n))
+        return NULL;
+    *size = (uint32_t)n;
+    return roots;
+}
+
+long long plat_time(void)
+{
+    return (long long)time(NULL);
+}
+
+void plat_noise(uint8_t *buf, int n)
+{
+    FILE *f = fopen("/dev/urandom", "rb");
+
+    if (!f || fread(buf, 1, (size_t)n, f) != (size_t)n) {
+        fprintf(stderr, "browse: no /dev/urandom\n");
+        exit(1);
+    }
+    fclose(f);
+}
+
+void plat_load_seed(uint8_t *seed)
+{
+    (void)seed;
+}
+
+void plat_save_seed(const uint8_t *seed)
+{
+    (void)seed;
 }
 
 /* ---- debugging ---------------------------------------------------------------- */

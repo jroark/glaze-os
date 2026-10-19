@@ -15,9 +15,15 @@ FS_CFLAGS := -std=gnu11 -O2 -g -Wall -I../servers/fs -I../third_party/littlefs -
 FAT := ../servers/fs/card.c ../third_party/fatfs/ff.c ../third_party/fatfs/ffunicode.c
 FAT_CFLAGS := $(CFLAGS) -I../servers/fs -I../third_party/fatfs -fsanitize=address,undefined
 
-# The browser engine, rendering pages to BMPs.
+# The browser engine, rendering pages to BMPs, with wolfSSL for https.
 WEB := $(filter-out ../apps/browser/main.c,$(wildcard ../apps/browser/*.c))
-WEB_CFLAGS := $(CFLAGS) -I../third_party/stb -fsanitize=address,undefined
+WEB_CFLAGS := $(CFLAGS) -I../third_party/stb -I../third_party/wolfssl -I../apps/browser/tls \
+    -DWOLFSSL_USER_SETTINGS -fsanitize=address,undefined
+WOLFSSL := $(addprefix ../third_party/wolfssl/,src/ssl.c src/internal.c src/tls.c src/tls13.c src/keys.c \
+    src/wolfio.c $(addprefix wolfcrypt/src/,aes.c sha.c sha256.c sha512.c hmac.c hash.c kdf.c random.c \
+    rsa.c ecc.c curve25519.c fe_low_mem.c chacha.c poly1305.c chacha20_poly1305.c sp_int.c wolfmath.c \
+    asn.c coding.c memory.c wc_port.c wc_encrypt.c error.c logging.c))
+WOLFSSL_CFLAGS := -std=gnu11 -O2 -g -I../third_party/wolfssl -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS
 
 # libmedia and the Helix MP3 decoder (the audio server's and Video app's
 # decoding), compared against ffmpeg by tests/mediatest.py.
@@ -57,14 +63,24 @@ fat-test: fattest
 mkfsimg: mkfsimg.c $(FS)
 	$(CC) $(FS_CFLAGS) -o $@ $^
 
-browse: browse.c hostres.c $(GFX) $(WEB) ../apps/browser/web.h
-	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB)
+# wolfSSL is built once, without sanitizers (its constant-time code trips UBSan's shift checks).
+WOLFSSL_OBJS := $(patsubst ../third_party/wolfssl/%.c,wolfssl.o/%.o,$(WOLFSSL))
+wolfssl.o/%.o: ../third_party/wolfssl/%.c ../apps/browser/tls/user_settings.h
+	@mkdir -p $(dir $@)
+	$(CC) $(WOLFSSL_CFLAGS) -c -o $@ $<
+libwolfssl.a: $(WOLFSSL_OBJS)
+	rm -f $@
+	ar rcs $@ $^
+
+browse: browse.c hostres.c $(GFX) $(WEB) ../apps/browser/web.h libwolfssl.a
+	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB) libwolfssl.a
 
 mediatest: mediatest.c $(MEDIA)
 	$(CC) $(MEDIA_CFLAGS) -o $@ $^ -lm
 
 clean:
-	rm -f sheet preview fstest fattest mkfsimg browse mediatest stowaway-test elf-test *.bmp *.png
+	rm -rf wolfssl.o
+	rm -f sheet preview fstest fattest mkfsimg browse libwolfssl.a mediatest stowaway-test elf-test *.bmp *.png
 
 # Byte decoder and shared text editing, with ASan/UBSan.
 stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c

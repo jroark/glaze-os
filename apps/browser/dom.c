@@ -186,7 +186,11 @@ const char *web_strerror(int err)
     case WE_RESET: return "The connection was lost.";
     case WE_PROTOCOL: return "The server sent a response that could not be understood.";
     case WE_TOO_BIG: return "The page is too large to open.";
-    case WE_HTTPS: return "Secure (https) pages are not supported yet.";
+    case WE_TLS: return "A secure connection to the server could not be made.";
+    case WE_CERT: return "The server's certificate is not trusted, so its identity can't be verified.";
+    case WE_CERT_NAME: return "The server's certificate belongs to a different site.";
+    case WE_CERT_DATE: return "The server's certificate is expired or not yet valid. "
+                              "Check the date and time in Settings.";
     case WE_SCHEME: return "This kind of address is not supported.";
     case WE_NOTFOUND: return "The file could not be found.";
     case WE_NOMEM: return "There is not enough memory to open the page.";

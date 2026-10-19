@@ -85,9 +85,19 @@ HELIX_SRCS := $(wildcard third_party/helix-mp3/*.c third_party/helix-mp3/real/*.
 HELIX_OBJS := $(patsubst %.c,$(OUT)/%.o,$(HELIX_SRCS))
 LIBMEDIA_SRCS := $(wildcard lib/media/*.c)
 
+# wolfSSL for the browser's https, configured by apps/browser/tls/user_settings.h.
+# ssl.c pulls in the other src/*.c files it needs.
+WOLFSSL_INC := -Ithird_party/wolfssl -Iapps/browser/tls -DWOLFSSL_USER_SETTINGS
+WOLFSSL_SRCS := $(addprefix third_party/wolfssl/,src/ssl.c src/internal.c src/tls.c src/tls13.c \
+    src/keys.c src/wolfio.c $(addprefix wolfcrypt/src/,aes.c sha.c sha256.c sha512.c hmac.c hash.c \
+    kdf.c random.c rsa.c ecc.c curve25519.c fe_low_mem.c chacha.c poly1305.c chacha20_poly1305.c \
+    sp_int.c wolfmath.c asn.c coding.c memory.c wc_port.c wc_encrypt.c error.c logging.c))
+WOLFSSL_OBJS := $(patsubst %.c,$(OUT)/%.o,$(WOLFSSL_SRCS))
+
 $(FSSTACK_OBJS): TP_INC := $(FS_INC)
 $(NETSTACK_OBJS): TP_INC := $(NET_INC)
 $(HELIX_OBJS): TP_INC := $(HELIX_INC)
+$(WOLFSSL_OBJS): TP_INC := $(WOLFSSL_INC)
 
 $(OUT)/lib/libfsstack.a: $(FSSTACK_OBJS)
 	@mkdir -p $(dir $@)
@@ -95,6 +105,11 @@ $(OUT)/lib/libfsstack.a: $(FSSTACK_OBJS)
 	$(AR) rcs $@ $^
 
 $(OUT)/lib/libnetstack.a: $(NETSTACK_OBJS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+$(OUT)/lib/libwolfssl.a: $(WOLFSSL_OBJS)
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
@@ -107,21 +122,23 @@ $(OUT)/lib/libmedia.a: $(patsubst lib/%.c,$(OUT)/lib/%.o,$(LIBMEDIA_SRCS)) $(HEL
 $(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
 $(OUT)/servers/net/%.o: USER_CFLAGS += $(NET_INC)
 $(OUT)/servers/audio/%.o: USER_CFLAGS += $(HELIX_INC)
-$(OUT)/apps/browser/%.o: USER_CFLAGS += -Ithird_party/stb
+$(OUT)/apps/browser/%.o: USER_CFLAGS += -Ithird_party/stb $(WOLFSSL_INC)
 $(OUT)/apps/video/%.o: USER_CFLAGS += -Ithird_party/stb
 
 # Per-program additions for dynamic links: compile flags, link inputs (built
 # first) and libraries.
-PROG_CFLAGS_browser := -Ithird_party/stb
+PROG_CFLAGS_browser := -Ithird_party/stb $(WOLFSSL_INC)
 PROG_CFLAGS_video := -Ithird_party/stb
 PROG_CFLAGS_audio := $(HELIX_INC)
 PROG_DEPS_video := $(OUT)/shared/libmedia.so.1
 PROG_LDLIBS_video := -l:libmedia.so.1
 PROG_DEPS_audio := $(OUT)/pic/libhelix.a $(OUT)/shared/libmedia.so.1
 PROG_LDLIBS_audio := $(OUT)/pic/libhelix.a -l:libmedia.so.1
+PROG_DEPS_browser := $(OUT)/pic/libwolfssl.a
+PROG_LDLIBS_browser := $(OUT)/pic/libwolfssl.a
 
-USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libc.a \
-    $(OUT)/lib/libfsstack.a $(OUT)/lib/libnetstack.a
+USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libwolfssl.a \
+    $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a $(OUT)/lib/libnetstack.a
 
 # ---- user programs ----------------------------------------------------------
 
@@ -191,12 +208,19 @@ $(OUT)/shared/libmedia.so.1: $(patsubst lib/%.c,$(OUT)/pic/%.o,$(LIBMEDIA_SRCS))
 	$(LD) $(DYN_LDFLAGS) -shared -soname libmedia.so.1 -z defs --gc-sections --version-script=lib/media/exports.map -o $@ $(filter %.o,$^) -L$(OUT)/shared --as-needed -l:libc.so.1
 
 HELIX_PIC_OBJS := $(patsubst %.c,$(OUT)/pic/%.o,$(HELIX_SRCS))
+WOLFSSL_PIC_OBJS := $(patsubst %.c,$(OUT)/pic/%.o,$(WOLFSSL_SRCS))
+$(HELIX_PIC_OBJS): TP_INC := $(HELIX_INC)
+$(WOLFSSL_PIC_OBJS): TP_INC := $(WOLFSSL_INC)
 $(OUT)/pic/third_party/%.o: third_party/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(filter-out -mno-abicalls -fno-pic,$(ARCHFLAGS)) -mabicalls -fPIC -std=gnu11 -ffreestanding \
 	    -fno-builtin -nostdlib -fno-stack-protector -O2 -ffunction-sections -fdata-sections -MMD -g \
-	    -Ilib/include -Ilib/libc/include $(HELIX_INC) -c -o $@ $<
+	    -Ilib/include -Ilib/libc/include $(TP_INC) -c -o $@ $<
 $(OUT)/pic/libhelix.a: $(HELIX_PIC_OBJS)
+	rm -f $@
+	$(AR) rcs $@ $^
+# The browser's alone, like libhelix.a.
+$(OUT)/pic/libwolfssl.a: $(WOLFSSL_PIC_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
@@ -243,19 +267,22 @@ $(OUT)/romfs/bin/%: $(OUT)/bin/%.elf
 # and checked in under assets/gen.
 
 ASSET_FILES := $(wildcard assets/gen/*)
-# The browser's bundled pages, romfs "web/".
+# The browser's bundled pages, romfs "web/", and its trusted roots, "ssl/"
+# (tools/mkroots.py).
 WEB_FILES := $(wildcard assets/web/*)
+SSL_FILES := $(wildcard assets/ssl/*)
 
 # ---- romfs ------------------------------------------------------------------
 
 ROMFS_BINS := $(foreach p,$(PROGS),$(OUT)/romfs/bin/$(p))
 
-$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) tools/mkromfs.py
+$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) tools/mkromfs.py
 	$(PYTHON) tools/mkromfs.py $@ \
 	    $(foreach p,$(PROGS),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
 	    $(foreach l,$(ROMFS_LIBRARY_FILES),lib/$(notdir $(l))=$(l)) \
 	    $(foreach a,$(ASSET_FILES),res/$(notdir $(a))=$(a)) \
 	    $(foreach w,$(WEB_FILES),web/$(notdir $(w))=$(w)) \
+	    $(foreach c,$(SSL_FILES),ssl/$(notdir $(c))=$(c)) \
 	    $(if $(INPUT_SCRIPT),test/input.txt=$(INPUT_SCRIPT))
 
 # ---- kernel -----------------------------------------------------------------

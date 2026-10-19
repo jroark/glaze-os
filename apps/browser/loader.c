@@ -3,7 +3,7 @@
  * document first, then stylesheets, then images), follows redirects, keeps
  * session cookies, and caches recent responses so going back and repeated
  * images don't refetch. Local schemes (res:, file:, data:) complete at
- * once. There's no TLS yet, so https: fails with WE_HTTPS.
+ * once.
  */
 
 #include "net.h"
@@ -117,9 +117,11 @@ static void set_cookie(const struct url *u, const char *v)
         cookie_free(&c);
         return;
     }
-    /* A cookie's domain must cover the host that set it. */
+    /* A cookie's domain must cover the host that set it, and only https
+     * may set a secure one. */
     size_t hl = strlen(u->host), dl = strlen(c.domain);
-    if (dl > hl || strcasecmp(u->host + hl - dl, c.domain) || (dl < hl && u->host[hl - dl - 1] != '.')) {
+    if (dl > hl || strcasecmp(u->host + hl - dl, c.domain) || (dl < hl && u->host[hl - dl - 1] != '.') ||
+        (c.secure && strcmp(u->scheme, "https"))) {
         cookie_free(&c);
         return;
     }
@@ -153,7 +155,7 @@ static char *cookies_for(const struct url *u)
 
     for (int i = 0; i < MAX_COOKIES; i++) {
         const struct cookie *c = &jar[i];
-        if (!c->name || c->secure)
+        if (!c->name || (c->secure && strcmp(u->scheme, "https")))
             continue;
         size_t dl = strlen(c->domain);
         bool dom = c->host_only ? !strcasecmp(u->host, c->domain)
@@ -390,15 +392,11 @@ static void begin(struct fetch *f)
         finish(f, WE_BADURL);
         return;
     }
-    if (!strcmp(u.scheme, "https")) {
-        finish(f, WE_HTTPS);
-        return;
-    }
     if (!strcmp(u.scheme, "res") || !strcmp(u.scheme, "file")) {
         finish(f, load_local(f, &u));
         return;
     }
-    if (strcmp(u.scheme, "http")) {
+    if (strcmp(u.scheme, "http") && strcmp(u.scheme, "https")) {
         finish(f, WE_SCHEME);
         return;
     }

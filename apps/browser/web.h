@@ -31,7 +31,10 @@ enum {
     WE_RESET,               /* connection dropped mid-response */
     WE_PROTOCOL,            /* malformed HTTP */
     WE_TOO_BIG,
-    WE_HTTPS,               /* TLS not supported yet */
+    WE_TLS,                 /* TLS handshake or record failure */
+    WE_CERT,                /* certificate not trusted */
+    WE_CERT_NAME,           /* certificate for another host */
+    WE_CERT_DATE,           /* certificate expired or not yet valid */
     WE_SCHEME,              /* unsupported URL scheme */
     WE_NOTFOUND,            /* file: or res: without that file */
     WE_NOMEM,
@@ -429,6 +432,7 @@ struct page {
     uint32_t bg;                /* canvas colour */
     uint32_t link_color;        /* <body link=...> or 0 */
     bool oom;                   /* something didn't fit in memory */
+    bool is_error;              /* load_error_page's */
 };
 
 struct page *page_new(const char *url);
