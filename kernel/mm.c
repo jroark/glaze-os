@@ -160,6 +160,10 @@ int as_map_page(struct addrspace *as, uint32_t va, uint32_t pa, uint32_t flags)
     if (!slot)
         return GZ_ENOMEM;
     *slot = PTE_MAKE(pa) | flags;
+    /* A TLB entry maps an even/odd page pair (VR4131 UM, TLB entry format),
+     * so one loaded while only the other page of the pair was mapped still
+     * holds this page as invalid. Drop it, or the first access faults. */
+    tlb_flush_all();
     return 0;
 }
 

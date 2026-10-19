@@ -205,6 +205,11 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_NET_BIND:      rv = sys_net_bind(cur->proc, (int)a0); break;
     case SYS_NET_SEND:      rv = sys_net_send(cur->proc, a0, a1); break;
     case SYS_NET_RECV:      rv = sys_net_recv(cur->proc, a0, a1); break;
+    case SYS_AUDIO_BIND:    rv = sys_audio_bind(cur->proc, (int)a0); break;
+    case SYS_AUDIO_START:   rv = sys_audio_start(cur->proc, a0, a1); break;
+    case SYS_AUDIO_WRITE:   rv = sys_audio_write(cur->proc, a0, a1); break;
+    case SYS_AUDIO_STOP:    rv = sys_audio_stop(cur->proc, a0); break;
+    case SYS_AUDIO_STATUS:  rv = sys_audio_status(cur->proc, a0); break;
     case SYS_THREAD_CREATE: rv = thread_spawn(a0, a1); break;
     case SYS_THREAD_EXIT:   rv = thread_exit(); break;
     case SYS_GETTID:        rv = cur->tid; break;

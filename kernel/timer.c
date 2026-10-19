@@ -76,4 +76,5 @@ void timer_irq(void)
     sched_timer_tick(time_us());
     input_poll();
     ne2000_irq();
+    audio_irq();
 }

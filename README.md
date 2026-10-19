@@ -40,7 +40,7 @@ The build also compiles `host/mkfsimg` with the host's C compiler (`HOSTCC`,
 default `cc`) to build the factory file system from `userdata/`.
 
 Apps and SpringBoard share `libc.so.1`, `libgfx.so.1` and `libui.so.1` by
-default. Native C plugins can use `dlopen`, `dlsym`, `dlclose` and `dlerror`,
+default; the audio server and Videos also share `libmedia.so.1`. Native C plugins can use `dlopen`, `dlsym`, `dlclose` and `dlerror`,
 loading from romfs or the writable filesystem. The file and network servers
 remain static. See [Dynamic libraries](docs/DYNAMIC_LIBRARIES.md) for the ABI,
 plugin build instructions, unloading rules, tests and measured savings.
@@ -95,6 +95,7 @@ Romfs holds only the OS. Everything else lives in the file system:
 | Path | Contents |
 | --- | --- |
 | `/Documents`, `/Pictures` | The user's files. Photos shows the GZI pictures in `/Pictures`. |
+| `/Music`, `/Movies` | Songs (MP3, WAV) for Music and videos (Motion-JPEG AVI) for Videos |
 | `/Library/Preferences` | Settings, one file per key (`lib/include/glaze/prefs.h`: `pref_get`, `pref_put`) |
 | `/Library/Notes` | Notes: an `index` file and one `<id>.txt` per note |
 | `/Library/Caches` | Data apps can rebuild, such as Photos' thumbnails |
@@ -155,6 +156,46 @@ Apps use `lib/include/glaze/net.h`: `net_resolve`, `net_socket`,
 The emulator's NAT resolves names and opens TCP connections on the host, so
 the guest reaches whatever the host can. Without a card, the network server
 reports "No Card" and calls fail with `GZ_ENETDOWN`.
+
+## Audio
+
+The BE-300's speaker is fed by a ping-pong DMA block in the companion chip,
+not the VRC4173's AIU; its registers come from WinCE's `wavedev.dll`, as
+documented in the emulator's `docs/BE300_AUDIO.md`. The kernel driver
+(`kernel/drivers/audio.c`) keeps a 64 KiB PCM ring and refills the two DMA
+buffers from it, for the audio server in `servers/audio` only. Boot the
+emulator with `--audio` to hear it.
+
+Apps use `lib/include/glaze/audio.h`:
+
+- **Player.** `audio_play("/Music/Demo.mp3")`, then pause, resume, seek,
+  next and previous. The server decodes the file itself, so music keeps
+  playing after the app exits, and it moves on through the folder. It plays
+  MP3 (the [Helix](https://github.com/ultraembedded/libhelix-mp3)
+  fixed-point decoder) and WAV, either PCM or IMA ADPCM.
+- **Stream.** `audio_stream_open(rate, channels)`, then
+  `audio_stream_write` with 16-bit PCM at any rate; `audio_stream_clock`
+  reports how much has been heard. Opening a stream pauses the player.
+
+The hardware plays 8, 11.025, 16, 22.05, 32 and 44.1 kHz; the server
+converts other rates to the nearest one.
+
+- **Music** (`apps/music`) lists the songs in `/Music` and has a Now Playing
+  screen with a scrubber and transport controls (OK plays and pauses, Left
+  and Right skip).
+- **Videos** (`apps/video`) plays Motion-JPEG AVI files from `/Movies`,
+  with PCM or IMA ADPCM sound, timed by the sound's clock. Late frames are
+  skipped. Reading from flash is the limit: the sample (192x144, 10 fps,
+  about 34 KB/s) plays at about 7 frames a second in the emulator. To make
+  one:
+
+  ```sh
+  ffmpeg -i in.mp4 -vf scale=192:-2 -r 10 -c:v mjpeg -q:v 12 -pix_fmt yuvj420p \
+      -ar 22050 -ac 1 -c:a adpcm_ima_wav out.avi
+  ```
+
+`host/mediatest` decodes files with the same code natively, and
+`tests/mediatest.py` compares it with ffmpeg.
 
 ### Stowaway keyboard
 

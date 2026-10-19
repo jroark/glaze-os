@@ -58,7 +58,35 @@
 #define KJ_CF_CAUSE         REG32(0x0A00A03Cu)
 #define KJ_INT_CF           (1u << 0)
 #define KJ_INT_KEYS         (1u << 1)
+#define KJ_INT_AUDIO        (1u << 8)
 #define KJ_INT_TOUCH        (1u << 9)
+#define KJ_SRC_EN           REG32(0x0A000030u)   /* bit 3: audio source enable */
+
+/* Wave output: a Casio ping-pong DMA block in the Kj window, not the
+ * VRC4173 UM's AIU (UM ch. 10 offsets 0x0E0..0x0FC see no traffic). The
+ * map comes from WinCE wavedev.dll: be300 docs/BE300_AUDIO.md, modelled in
+ * be300 src/hw/aiu.c. Buffer registers take KSEG1 addresses, end
+ * inclusive; samples are S16LE, mono or interleaved stereo. */
+#define AUD_CODEC_CMD       REG32(0x0A0003C0u)   /* serial codec command */
+#define AUD_CODEC_READY     REG32(0x0A0003C4u)   /* non-zero when idle */
+#define AUD_CODEC_STATUS    REG32(0x0A0003F4u)   /* bit 7 folds into 0xD007 */
+#define AUD_CTRL            REG32(0x0A000880u)   /* 6:4 rate, 3 output on */
+#define AUD_POWER           REG32(0x0A000884u)   /* 0 enable, 1 codec on */
+#define AUD_FORMAT          REG32(0x0A000888u)   /* 1 mono, 2 cleared on setup */
+#define AUD_START           REG32(0x0A000890u)   /* bit 1 set on start */
+#define AUD_DMA_RUN         REG32(0x0A000898u)
+#define AUD_ARM             REG32(0x0A0008A0u)
+#define AUD_STATUS          REG32(0x0A0008A8u)   /* bit n: buffer n drained */
+#define AUD_BUF0_START      REG32(0x0A0008B0u)
+#define AUD_BUF0_END        REG32(0x0A0008B4u)
+#define AUD_BUF1_START      REG32(0x0A0008B8u)
+#define AUD_BUF1_END        REG32(0x0A0008BCu)
+#define AUD_GO              REG32(0x0A0008C4u)   /* written 1 on start */
+#define AUD_ACK0            REG32(0x0A0008C8u)
+#define AUD_ACK1            REG32(0x0A0008CCu)
+#define AUD_CTRL_RATE_MASK  0x70u
+#define AUD_CTRL_OUT        0x08u
+#define AUD_SRC_EN_BIT      0x08u
 
 /* PCMCIA card socket. Setting bit 2 of the bridge register at 0x0A00A01C
  * turns the C000/D000 pages into card windows (the stock pcmcia.dll does

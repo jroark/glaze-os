@@ -76,8 +76,16 @@ $(OUT)/third_party/%.o: third_party/%.c
 	    -O2 -ffunction-sections -fdata-sections -MMD -g -Ilib/include -Ilib/libc/include \
 	    $(TP_INC) -c -o $@ $<
 
+# The Helix fixed-point MP3 decoder. Static builds put it in libmedia.a with
+# lib/media; dynamic ones keep it a private archive of bin/audio, its only user.
+HELIX_INC := -Ithird_party/helix-mp3/pub
+HELIX_SRCS := $(wildcard third_party/helix-mp3/*.c third_party/helix-mp3/real/*.c)
+HELIX_OBJS := $(patsubst %.c,$(OUT)/%.o,$(HELIX_SRCS))
+LIBMEDIA_SRCS := $(wildcard lib/media/*.c)
+
 $(FSSTACK_OBJS): TP_INC := $(FS_INC)
 $(NETSTACK_OBJS): TP_INC := $(NET_INC)
+$(HELIX_OBJS): TP_INC := $(HELIX_INC)
 
 $(OUT)/lib/libfsstack.a: $(FSSTACK_OBJS)
 	@mkdir -p $(dir $@)
@@ -89,12 +97,29 @@ $(OUT)/lib/libnetstack.a: $(NETSTACK_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
+$(OUT)/lib/libmedia.a: $(patsubst lib/%.c,$(OUT)/lib/%.o,$(LIBMEDIA_SRCS)) $(HELIX_OBJS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
+
 $(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
 $(OUT)/servers/net/%.o: USER_CFLAGS += $(NET_INC)
+$(OUT)/servers/audio/%.o: USER_CFLAGS += $(HELIX_INC)
 $(OUT)/apps/browser/%.o: USER_CFLAGS += -Ithird_party/stb
+$(OUT)/apps/video/%.o: USER_CFLAGS += -Ithird_party/stb
 
-USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a \
-    $(OUT)/lib/libnetstack.a
+# Per-program additions for dynamic links: compile flags, link inputs (built
+# first) and libraries.
+PROG_CFLAGS_browser := -Ithird_party/stb
+PROG_CFLAGS_video := -Ithird_party/stb
+PROG_CFLAGS_audio := $(HELIX_INC)
+PROG_DEPS_video := $(OUT)/shared/libmedia.so.1
+PROG_LDLIBS_video := -l:libmedia.so.1
+PROG_DEPS_audio := $(OUT)/pic/libhelix.a $(OUT)/shared/libmedia.so.1
+PROG_LDLIBS_audio := $(OUT)/pic/libhelix.a -l:libmedia.so.1
+
+USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libc.a \
+    $(OUT)/lib/libfsstack.a $(OUT)/lib/libnetstack.a
 
 # ---- user programs ----------------------------------------------------------
 
@@ -129,13 +154,14 @@ endef
 define DYNAMIC_template
 $(OUT)/dyn/$(1)/%.o: $(1)/%.c
 	@mkdir -p $$(dir $$@)
-	$(CC) $(PIC_CFLAGS) $(if $(filter browser,$(notdir $(1))),-Ithird_party/stb) -c -o $$@ $$<
-$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c)) $(OUT)/pic/crt0.o $(OUT)/pic/start.o $(SHARED_LIBS)
+	$(CC) $(PIC_CFLAGS) $(PROG_CFLAGS_$(notdir $(1))) -c -o $$@ $$<
+$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c)) $(OUT)/pic/crt0.o $(OUT)/pic/start.o $(SHARED_LIBS) \
+    $(PROG_DEPS_$(notdir $(1)))
 	@mkdir -p $$(dir $$@)
 	$(LD) $(DYN_LDFLAGS) -pie -e _start --export-dynamic --gc-sections \
 	    --dynamic-linker /lib/ld-glaze.so.1 -o $$@ $(OUT)/pic/crt0.o $(OUT)/pic/start.o \
 	    $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c)) \
-	    -L$(OUT)/shared --as-needed -l:libui.so.1 -l:libgfx.so.1 -l:libc.so.1
+	    -L$(OUT)/shared --as-needed $(PROG_LDLIBS_$(notdir $(1))) -l:libui.so.1 -l:libgfx.so.1 -l:libc.so.1
 endef
 
 PIC_C_SRCS := $(filter-out lib/libc/start.c,$(LIBC_SRCS))
@@ -158,6 +184,20 @@ $(OUT)/shared/libgfx.so.1: $(patsubst lib/%.c,$(OUT)/pic/%.o,$(LIBGFX_SRCS)) $(O
 $(OUT)/shared/libui.so.1: $(patsubst lib/%.c,$(OUT)/pic/%.o,$(LIBUI_SRCS)) $(OUT)/shared/libgfx.so.1 lib/ui/exports.map
 	$(LD) $(DYN_LDFLAGS) -shared -soname libui.so.1 -z defs --gc-sections --version-script=lib/ui/exports.map -o $@ $(filter %.o,$^) -L$(OUT)/shared --as-needed -l:libgfx.so.1 -l:libc.so.1
 
+# libmedia is shared by the audio server and Videos.
+$(OUT)/shared/libmedia.so.1: $(patsubst lib/%.c,$(OUT)/pic/%.o,$(LIBMEDIA_SRCS)) $(OUT)/shared/libc.so.1 lib/media/exports.map
+	$(LD) $(DYN_LDFLAGS) -shared -soname libmedia.so.1 -z defs --gc-sections --version-script=lib/media/exports.map -o $@ $(filter %.o,$^) -L$(OUT)/shared --as-needed -l:libc.so.1
+
+HELIX_PIC_OBJS := $(patsubst %.c,$(OUT)/pic/%.o,$(HELIX_SRCS))
+$(OUT)/pic/third_party/%.o: third_party/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(filter-out -mno-abicalls -fno-pic,$(ARCHFLAGS)) -mabicalls -fPIC -std=gnu11 -ffreestanding \
+	    -fno-builtin -nostdlib -fno-stack-protector -O2 -ffunction-sections -fdata-sections -MMD -g \
+	    -Ilib/include -Ilib/libc/include $(HELIX_INC) -c -o $@ $<
+$(OUT)/pic/libhelix.a: $(HELIX_PIC_OBJS)
+	rm -f $@
+	$(AR) rcs $@ $^
+
 $(OUT)/ldso/%.o: lib/ldso/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_CFLAGS) -Os -c -o $@ $<
@@ -173,7 +213,7 @@ $(OUT)/shared/ld-glaze.so.1: $(OUT)/ldso/entry.o $(OUT)/ldso/ldso.o $(OUT)/ldso/
 
 ifeq ($(DYNAMIC),1)
 $(foreach d,$(PROG_DIRS),$(if $(filter $(notdir $(d)),$(STATIC_PROGS)),$(eval $(call STATIC_template,$(d))),$(eval $(call DYNAMIC_template,$(d)))))
-ROMFS_LIBS := $(SHARED_LIBS) $(OUT)/shared/ld-glaze.so.1
+ROMFS_LIBS := $(SHARED_LIBS) $(OUT)/shared/libmedia.so.1 $(OUT)/shared/ld-glaze.so.1
 else
 $(foreach d,$(PROG_DIRS),$(eval $(call STATIC_template,$(d))))
 ROMFS_LIBS :=

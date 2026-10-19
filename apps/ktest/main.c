@@ -1,10 +1,11 @@
 /* Kernel self-test: IPC round trips, notifications, sleep, shm, malloc, faults,
- * threads and semaphores, the key/value store, the file server and, with an
- * NE2000, the network. */
+ * threads and semaphores, the key/value store, the file server, the audio
+ * server and, with an NE2000, the network. */
 
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <glaze/audio.h>
 #include <glaze/fs.h>
 #include <glaze/net.h>
 #include <glaze/prefs.h>
@@ -408,6 +409,94 @@ static void test_bsd(uint32_t self)
     }
 }
 
+/* ---- audio ---------------------------------------------------------------- */
+
+/* A 440 Hz triangle at 22050 Hz mono (integer only), continuing from *phase. */
+static void tone(int16_t *out, int frames, uint32_t *phase)
+{
+    for (int i = 0; i < frames; i++) {
+        uint32_t p = (*phase += 1308) & 0xFFFF;     /* 440 Hz: 65536 * 440 / 22050 */
+        int v = p < 0x8000 ? (int)p * 2 - 0x8000 : 0x17FFF - (int)p * 2;
+        out[i] = (int16_t)(v / 4);
+    }
+}
+
+static void test_audio(void)
+{
+    static int16_t pcm[2048];
+    struct audio_state st;
+    uint32_t phase = 0, played = 0, queued = 0;
+
+    CHECK(gz_audio_start(22050, 1) == GZ_EPERM && gz_audio_write(pcm, 4) == GZ_EPERM,
+          "raw audio denied to apps");
+
+    /* Stream mode: the clock must follow wall time with no underruns. */
+    CHECK(audio_stream_open(22050, 1) == 0, "audio stream open");
+    audio_get_state(&st);
+    uint32_t under0 = st.underruns;
+    int64_t t0 = -1;
+    uint32_t p0 = 0;
+    int pending = 0, off = 0;
+    uint64_t start = gz_time_us();
+    while (gz_time_us() - start < 3000000) {
+        if (!pending) {
+            tone(pcm, 2048, &phase);
+            pending = 4096;
+            off = 0;
+        }
+        int n = audio_stream_write((uint8_t *)pcm + off, (uint32_t)pending);
+        if (n > 0) {
+            off += n;
+            pending -= n;
+            continue;
+        }
+        audio_stream_clock(&played, &queued);
+        if (t0 < 0 && played > 200) {
+            t0 = (int64_t)gz_time_us();
+            p0 = played;
+        }
+        gz_sleep_ms(20);
+    }
+    audio_stream_clock(&played, &queued);
+    uint32_t wall = t0 < 0 ? 0 : (uint32_t)((gz_time_us() - (uint64_t)t0) / 1000);
+    uint32_t heard = played - p0;
+    audio_get_state(&st);
+    printf("ktest: audio stream %u ms played in %u ms, %u ms queued, %u underruns\n",
+           heard, wall, queued, st.underruns - under0);
+    /* The DMA runs on the emulator host's clock while guest time follows the
+     * emulated Count, so allow for drift between them. */
+    CHECK(wall > 1000 && heard * 10 > wall * 6 && heard * 10 < wall * 14, "audio stream clock");
+    CHECK(st.underruns == under0, "audio stream without underruns");
+    CHECK(audio_stream_close() == 0, "audio stream close");
+
+    /* Player mode on the factory MP3. */
+    int rv = audio_play("/Music/Demo.mp3");
+    CHECK(rv == 0, "audio play mp3");
+    gz_sleep_ms(2000);
+    audio_get_state(&st);
+    printf("ktest: audio '%s' by '%s' at %u/%u ms, %u Hz %u ch %u kbps\n", st.title, st.artist,
+           st.position_ms, st.duration_ms, st.rate, st.channels, st.bitrate);
+    CHECK(st.state == AUDIO_PLAYING && st.position_ms > 1000 && st.position_ms < 3000 &&
+          !strcmp(st.title, "Glaze Demo") && st.duration_ms > 19000, "audio mp3 playing");
+    CHECK(audio_seek(15000) == 0, "audio seek");
+    gz_sleep_ms(500);
+    audio_get_state(&st);
+    CHECK(st.position_ms >= 15000 && st.position_ms < 16500, "audio position after seek");
+    audio_pause();
+    audio_get_state(&st);
+    uint32_t paused_at = st.position_ms;
+    gz_sleep_ms(300);
+    audio_get_state(&st);
+    CHECK(st.state == AUDIO_PAUSED && st.position_ms == paused_at, "audio pause");
+    CHECK(audio_play("/Music/Chime.wav") == 0, "audio play adpcm wav");
+    gz_sleep_ms(1000);
+    audio_get_state(&st);
+    CHECK(st.state == AUDIO_PLAYING && st.position_ms > 300 && st.rate == 22050, "audio wav playing");
+    audio_stop();
+    audio_get_state(&st);
+    CHECK(st.state == AUDIO_STOPPED, "audio stop");
+}
+
 static void test_net(void)
 {
     static uint8_t frame[64], data[20000], back[20000];
@@ -581,6 +670,7 @@ int main(void)
     test_threads();
     test_fs();
     test_prefs();
+    test_audio();
     test_net();
 
     struct gz_sysinfo si;

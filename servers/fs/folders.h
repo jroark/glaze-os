@@ -4,7 +4,8 @@
 #define FS_FOLDERS_H
 
 static const char *const fs_standard_folders[] = {
-    "/Documents", "/Pictures", "/Library", "/Library/Preferences", "/Library/Notes", "/Library/Libraries",
+    "/Documents", "/Pictures", "/Music", "/Movies", "/Library", "/Library/Preferences",
+    "/Library/Notes", "/Library/Libraries",
 };
 
 #endif

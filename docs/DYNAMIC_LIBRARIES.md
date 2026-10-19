@@ -4,14 +4,17 @@ The default build links apps and SpringBoard as ELF32 little-endian MIPS O32
 PIE programs. Their `PT_INTERP` names `/lib/ld-glaze.so.1`. The kernel maps the
 program and this independent, statically linked interpreter; the interpreter
 loads `DT_NEEDED` dependencies, relocates them eagerly and runs constructors
-before entering the program. `fs` and `net` remain static bootstrap services.
+before entering the program. `fs` and `net` remain static bootstrap services;
+the audio server, which the kernel also starts, is dynamic.
 
 `libc.so.1` owns the allocator, threads, errno, resource mapping, filesystem and
-network clients, and BSD socket wrappers. `libgfx.so.1` owns graphics and font
-resources; `libui.so.1` owns widgets and the app client. Each has an explicit
-export map. lwIP, Dhara/littlefs and Browser's engine still have one consumer
-each, so moving them into separate libraries would add loader and file overhead
-without removing copies. Internal helpers stay private to their library.
+network and audio clients, and BSD socket wrappers. `libgfx.so.1` owns
+graphics and font resources; `libui.so.1` owns widgets and the app client.
+`libmedia.so.1` holds the WAV/ADPCM/AVI/MP3-probe/resampling code the audio
+server and Videos both use. Each has an explicit export map. lwIP,
+Dhara/littlefs, Browser's engine and the Helix MP3 decoder (in `bin/audio`,
+from a private PIC archive) still have one consumer each, so moving them into
+separate libraries would add loader and file overhead without removing copies. Internal helpers stay private to their library.
 
 ## Loading modules
 

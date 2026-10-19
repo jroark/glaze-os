@@ -27,6 +27,7 @@ void kmain(void)
     rtc_init();
     input_init();
     ne2000_init();
+    audio_init();
     ipc_init();
     sched_init();
     romfs_list();
@@ -36,6 +37,8 @@ void kmain(void)
         kputs("fs: no file server\n");
     if (!proc_spawn("bin/net", 0, PROC_NET))
         kputs("net: no network server\n");
+    if (!proc_spawn("bin/audio", 0, PROC_AUDIO))
+        kputs("audio: no audio server\n");
     if (!proc_spawn(GLAZE_INIT, 0, PROC_PRIVILEGED))
         panic("cannot start %s", GLAZE_INIT);
 
