@@ -60,6 +60,25 @@
 #define KJ_INT_KEYS         (1u << 1)
 #define KJ_INT_TOUCH        (1u << 9)
 
+/* PCMCIA card socket. Setting bit 2 of the bridge register at 0x0A00A01C
+ * turns the C000/D000 pages into card windows (the stock pcmcia.dll does
+ * this before its CIS scan; be300 src/devices/nand_window.c, and the
+ * Linux port's setup.c). The companion's card status at 0x0A001000 reads
+ * 0x4 with a card, 0xC for an empty attached socket (doc: CompactFlash and
+ * PCMCIA), and 0 on the emulator when nothing is attached. */
+#define PCMCIA_BRIDGE       REG32(0x0A00A01Cu)
+#define PCMCIA_BRIDGE_EN    0x04u
+#define PCMCIA_CARD_STATUS  REG32(0x0A001000u)
+#define PCMCIA_STATUS_MASK  0x0Cu
+#define PCMCIA_CARD_IN      0x04u
+
+/* NE2000 (DP8390) in the card I/O window at ISA port 0x300; the window
+ * decodes the low five address bits (be300 src/hw/cf_ne2000.c). */
+#define NE_BASE             0x0A00C300u
+#define NE_REG(r)           REG8(NE_BASE + (r))
+#define NE_DATA16           REG16(NE_BASE + 0x10)
+#define NE_RESET            REG8(NE_BASE + 0x1F)
+
 /* VRC4173 SIU UART, register stride 4 (doc: UARTs). */
 #define UART_BASE           0x0A008680u
 #define UART_THR            REG8(UART_BASE + 0 * 4)

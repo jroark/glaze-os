@@ -37,6 +37,10 @@ enum {
     SYS_FLASH_READ,
     SYS_FLASH_PROG,
     SYS_FLASH_ERASE,
+    SYS_NET_INFO,
+    SYS_NET_BIND,
+    SYS_NET_SEND,
+    SYS_NET_RECV,
     SYS_COUNT
 };
 
@@ -49,6 +53,22 @@ enum {
 #define GZ_EPERM        (-5)
 #define GZ_EDEAD        (-6)    /* peer exited */
 #define GZ_EFULL        (-7)
+/* File server (glaze/fs.h). */
+#define GZ_EEXIST       (-8)
+#define GZ_ENOTEMPTY    (-9)
+#define GZ_ENOSPC       (-10)
+#define GZ_EISDIR       (-11)
+#define GZ_ENOTDIR      (-12)
+#define GZ_EIO          (-13)
+#define GZ_ECORRUPT     (-14)
+/* Network server (glaze/net.h). */
+#define GZ_ENETDOWN     (-15)   /* no card, or no address yet */
+#define GZ_ECONNREFUSED (-16)
+#define GZ_ECONNRESET   (-17)
+#define GZ_ENOTCONN     (-18)
+#define GZ_EHOSTUNREACH (-19)
+#define GZ_EINUSE       (-20)   /* address or port in use */
+#define GZ_EBUSY        (-21)   /* another call is pending on the socket */
 
 /* IPC message: 64 bytes, copied by value. */
 #define GZ_MSG_WORDS    16
@@ -63,6 +83,7 @@ struct gz_msg {
 /* Kernel-generated notification bits. */
 #define GZ_NOTIFY_INPUT     0x80000000u
 #define GZ_NOTIFY_CHILD     0x40000000u
+#define GZ_NOTIFY_NET       0x20000000u     /* frames waiting (SYS_NET_RECV) */
 
 /* Input events (SYS_INPUT_READ). */
 enum {
@@ -115,6 +136,18 @@ struct gz_sysinfo {
 #define GZ_FLASH_PAGE_SIZE      512
 #define GZ_FLASH_PAGES_PER_BLOCK 32
 #define GZ_FLASH_BLOCKS         640
+
+/* SYS_NET_*: raw Ethernet frames for the network server (PROC_NET). */
+#define GZ_ETH_FRAME_MAX    1514    /* without the CRC */
+
+struct gz_netif_info {
+    uint32_t present;           /* an NE2000 card answered the probe */
+    uint8_t mac[6];
+    uint16_t reserved;
+    uint32_t rx_frames, tx_frames;
+    uint32_t rx_dropped;        /* kernel queue full or bad frames */
+    uint32_t overruns;          /* card ring overflows */
+};
 
 #define GZ_FB_WIDTH     240
 #define GZ_FB_HEIGHT    320

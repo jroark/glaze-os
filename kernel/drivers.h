@@ -6,6 +6,14 @@
 
 #ifndef GLAZE_BUILD
 #define GLAZE_BUILD "dev"
+/* ne2000.c: PCMCIA Ethernet for the network server. */
+void ne2000_init(void);
+void ne2000_irq(void);
+int sys_net_info(struct proc *p, uint32_t uout);
+int sys_net_bind(struct proc *p, int port);
+int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len);
+int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max);
+
 #endif
 
 /* irq.c: VR4131 ICU / GIU / VRC4173 cascade. */
@@ -33,5 +41,13 @@ int sys_kv_put(struct addrspace *as, uint32_t ukey, uint32_t ubuf, uint32_t len)
 int sys_flash_read(struct proc *p, uint32_t page, uint32_t ubuf);
 int sys_flash_prog(struct proc *p, uint32_t page, uint32_t ubuf);
 int sys_flash_erase(struct proc *p, uint32_t block);
+
+/* ne2000.c: PCMCIA Ethernet for the network server. */
+void ne2000_init(void);
+void ne2000_irq(void);
+int sys_net_info(struct proc *p, uint32_t uout);
+int sys_net_bind(struct proc *p, int port);
+int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len);
+int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max);
 
 #endif

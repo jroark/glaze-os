@@ -58,20 +58,36 @@ FSSTACK_SRCS := third_party/littlefs/lfs.c third_party/littlefs/lfs_util.c \
     third_party/dhara/dhara/error.c third_party/dhara/ecc/bch.c third_party/dhara/ecc/gf13.c
 FSSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(FSSTACK_SRCS))
 
+# lwIP for the network server; its port headers live in servers/net.
+NET_INC := -Ithird_party/lwip/src/include -Iservers/net
+NETSTACK_SRCS := $(wildcard third_party/lwip/src/core/*.c third_party/lwip/src/core/ipv4/*.c) \
+    third_party/lwip/src/netif/ethernet.c
+NETSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(NETSTACK_SRCS))
+
 $(OUT)/third_party/%.o: third_party/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(ARCHFLAGS) -std=gnu11 -ffreestanding -fno-builtin -nostdlib -fno-stack-protector \
 	    -O2 -ffunction-sections -fdata-sections -MMD -g -Ilib/include -Ilib/libc/include \
-	    $(FS_INC) -c -o $@ $<
+	    $(TP_INC) -c -o $@ $<
+
+$(FSSTACK_OBJS): TP_INC := $(FS_INC)
+$(NETSTACK_OBJS): TP_INC := $(NET_INC)
 
 $(OUT)/lib/libfsstack.a: $(FSSTACK_OBJS)
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-$(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
+$(OUT)/lib/libnetstack.a: $(NETSTACK_OBJS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
 
-USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a
+$(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
+$(OUT)/servers/net/%.o: USER_CFLAGS += $(NET_INC)
+
+USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a \
+    $(OUT)/lib/libnetstack.a
 
 # ---- user programs ----------------------------------------------------------
 

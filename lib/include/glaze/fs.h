@@ -19,15 +19,6 @@
 #define FS_PATH_MAX     128
 #define FS_NAME_MAX     64
 
-/* Errors beyond abi.h's. */
-#define GZ_EEXIST       (-8)
-#define GZ_ENOTEMPTY    (-9)
-#define GZ_ENOSPC       (-10)
-#define GZ_EISDIR       (-11)
-#define GZ_ENOTDIR      (-12)
-#define GZ_EIO          (-13)
-#define GZ_ECORRUPT     (-14)
-
 /* Requests: w0 = op, w1 = session; replies: w0 = result (>= 0 or error). */
 enum {
     FS_HELLO = 1,           /* w1 = pid -> w1 = session, w2 = shm id */

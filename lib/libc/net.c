@@ -1,0 +1,236 @@
+/* Network client: requests to the network server (see glaze/net.h). */
+
+#include <glaze/net.h>
+#include <glaze/sys.h>
+#include <stdio.h>
+#include <string.h>
+
+static int port, session = -1;
+static uint8_t *buf;
+
+/* Connects on first use, waiting a little for the server after boot. */
+static int connect(void)
+{
+    struct gz_msg m, r;
+
+    if (session >= 0)
+        return 0;
+    for (int tries = 0; (port = gz_port_lookup(NET_PORT_NAME)) <= 0; tries++) {
+        if (tries == 100)
+            return GZ_ENETDOWN;
+        gz_sleep_ms(50);
+    }
+    memset(&m, 0, sizeof(m));
+    m.w[0] = NET_HELLO;
+    m.w[1] = (uint32_t)gz_getpid();
+    if (gz_send(port, &m, &r) < 0 || (int)r.w[0] < 0)
+        return r.w[0] ? (int)r.w[0] : GZ_EIO;
+    buf = gz_shm_map((int)r.w[2]);
+    if (!buf)
+        return GZ_ENOMEM;
+    session = (int)r.w[1];
+    return 0;
+}
+
+static int call(uint32_t op, uint32_t a, uint32_t b, uint32_t c, uint32_t d, struct gz_msg *reply)
+{
+    struct gz_msg m, r;
+    int rv = connect();
+
+    if (reply)
+        memset(reply, 0, sizeof(*reply));
+    if (rv)
+        return rv;
+    memset(&m, 0, sizeof(m));
+    m.w[0] = op;
+    m.w[1] = (uint32_t)session;
+    m.w[2] = a;
+    m.w[3] = b;
+    m.w[4] = c;
+    m.w[5] = d;
+    if (gz_send(port, &m, &r) < 0)
+        return GZ_EIO;
+    if (reply)
+        *reply = r;
+    return (int)r.w[0];
+}
+
+int net_status(struct net_status *st)
+{
+    int rv = call(NET_STATUS, 0, 0, 0, 0, NULL);
+
+    if (rv < 0)
+        return rv;
+    memcpy(st, buf, sizeof(*st));
+    return 0;
+}
+
+int net_wait_up(int timeout_ms)
+{
+    struct net_status st;
+    uint32_t start = gz_time_ms();
+
+    for (;;) {
+        if (net_status(&st) == 0 && (st.state == NET_UP || st.state == NET_UP_STATIC))
+            return 0;
+        if (st.state == NET_NO_CARD || (int)(gz_time_ms() - start) >= timeout_ms)
+            return GZ_ENETDOWN;
+        gz_sleep_ms(100);
+    }
+}
+
+int net_resolve(const char *host, uint32_t *addr, int timeout_ms)
+{
+    struct gz_msg r;
+    size_t n = strlen(host);
+    int rv = connect();
+
+    if (rv)
+        return rv;
+    if (n >= NET_HOST_MAX)
+        return GZ_EINVAL;
+    memcpy(buf, host, n + 1);
+    rv = call(NET_RESOLVE, (uint32_t)timeout_ms, 0, 0, 0, &r);
+    if (rv == 0)
+        *addr = r.w[1];
+    return rv;
+}
+
+int net_socket(int type)
+{
+    return call(NET_SOCKET, (uint32_t)type, 0, 0, 0, NULL);
+}
+
+int net_connect(int s, uint32_t addr, uint16_t port_, int timeout_ms)
+{
+    return call(NET_CONNECT, (uint32_t)s, addr, port_, (uint32_t)timeout_ms, NULL);
+}
+
+int net_bind(int s, uint16_t port_)
+{
+    return call(NET_BIND, (uint32_t)s, port_, 0, 0, NULL);
+}
+
+int net_listen(int s)
+{
+    return call(NET_LISTEN, (uint32_t)s, 0, 0, 0, NULL);
+}
+
+int net_accept(int s, uint32_t *addr, uint16_t *port_, int timeout_ms)
+{
+    struct gz_msg r;
+    int rv = call(NET_ACCEPT, (uint32_t)s, (uint32_t)timeout_ms, 0, 0, &r);
+
+    if (rv >= 0) {
+        if (addr)
+            *addr = r.w[1];
+        if (port_)
+            *port_ = (uint16_t)r.w[2];
+    }
+    return rv;
+}
+
+int net_send(int s, const void *src, uint32_t len)
+{
+    uint32_t done = 0;
+    int rv = connect();
+
+    if (rv)
+        return rv;
+    while (done < len) {
+        uint32_t n = MIN(len - done, NET_IO_MAX);
+        memcpy(buf, (const uint8_t *)src + done, n);
+        rv = call(NET_SEND, (uint32_t)s, n, 0, 0, NULL);
+        if (rv < 0)
+            return rv;
+        done += (uint32_t)rv;
+    }
+    return (int)done;
+}
+
+int net_recv(int s, void *dst, uint32_t len, int timeout_ms)
+{
+    int rv = call(NET_RECV, (uint32_t)s, MIN(len, NET_IO_MAX), (uint32_t)timeout_ms, 0, NULL);
+
+    if (rv > 0)
+        memcpy(dst, buf, (size_t)rv);
+    return rv;
+}
+
+int net_sendto(int s, const void *src, uint32_t len, uint32_t addr, uint16_t port_)
+{
+    int rv = connect();
+
+    if (rv)
+        return rv;
+    if (len > NET_IO_MAX)
+        return GZ_EINVAL;
+    memcpy(buf, src, len);
+    return call(NET_SENDTO, (uint32_t)s, len, addr, port_, NULL);
+}
+
+int net_recvfrom(int s, void *dst, uint32_t len, uint32_t *addr, uint16_t *port_, int timeout_ms)
+{
+    struct gz_msg r;
+    int rv = call(NET_RECVFROM, (uint32_t)s, MIN(len, NET_IO_MAX), (uint32_t)timeout_ms, 0, &r);
+
+    if (rv >= 0) {
+        memcpy(dst, buf, (size_t)rv);
+        if (addr)
+            *addr = r.w[1];
+        if (port_)
+            *port_ = (uint16_t)r.w[2];
+    }
+    return rv;
+}
+
+int net_close(int s)
+{
+    return call(NET_CLOSE, (uint32_t)s, 0, 0, 0, NULL);
+}
+
+int net_ping(uint32_t addr, int timeout_ms)
+{
+    return call(NET_PING, addr, (uint32_t)timeout_ms, 0, 0, NULL);
+}
+
+char *net_ntoa(uint32_t addr, char *out)
+{
+    snprintf(out, 16, "%u.%u.%u.%u", addr & 0xFF, (addr >> 8) & 0xFF,
+             (addr >> 16) & 0xFF, addr >> 24);
+    return out;
+}
+
+int net_aton(const char *s, uint32_t *addr)
+{
+    uint32_t v = 0;
+
+    for (int i = 0; i < 4; i++) {
+        uint32_t part = 0;
+        int digits = 0;
+        while (*s >= '0' && *s <= '9' && digits < 3) {
+            part = part * 10 + (uint32_t)(*s++ - '0');
+            digits++;
+        }
+        if (!digits || part > 255 || *s != (i < 3 ? '.' : '\0'))
+            return GZ_EINVAL;
+        s++;
+        v |= part << (8 * i);
+    }
+    *addr = v;
+    return 0;
+}
+
+const char *net_strerror(int err)
+{
+    switch (err) {
+    case GZ_ENETDOWN:       return "Not connected to a network";
+    case GZ_ETIMEDOUT:      return "The server didn't respond";
+    case GZ_ENOENT:         return "Server not found";
+    case GZ_ECONNREFUSED:   return "Connection refused";
+    case GZ_ECONNRESET:     return "Connection lost";
+    case GZ_EHOSTUNREACH:   return "Server unreachable";
+    case GZ_ENOMEM:         return "Out of memory";
+    default:                return "Network error";
+    }
+}

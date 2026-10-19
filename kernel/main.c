@@ -26,6 +26,7 @@ void kmain(void)
     timer_init();
     rtc_init();
     input_init();
+    ne2000_init();
     kv_init();
     ipc_init();
     sched_init();
@@ -34,6 +35,8 @@ void kmain(void)
     /* The file server owns the flash above the key/value store. */
     if (!proc_spawn("bin/fs", 0, PROC_FLASH))
         kputs("fs: no file server\n");
+    if (!proc_spawn("bin/net", 0, PROC_NET))
+        kputs("net: no network server\n");
     if (!proc_spawn(GLAZE_INIT, 0, PROC_PRIVILEGED))
         panic("cannot start %s", GLAZE_INIT);
 

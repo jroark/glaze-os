@@ -197,6 +197,10 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_FLASH_READ:    rv = sys_flash_read(cur->proc, a0, a1); break;
     case SYS_FLASH_PROG:    rv = sys_flash_prog(cur->proc, a0, a1); break;
     case SYS_FLASH_ERASE:   rv = sys_flash_erase(cur->proc, a0); break;
+    case SYS_NET_INFO:      rv = sys_net_info(cur->proc, a0); break;
+    case SYS_NET_BIND:      rv = sys_net_bind(cur->proc, (int)a0); break;
+    case SYS_NET_SEND:      rv = sys_net_send(cur->proc, a0, a1); break;
+    case SYS_NET_RECV:      rv = sys_net_recv(cur->proc, a0, a1); break;
     default:                rv = GZ_EINVAL; break;
     }
     if (rv != SYSRET_BLOCKED)
