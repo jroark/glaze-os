@@ -180,6 +180,25 @@ int fs_mkdir(const char *path)
     return path_call(FS_MKDIR, path, 0);
 }
 
+int fs_mkdirs(const char *path)
+{
+    char part[FS_PATH_MAX];
+    size_t n = strlen(path);
+
+    if (n >= sizeof(part))
+        return GZ_EINVAL;
+    for (size_t i = 1; i <= n; i++) {
+        if (path[i] != '/' && path[i] != 0)
+            continue;
+        memcpy(part, path, i);
+        part[i] = 0;
+        int rv = fs_mkdir(part);
+        if (rv < 0 && rv != GZ_EEXIST)
+            return rv;
+    }
+    return 0;
+}
+
 int fs_remove(const char *path)
 {
     SESSION_LOCKED();

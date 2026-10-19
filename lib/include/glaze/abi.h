@@ -28,8 +28,6 @@ enum {
     SYS_FB_MAP,
     SYS_INPUT_BIND,
     SYS_INPUT_READ,
-    SYS_KV_GET,
-    SYS_KV_PUT,
     SYS_SYSINFO,
     SYS_GETPID,
     SYS_ROMFS_MAP,
@@ -128,9 +126,6 @@ struct gz_datetime {
     uint8_t weekday;        /* 0 = Sunday */
 };
 
-/* SYS_KV_PUT with this length deletes the key. */
-#define GZ_KV_DELETE    0xFFFFFFFFu
-
 struct gz_sysinfo {
     uint32_t total_pages;       /* all of SDRAM */
     uint32_t free_pages;        /* available to processes */
@@ -140,10 +135,10 @@ struct gz_sysinfo {
     char build[32];
 };
 
-/* SYS_FLASH_*: the file server's NAND region (10 MiB from 0x600000). */
+/* SYS_FLASH_*: the file server's NAND region (11 MiB from 0x500000). */
 #define GZ_FLASH_PAGE_SIZE      512
 #define GZ_FLASH_PAGES_PER_BLOCK 32
-#define GZ_FLASH_BLOCKS         640
+#define GZ_FLASH_BLOCKS         704
 
 /* SYS_NET_*: raw Ethernet frames for the network server (PROC_NET). */
 #define GZ_ETH_FRAME_MAX    1514    /* without the CRC */

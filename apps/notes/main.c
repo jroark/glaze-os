@@ -1,12 +1,13 @@
 /*
  * Notes: a list of notes on yellow legal paper and an editor with the
- * on-screen keyboard. Notes persist in the kernel key/value store:
- *   "notes.idx"   array of struct meta (id + last edit time)
- *   "note.<id>"   note text
+ * on-screen keyboard. Notes persist as files under /Library/Notes:
+ *   index         array of struct meta (id + last edit time)
+ *   <id>.txt      note text
  * Edits are saved after a short pause and on leaving the editor, since
  * pressing Home terminates the app.
  */
 
+#include <glaze/fs.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
@@ -58,14 +59,24 @@ static bool in_keyboard;
 
 /* ---- storage ------------------------------------------------------------ */
 
-static void key_for(uint32_t id, char *buf, size_t n)
+#define NOTES_DIR   "/Library/Notes"
+#define NOTES_INDEX NOTES_DIR "/index"
+
+static void path_for(uint32_t id, char *buf, size_t n)
 {
-    snprintf(buf, n, "note.%u", id);
+    snprintf(buf, n, NOTES_DIR "/%u.txt", id);
+}
+
+/* Writes a whole file, creating the Notes folder if it is missing. */
+static void write_file(const char *path, const void *data, uint32_t len)
+{
+    if (fs_write_file(path, data, len) == GZ_ENOENT && fs_mkdirs(NOTES_DIR) == 0)
+        fs_write_file(path, data, len);
 }
 
 static void load_index(void)
 {
-    int n = gz_kv_get("notes.idx", notes, sizeof(notes));
+    int n = fs_read_file(NOTES_INDEX, notes, sizeof(notes));
 
     nnotes = n > 0 ? n / (int)sizeof(struct meta) : 0;
     for (int i = 0; i < nnotes; i++) {
@@ -76,15 +87,15 @@ static void load_index(void)
 
 static void save_index(void)
 {
-    gz_kv_put("notes.idx", notes, (uint32_t)(nnotes * (int)sizeof(struct meta)));
+    write_file(NOTES_INDEX, notes, (uint32_t)(nnotes * (int)sizeof(struct meta)));
 }
 
 static void load_text(int i, char *buf, int max)
 {
-    char key[24];
+    char path[FS_PATH_MAX];
 
-    key_for(notes[i].id, key, sizeof(key));
-    int n = gz_kv_get(key, buf, (uint32_t)max);
+    path_for(notes[i].id, path, sizeof(path));
+    int n = fs_read_file(path, buf, (uint32_t)max);
     buf[n > 0 ? MIN(n, max) : 0] = 0;
 }
 
@@ -99,12 +110,12 @@ static void move_to_front(int i)
 
 static void save_current(void)
 {
-    char key[24];
+    char path[FS_PATH_MAX];
 
     if (cur < 0 || !dirty)
         return;
-    key_for(notes[cur].id, key, sizeof(key));
-    gz_kv_put(key, text, (uint32_t)strlen(text));
+    path_for(notes[cur].id, path, sizeof(path));
+    write_file(path, text, (uint32_t)strlen(text));
     gz_rtc_get(&notes[cur].dt);
     move_to_front(cur);
     cur = 0;
@@ -114,12 +125,12 @@ static void save_current(void)
 
 static void delete_current(void)
 {
-    char key[24];
+    char path[FS_PATH_MAX];
 
     if (cur < 0)
         return;
-    key_for(notes[cur].id, key, sizeof(key));
-    gz_kv_put(key, NULL, GZ_KV_DELETE);
+    path_for(notes[cur].id, path, sizeof(path));
+    fs_remove(path);
     memmove(&notes[cur], &notes[cur + 1], (size_t)(nnotes - cur - 1) * sizeof(struct meta));
     nnotes--;
     save_index();
@@ -146,12 +157,12 @@ static void short_time(const struct gz_datetime *dt, char *buf, size_t n)
     }
 }
 
-/* First line of a note, for its list row. */
+/* First line of a note, for its list row; the start of the file is enough. */
 static void title_of(int i, char *buf, size_t n)
 {
-    static char tmp[MAX_TEXT + 1];
+    char tmp[256];
 
-    load_text(i, tmp, MAX_TEXT);
+    load_text(i, tmp, sizeof(tmp) - 1);
     size_t k = 0;
     const char *p = tmp;
     while (*p == '\n' || *p == ' ')

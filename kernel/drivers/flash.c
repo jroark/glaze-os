@@ -1,6 +1,6 @@
 /*
  * Raw NAND access for the file server (servers/fs), which runs Dhara and
- * littlefs on the flash above the key/value store. Only a process the
+ * littlefs on the flash above the kernel. Only a process the
  * kernel started with PROC_FLASH may use it, and only inside that region.
  * Pages and blocks are numbered from the start of the region.
  */

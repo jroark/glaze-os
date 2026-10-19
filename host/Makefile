@@ -15,7 +15,7 @@ FS_CFLAGS := -std=gnu11 -O2 -g -Wall -I../servers/fs -I../third_party/littlefs -
 WEB := $(filter-out ../apps/browser/main.c,$(wildcard ../apps/browser/*.c))
 WEB_CFLAGS := $(CFLAGS) -I../third_party/stb -fsanitize=address,undefined
 
-all: sheet preview fstest browse
+all: sheet preview fstest mkfsimg browse
 
 sheet: sheet.c hostres.c $(GFX)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -30,8 +30,12 @@ shots: preview
 fstest: fstest.c $(FS)
 	$(CC) $(FS_CFLAGS) -o $@ $^
 
+# The top-level Makefile builds its own copy into out/host for the image.
+mkfsimg: mkfsimg.c $(FS)
+	$(CC) $(FS_CFLAGS) -o $@ $^
+
 browse: browse.c hostres.c $(GFX) $(WEB) ../apps/browser/web.h
 	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB)
 
 clean:
-	rm -f sheet preview fstest browse *.bmp *.png
+	rm -f sheet preview fstest mkfsimg browse *.bmp *.png

@@ -88,8 +88,6 @@ static inline int gz_sem_wait(int sem, int timeout_ms) { return GZ_SC2(SYS_SEM_W
 static inline int gz_sem_post(int sem) { return GZ_SC1(SYS_SEM_POST, sem); }
 static inline int gz_sem_destroy(int sem) { return GZ_SC1(SYS_SEM_DESTROY, sem); }
 
-static inline int gz_kv_get(const char *key, void *buf, uint32_t len) { return GZ_SC3(SYS_KV_GET, key, buf, len); }
-static inline int gz_kv_put(const char *key, const void *buf, uint32_t len) { return GZ_SC3(SYS_KV_PUT, key, buf, len); }
 static inline int gz_sysinfo(struct gz_sysinfo *si) { return GZ_SC1(SYS_SYSINFO, si); }
 
 static inline const void *gz_romfs_map(const char *name, uint32_t *size)

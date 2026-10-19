@@ -6,6 +6,7 @@
 
 #include "sb_internal.h"
 
+#include <glaze/prefs.h>
 #include <glaze/res.h>
 #include <glaze/sys.h>
 #include <stdio.h>
@@ -596,9 +597,9 @@ static void load_settings(void)
 {
     int32_t wall = 0, h24 = 0;
 
-    if (gz_kv_get("sb.wallpaper", &wall, sizeof(wall)) == 4 && wall >= 0 && wall < sb_num_wallpapers)
+    if (pref_get("sb.wallpaper", &wall, sizeof(wall)) == 4 && wall >= 0 && wall < sb_num_wallpapers)
         view.wallpaper = wall;
-    if (gz_kv_get("sb.24h", &h24, sizeof(h24)) == 4)
+    if (pref_get("sb.24h", &h24, sizeof(h24)) == 4)
         sb_24h = h24 != 0;
     update_clock(true);
 }

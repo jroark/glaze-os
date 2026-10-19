@@ -61,7 +61,7 @@ int main(void)
     gfx_draw_image(&s, 240, 0, &dusk, 255);
     gfx_image meadow = img("wall_meadow.gzi");
     gfx_draw_image_scaled(&s, gfx_r(480, 0, 120, 160), &meadow, 255);
-    gfx_image ph = img("photo_1.gzi");
+    gfx_image ph = img("../../userdata/Pictures/Sunset.gzi");
     gfx_draw_image_scaled(&s, gfx_r(600, 0, 120, 160), &ph, 255);
 
     const char *fonts[] = { "sans_r9.gzf", "sans_r10.gzf", "sans_r12.gzf", "sans_r14.gzf", "sans_r17.gzf",

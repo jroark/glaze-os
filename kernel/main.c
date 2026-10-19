@@ -27,12 +27,11 @@ void kmain(void)
     rtc_init();
     input_init();
     ne2000_init();
-    kv_init();
     ipc_init();
     sched_init();
     romfs_list();
 
-    /* The file server owns the flash above the key/value store. */
+    /* The file server owns the flash above the kernel. */
     if (!proc_spawn("bin/fs", 0, PROC_FLASH))
         kputs("fs: no file server\n");
     if (!proc_spawn("bin/net", 0, PROC_NET))

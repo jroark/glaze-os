@@ -4,4 +4,5 @@ preview
 *.png
 *.dSYM/
 fstest
+mkfsimg
 browse

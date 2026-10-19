@@ -6,6 +6,7 @@
  */
 
 #include <glaze/net.h>
+#include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
@@ -371,7 +372,7 @@ static void load(void)
         }
         break;
     }
-    gz_kv_put("web.url", url, (uint32_t)strlen(url));
+    pref_put("web.url", url, (uint32_t)strlen(url));
     ui_scroll_reset(&scroll, 0, 0);
     layout();
 }
@@ -538,7 +539,7 @@ static void event(const struct gz_input_event *e)
 int main(void)
 {
     ui_init(SB_STATUS_GRAY);
-    int n = gz_kv_get("web.url", url, URL_MAX);
+    int n = pref_get("web.url", url, URL_MAX);
     if (n > 0)
         url[n] = 0;
     show_message("Web", "Tap the address bar to enter a page, then Go.\n\n"
