@@ -41,6 +41,13 @@ enum {
     SYS_NET_BIND,
     SYS_NET_SEND,
     SYS_NET_RECV,
+    SYS_THREAD_CREATE,
+    SYS_THREAD_EXIT,
+    SYS_GETTID,
+    SYS_SEM_CREATE,
+    SYS_SEM_WAIT,
+    SYS_SEM_POST,
+    SYS_SEM_DESTROY,
     SYS_COUNT
 };
 
@@ -69,6 +76,7 @@ enum {
 #define GZ_EHOSTUNREACH (-19)
 #define GZ_EINUSE       (-20)   /* address or port in use */
 #define GZ_EBUSY        (-21)   /* another call is pending on the socket */
+#define GZ_EINPROGRESS  (-22)   /* non-blocking connect started */
 
 /* IPC message: 64 bytes, copied by value. */
 #define GZ_MSG_WORDS    16

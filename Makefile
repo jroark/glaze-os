@@ -60,7 +60,8 @@ FSSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(FSSTACK_SRCS))
 
 # lwIP for the network server; its port headers live in servers/net.
 NET_INC := -Ithird_party/lwip/src/include -Iservers/net
-NETSTACK_SRCS := $(wildcard third_party/lwip/src/core/*.c third_party/lwip/src/core/ipv4/*.c) \
+NETSTACK_SRCS := $(wildcard third_party/lwip/src/core/*.c third_party/lwip/src/core/ipv4/*.c \
+    third_party/lwip/src/api/*.c) \
     third_party/lwip/src/netif/ethernet.c
 NETSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(NETSTACK_SRCS))
 

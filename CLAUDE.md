@@ -26,7 +26,7 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 ```
 
 - The emulator writes NAND back into the image, so boot a copy when you need a clean flash. Kernel and `printf` output goes to the emulator's stdout. A screenshot (`screenshot_*.bmp`) is saved on orderly shutdown, including SIGTERM from `timeout`. With no display, `SDL_VIDEODRIVER=dummy` runs it headless and still saves the screenshot.
-- **ktest** (`apps/ktest`): build with `INIT=bin/ktest`, boot, and grep stdout for `ktest: FAIL` / `ktest: ALL PASS`. It covers IPC, shm, sleep, faults, the KV store and the file server, and with `--ne2000` the network: DHCP, ping, DNS through the NAT, and TCP/UDP over lwIP's loopback. Boot it both with and without `--ne2000`; without a card the network cases print `SKIP`. It prints `INFO` for an internet fetch it can't require.
+- **ktest** (`apps/ktest`): build with `INIT=bin/ktest`, boot, and grep stdout for `ktest: FAIL` / `ktest: ALL PASS`. It covers IPC, shm, sleep, faults, threads and semaphores, the KV store and the file server, and with `--ne2000` the network: DHCP, ping, DNS through the NAT, TCP/UDP over lwIP's loopback through both `glaze/net.h` and BSD sockets. Boot it both with and without `--ne2000`; without a card the network cases print `SKIP`. It prints `INFO` for an internet fetch it can't require.
 - **Scripted UI tests**: `tests/*.txt` replay timed events (`<ms> tap x y`, `drag ...`, `key ok|esc|...|home`) from inside the kernel, in screen coordinates. `tests/run.sh tests/t_x.txt` builds, boots and converts the final screenshot, but it uses the macOS tools `gtimeout` and `sips`. Scripted events bypass the touch panel and its interrupts.
 - **Real touch path**: `tests/touch.sh tests/touch_unlock.act` drives the emulator window with xdotool on an X display (`Xvfb :99 &`, then `DISPLAY=:99`). Action coordinates are window/screen pixels; app surfaces start 16 px lower, under the status bar.
 - **Flash stack**: `host/fstest [seed [wear|flips|bad|cuts|format]]` runs `servers/fs/ftl.c` plus littlefs and Dhara on a RAM NAND model with bit flips, failing blocks and power cuts. A full run takes several minutes; pass a phase name to run one.
@@ -36,6 +36,7 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 - Everything is built `-march=mips2 -mabi=32 -mno-abicalls -fno-pic -G 0 -msoft-float`, freestanding and static. The VR4131 is MIPS III without CLZ or MIPS32 SPECIAL2 ops, and the emulator executes 32-bit code only.
 - Nothing links libgcc. Compiler helpers live in `lib/libc` (`divdi3.c` for 64-bit division, `bitops.c` for `__popcountsi2`, `__ctzsi2`, `__clzsi2` and `__bswapsi2`). An "undefined reference to `__…si2`" means another helper is needed there.
 - The libc is minimal (`lib/libc/include`). Check it has a function before using it, or add it to `lib/libc/string.c` and similar. The kernel compiles `lib/libc/string.c` and `divdi3.c` too.
+- The VR4131 has no LL/SC (VR4131 UM: "does not support LL, LLD, SC, SCD"), so there are no userspace atomics: every lock is a kernel semaphore (`gz_mutex` in `glaze/thread.h`).
 
 ## Architecture
 
@@ -51,6 +52,7 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 - Syscall numbers and the ABI are in `lib/include/glaze/abi.h` (shared with userspace); user wrappers are in `glaze/sys.h`.
 - Device access is gated by process flags. `PROC_PRIVILEGED` (framebuffer, input) can be passed down by a privileged spawner. `PROC_FLASH` (raw NAND) and `PROC_NET` (Ethernet frames) are granted only by the kernel, to `bin/fs` and `bin/net`; `sys_spawn` masks other flags.
 - The kernel spawns `bin/fs`, `bin/net` and then `INIT` (default `bin/springboard`) at boot.
+- Processes may have extra threads (`SYS_THREAD_CREATE`, libc `gz_thread_create`). Each gets a 64 KiB stack in a 64 KiB-aligned slot below the main stack (with an unmapped guard); libc keeps a per-thread block at the stack's base (`gz_self()`: tid, `errno`, TLS slots). The last thread to exit ends the process. Synchronization is the kernel's process-private counting semaphores (`kernel/sem.c`, `SYS_SEM_*`, with timeouts); libc's recursive `gz_mutex` sits on them, and malloc and the fs/net clients lock only once a process has a second thread.
 
 **Input.** Touch comes from the VRC4173 PIU, through GIRQ0 to GIU line 0 to IP2 (`kernel/drivers/irq.c`, `input.c`); buttons are polled and also arrive on GIRQ0. Events go into a kernel ring that only the bound compositor drains. SpringBoard forwards events to the foreground app through the shared ring in `struct sb_shared`. `ui_next_event` coalesces consecutive moves.
 
@@ -62,8 +64,9 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 
 **Networking** (`kernel/drivers/ne2000.c`, `servers/net`, `glaze/net.h`, client in `lib/libc/net.c`):
 - The NE2000 sits in the PCMCIA card I/O window at 0x0A00C300 once bit 2 of the bridge register 0x0A00A01C is set; its interrupt is GIRQ0 bit 0, which also carries CF state changes. The driver queues received frames in the kernel and notifies the port bound with `SYS_NET_BIND` (`GZ_NOTIFY_NET`); the timer tick polls it too.
-- The server runs lwIP (vendored unmodified in `third_party/lwip`, built into `libnetstack.a`) with `NO_SYS`, from one loop that handles requests, frames and lwIP timers. Its options are in `servers/net/lwipopts.h`.
-- Sessions mirror the file server's (8 KiB shared buffer). Calls that wait (connect, accept, recv, resolve, ping) get deferred replies: the server keeps the sender's token and answers from an lwIP callback or at the deadline.
+- The server runs lwIP (vendored unmodified in `third_party/lwip`, built into `libnetstack.a`) in its tcpip thread on the OS port in `servers/net/sys_arch.c` (semaphores, mailboxes, threads; `LWIP_NETCONN_SEM_PER_THREAD` keeps its semaphore in the thread block). Options are in `servers/net/lwipopts.h`.
+- The main thread receives requests and frame notifications (frames go to `tcpip_input`). Calls that finish at once run there on lwIP's sockets; calls that wait (connect, accept, send, recv, resolve, ping, poll) go to worker threads, which make the blocking `lwip_*` call and reply to the sender's token. lwIP's poll bits differ from POSIX's, which the protocol uses.
+- Sessions mirror the file server's (8 KiB shared buffer). A timeout of 0 means non-blocking. BSD sockets for apps (`sys/socket.h`, `poll.h`, `netdb.h`, ...) are `lib/libc/socket.c` on top of `glaze/net.h`: an fd is a net socket handle, IPv4 TCP/UDP only.
 - lwIP won't route 127.0.0.0/8 out of the Ethernet interface, so the guest can't reach the host's loopback through the NAT; use the host's own address.
 
 **UI libraries.** `libgfx` (`lib/gfx`) is a software RGB565 renderer for GZI images and GZF fonts; the formats are described in `lib/include/glaze/gfx.h`. `libui` (`lib/ui`) provides the nav bar, bar buttons, grouped cells, alerts, the keyboard, inertial scroll views and push/pop transitions. Apps follow the Settings/Notes pattern: draw the whole view, keep hit rects, `redraw()` after events, and use `ui_transition(draw_fn, forward)` for navigation. `host/` builds `libgfx` natively to render SpringBoard previews.

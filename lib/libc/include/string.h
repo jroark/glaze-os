@@ -22,5 +22,8 @@ char *strrchr(const char *s, int c);
 char *strstr(const char *h, const char *n);
 size_t strspn(const char *s, const char *accept);
 size_t strcspn(const char *s, const char *reject);
+size_t strnlen(const char *s, size_t max);
+char *strdup(const char *s);
+char *strndup(const char *s, size_t n);
 
 #endif

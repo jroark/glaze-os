@@ -2,11 +2,23 @@
 
 #include <glaze/net.h>
 #include <glaze/sys.h>
+#include <glaze/thread.h>
 #include <stdio.h>
 #include <string.h>
 
 static int port, session = -1;
 static uint8_t *buf;
+
+/* One call at a time per process: the shared buffer is the session's. */
+static struct gz_mutex session_lock = GZ_MUTEX_INIT;
+
+static void release(struct gz_mutex **m)
+{
+    gz_mutex_unlock(*m);
+}
+
+#define SESSION_LOCKED() \
+    struct gz_mutex *held_ __attribute__((cleanup(release))) = (gz_mutex_lock(&session_lock), &session_lock)
 
 /* Connects on first use, waiting a little for the server after boot. */
 static int connect(void)
@@ -57,6 +69,7 @@ static int call(uint32_t op, uint32_t a, uint32_t b, uint32_t c, uint32_t d, str
 
 int net_status(struct net_status *st)
 {
+    SESSION_LOCKED();
     int rv = call(NET_STATUS, 0, 0, 0, 0, NULL);
 
     if (rv < 0)
@@ -81,6 +94,7 @@ int net_wait_up(int timeout_ms)
 
 int net_resolve(const char *host, uint32_t *addr, int timeout_ms)
 {
+    SESSION_LOCKED();
     struct gz_msg r;
     size_t n = strlen(host);
     int rv = connect();
@@ -98,26 +112,31 @@ int net_resolve(const char *host, uint32_t *addr, int timeout_ms)
 
 int net_socket(int type)
 {
+    SESSION_LOCKED();
     return call(NET_SOCKET, (uint32_t)type, 0, 0, 0, NULL);
 }
 
 int net_connect(int s, uint32_t addr, uint16_t port_, int timeout_ms)
 {
+    SESSION_LOCKED();
     return call(NET_CONNECT, (uint32_t)s, addr, port_, (uint32_t)timeout_ms, NULL);
 }
 
 int net_bind(int s, uint16_t port_)
 {
+    SESSION_LOCKED();
     return call(NET_BIND, (uint32_t)s, port_, 0, 0, NULL);
 }
 
 int net_listen(int s)
 {
+    SESSION_LOCKED();
     return call(NET_LISTEN, (uint32_t)s, 0, 0, 0, NULL);
 }
 
 int net_accept(int s, uint32_t *addr, uint16_t *port_, int timeout_ms)
 {
+    SESSION_LOCKED();
     struct gz_msg r;
     int rv = call(NET_ACCEPT, (uint32_t)s, (uint32_t)timeout_ms, 0, 0, &r);
 
@@ -130,8 +149,9 @@ int net_accept(int s, uint32_t *addr, uint16_t *port_, int timeout_ms)
     return rv;
 }
 
-int net_send(int s, const void *src, uint32_t len)
+int net_send_flags(int s, const void *src, uint32_t len, int flags)
 {
+    SESSION_LOCKED();
     uint32_t done = 0;
     int rv = connect();
 
@@ -140,25 +160,39 @@ int net_send(int s, const void *src, uint32_t len)
     while (done < len) {
         uint32_t n = MIN(len - done, NET_IO_MAX);
         memcpy(buf, (const uint8_t *)src + done, n);
-        rv = call(NET_SEND, (uint32_t)s, n, 0, 0, NULL);
+        rv = call(NET_SEND, (uint32_t)s, n, (uint32_t)flags, 0, NULL);
         if (rv < 0)
-            return rv;
+            return done ? (int)done : rv;
         done += (uint32_t)rv;
+        if ((uint32_t)rv < n)
+            break;              /* NET_MSG_DONTWAIT: the rest didn't fit */
     }
     return (int)done;
 }
 
-int net_recv(int s, void *dst, uint32_t len, int timeout_ms)
+int net_send(int s, const void *src, uint32_t len)
 {
-    int rv = call(NET_RECV, (uint32_t)s, MIN(len, NET_IO_MAX), (uint32_t)timeout_ms, 0, NULL);
+    return net_send_flags(s, src, len, 0);
+}
+
+int net_recv_flags(int s, void *dst, uint32_t len, int timeout_ms, int flags)
+{
+    SESSION_LOCKED();
+    int rv = call(NET_RECV, (uint32_t)s, MIN(len, NET_IO_MAX), (uint32_t)timeout_ms, (uint32_t)flags, NULL);
 
     if (rv > 0)
         memcpy(dst, buf, (size_t)rv);
     return rv;
 }
 
+int net_recv(int s, void *dst, uint32_t len, int timeout_ms)
+{
+    return net_recv_flags(s, dst, len, timeout_ms, 0);
+}
+
 int net_sendto(int s, const void *src, uint32_t len, uint32_t addr, uint16_t port_)
 {
+    SESSION_LOCKED();
     int rv = connect();
 
     if (rv)
@@ -171,6 +205,7 @@ int net_sendto(int s, const void *src, uint32_t len, uint32_t addr, uint16_t por
 
 int net_recvfrom(int s, void *dst, uint32_t len, uint32_t *addr, uint16_t *port_, int timeout_ms)
 {
+    SESSION_LOCKED();
     struct gz_msg r;
     int rv = call(NET_RECVFROM, (uint32_t)s, MIN(len, NET_IO_MAX), (uint32_t)timeout_ms, 0, &r);
 
@@ -186,12 +221,57 @@ int net_recvfrom(int s, void *dst, uint32_t len, uint32_t *addr, uint16_t *port_
 
 int net_close(int s)
 {
+    SESSION_LOCKED();
     return call(NET_CLOSE, (uint32_t)s, 0, 0, 0, NULL);
 }
 
 int net_ping(uint32_t addr, int timeout_ms)
 {
+    SESSION_LOCKED();
     return call(NET_PING, addr, (uint32_t)timeout_ms, 0, 0, NULL);
+}
+
+int net_poll(struct net_pollfd *fds, int n, int timeout_ms)
+{
+    SESSION_LOCKED();
+    int rv = connect();
+
+    if (rv)
+        return rv;
+    if (n < 0 || n > NET_POLL_MAX)
+        return GZ_EINVAL;
+    memcpy(buf, fds, sizeof(*fds) * (size_t)n);
+    rv = call(NET_POLL, (uint32_t)n, (uint32_t)timeout_ms, 0, 0, NULL);
+    if (rv >= 0)
+        memcpy(fds, buf, sizeof(*fds) * (size_t)n);
+    return rv;
+}
+
+int net_sockopt(int s, int opt, int value)
+{
+    SESSION_LOCKED();
+    return call(NET_SOCKOPT, (uint32_t)s, (uint32_t)opt, (uint32_t)value, 0, NULL);
+}
+
+int net_shutdown(int s, int how)
+{
+    SESSION_LOCKED();
+    return call(NET_SHUTDOWN, (uint32_t)s, (uint32_t)how, 0, 0, NULL);
+}
+
+int net_name(int s, bool peer, uint32_t *addr, uint16_t *port_)
+{
+    SESSION_LOCKED();
+    struct gz_msg r;
+    int rv = call(NET_NAME, (uint32_t)s, peer, 0, 0, &r);
+
+    if (rv == 0) {
+        if (addr)
+            *addr = r.w[1];
+        if (port_)
+            *port_ = (uint16_t)r.w[2];
+    }
+    return rv;
 }
 
 char *net_ntoa(uint32_t addr, char *out)

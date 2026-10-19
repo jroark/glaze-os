@@ -11,7 +11,9 @@
 #define KSTACK_SIZE     8192u
 
 #define MAX_PROCS       32
-#define MAX_THREADS     64
+#define MAX_THREADS     128
+#define MAX_SEMS        256
+#define MAX_STACK_SLOTS 32          /* threads besides main, per process */
 #define MAX_PORTS       64
 #define MAX_REGIONS     32
 #define MAX_SHM         32
@@ -81,6 +83,7 @@ enum tstate {
     T_SEND,         /* queued on a port, waiting for a receiver */
     T_REPLY,        /* message delivered, waiting for reply */
     T_RECV,         /* waiting for a message or notification */
+    T_SEM,          /* waiting on a semaphore */
     T_ZOMBIE,
 };
 
@@ -105,6 +108,9 @@ struct thread {
     uint32_t ipc_ubuf;              /* user buffer for recv / reply */
     int ipc_port;                   /* port blocked on (send/recv) */
     int reply_owner_pid;            /* pid that owes us a reply */
+
+    int sem_id;                     /* semaphore waited on (T_SEM) */
+    int stack_slot;                 /* user stack slot, -1 for the main thread */
 };
 
 struct proc {
@@ -117,6 +123,7 @@ struct proc {
     int parent;
     bool dying;
     int exit_code;
+    uint32_t stack_slots;           /* bitmap of thread stacks in use */
 };
 
 #define PROC_PRIVILEGED     0x1     /* may map the framebuffer, bind input */
@@ -146,7 +153,19 @@ void proc_exit(struct proc *p, int code);
 void proc_reap(void);
 void sched_kill_proc_threads(struct proc *p);
 int sched_reap_threads(struct proc *p);
+int sched_live_threads(struct proc *p);
 int proc_count(void);
+int thread_spawn(uint32_t entry, uint32_t arg);
+int thread_exit(void);
+
+/* ---- semaphores (sem.c) ------------------------------------------------- */
+
+int sem_create(struct proc *p, int count);
+int sem_wait(int id, int timeout_ms);
+int sem_post(int id);
+int sem_destroy(int id);
+void sem_timeout(struct thread *t);
+void sem_proc_cleanup(struct proc *p);
 
 /* ---- IPC (ipc.c) -------------------------------------------------------- */
 

@@ -37,7 +37,8 @@ static struct thread *thread_alloc(void)
         memset(t, 0, sizeof(*t));
         t->kstack = kstack;
         /* tid encodes the slot plus a generation so stale tokens fail. */
-        t->tid = (next_tid_gen++ << 6) | i;
+        t->tid = (next_tid_gen++ << 7) | i;
+        t->stack_slot = -1;
         if (next_tid_gen > 0xFFFFF)
             next_tid_gen = 1;
         return t;
@@ -196,6 +197,8 @@ void sched_timer_tick(uint64_t now_us)
             thread_make_runnable(t);
         } else if (t->state == T_RECV) {
             ipc_timeout(t);
+        } else if (t->state == T_SEM) {
+            sem_timeout(t);
         }
     }
     /* Round-robin among equal-priority user threads. */
@@ -284,6 +287,18 @@ void sched_kill_proc_threads(struct proc *p)
             ipc_fail_reply_waiters(p, t);
         }
     }
+}
+
+/* Threads of `p` that haven't exited. */
+int sched_live_threads(struct proc *p)
+{
+    int live = 0;
+
+    for (int i = 0; i < MAX_THREADS; i++) {
+        struct thread *t = &threads[i];
+        live += t->state != T_UNUSED && t->state != T_ZOMBIE && t->proc == p;
+    }
+    return live;
 }
 
 /* Free zombie threads other than the running one. Returns how many of
