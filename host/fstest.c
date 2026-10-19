@@ -18,7 +18,7 @@
 #include <string.h>
 #include "ftl.h"
 
-#define BLOCKS      640
+#define BLOCKS      704
 #define PAGES       (BLOCKS * FTL_PAGES_PER_BLOCK)
 #define PAGE        FTL_PAGE_SIZE
 

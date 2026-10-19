@@ -7,6 +7,7 @@
 #include <glaze/sys.h>
 #include <stdio.h>
 #include <string.h>
+#include "folders.h"
 #include "ftl.h"
 
 #define MAX_SESSIONS    8
@@ -226,7 +227,7 @@ static int op_statfs(struct session *s)
     return 0;
 }
 
-static void seed(void);
+static void make_folders(void);
 
 static int op_format(void)
 {
@@ -236,7 +237,7 @@ static int op_format(void)
         lfs_unmount(&lfs);
     mount_err = gz_err(ftl_format(&lfs));
     if (!mount_err)
-        seed();
+        make_folders();
     return mount_err;
 }
 
@@ -303,41 +304,15 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
     }
 }
 
-/* ---- first boot ------------------------------------------------------------ */
+/* ---- new volumes ----------------------------------------------------------- */
 
-static const char welcome[] =
-    "Welcome to Glaze.\n"
-    "\n"
-    "This folder lives on the BE-300's flash. Files keeps your documents "
-    "and pictures here, and they stay put when you turn the device off.\n";
-
-static void write_file(const char *path, const void *data, uint32_t len)
+/* A blank or erased volume gets the standard folders and nothing else. The
+ * factory volume, with sample documents and pictures, is built into the
+ * NAND image by host/mkfsimg. */
+static void make_folders(void)
 {
-    lfs_file_t f;
-
-    if (lfs_file_open(&lfs, &f, path, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC))
-        return;
-    lfs_file_write(&lfs, &f, data, len);
-    lfs_file_close(&lfs, &f);
-}
-
-/* Standard folders, a note and two of the stock photos. */
-static void seed(void)
-{
-    static const char *const photos[][2] = {
-        { "res/photo_1.gzi", "/Pictures/Photo 1.gzi" },
-        { "res/photo_4.gzi", "/Pictures/Photo 4.gzi" },
-    };
-
-    lfs_mkdir(&lfs, "/Documents");
-    lfs_mkdir(&lfs, "/Pictures");
-    write_file("/Documents/Welcome.txt", welcome, sizeof(welcome) - 1);
-    for (unsigned i = 0; i < sizeof(photos) / sizeof(photos[0]); i++) {
-        uint32_t size;
-        const void *data = gz_romfs_map(photos[i][0], &size);
-        if (data)
-            write_file(photos[i][1], data, size);
-    }
+    for (unsigned i = 0; i < sizeof(fs_standard_folders) / sizeof(fs_standard_folders[0]); i++)
+        lfs_mkdir(&lfs, fs_standard_folders[i]);
 }
 
 int main(void)
@@ -349,7 +324,7 @@ int main(void)
 
     mount_err = rv < 0 ? gz_err(rv) : 0;
     if (rv == 1)
-        seed();
+        make_folders();
     snprintf(line, sizeof(line), "fs: %s in %u ms\n",
              rv < 0 ? "mount failed" : rv ? "formatted" : "mounted", gz_time_ms() - t0);
     gz_log(line, (uint32_t)strlen(line));

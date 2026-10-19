@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <glaze/fs.h>
 #include <glaze/net.h>
+#include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/thread.h>
 #include <netdb.h>
@@ -198,12 +199,16 @@ static void test_fs(void)
     for (unsigned i = 0; i < sizeof(data); i++)
         data[i] = (uint8_t)(i * 7 + i / 251);
     fs_remove("/ktest/sub/b.bin");
+    fs_remove("/ktest/sub/deep");
     fs_remove("/ktest/sub");
     fs_remove("/ktest/a.bin");
     fs_remove("/ktest/c.bin");
     fs_remove("/ktest");
     CHECK(fs_mkdir("/ktest") == 0 && fs_mkdir("/ktest/sub") == 0, "fs mkdir");
     CHECK(fs_mkdir("/ktest") == GZ_EEXIST, "fs mkdir existing");
+    CHECK(fs_mkdirs("/ktest/sub/deep") == 0 && fs_mkdirs("/ktest/sub/deep") == 0 &&
+          fs_stat("/ktest/sub/deep", &st) == 0 && st.type == FS_DIR && fs_remove("/ktest/sub/deep") == 0,
+          "fs mkdirs");
     CHECK(fs_write_file("/ktest/a.bin", data, sizeof(data)) == (int)sizeof(data), "fs write 20000 bytes");
     CHECK(fs_read_file("/ktest/a.bin", back, sizeof(back)) == (int)sizeof(back) &&
           !memcmp(data, back, sizeof(data)), "fs read back");
@@ -273,6 +278,30 @@ static const char *strerror_or(int e)
 
     snprintf(b, sizeof(b), "errno %d", e);
     return b;
+}
+
+/* Preferences: files under /Library/Preferences, and a persistent counter. */
+static void test_prefs(void)
+{
+    struct fs_dirent ents[16];
+    char small[8] = { 0 };
+    uint32_t boots = 0, boots2 = 0;
+
+    CHECK(pref_put("ktest.small", "one", 3) == 0 && pref_put("ktest.small", "two!", 4) == 0 &&
+          pref_get("ktest.small", small, sizeof(small)) == 4 && !memcmp(small, "two!", 4), "pref overwrite");
+    int n = fs_list(PREFS_DIR, 0, ents, 16);
+    bool listed = false;
+    for (int i = 0; i < n; i++)
+        listed |= !strcmp(ents[i].name, "ktest.small");
+    CHECK(listed, "pref is a file in " PREFS_DIR);
+    CHECK(pref_delete("ktest.small") == 0 && pref_get("ktest.small", small, sizeof(small)) == GZ_ENOENT,
+          "pref delete");
+    CHECK(pref_get("no/such", small, sizeof(small)) == GZ_EINVAL, "pref key with a slash rejected");
+    pref_get("ktest.boots", &boots, sizeof(boots));
+    boots++;
+    CHECK(pref_put("ktest.boots", &boots, sizeof(boots)) == 0 &&
+          pref_get("ktest.boots", &boots2, sizeof(boots2)) == 4 && boots2 == boots, "pref counter");
+    printf("ktest: boot count %u (persists across runs)\n", boots);
 }
 
 /* BSD sockets (libc) over the server's lwIP sockets, to ourselves. */
@@ -549,35 +578,9 @@ int main(void)
     printf("ktest: rtc %u-%02u-%02u %02u:%02u:%02u wd%u\n", now.year, now.month,
            now.day, now.hour, now.minute, now.second, now.weekday);
 
-    /* KV store: round trip, overwrite, delete, and a persistent counter */
-    static char big[12000];
-    for (uint32_t i = 0; i < sizeof(big); i++)
-        big[i] = (char)('a' + i % 26);
-    CHECK(gz_kv_put("ktest.big", big, sizeof(big)) == 0, "kv_put 12000 bytes");
-    static char back[12000];
-    CHECK(gz_kv_get("ktest.big", back, sizeof(back)) == (int)sizeof(big) &&
-          !memcmp(big, back, sizeof(big)), "kv_get round trip");
-    gz_kv_put("ktest.small", "one", 3);
-    gz_kv_put("ktest.small", "two!", 4);
-    char small[8] = { 0 };
-    CHECK(gz_kv_get("ktest.small", small, sizeof(small)) == 4 && !memcmp(small, "two!", 4), "kv overwrite");
-    gz_kv_put("ktest.small", NULL, GZ_KV_DELETE);
-    CHECK(gz_kv_get("ktest.small", small, sizeof(small)) == GZ_ENOENT, "kv delete");
-    uint32_t boots = 0;
-    gz_kv_get("ktest.boots", &boots, sizeof(boots));
-    boots++;
-    gz_kv_put("ktest.boots", &boots, sizeof(boots));
-    printf("ktest: boot count %u (persists across runs)\n", boots);
-    /* Churn enough to force a compaction (>1024 pages written). */
-    for (int i = 0; i < 50; i++)
-        gz_kv_put("ktest.big", big, sizeof(big));
-    CHECK(gz_kv_get("ktest.big", back, sizeof(back)) == (int)sizeof(big) &&
-          !memcmp(big, back, sizeof(big)), "kv survives compaction");
-    uint32_t boots2 = 0;
-    CHECK(gz_kv_get("ktest.boots", &boots2, sizeof(boots2)) == 4 && boots2 == boots, "kv counter after compaction");
-
     test_threads();
     test_fs();
+    test_prefs();
     test_net();
 
     struct gz_sysinfo si;

@@ -1,6 +1,7 @@
 /* Settings: network, wallpaper, date & time, about. */
 
 #include <glaze/net.h>
+#include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
@@ -35,14 +36,14 @@ static int32_t s_wallpaper, s_24h, s_tz;
 
 static void load(void)
 {
-    gz_kv_get("sb.wallpaper", &s_wallpaper, 4);
-    gz_kv_get("sb.24h", &s_24h, 4);
-    gz_kv_get("set.tz", &s_tz, 4);
+    pref_get("sb.wallpaper", &s_wallpaper, 4);
+    pref_get("sb.24h", &s_24h, 4);
+    pref_get("set.tz", &s_tz, 4);
 }
 
 static void save(const char *key, int32_t v)
 {
-    gz_kv_put(key, &v, 4);
+    pref_put(key, &v, 4);
 }
 
 static void add_hit(gfx_rect r, int id)

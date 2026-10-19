@@ -11,14 +11,15 @@ boot ROM from NAND.
 | --- | --- |
 | `boot/` | Stage-1 SPL loaded by the boot ROM; it streams the kernel from NAND |
 | `kernel/` | Exceptions, TLB/page tables, scheduler, IPC, shared memory, ELF loader, romfs, syscalls |
-| `kernel/drivers/` | ICU/GIU interrupt cascade, PIU touch, buttons, RTC, NAND, key/value store, raw flash for the file server, NE2000 Ethernet |
+| `kernel/drivers/` | ICU/GIU interrupt cascade, PIU touch, buttons, RTC, NAND, raw flash for the file server, NE2000 Ethernet |
 | `lib/` | Minimal libc, `libgfx` (RGB565 software renderer), `libui` (widgets, keyboard, transitions) |
 | `servers/springboard/` | Compositor, lock screen, home screen, app launching |
 | `servers/fs/` | File server: littlefs on Dhara on raw NAND, with ECC and bad-block handling (see below) |
 | `servers/net/` | Network server: lwIP (TCP, UDP, DHCP, DNS, ICMP) over the NE2000 (see below) |
 | `apps/` | Built-in apps, plus `ktest` (kernel self-tests) |
-| `assets/` | Fonts (Bitstream Vera, see `assets/fonts/VeraCopyright.txt`) and generated art |
-| `host/` | Native libgfx build that renders previews of SpringBoard; `fstest`, the flash stack under fault injection |
+| `assets/` | Fonts (Bitstream Vera, see `assets/fonts/VeraCopyright.txt`) and generated art for romfs |
+| `userdata/` | Files the device ships with (sample pictures, a welcome note), built into the file system |
+| `host/` | Native libgfx build that renders previews of SpringBoard; `fstest`, the flash stack under fault injection; `mkfsimg`, which builds the factory file system |
 | `third_party/` | littlefs, Dhara and lwIP, unmodified (see `third_party/README.md`) |
 | `tools/` | NAND image packer, romfs builder, Swift asset generator |
 
@@ -34,10 +35,14 @@ The cross toolchain comes from the be300 `mips-cross-dev` Docker image:
 ./build.sh INIT=bin/ktest  # kernel self-test image
 ```
 
-To regenerate assets (macOS, needs Swift):
+The build also compiles `host/mkfsimg` with the host's C compiler (`HOSTCC`,
+default `cc`) to build the factory file system from `userdata/`.
+
+To regenerate assets (macOS, needs Swift). The sample photos go to
+`userdata/Pictures`, not romfs:
 
 ```sh
-swift tools/mkassets.swift assets/gen assets/fonts
+swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures
 ```
 
 ## Running
@@ -47,7 +52,7 @@ be300 --nand out/glaze.bin --rtc-host-time
 ```
 
 The emulator writes NAND back to the image, so work on a copy if you want a
-clean store each run. Add `--ne2000` to insert the emulated PCMCIA Ethernet
+clean file system each run. Add `--ne2000` to insert the emulated PCMCIA Ethernet
 card (see Networking).
 
 For unattended UI tests, build with `INPUT_SCRIPT=tests/calc.txt`. The kernel
@@ -68,16 +73,29 @@ Xvfb :99 & DISPLAY=:99 tests/touch.sh tests/touch_unlock.act
 | --- | --- |
 | `0x0` | Partition table |
 | `0x4000` | SPL (B000FF container) |
-| `0x14000` | Kernel plus romfs (apps and assets) |
-| `0x500000` | Key/value store (two 512 KiB log areas) |
-| `0x600000` | File system (10 MiB, about 5.7 MiB usable) |
+| `0x14000` | Kernel plus romfs (the OS: built-in apps and their assets) |
+| `0x500000` | File system (11 MiB, about 6.3 MiB usable): user files and settings |
 
 ## File system
 
 Apps reach files through `lib/include/glaze/fs.h` (`fs_open`, `fs_read`,
 `fs_list`, ...), which talks to the file server in `servers/fs`. The kernel
 starts the server before SpringBoard and gives only it raw access to the
-flash above the key/value store.
+flash above the kernel.
+
+Romfs holds only the OS. Everything else lives in the file system:
+
+| Path | Contents |
+| --- | --- |
+| `/Documents`, `/Pictures` | The user's files. Photos shows the GZI pictures in `/Pictures`. |
+| `/Library/Preferences` | Settings, one file per key (`lib/include/glaze/prefs.h`: `pref_get`, `pref_put`) |
+| `/Library/Notes` | Notes: an `index` file and one `<id>.txt` per note |
+| `/Library/Caches` | Data apps can rebuild, such as Photos' thumbnails |
+
+A new NAND image already holds a formatted volume with the contents of
+`userdata/`, built by `host/mkfsimg` with the same flash code the server
+runs, so the first boot just mounts it. Erasing the volume, or booting on
+blank flash, leaves only the empty standard folders (`servers/fs/folders.h`).
 
 The server runs [littlefs](https://github.com/littlefs-project/littlefs) on
 the [Dhara](https://github.com/dlbeer/dhara) flash translation layer

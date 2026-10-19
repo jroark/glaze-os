@@ -80,6 +80,8 @@ int fs_stat(const char *path, struct fs_stat *st);
  * count, or an error. */
 int fs_list(const char *path, uint32_t skip, struct fs_dirent *out, int max);
 int fs_mkdir(const char *path);
+/* Creates a folder and any missing parents; an existing one is fine. */
+int fs_mkdirs(const char *path);
 int fs_remove(const char *path);
 int fs_rename(const char *from, const char *to);
 int fs_statfs(struct fs_info *info);

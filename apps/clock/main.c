@@ -5,6 +5,7 @@
  * offset chosen in Settings > Date & Time ("set.tz", whole hours, no DST).
  */
 
+#include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
@@ -314,7 +315,7 @@ static int hit(int x, int y)
 int main(void)
 {
     ui_init(SB_STATUS_BLACK);
-    gz_kv_get("set.tz", &tz_offset, sizeof(tz_offset));
+    pref_get("set.tz", &tz_offset, sizeof(tz_offset));
     draw();
 
     for (;;) {

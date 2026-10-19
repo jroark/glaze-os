@@ -136,8 +136,8 @@
 #define NAND_STREAM8        REG8(0x0A00B000u)
 #define NAND_PAGE_DATA      512u
 #define NAND_PAGES_PER_BLOCK 32u
-/* Flash layout above the kernel: the key/value store (kv.c) takes 1 MiB at
- * 0x500000 and the file server's region runs from here to the end. */
-#define FLASH_FS_OFFSET     0x600000u
+/* Flash layout above the kernel: the file server's region runs from here to
+ * the end of the NAND. */
+#define FLASH_FS_OFFSET     0x500000u
 
 #endif

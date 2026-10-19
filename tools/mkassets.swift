@@ -2,7 +2,10 @@
 // draws icons, wallpapers, sample photos and UI parts with CoreGraphics.
 // Output formats are described in lib/include/glaze/gfx.h.
 //
-// usage: swift tools/mkassets.swift <out-dir> <font-dir>
+// usage: swift tools/mkassets.swift <out-dir> <font-dir> <photo-dir>
+//
+// The sample photos are user files, not OS assets: they go to <photo-dir>
+// (userdata/Pictures), which host/mkfsimg builds into the factory volume.
 //
 // All artwork here is original, drawn in the style of early iPhone OS.
 
@@ -12,6 +15,8 @@ import Foundation
 
 let outDir = CommandLine.arguments[1]
 let fontDir = CommandLine.arguments[2]
+let photoDir = CommandLine.arguments[3]
+var saveDir = outDir
 
 // MARK: - Output
 
@@ -21,7 +26,7 @@ func le32(_ v: Int) -> [UInt8] { le16(v & 0xFFFF) + le16((v >> 16) & 0xFFFF) }
 let bayer: [[Int]] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
 
 func save(_ name: String, _ bytes: [UInt8]) {
-    let url = URL(fileURLWithPath: outDir).appendingPathComponent(name)
+    let url = URL(fileURLWithPath: saveDir).appendingPathComponent(name)
     try! Data(bytes).write(to: url)
 }
 
@@ -477,7 +482,9 @@ func makeWallpapers() {
 }
 
 func makePhotos() {
-    image("photo_1.gzi", W, H, alpha: false) { ctx in      // sunset over water
+    saveDir = photoDir
+    defer { saveDir = outDir }
+    image("Sunset.gzi", W, H, alpha: false) { ctx in      // sunset over water
         gradient(ctx, [(0x2B1B4F, 1, 0), (0xD9566A, 1, 0.45), (0xFFC46B, 1, 0.6)], from: .zero, to: CGPoint(x: 0, y: 192))
         radial(ctx, CGPoint(x: 120, y: 182), 70, 0xFFF2B0, 0xFFB050, 1, 0)
         fill(ctx, CGPath(ellipseIn: CGRect(x: 96, y: 160, width: 48, height: 48), transform: nil), col(0xFFE9A0))
@@ -490,7 +497,7 @@ func makePhotos() {
                  col(0xFFD27A, 0.75 - CGFloat(i) * 0.025))
         }
     }
-    image("photo_2.gzi", W, H, alpha: false) { ctx in      // mountains
+    image("Mountains.gzi", W, H, alpha: false) { ctx in      // mountains
         gradient(ctx, [(0x2F7FD0, 1, 0), (0xA9D8F5, 1, 0.6)], from: .zero, to: CGPoint(x: 0, y: 220))
         let peak = CGMutablePath()
         peak.move(to: CGPoint(x: -10, y: 240)); peak.addLine(to: CGPoint(x: 70, y: 120)); peak.addLine(to: CGPoint(x: 100, y: 150))
@@ -506,7 +513,7 @@ func makePhotos() {
         mountains(ctx, base: 270, amp: 50, seed: 9, color: col(0x2E6B2A))
         vgrad(ctx, CGRect(x: 0, y: 270, width: 240, height: 50), 0x3E8A2E, 0x1F4D17)
     }
-    image("photo_3.gzi", W, H, alpha: false) { ctx in      // night sky
+    image("Night.gzi", W, H, alpha: false) { ctx in      // night sky
         gradient(ctx, [(0x02030A, 1, 0), (0x0B1A3A, 1, 0.7), (0x1E3A5F, 1, 1)], from: .zero, to: CGPoint(x: 0, y: 320))
         var rng = LCG(s: 99)
         for _ in 0..<220 {
@@ -519,7 +526,7 @@ func makePhotos() {
         fill(ctx, CGPath(ellipseIn: CGRect(x: 165, y: 50, width: 30, height: 30), transform: nil), col(0x081530))
         mountains(ctx, base: 300, amp: 40, seed: 4, color: col(0x050810))
     }
-    image("photo_4.gzi", W, H, alpha: false) { ctx in      // beach
+    image("Beach.gzi", W, H, alpha: false) { ctx in      // beach
         gradient(ctx, [(0x3BA4E6, 1, 0), (0xBCE6FA, 1, 1)], from: .zero, to: CGPoint(x: 0, y: 170))
         fill(ctx, CGPath(ellipseIn: CGRect(x: 168, y: 34, width: 34, height: 34), transform: nil), col(0xFFF6C2))
         vgrad(ctx, CGRect(x: 0, y: 170, width: 240, height: 70), 0x1B8DB8, 0x48C3D9)
@@ -534,7 +541,7 @@ func makePhotos() {
         ctx.move(to: CGPoint(x: 0, y: 238)); ctx.addCurve(to: CGPoint(x: 240, y: 252), control1: CGPoint(x: 90, y: 224), control2: CGPoint(x: 170, y: 264))
         ctx.strokePath()
     }
-    image("photo_5.gzi", W, H, alpha: false) { ctx in      // forest
+    image("Forest.gzi", W, H, alpha: false) { ctx in      // forest
         gradient(ctx, [(0xCFE8D8, 1, 0), (0x7FB38E, 1, 1)], from: .zero, to: CGPoint(x: 0, y: 320))
         for layer in 0..<3 {
             var rng = LCG(s: UInt32(40 + layer))
@@ -552,7 +559,7 @@ func makePhotos() {
             fill(ctx, CGPath(rect: CGRect(x: 0, y: baseY, width: 240, height: 320 - baseY), transform: nil), col(shade[layer]))
         }
     }
-    image("photo_6.gzi", W, H, alpha: false) { ctx in      // abstract
+    image("Abstract.gzi", W, H, alpha: false) { ctx in      // abstract
         gradient(ctx, [(0x1A1A2E, 1, 0), (0x16213E, 1, 1)], from: .zero, to: CGPoint(x: 0, y: 320))
         var rng = LCG(s: 1234)
         let palette: [UInt32] = [0xE94560, 0xF5A623, 0x0F9D9A, 0x7B61FF, 0x4FC3F7]
@@ -654,6 +661,7 @@ func makeUI() {
 // MARK: - Main
 
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+try? FileManager.default.createDirectory(atPath: photoDir, withIntermediateDirectories: true)
 for size in [9, 10, 11, 12, 13, 14, 17, 24, 44] {
     makeFont("Vera.ttf", CGFloat(size), "sans_r\(size).gzf")
 }

@@ -1,0 +1,3 @@
+Welcome to Glaze.
+
+This folder lives on the BE-300's flash. Files keeps your documents and pictures here, and they stay put when you turn the device off.

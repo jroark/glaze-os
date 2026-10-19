@@ -11,7 +11,7 @@ FS := ../servers/fs/ftl.c ../third_party/littlefs/lfs.c ../third_party/littlefs/
 FS_CFLAGS := -std=gnu11 -O2 -g -Wall -I../servers/fs -I../third_party/littlefs -I../third_party/dhara \
     -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR
 
-all: sheet preview fstest
+all: sheet preview fstest mkfsimg
 
 sheet: sheet.c hostres.c $(GFX)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -26,5 +26,9 @@ shots: preview
 fstest: fstest.c $(FS)
 	$(CC) $(FS_CFLAGS) -o $@ $^
 
+# The top-level Makefile builds its own copy into out/host for the image.
+mkfsimg: mkfsimg.c $(FS)
+	$(CC) $(FS_CFLAGS) -o $@ $^
+
 clean:
-	rm -f sheet preview fstest *.bmp *.png
+	rm -f sheet preview fstest mkfsimg *.bmp *.png

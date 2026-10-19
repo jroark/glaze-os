@@ -188,8 +188,6 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_FB_MAP:        rv = sys_fb_map(); break;
     case SYS_INPUT_BIND:    rv = PRIV() ? input_bind((int)a0) : GZ_EPERM; break;
     case SYS_INPUT_READ:    rv = PRIV() ? input_read(AS, a0, a1) : GZ_EPERM; break;
-    case SYS_KV_GET:        rv = sys_kv_get(AS, a0, a1, a2); break;
-    case SYS_KV_PUT:        rv = sys_kv_put(AS, a0, a1, a2); break;
     case SYS_SYSINFO:       rv = sys_sysinfo(a0); break;
     case SYS_GETPID:        rv = cur->proc->pid; break;
     case SYS_ROMFS_MAP:     rv = sys_romfs_map(a0, a1); break;
