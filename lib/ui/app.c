@@ -45,6 +45,13 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
         if (sh->tail != sh->head) {
             *ev = sh->ev[sh->tail % SB_RING];
             sh->tail++;
+            /* A drag is only as smooth as the app can draw: skip to the
+             * newest of consecutive moves rather than fall behind. */
+            while (ev->type == GZ_EV_TOUCH_MOVE && sh->tail != sh->head &&
+                   sh->ev[sh->tail % SB_RING].type == GZ_EV_TOUCH_MOVE) {
+                *ev = sh->ev[sh->tail % SB_RING];
+                sh->tail++;
+            }
             return 1;
         }
         int wait = timeout_ms;

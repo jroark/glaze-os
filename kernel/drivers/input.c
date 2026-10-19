@@ -101,6 +101,9 @@ static void read_page(uint32_t base)
     if (y >= FB_HEIGHT)
         y = FB_HEIGHT - 1;
 
+    /* The panel keeps sampling a resting pen; only report movement. */
+    if (pen_down && x == pen_x && y == pen_y)
+        return;
     push(pen_down ? GZ_EV_TOUCH_MOVE : GZ_EV_TOUCH_DOWN, 0, x, y);
     pen_down = true;
     pen_x = x;
