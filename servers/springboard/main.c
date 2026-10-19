@@ -27,6 +27,7 @@ enum state {
 #define ZOOM_MS         280
 #define PAGE_MS         260
 #define SPRING_MS       200
+#define FLING_MS        150     /* how far a released knob coasts */
 #define LAUNCH_TIMEOUT  3000
 #define SURFACE_BYTES   (SB_APP_W * SB_APP_H * 2)
 #define SHM_HEADER      4096
@@ -286,6 +287,21 @@ static void begin_unlock(void)
 
 /* ---- input -------------------------------------------------------------- */
 
+/* Horizontal speed in px per 100 ms, smoothed. Uses the event timestamps:
+ * events can arrive in bursts, so the drain time says nothing about speed. */
+static void track_move(const struct gz_input_event *e, bool start)
+{
+    if (start) {
+        velocity = 0;
+    } else {
+        uint32_t dt = e->time_ms - last_move_ms;
+        if (dt > 0)
+            velocity = (velocity + (e->x - last_x) * 100 / (int)dt) / 2;
+    }
+    last_x = e->x;
+    last_move_ms = e->time_ms;
+}
+
 static void lock_touch(const struct gz_input_event *e)
 {
     int knob_left = TRACK_X + 2 + view.knob_x;
@@ -297,11 +313,13 @@ static void lock_touch(const struct gz_input_event *e)
             anim.active = false;
             dragging_knob = true;
             grab_dx = e->x - knob_left;
+            track_move(e, true);
         }
         break;
     case GZ_EV_TOUCH_MOVE:
         if (dragging_knob) {
             int k = e->x - grab_dx - (TRACK_X + 2);
+            track_move(e, false);
             view.knob_x = k < 0 ? 0 : k > KNOB_TRAVEL ? KNOB_TRAVEL : k;
             render_track();
         }
@@ -310,7 +328,9 @@ static void lock_touch(const struct gz_input_event *e)
         if (!dragging_knob)
             break;
         dragging_knob = false;
-        if (view.knob_x >= KNOB_TRAVEL - 6)
+        /* The panel is sampled, so a quick slide can lift off before the
+         * last sample reaches the end; carry it on by its speed. */
+        if (view.knob_x + velocity * FLING_MS / 100 >= KNOB_TRAVEL - 6)
             begin_unlock();
         else
             anim_start(view.knob_x, 0, SPRING_MS);
@@ -326,17 +346,15 @@ static int page_count(void)
 static void home_touch(const struct gz_input_event *e)
 {
     int page = (view.scroll_x + SCREEN_W / 2) / SCREEN_W;
-    uint32_t t = now_ms();
 
     switch (e->type) {
     case GZ_EV_TOUCH_DOWN:
         anim.active = false;
         touching = true;
         swiping = false;
-        down_x = last_x = e->x;
+        down_x = e->x;
         down_y = e->y;
-        last_move_ms = t;
-        velocity = 0;
+        track_move(e, true);
         view.pressed = sb_hit_icon(e->x, e->y, view.scroll_x);
         if (view.pressed >= 0)
             render_home();
@@ -344,11 +362,7 @@ static void home_touch(const struct gz_input_event *e)
     case GZ_EV_TOUCH_MOVE: {
         if (!touching)
             break;
-        uint32_t dt = t - last_move_ms;
-        if (dt > 0)
-            velocity = (velocity + (e->x - last_x) * 100 / (int)dt) / 2;
-        last_x = e->x;
-        last_move_ms = t;
+        track_move(e, false);
         if (!swiping && abs(e->x - down_x) > 8 && down_y < DOCK_Y) {
             swiping = true;
             if (view.pressed >= 0) {

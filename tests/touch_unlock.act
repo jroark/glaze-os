@@ -1,0 +1,15 @@
+# Flick the unlock slider in ~100 ms, open Calculator, and enter 7+8=.
+sleep 9
+drag 40 280 215 280 4 0.02
+sleep 2
+tap 210 50
+sleep 3
+tap 30 188
+sleep 0.3
+tap 205 225
+sleep 0.3
+tap 90 188
+sleep 0.3
+tap 205 285
+sleep 1.5
+shot calc

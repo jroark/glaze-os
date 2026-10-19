@@ -20,6 +20,9 @@
 
 #define RING_SIZE   64
 
+/* Power on and scan while the pen is down (WaitPenTouch mode). */
+#define PIU_SCAN    (PIUCNT_PIUPWR | PIUCNT_PIUSEQEN | PIUCNT_PADATSTART)
+
 static struct gz_input_event ring[RING_SIZE];
 static uint32_t ring_head, ring_tail;
 static int bound_port;
@@ -128,8 +131,15 @@ static void touch_irq(void)
         }
         ack |= PIUINT_PENCHG;
     }
-    if (active & PIUINT_DATALOST)
-        ack |= PIUINT_DATALOST;
+    if (active & PIUINT_DATALOST) {
+        /* Both pages filled before we drained them, and the sequencer
+         * stopped. It restarts only once both pages and DATALOST are clear
+         * and PIUCNT is rewritten (VRC4173 UM 9.7). */
+        PIU_INT = (uint16_t)((mask << 8) | ack | PIUINT_DATALOST |
+                             PIUINT_PAGE0 | PIUINT_PAGE1);
+        PIU_CNT = PIU_SCAN;
+        return;
+    }
     if (ack)
         PIU_INT = (uint16_t)((mask << 8) | ack);
 }
@@ -181,12 +191,14 @@ void input_init(void)
     keys1 = KEYS_SET1;
     keys2 = KEYS_SET2;
 
-    /* PIU defaults from the VRC4173 idle dump, PENCHG + page + datalost
-     * interrupts, and WaitPenTouch scanning (doc: Touch; Linux driver). */
-    PIU_SIVL = 0x05DC;
+    /* PENCHG + page + datalost interrupts and WaitPenTouch scanning (doc:
+     * Touch; Linux driver). The interval is in 30 us units: the idle dump's
+     * 0x5DC samples at ~22 Hz, which loses the end of quick drags, so scan
+     * every ~10 ms instead. */
+    PIU_SIVL = 0x0150;
     PIU_STBL = 0x00C8;
     PIU_INT = (PIUINT_PENCHG | PIUINT_DATALOST | PIUINT_PAGE0 | PIUINT_PAGE1) << 8;
-    PIU_CNT = PIUCNT_PIUPWR | PIUCNT_PIUSEQEN | PIUCNT_PADATSTART;
+    PIU_CNT = PIU_SCAN;
 #ifdef GLAZE_INPUT_SCRIPT
     input_script_load();
 #endif
