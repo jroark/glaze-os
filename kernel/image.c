@@ -203,6 +203,26 @@ fail:
     image_release_region(as, r); as_region_drop(as, r); as_prune_tables(as);
     return GZ_ENOMEM;
 }
+/* A program for a new process: from romfs, or from a buffer in the spawner's
+ * address space (SYS_SPAWN_IMAGE). Its PT_INTERP, if any, is copied out. */
+int image_map_exec(struct addrspace *as, struct addrspace *src_as, const void *rom, uint32_t src, uint32_t size,
+                   struct gz_image_info *info, uint32_t *type, char *interp, uint32_t max)
+{
+    struct image *im = image_get(src_as, rom, src, size);
+    if (!im) return GZ_EINVAL;
+    *type = im->eh.type;
+    interp[0] = 0;
+    for (unsigned i = 0; i < im->eh.phnum; i++) {
+        struct gz_elf_phdr *p = &im->ph[i];
+        if (p->type != GZ_PT_INTERP) continue;
+        if (interp[0] || !p->filesz || p->filesz > max || !gz_elf_range(p->offset, p->filesz, im->size)) {
+            image_unref(im); return GZ_EINVAL;
+        }
+        file_read(im, p->offset, interp, p->filesz);
+        if (interp[p->filesz - 1] || !interp[0]) { image_unref(im); return GZ_EINVAL; }
+    }
+    return map_instance(as, im, info, USER_TEXT_BASE);
+}
 int image_map(struct addrspace *as, const void *rom, uint32_t size, struct gz_image_info *info, uint32_t at)
 {
     struct image *im = image_get(as, rom, 0, size);

@@ -24,16 +24,15 @@ int proc_count(void)
     return n;
 }
 
-struct proc *proc_spawn(const char *path, int parent, uint32_t flags)
+/* The program is romfs data (rom), or size bytes at src in src_as. */
+static struct proc *spawn(const char *name, struct addrspace *src_as, const void *rom, uint32_t src,
+                          uint32_t size, int parent, uint32_t flags)
 {
-    uint32_t size, entry;
+    uint32_t entry;
     struct gz_ld_start start;
-    const void *image = romfs_find(path, &size);
     struct proc *p = NULL;
     int slot;
 
-    if (!image)
-        return NULL;
     for (slot = 0; slot < MAX_PROCS; slot++) {
         if (!procs[slot].used) {
             p = &procs[slot];
@@ -52,15 +51,12 @@ struct proc *proc_spawn(const char *path, int parent, uint32_t flags)
     p->pid = (pid_gen++ << 5) | slot;
     p->parent = parent;
     p->flags = flags;
-    const char *base = path;
-    for (const char *c = path; *c; c++) {
-        if (*c == '/')
-            base = c + 1;
-    }
-    strncpy(p->name, base, sizeof(p->name) - 1);
+    strncpy(p->name, name, sizeof(p->name) - 1);
 
-    int load_error = elf_load(&p->as, image, size, &entry, &start);
-    if (load_error) { kprintf("proc: cannot load %s (%d)\n", path, load_error); goto fail; }
+    int load_error = elf_load(&p->as, src_as, rom, src, size, &entry, &start);
+    if (!load_error && !rom && !start.abi)
+        load_error = GZ_EINVAL;     /* installed apps run on the dynamic linker */
+    if (load_error) { kprintf("proc: cannot load %s (%d)\n", name, load_error); goto fail; }
     if (as_alloc_region(&p->as, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE, REGION_OWNED))
         goto fail;
 
@@ -84,6 +80,29 @@ fail:
     as_destroy(&p->as);
     p->used = false;
     return NULL;
+}
+
+struct proc *proc_spawn(const char *path, int parent, uint32_t flags)
+{
+    uint32_t size;
+    const void *image = romfs_find(path, &size);
+    const char *base = path;
+
+    if (!image)
+        return NULL;
+    for (const char *c = path; *c; c++) {
+        if (*c == '/')
+            base = c + 1;
+    }
+    return spawn(base, NULL, image, 0, size, parent, flags);
+}
+
+/* An installed app: the ELF is read by the spawner (SpringBoard) and copied
+ * from its address space into shared image frames. */
+struct proc *proc_spawn_image(struct addrspace *src_as, uint32_t src, uint32_t size, const char *name,
+                              int parent, uint32_t flags)
+{
+    return spawn(name, src_as, NULL, src, size, parent, flags);
 }
 
 void proc_exit(struct proc *p, int code)
