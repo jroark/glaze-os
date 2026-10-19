@@ -35,7 +35,7 @@ preview: preview.c hostres.c $(GFX) $(SB)
 
 shots: preview
 	./preview
-	for f in lock lock_drag unlock_anim home home_dusk_pressed; do sips -s format png $$f.bmp --out $$f.png >/dev/null; done
+	for f in lock lock_drag unlock_anim home home_dusk_pressed home_badges home_banner lock_notes; do sips -s format png $$f.bmp --out $$f.png >/dev/null; done
 
 fstest: fstest.c $(FS)
 	$(CC) $(FS_CFLAGS) -o $@ $^

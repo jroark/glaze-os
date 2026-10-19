@@ -1,5 +1,11 @@
-/* Calendar: month grid with today highlighted; arrows change the month. */
+/*
+ * Calendar: month grid with today highlighted; arrows change the month. The
+ * shown day can carry a 9:00 reminder, a SpringBoard notification whose id
+ * is the date (yyyymmdd), so it fires whether or not Calendar is running.
+ */
 
+#include <glaze/notify.h>
+#include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
@@ -17,7 +23,12 @@ static const char *const wd_long[7] = {
 static int year, month;                 /* shown month, 1-based */
 static struct gz_datetime today;
 static int sel_day;                     /* selected day in the shown month, 0 = none */
-static int pressed = 0;                 /* 1 prev, 2 next */
+static int pressed = 0;                 /* 1 prev, 2 next, 3 reminder */
+static bool h24;
+static gfx_rect remind_rect, alert_ok;
+static char alert_msg[40];              /* a reminder that fired in front */
+
+#define REMIND_HOUR 9
 
 #define HEADER_Y    UI_NAV_H
 #define HEADER_H    44
@@ -51,6 +62,42 @@ static gfx_rect prev_rect = { 0, HEADER_Y, 48, 26 }, next_rect = { UI_W - 48, HE
 static gfx_rect cell_rect(int index)
 {
     return gfx_r(GRID_X + (index % 7) * CELL_W, GRID_Y + (index / 7) * CELL_H, CELL_W, CELL_H);
+}
+
+/* The day the bottom panel describes. */
+static int shown_day(void)
+{
+    return sel_day ? sel_day : (year == today.year && month == today.month ? today.day : 1);
+}
+
+static uint32_t reminder_id(int y, int m, int d)
+{
+    return (uint32_t)(y * 10000 + m * 100 + d);
+}
+
+static uint32_t reminder_when(int d)
+{
+    struct gz_datetime dt = { (uint16_t)year, (uint8_t)month, (uint8_t)d, REMIND_HOUR, 0, 0, 0 };
+    return gz_dt_to_secs(&dt);
+}
+
+static void day_label(char *buf, size_t n, int d)
+{
+    snprintf(buf, n, "%s, %s %d", wd_long[(first_weekday(year, month) + d - 1) % 7], months[month - 1], d);
+}
+
+static void toggle_reminder(void)
+{
+    int d = shown_day();
+    uint32_t id = reminder_id(year, month, d);
+    char body[40];
+
+    if (ui_notify_pending(id)) {
+        ui_notify_cancel(id);
+    } else {
+        day_label(body, sizeof(body), d);
+        ui_notify_post(id, reminder_when(d), "Reminder", body, 1);
+    }
 }
 
 static void draw(void)
@@ -103,10 +150,28 @@ static void draw(void)
     int below = GRID_Y + 6 * CELL_H;
     gfx_fill(s, gfx_r(0, below, UI_W, UI_H - below), 0xFFFFFF);
     gfx_fill(s, gfx_r(0, below, UI_W, 1), 0x8A9099);
-    int d = sel_day ? sel_day : (year == today.year && month == today.month ? today.day : 1);
-    snprintf(buf, sizeof(buf), "%s, %s %d", wd_long[(first + d - 1) % 7], months[month - 1], d);
+    int d = shown_day();
+    day_label(buf, sizeof(buf), d);
     gfx_text(s, 10, below + 8, ui_font(FONT_B13), buf, 0x2C3138, 255);
-    gfx_text(s, 10, below + 28, ui_font(FONT_R12), "No Events", 0x8A9099, 255);
+
+    /* A reminder can be set for any day whose reminder time is still ahead. */
+    bool set = ui_notify_pending(reminder_id(year, month, d)) != 0;
+    remind_rect = gfx_r(UI_W - 98, below + 23, 88, 24);
+    if (set) {
+        snprintf(buf, sizeof(buf), h24 ? "Reminder at %02d:00" : "Reminder at %d:00 AM", REMIND_HOUR);
+        gfx_text(s, 10, below + 28, ui_font(FONT_R12), buf, 0x2A63D4, 255);
+        ui_draw_button(s, remind_rect, "Cancel", pressed == 3);
+    } else {
+        gfx_text(s, 10, below + 28, ui_font(FONT_R12), "No Events", 0x8A9099, 255);
+        if ((int32_t)(reminder_when(d) - ui_now_secs()) > 0)
+            ui_draw_button(s, remind_rect, "Remind Me", pressed == 3);
+        else
+            remind_rect = gfx_r(0, 0, 0, 0);
+    }
+    if (alert_msg[0]) {
+        gfx_rect unused;
+        ui_draw_alert(s, "Reminder", alert_msg, "OK", NULL, &alert_ok, &unused, pressed == 4 ? 0 : -1);
+    }
     ui_invalidate_all();
     ui_present();
 }
@@ -130,6 +195,9 @@ int main(void)
     gz_rtc_get(&today);
     year = today.year;
     month = today.month;
+    int32_t pref24 = 0;
+    h24 = pref_get("sb.24h", &pref24, sizeof(pref24)) == 4 && pref24;
+    ui_set_badge(0);
     draw();
 
     for (;;) {
@@ -139,14 +207,37 @@ int main(void)
             draw();
             continue;
         }
-        if (ev.type == GZ_EV_KEY_DOWN && (ev.code == GZ_KEY_LEFT || ev.code == GZ_KEY_RIGHT)) {
+        if (ev.type == GZ_EV_APP_NOTIFY) {
+            /* A reminder came due while Calendar is open, so SpringBoard
+             * leaves showing it to us. Reminders fire on their own day. */
+            gz_rtc_get(&today);
+            snprintf(alert_msg, sizeof(alert_msg), "%s, %s %d", wd_long[today.weekday % 7],
+                     months[today.month - 1], today.day);
+            draw();
+        } else if (alert_msg[0]) {
+            /* Modal: only the alert's button. */
+            if (ev.type == GZ_EV_TOUCH_DOWN)
+                pressed = gfx_rect_contains(alert_ok, ev.x, ev.y) ? 4 : 0;
+            else if (ev.type == GZ_EV_TOUCH_UP && pressed == 4 && gfx_rect_contains(alert_ok, ev.x, ev.y))
+                alert_msg[0] = 0;
+            if (ev.type == GZ_EV_TOUCH_UP)
+                pressed = 0;
+            draw();
+        } else if (ev.type == GZ_EV_KEY_DOWN && (ev.code == GZ_KEY_LEFT || ev.code == GZ_KEY_RIGHT)) {
             change_month(ev.code == GZ_KEY_LEFT ? -1 : 1);
             draw();
         } else if (ev.type == GZ_EV_TOUCH_DOWN) {
-            pressed = gfx_rect_contains(prev_rect, ev.x, ev.y) ? 1 : gfx_rect_contains(next_rect, ev.x, ev.y) ? 2 : 0;
+            pressed = gfx_rect_contains(prev_rect, ev.x, ev.y)   ? 1
+                      : gfx_rect_contains(next_rect, ev.x, ev.y) ? 2
+                      : gfx_rect_contains(remind_rect, ev.x, ev.y) ? 3
+                                                                 : 0;
             draw();
         } else if (ev.type == GZ_EV_TOUCH_UP) {
-            if (pressed) {
+            if (pressed == 3) {
+                if (gfx_rect_contains(remind_rect, ev.x, ev.y))
+                    toggle_reminder();
+                pressed = 0;
+            } else if (pressed) {
                 change_month(pressed == 1 ? -1 : 1);
                 pressed = 0;
             } else {

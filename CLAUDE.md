@@ -74,6 +74,7 @@ and shared text editor.
 - The app draws into the surface and calls `ui_present()`, which blocks until the dirty rectangle is on screen.
 - The Home button kills the app, so apps must save state eagerly (Notes debounces its saves).
 - The home-screen app list is the `sb_apps[]` table in `servers/springboard/draw.c`; icons are `assets/gen/icon_*.gzi`.
+- Badges and notifications belong to SpringBoard (`servers/springboard/notify.c`), so they outlive the app. The front app calls `ui_set_badge` and `ui_notify_post/cancel/pending` (`lib/ui/notify.c`). Text travels in `sb_shared.req`, and fire times are `glaze/notify.h` wall-clock seconds. A note fires as a banner, on the lock screen when locked, or as `GZ_EV_APP_NOTIFY` with no badge when its own app is in front. Badges and pending notes persist as the `sb.badges`/`sb.notes` preferences, keyed by binary path. Other processes post for an app by path through `sb_*_for` (`lib/libc/notify.c`), which is unauthenticated because the kernel does not identify senders. Clock's timer and Calendar's reminders use it; `tests/t_notify.txt` exercises it.
 
 **Networking** (`kernel/drivers/ne2000.c`, `servers/net`, `glaze/net.h`, client in `lib/libc/net.c`):
 - The NE2000 sits in the PCMCIA card I/O window at 0x0A00C300 once bit 2 of the bridge register 0x0A00A01C is set; its interrupt is GIRQ0 bit 0, which also carries CF state changes. The driver queues received frames in the kernel and notifies the port bound with `SYS_NET_BIND` (`GZ_NOTIFY_NET`); the timer tick polls it too.

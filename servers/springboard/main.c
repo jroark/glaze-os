@@ -6,6 +6,7 @@
 
 #include "sb_internal.h"
 
+#include <glaze/notify.h>
 #include <glaze/prefs.h>
 #include <glaze/res.h>
 #include <glaze/sys.h>
@@ -30,8 +31,12 @@ enum state {
 #define SPRING_MS       200
 #define FLING_MS        150     /* how far a released knob coasts */
 #define LAUNCH_TIMEOUT  3000
+#define BANNER_MS       4000
+#define MAX_CLIENTS     4
 #define SURFACE_BYTES   (SB_APP_W * SB_APP_H * 2)
 #define SHM_HEADER      4096
+
+_Static_assert(sizeof(struct sb_shared) <= SHM_HEADER, "sb_shared must fit before the surface");
 
 static gfx_surface fb;          /* the hardware framebuffer */
 static gfx_surface bb;          /* back buffer, flushed to fb by rect */
@@ -65,6 +70,19 @@ static int velocity;            /* px per 100 ms, smoothed */
 static int minute_shown = -1;
 static uint32_t shimmer_next;
 
+/* Notification banner over the top of the screen, and the app to open
+ * once the current one has zoomed out (a tapped banner's). */
+static struct sb_note banner;
+static bool banner_queued, banner_visible, banner_touch;
+static uint32_t banner_until;
+static int launch_after_home = -1;
+
+/* Request pages of processes that notify for other apps (SB_CLIENT_OPEN). */
+static struct {
+    int pid, shm;
+    struct sb_note_req *req;
+} clients[MAX_CLIENTS];
+
 static void load_settings(void);
 
 /* ---- helpers ------------------------------------------------------------ */
@@ -83,6 +101,8 @@ static void flush_all(void)
 {
     flush(gfx_r(0, 0, SCREEN_W, SCREEN_H));
 }
+
+static void overlay_banner(void);
 
 static void anim_start(int from, int to, uint32_t dur)
 {
@@ -130,6 +150,13 @@ static void update_clock(bool force)
     sb_clock_from(&view.clk, &dt);
 }
 
+static uint32_t now_secs(void)
+{
+    struct gz_datetime dt;
+
+    return gz_rtc_get(&dt) ? 0 : gz_dt_to_secs(&dt);
+}
+
 /* ms until the next minute boundary, so the clocks stay current. */
 static int ms_to_next_minute(void)
 {
@@ -144,6 +171,7 @@ static int ms_to_next_minute(void)
 
 static void render_lock(void)
 {
+    view.num_lock_notes = sb_num_delivered;
     sb_draw_wallpaper(&bb, &view, gfx_r(0, 0, SCREEN_W, SCREEN_H));
     sb_draw_lock(&bb, &view, 0);
     flush_all();
@@ -163,6 +191,7 @@ static void render_home(void)
 {
     sb_draw_home(&bb, &view);
     flush_all();
+    overlay_banner();
 }
 
 static void render_grid(void)
@@ -173,6 +202,7 @@ static void render_grid(void)
     sb_draw_home(&bb, &view);
     gfx_reset_clip(&bb);
     flush(r);
+    overlay_banner();
 }
 
 static void render_app_status(void)
@@ -190,6 +220,56 @@ static void present_app_rect(gfx_rect r)
     if (!gfx_rect_intersect(r, gfx_r(0, 0, SB_APP_W, SB_APP_H), &c))
         return;
     gfx_blit(&fb, c.x, c.y + SB_STATUS_H, &app_surf, c);
+    if (c.y < BANNER_H)
+        overlay_banner();
+}
+
+/* ---- notification banner ------------------------------------------------ */
+
+static gfx_rect banner_rect(void)
+{
+    return gfx_r(0, SB_STATUS_H, SCREEN_W, BANNER_H);
+}
+
+/* Draws the banner over whatever is under it: the app or the home screen. */
+static void overlay_banner(void)
+{
+    gfx_rect r = banner_rect();
+
+    if (!banner_visible)
+        return;
+    if (state == ST_APP) {
+        gfx_blit(&bb, 0, SB_STATUS_H, &app_surf, gfx_r(0, 0, SB_APP_W, BANNER_H));
+    } else {
+        gfx_set_clip(&bb, r);
+        sb_draw_home(&bb, &view);
+        gfx_reset_clip(&bb);
+    }
+    sb_draw_banner(&bb, &banner);
+    flush(r);
+}
+
+static void hide_banner(void)
+{
+    if (!banner_visible)
+        return;
+    banner_visible = false;
+    banner_touch = false;
+    if (state == ST_APP)
+        present_app_rect(gfx_r(0, 0, SB_APP_W, BANNER_H));
+    else if (state == ST_HOME)
+        render_home();
+}
+
+/* A queued banner waits for the home screen or an app to be up. */
+static void show_queued_banner(void)
+{
+    if (!banner_queued || (state != ST_HOME && state != ST_APP))
+        return;
+    banner_queued = false;
+    banner_visible = true;
+    banner_until = now_ms() + BANNER_MS;
+    overlay_banner();
 }
 
 static void render_app(void)
@@ -231,6 +311,7 @@ static void launch(int index)
 
 static void begin_zoom_in(void)
 {
+    banner_visible = banner_touch = false;
     view.pressed = -1;
     sb_draw_home(&snap, &view);
     state = ST_ZOOM_IN;
@@ -239,6 +320,7 @@ static void begin_zoom_in(void)
 
 static void begin_zoom_out(void)
 {
+    banner_visible = banner_touch = false;
     load_settings();
     view.pressed = -1;
     sb_draw_home(&snap, &view);
@@ -263,6 +345,7 @@ static void send_event(const struct gz_input_event *ev)
 static void lock_device(void)
 {
     lock_over_app = (state == ST_APP);
+    banner_visible = banner_touch = false;
     state = ST_LOCK;
     anim.active = false;
     view.knob_x = 0;
@@ -274,6 +357,8 @@ static void lock_device(void)
 
 static void begin_unlock(void)
 {
+    notify_clear_delivered();
+    view.num_lock_notes = 0;
     if (lock_over_app && app_index >= 0) {
         gfx_blit(&snap, 0, SB_STATUS_H, &app_surf, gfx_r(0, 0, SB_APP_W, SB_APP_H));
         sb_draw_status(&snap, &view.clk, sb_apps[app_index].status_style, false);
@@ -439,6 +524,33 @@ static void handle_key(const struct gz_input_event *e)
     }
 }
 
+/* A tap on the banner opens its app; the banner swallows that touch. */
+static bool banner_touch_event(const struct gz_input_event *e)
+{
+    if (e->type == GZ_EV_TOUCH_DOWN && banner_visible && gfx_rect_contains(banner_rect(), e->x, e->y)) {
+        banner_touch = true;
+        return true;
+    }
+    if (!banner_touch)
+        return false;
+    if (e->type == GZ_EV_TOUCH_UP) {
+        banner_touch = false;
+        if (banner_visible && gfx_rect_contains(banner_rect(), e->x, e->y)) {
+            int target = banner.app;
+            if (state == ST_HOME) {
+                banner_visible = false;
+                launch(target);
+            } else if (state == ST_APP && app_index != target) {
+                launch_after_home = target;
+                begin_zoom_out();
+            } else {
+                hide_banner();
+            }
+        }
+    }
+    return true;
+}
+
 static void handle_input(void)
 {
     struct gz_input_event evs[16];
@@ -456,6 +568,8 @@ static void handle_input(void)
                     send_event(e);
                 continue;
             }
+            if (banner_touch_event(e))
+                continue;
             switch (state) {
             case ST_LOCK:
                 lock_touch(e);
@@ -472,6 +586,129 @@ static void handle_input(void)
             }
         }
     }
+}
+
+/* ---- notifications ------------------------------------------------------ */
+
+static bool app_in_front(int app)
+{
+    return app_ready && app_index == app && (state == ST_APP || state == ST_ZOOM_IN);
+}
+
+static void fire(const struct sb_note *n)
+{
+    if (app_in_front(n->app)) {
+        struct gz_input_event e = { .type = GZ_EV_APP_NOTIFY, .code = (uint16_t)n->id, .time_ms = now_ms() };
+        send_event(&e);
+        return;
+    }
+    notify_add_badge(n->app, n->badge);
+    if (state == ST_LOCK) {
+        notify_deliver_locked(n);
+        if (!dragging_knob && !anim.active)
+            render_lock();
+        return;
+    }
+    banner = *n;
+    banner_queued = true;
+    banner_visible = false;
+    if (state == ST_HOME)
+        render_home();
+    show_queued_banner();
+}
+
+static void fire_due(void)
+{
+    struct sb_note n;
+    uint32_t now = now_secs();
+
+    while (now && notify_pop_due(now, &n))
+        fire(&n);
+}
+
+/* The request page of a client process, opening one if asked to. */
+static struct sb_note_req *client_req(int pid, bool open, int *shm)
+{
+    int slot = -1;
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i].req && clients[i].pid == pid) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0 && open) {
+        /* Reuse the page of a client that has exited. */
+        for (int i = 0; i < MAX_CLIENTS && slot < 0; i++) {
+            if (!clients[i].req || !gz_proc_alive(clients[i].pid))
+                slot = i;
+        }
+        if (slot < 0)
+            return NULL;
+        if (!clients[slot].req) {
+            clients[slot].shm = gz_shm_create(sizeof(struct sb_note_req));
+            clients[slot].req = clients[slot].shm < 0 ? NULL : gz_shm_map(clients[slot].shm);
+            if (!clients[slot].req)
+                return NULL;
+        }
+        clients[slot].pid = pid;
+    }
+    if (slot < 0)
+        return NULL;
+    if (shm)
+        *shm = clients[slot].shm;
+    return clients[slot].req;
+}
+
+/* Notification requests: the front app's for itself, or a client's for an
+ * app named by path. */
+static int handle_note_msg(const struct gz_msg *m, struct gz_msg *r)
+{
+    struct sb_note_req q;
+    const struct sb_note_req *src;
+    int pid = (int)m->w[3], app, shm = -1;
+    uint32_t op = m->w[0];
+
+    if (op == SB_CLIENT_OPEN) {
+        if (!client_req(pid, true, &shm))
+            return GZ_ENOSPC;
+        r->w[1] = (uint32_t)shm;
+        return 0;
+    }
+    if (op >= SB_BADGE_SET_FOR) {
+        if (!(src = client_req(pid, false, NULL)))
+            return GZ_EPERM;
+        op -= SB_BADGE_SET_FOR - SB_BADGE_SET;
+        memcpy(&q, src, sizeof(q));
+        q.path[sizeof(q.path) - 1] = 0;
+        if ((app = notify_app_for_path(q.path)) < 0)
+            return GZ_ENOENT;
+    } else {
+        if (app_pid <= 0 || pid != app_pid || app_index < 0)
+            return GZ_EPERM;
+        app = app_index;
+        memcpy(&q, &shared->req, sizeof(q));
+    }
+    q.title[sizeof(q.title) - 1] = 0;
+    q.body[sizeof(q.body) - 1] = 0;
+
+    switch (op) {
+    case SB_BADGE_SET:
+        notify_set_badge(app, m->w[1]);
+        if (state == ST_HOME)
+            render_home();
+        return 0;
+    case SB_NOTE_POST: {
+        uint32_t when = m->w[1] ? m->w[1] : now_secs();
+        return notify_post(app, m->w[2], when, m->w[4], q.title, q.body);
+    }
+    case SB_NOTE_CANCEL:
+        return notify_cancel(app, m->w[1]);
+    case SB_NOTE_PENDING:
+        r->w[1] = notify_pending(app, m->w[1]);
+        return 0;
+    }
+    return GZ_EINVAL;
 }
 
 /* ---- app messages ------------------------------------------------------- */
@@ -503,6 +740,16 @@ static void handle_msg(int token, struct gz_msg *m)
         break;
     }
     case SB_SET_STATUS:
+        break;
+    case SB_BADGE_SET:
+    case SB_NOTE_POST:
+    case SB_NOTE_CANCEL:
+    case SB_NOTE_PENDING:
+    case SB_CLIENT_OPEN:
+    case SB_BADGE_SET_FOR:
+    case SB_NOTE_POST_FOR:
+    case SB_NOTE_CANCEL_FOR:
+        r.w[0] = (uint32_t)handle_note_msg(m, &r);
         break;
     default:
         r.w[0] = (uint32_t)GZ_EINVAL;
@@ -561,6 +808,9 @@ static void frame(void)
                 app_cleanup();
                 state = ST_HOME;
                 render_home();
+                if (launch_after_home >= 0)
+                    launch(launch_after_home);
+                launch_after_home = -1;
             }
         }
         break;
@@ -615,7 +865,10 @@ int main(void)
     init_surfaces();
     sb_draw_init();
     load_settings();
+    notify_load();
     view.pressed = -1;
+    view.badges = sb_badges;
+    view.lock_notes = sb_delivered;
 
     sb_port = gz_port_create();
     gz_port_register(sb_port, SB_PORT_NAME);
@@ -639,6 +892,11 @@ int main(void)
         } else if (state == ST_LAUNCH_WAIT || app_index >= 0) {
             timeout = MIN(timeout, 250);    /* watch the app process */
         }
+        int due = notify_next_ms(now_secs());
+        if (due >= 0)
+            timeout = MIN(timeout, due);
+        if (banner_visible)
+            timeout = MIN(timeout, (int)(banner_until - t) < 0 ? 0 : (int)(banner_until - t));
 
         struct gz_msg m;
         int tok = gz_recv(sb_port, &m, timeout);
@@ -680,6 +938,11 @@ int main(void)
                 render_home();
             }
         }
+
+        fire_due();
+        show_queued_banner();
+        if (banner_visible && (int)(now_ms() - banner_until) >= 0)
+            hide_banner();
 
         int old_minute = minute_shown;
         update_clock(false);

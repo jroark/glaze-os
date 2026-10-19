@@ -40,6 +40,22 @@ void ui_invalidate_all(void);
 /* Push the dirty region to the screen (blocks until it is shown). */
 void ui_present(void);
 
+/* ---- badge and notifications (kept by SpringBoard, see glaze/sb.h) ------ */
+
+/* The app's home-screen icon badge; 0 clears it. */
+int ui_set_badge(int count);
+/* Schedules a notification for wall-clock time `when` (ui_now_secs() scale;
+ * 0 = now) that adds `badge` to the icon badge as it fires. Posting an id
+ * again replaces it. If the app is in front then, it gets GZ_EV_APP_NOTIFY
+ * instead of a banner and no badge. 0, or GZ_ENOSPC when SpringBoard's
+ * table is full. */
+int ui_notify_post(uint32_t id, uint32_t when, const char *title, const char *body, int badge);
+int ui_notify_cancel(uint32_t id);
+/* Fire time of a pending notification, or 0. */
+uint32_t ui_notify_pending(uint32_t id);
+/* Current wall-clock time in glaze/notify.h seconds. */
+uint32_t ui_now_secs(void);
+
 /* ---- colours ------------------------------------------------------------ */
 
 #define UI_NAV_TOP          0xB0BCCD
