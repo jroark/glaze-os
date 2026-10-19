@@ -1,0 +1,75 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Glaze is a microkernel OS for the Casio BE-300 (NEC VR4131 MIPS, 240x320 RGB565 LCD, 16 MiB SDRAM, 16 MiB small-page NAND) with an early-iPhone-OS-style UI. It boots through the stock boot ROM from a NAND image on the [be300 emulator](https://github.com/jroark/be300).
+
+## Building
+
+```sh
+./build.sh                        # Docker (mips-cross-dev image) -> out/glaze.bin
+make -j8                          # same, natively, if mipsel-linux-gnu-gcc is installed
+make -j8 INIT=bin/ktest           # boot the kernel self-test instead of SpringBoard
+make -j8 INPUT_SCRIPT=tests/x.txt # replay scripted input (see Testing)
+make -C host fstest               # native build of the file-system stack test
+```
+
+There is no linter; the build uses `-Wall -Wextra` and should stay warning-free. `compile_flags.txt` is for clangd.
+
+`main.o`, `input.o` and `romfs.img` are always rebuilt because `INIT`, `BUILD_ID` and `INPUT_SCRIPT` are baked into them. Every directory under `apps/` and `servers/` becomes a program, `bin/<dirname>` in romfs, with no Makefile edit. Assets in `assets/gen/` are checked in; they are regenerated only on macOS with `swift tools/mkassets.swift assets/gen assets/fonts`.
+
+## Running and testing
+
+```sh
+be300 --nand out/glaze.bin --rtc-host-time > stdout.log 2> stderr.log
+```
+
+- The emulator writes NAND back into the image, so boot a copy when you need a clean flash. Kernel and `printf` output goes to the emulator's stdout. A screenshot (`screenshot_*.bmp`) is saved on orderly shutdown, including SIGTERM from `timeout`. With no display, `SDL_VIDEODRIVER=dummy` runs it headless and still saves the screenshot.
+- **ktest** (`apps/ktest`): build with `INIT=bin/ktest`, boot, and grep stdout for `ktest: FAIL` / `ktest: ALL PASS`. It covers IPC, shm, sleep, faults, the KV store and the file server.
+- **Scripted UI tests**: `tests/*.txt` replay timed events (`<ms> tap x y`, `drag ...`, `key ok|esc|...|home`) from inside the kernel, in screen coordinates. `tests/run.sh tests/t_x.txt` builds, boots and converts the final screenshot, but it uses the macOS tools `gtimeout` and `sips`. Scripted events bypass the touch panel and its interrupts.
+- **Real touch path**: `tests/touch.sh tests/touch_unlock.act` drives the emulator window with xdotool on an X display (`Xvfb :99 &`, then `DISPLAY=:99`). Action coordinates are window/screen pixels; app surfaces start 16 px lower, under the status bar.
+- **Flash stack**: `host/fstest [seed [wear|flips|bad|cuts|format]]` runs `servers/fs/ftl.c` plus littlefs and Dhara on a RAM NAND model with bit flips, failing blocks and power cuts. A full run takes several minutes; pass a phase name to run one.
+
+## Toolchain constraints
+
+- Everything is built `-march=mips2 -mabi=32 -mno-abicalls -fno-pic -G 0 -msoft-float`, freestanding and static. The VR4131 is MIPS III without CLZ or MIPS32 SPECIAL2 ops, and the emulator executes 32-bit code only.
+- Nothing links libgcc. Compiler helpers live in `lib/libc` (`divdi3.c` for 64-bit division, `bitops.c` for `__popcountsi2`, `__ctzsi2`, `__clzsi2` and `__bswapsi2`). An "undefined reference to `__…si2`" means another helper is needed there.
+- The libc is minimal (`lib/libc/include`). Check it has a function before using it, or add it to `lib/libc/string.c` and similar. The kernel compiles `lib/libc/string.c` and `divdi3.c` too.
+
+## Architecture
+
+**Boot.** The boot ROM loads the SPL (`boot/`) from the B000FF container at NAND 0x4000. The SPL streams the flat kernel from 0x14000 to 0x80010000 and jumps to it. The SPL bakes in the kernel's load, entry and size from `tools/elf_consts.py`; `tools/mk_nand.py` packs the image.
+
+**Flash layout.** 0x500000 holds the kernel's key/value store (1 MiB, `kernel/drivers/kv.c`). 0x600000 to the end is the file server's region (`FLASH_FS_OFFSET`, `GZ_FLASH_BLOCKS`). The romfs (apps and assets) is linked into the kernel image itself (`kernel/romfs_blob.S`, `tools/mkromfs.py`), and files in it are page-aligned so they can be mapped into user space.
+
+**Kernel** (`kernel/`):
+- Non-preemptive: kernel code runs with interrupts disabled, and user threads are preempted from the timer tick.
+- Scheduling is strict priority (high, normal, low, idle) with round-robin within a level.
+- Two-level page tables hold PTEs in VR41xx EntryLo format (`mips.h`). The VR41xx TLB layout differs from standard R4000.
+- IPC is synchronous send/recv/reply on named ports with 64-byte messages (`struct gz_msg`), plus per-port notification bits. Bulk data goes through shared memory (`SYS_SHM_*`).
+- Syscall numbers and the ABI are in `lib/include/glaze/abi.h` (shared with userspace); user wrappers are in `glaze/sys.h`.
+- Device access is gated by process flags. `PROC_PRIVILEGED` (framebuffer, input) can be passed down by a privileged spawner. `PROC_FLASH` (raw NAND) is granted only by the kernel, to `bin/fs`; `sys_spawn` masks other flags.
+- The kernel spawns `bin/fs` and then `INIT` (default `bin/springboard`) at boot.
+
+**Input.** Touch comes from the VRC4173 PIU, through GIRQ0 to GIU line 0 to IP2 (`kernel/drivers/irq.c`, `input.c`); buttons are polled and also arrive on GIRQ0. Events go into a kernel ring that only the bound compositor drains. SpringBoard forwards events to the foreground app through the shared ring in `struct sb_shared`. `ui_next_event` coalesces consecutive moves.
+
+**SpringBoard ↔ app protocol** (`glaze/sb.h`, `lib/ui/app.c`):
+- An app sends `SB_HELLO` and receives a shared-memory 240x304 surface; the top 16 rows of the screen are SpringBoard's status bar.
+- The app draws into the surface and calls `ui_present()`, which blocks until the dirty rectangle is on screen.
+- The Home button kills the app, so apps must save state eagerly (Notes debounces its saves).
+- The home-screen app list is the `sb_apps[]` table in `servers/springboard/draw.c`; icons are `assets/gen/icon_*.gzi`.
+
+**UI libraries.** `libgfx` (`lib/gfx`) is a software RGB565 renderer for GZI images and GZF fonts; the formats are described in `lib/include/glaze/gfx.h`. `libui` (`lib/ui`) provides the nav bar, bar buttons, grouped cells, alerts, the keyboard, inertial scroll views and push/pop transitions. Apps follow the Settings/Notes pattern: draw the whole view, keep hit rects, `redraw()` after events, and use `ui_transition(draw_fn, forward)` for navigation. `host/` builds `libgfx` natively to render SpringBoard previews.
+
+**File system** (`servers/fs`, `glaze/fs.h`, client in `lib/libc/fs.c`):
+- littlefs runs on the Dhara NAND translation layer, both vendored unmodified in `third_party/` and built into `libfsstack.a`. Don't edit them; put changes in `servers/fs/ftl.c`.
+- ECC is in-band: the spare area is synthesized by the emulator and absent from image files. Each page gets a 4-bit BCH code stored in the unused tail (bytes 480–511) of the checkpoint page Dhara writes after every 3 data pages.
+- The rest of `ftl.c`'s design is documented in its header comment and depends on Dhara's journal layout (`log2_ppc == 2` for 512-byte pages): the ECC cache, the bad-block table in the region's first two blocks, read-back verification, and torn-checkpoint handling. Re-run `host/fstest` after any change to `ftl.c`.
+- littlefs's block count is fixed from the geometry, not from `dhara_map_capacity`, which changes between mounts.
+- Clients get a session with an 8 KiB shared buffer; paths and data travel in it.
+
+## Hardware notes
+
+Register addresses and bit meanings follow the VR4131 and VRC4173 user's manuals and the be300 emulator's models (the `be300` and `mipsel-cross-image` repos hold the manuals, hardware dumps and the Linux port). Cite the manual section in comments when touching hardware code. Some things are known not to match real hardware yet:
+- **D-cache colouring:** the virtually indexed D-cache can give a page's kernel and user mappings different cache colours. The emulator doesn't model cache contents (TODO in `kernel/mm.c`).
+- **Factory bad-block marks:** these sit in the spare area and are never read.
