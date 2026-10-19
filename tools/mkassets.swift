@@ -120,11 +120,14 @@ func makeFont(_ file: String, _ size: CGFloat, _ name: String) {
     let ascent = Int(ceil(CTFontGetAscent(font)))
     let descent = Int(ceil(CTFontGetDescent(font)))
     let lineH = ascent + descent + Int(round(CTFontGetLeading(font)))
+    // ASCII, the extras at 0x7f-0x87, '?' fillers up to 0x9f, then Latin-1
+    // at its own code points (the browser maps text to this range).
     let codes = Array(32...126).map { UInt32($0) } + extraChars
+        + Array(repeating: UInt32(63), count: 0xA0 - 0x88) + Array(0xA0...0xFF).map { UInt32($0) }
 
     var glyphRecs = [UInt8](), bitmap = [UInt8]()
     for code in codes {
-        var uni = UniChar(code)
+        var uni = UniChar(code == 0xA0 ? 32 : code)
         var glyph = CGGlyph(0)
         CTFontGetGlyphsForCharacters(font, &uni, &glyph, 1)
         var adv = CGSize.zero
@@ -659,6 +662,12 @@ for size in [9, 10, 11, 12, 13, 14, 17, 24, 44] {
 }
 for size in [8, 9, 10, 11, 12, 13, 14, 17, 20] {
     makeFont("VeraBd.ttf", CGFloat(size), "sans_b\(size).gzf")
+}
+for size in [10, 11, 12, 13, 14] {
+    makeFont("VeraIt.ttf", CGFloat(size), "sans_i\(size).gzf")
+}
+for size in [10, 11, 12] {
+    makeFont("VeraMono.ttf", CGFloat(size), "mono_r\(size).gzf")
 }
 makeIcons()
 makeWallpapers()

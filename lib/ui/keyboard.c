@@ -5,6 +5,7 @@
 
 #define KEY_SHIFT   1
 #define KEY_MODE    2
+#define KEY_DOTCOM  3
 
 struct key {
     int16_t x, y, w, h;
@@ -15,7 +16,7 @@ struct key {
 #define MAX_KEYS 40
 static struct key keys[MAX_KEYS];
 static int nkeys;
-static bool built_numbers = true, built_shift = true;
+static bool built_numbers = true, built_shift = true, built_url;
 static char letter_labels[MAX_KEYS][2];
 
 static void add(int x, int y, int w, char ch, const char *label)
@@ -48,15 +49,16 @@ static void row(const char *chars, int x, int y, bool upper)
 
 static void build(const struct ui_keyboard *kb)
 {
-    if (built_numbers == kb->numbers && built_shift == kb->shift && nkeys)
+    if (built_numbers == kb->numbers && built_shift == kb->shift && built_url == kb->url && nkeys)
         return;
     built_numbers = kb->numbers;
     built_shift = kb->shift;
+    built_url = kb->url;
     nkeys = 0;
     if (kb->numbers) {
         row("1234567890", 6, 6, false);
-        row("-/:;()$&@", 17, 42, false);
-        row(".,?!'", 63, 78, false);
+        row(kb->url ? "-/:;()_&@" : "-/:;()$&@", 17, 42, false);
+        row(kb->url ? ".=?#%~" : ".,?!'", 63, 78, false);
         add(6, 78, 50, KEY_MODE, "#+=");
     } else {
         row("qwertyuiop", 6, 6, kb->shift);
@@ -66,8 +68,15 @@ static void build(const struct ui_keyboard *kb)
     }
     add(206, 78, 28, '\b', GFX_CH_LARROW);
     add(6, 114, 52, KEY_MODE, kb->numbers ? "ABC" : ".?123");
-    add(62, 114, 116, ' ', "space");
-    add(182, 114, 52, '\n', "return");
+    if (kb->url) {
+        add(62, 114, 36, '/', NULL);
+        add(102, 114, 36, '.', NULL);
+        add(142, 114, 36, KEY_DOTCOM, ".com");
+        add(182, 114, 52, '\n', "Go");
+    } else {
+        add(62, 114, 116, ' ', "space");
+        add(182, 114, 52, '\n', "return");
+    }
 }
 
 void ui_keyboard_init(struct ui_keyboard *kb)
@@ -80,7 +89,7 @@ void ui_keyboard_init(struct ui_keyboard *kb)
 
 static bool special(const struct key *k)
 {
-    return k->ch == KEY_SHIFT || k->ch == KEY_MODE || k->ch == '\b' || k->ch == '\n';
+    return k->ch == KEY_SHIFT || k->ch == KEY_MODE || k->ch == '\b' || k->ch == '\n' || k->ch == KEY_DOTCOM;
 }
 
 void ui_draw_keyboard(gfx_surface *s, const struct ui_keyboard *kb, int y)
@@ -177,7 +186,9 @@ int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
             *changed = true;
         }
         if (ch == '\n')
-            kb->shift = true;
+            kb->shift = !kb->url;
+        if (ch == KEY_DOTCOM)
+            return UI_KEY_DOTCOM;
         return (unsigned char)ch;
     }
     }
