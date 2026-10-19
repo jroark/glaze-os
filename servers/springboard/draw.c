@@ -18,6 +18,8 @@ const struct sb_app_info sb_apps[] = {
     { "Notes", "icon_notes.gzi", "bin/notes", SB_STATUS_GRAY, true },
     { "Settings", "icon_settings.gzi", "bin/settings", SB_STATUS_GRAY, true },
     { "Browser", "icon_web.gzi", "bin/browser", SB_STATUS_GRAY, false },
+    { "Music", "icon_music.gzi", "bin/music", SB_STATUS_BLACK, false },
+    { "Videos", "icon_video.gzi", "bin/video", SB_STATUS_BLACK, false },
 };
 const int sb_num_apps = sizeof(sb_apps) / sizeof(sb_apps[0]);
 

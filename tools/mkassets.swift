@@ -403,6 +403,44 @@ func makeIcons() {
         fill(ctx, white, col(0xFFFFFF))
         fill(ctx, CGPath(ellipseIn: CGRect(x: c.x - 1.3, y: c.y - 1.3, width: 2.6, height: 2.6), transform: nil), col(0x2A2A2A))
     }
+    icon("music") { ctx in
+        vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 44), 0xFFB347, 0xE4570B)
+        // Two beamed eighth notes over a soft shadow; parts are filled one
+        // at a time so overlaps don't cancel.
+        let beam = CGMutablePath()
+        beam.addLines(between: [CGPoint(x: 16.6, y: 11), CGPoint(x: 35, y: 7.5),
+                                CGPoint(x: 35, y: 12.5), CGPoint(x: 16.6, y: 16)])
+        beam.closeSubpath()
+        let parts: [CGPath] = [
+            CGPath(ellipseIn: CGRect(x: 8.5, y: 27.5, width: 10.5, height: 8), transform: nil),
+            CGPath(ellipseIn: CGRect(x: 24.5, y: 24, width: 10.5, height: 8), transform: nil),
+            CGPath(rect: CGRect(x: 16.6, y: 11, width: 2.4, height: 21), transform: nil),
+            CGPath(rect: CGRect(x: 32.6, y: 7.5, width: 2.4, height: 21), transform: nil),
+            beam,
+        ]
+        ctx.saveGState()
+        ctx.translateBy(x: 0, y: 1)
+        for p in parts { fill(ctx, p, col(0x7A2A00, 0.35)) }
+        ctx.restoreGState()
+        for p in parts { fill(ctx, p, col(0xFFFFFF)) }
+    }
+
+    icon("video") { ctx in
+        vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 44), 0x505860, 0x0C0E10)
+        // A strip of film with a play button on its frame.
+        fill(ctx, CGPath(rect: CGRect(x: 3, y: 10, width: 38, height: 24), transform: nil), col(0x161616))
+        for i in 0..<7 {
+            let x = 5 + CGFloat(i) * 5.3
+            fill(ctx, rr(CGRect(x: x, y: 11.5, width: 3, height: 2.6), 0.6), col(0xD8D8D8))
+            fill(ctx, rr(CGRect(x: x, y: 29.9, width: 3, height: 2.6), 0.6), col(0xD8D8D8))
+        }
+        vgrad(ctx, CGRect(x: 5, y: 15.5, width: 34, height: 13), 0x8CCBF4, 0x2A64AE)
+        let tri = CGMutablePath()
+        tri.addLines(between: [CGPoint(x: 18.5, y: 16.5), CGPoint(x: 27.5, y: 22), CGPoint(x: 18.5, y: 27.5)])
+        tri.closeSubpath()
+        fill(ctx, tri, col(0xFFFFFF))
+    }
+
     icon("calendar") { ctx in
         vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 44), 0xFFFFFF, 0xDCDCDC)
         vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 13), 0xF0544A, 0xB51D15)
