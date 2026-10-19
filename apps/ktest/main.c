@@ -1,5 +1,7 @@
-/* Kernel self-test: IPC round trips, notifications, sleep, shm, malloc, faults. */
+/* Kernel self-test: IPC round trips, notifications, sleep, shm, malloc, faults,
+ * the key/value store and the file server. */
 
+#include <glaze/fs.h>
 #include <glaze/sys.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,10 +9,73 @@
 
 static int failures;
 
+/* Apps don't get raw flash. */
+static bool fs_raw_denied(void)
+{
+    static uint8_t page[GZ_FLASH_PAGE_SIZE];
+
+    return gz_flash_read(0, page) == GZ_EPERM && gz_flash_erase(0) == GZ_EPERM;
+}
+
 #define CHECK(cond, what) do { \
     if (cond) printf("ktest: PASS %s\n", what); \
     else { printf("ktest: FAIL %s\n", what); failures++; } \
 } while (0)
+
+static void test_fs(void)
+{
+    static uint8_t data[20000], back[20000];
+    struct fs_dirent ents[8];
+    struct fs_stat st;
+    struct fs_info info;
+
+    CHECK(fs_raw_denied(), "flash syscalls denied to apps");
+    CHECK(fs_statfs(&info) == 0 && info.mounted == 0 && info.total > 4u << 20, "fs mounted");
+    printf("ktest: fs %u KiB used of %u, %u bad blocks\n", info.used / 1024, info.total / 1024,
+           info.bad_blocks);
+
+    for (unsigned i = 0; i < sizeof(data); i++)
+        data[i] = (uint8_t)(i * 7 + i / 251);
+    fs_remove("/ktest/sub/b.bin");
+    fs_remove("/ktest/sub");
+    fs_remove("/ktest/a.bin");
+    fs_remove("/ktest/c.bin");
+    fs_remove("/ktest");
+    CHECK(fs_mkdir("/ktest") == 0 && fs_mkdir("/ktest/sub") == 0, "fs mkdir");
+    CHECK(fs_mkdir("/ktest") == GZ_EEXIST, "fs mkdir existing");
+    CHECK(fs_write_file("/ktest/a.bin", data, sizeof(data)) == (int)sizeof(data), "fs write 20000 bytes");
+    CHECK(fs_read_file("/ktest/a.bin", back, sizeof(back)) == (int)sizeof(back) &&
+          !memcmp(data, back, sizeof(data)), "fs read back");
+    CHECK(fs_stat("/ktest/a.bin", &st) == 0 && st.type == FS_FILE && st.size == sizeof(data), "fs stat file");
+    CHECK(fs_stat("/ktest/sub", &st) == 0 && st.type == FS_DIR, "fs stat dir");
+    CHECK(fs_stat("/ktest/none", &st) == GZ_ENOENT, "fs stat missing");
+
+    int fd = fs_open("/ktest/a.bin", FS_O_READ | FS_O_WRITE);
+    CHECK(fd >= 0 && fs_seek(fd, 10000, FS_SEEK_SET) == 10000 && fs_write(fd, "glaze", 5) == 5 &&
+          fs_seek(fd, -5, FS_SEEK_CUR) == 10000 && fs_read(fd, back, 5) == 5 && !memcmp(back, "glaze", 5) &&
+          fs_seek(fd, 0, FS_SEEK_END) == (int)sizeof(data) && fs_close(fd) == 0, "fs seek/overwrite");
+
+    CHECK(fs_rename("/ktest/a.bin", "/ktest/sub/b.bin") == 0 && fs_stat("/ktest/a.bin", &st) == GZ_ENOENT,
+          "fs rename");
+    fs_write_file("/ktest/c.bin", "x", 1);
+    int n = fs_list("/ktest", 0, ents, 8);
+    CHECK(n == 2 && ((ents[0].type == FS_FILE && !strcmp(ents[0].name, "c.bin") && ents[1].type == FS_DIR) ||
+                     (ents[1].type == FS_FILE && !strcmp(ents[1].name, "c.bin") && ents[0].type == FS_DIR)),
+          "fs list");
+    CHECK(fs_list("/ktest", 1, ents, 8) == 1, "fs list skip");
+    CHECK(fs_remove("/ktest/sub") == GZ_ENOTEMPTY, "fs remove non-empty dir");
+    CHECK(fs_remove("/ktest/sub/b.bin") == 0 && fs_remove("/ktest/sub") == 0 &&
+          fs_remove("/ktest/c.bin") == 0 && fs_remove("/ktest") == 0, "fs remove");
+
+    /* Throughput, for reference. */
+    uint32_t t0 = gz_time_ms();
+    fs_write_file("/ktest.bin", data, sizeof(data));
+    uint32_t t1 = gz_time_ms();
+    fs_read_file("/ktest.bin", back, sizeof(back));
+    uint32_t t2 = gz_time_ms();
+    fs_remove("/ktest.bin");
+    printf("ktest: fs wrote 20000 bytes in %u ms, read in %u ms\n", t1 - t0, t2 - t1);
+}
 
 int main(void)
 {
@@ -117,6 +182,8 @@ int main(void)
           !memcmp(big, back, sizeof(big)), "kv survives compaction");
     uint32_t boots2 = 0;
     CHECK(gz_kv_get("ktest.boots", &boots2, sizeof(boots2)) == 4 && boots2 == boots, "kv counter after compaction");
+
+    test_fs();
 
     struct gz_sysinfo si;
     gz_sysinfo(&si);

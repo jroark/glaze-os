@@ -14,6 +14,7 @@ const struct sb_app_info sb_apps[] = {
     { "Photos", "icon_photos.gzi", "bin/photos", SB_STATUS_BLACK, false },
     { "Clock", "icon_clock.gzi", "bin/clock", SB_STATUS_BLACK, false },
     { "Calculator", "icon_calculator.gzi", "bin/calculator", SB_STATUS_BLACK, false },
+    { "Files", "icon_files.gzi", "bin/files", SB_STATUS_GRAY, false },
     { "Notes", "icon_notes.gzi", "bin/notes", SB_STATUS_GRAY, true },
     { "Settings", "icon_settings.gzi", "bin/settings", SB_STATUS_GRAY, true },
 };

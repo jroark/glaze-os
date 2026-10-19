@@ -29,4 +29,9 @@ void kv_init(void);
 int sys_kv_get(struct addrspace *as, uint32_t ukey, uint32_t ubuf, uint32_t len);
 int sys_kv_put(struct addrspace *as, uint32_t ukey, uint32_t ubuf, uint32_t len);
 
+/* flash.c: raw NAND for the file server. */
+int sys_flash_read(struct proc *p, uint32_t page, uint32_t ubuf);
+int sys_flash_prog(struct proc *p, uint32_t page, uint32_t ubuf);
+int sys_flash_erase(struct proc *p, uint32_t block);
+
 #endif
