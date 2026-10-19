@@ -35,6 +35,7 @@ static void thread_start(void *p)
     free(p);
     t->tid = gz_gettid();
     t->err = 0;
+    t->dl_pending = false;
     t->fn = st.fn;
     t->arg = st.arg;
     t->tls[0] = t->tls[1] = NULL;   /* the stack slot may be reused */

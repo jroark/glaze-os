@@ -1,43 +1,39 @@
-/* Static ELF32 little-endian MIPS loader. */
-
+/* ELF process loading. Static programs retain their original entry ABI. */
 #include "kernel.h"
 #include "proc.h"
+#include "hw.h"
 
-struct elf32_ehdr {
-    uint8_t ident[16];
-    uint16_t type, machine;
-    uint32_t version, entry, phoff, shoff, flags;
-    uint16_t ehsize, phentsize, phnum, shentsize, shnum, shstrndx;
-};
-
-struct elf32_phdr {
-    uint32_t type, offset, vaddr, paddr, filesz, memsz, flags, align;
-};
-
-#define PT_LOAD 1
-#define EM_MIPS 8
-
-int elf_load(struct addrspace *as, const void *image, uint32_t size, uint32_t *entry)
+int elf_load(struct addrspace *as, const void *image, uint32_t size, uint32_t *entry, struct gz_ld_start *start)
 {
-    const struct elf32_ehdr *eh = image;
-
-    if (size < sizeof(*eh) || memcmp(eh->ident, "\177ELF\1\1", 6) || eh->machine != EM_MIPS)
-        return GZ_EINVAL;
-    if (eh->phoff + eh->phnum * sizeof(struct elf32_phdr) > size)
-        return GZ_EINVAL;
-
-    const struct elf32_phdr *ph = (const void *)((const uint8_t *)image + eh->phoff);
-    for (int i = 0; i < eh->phnum; i++) {
-        if (ph[i].type != PT_LOAD || !ph[i].memsz)
-            continue;
-        if (ph[i].vaddr < USER_TEXT_BASE || ph[i].vaddr + ph[i].memsz > USER_MMAP_BASE ||
-            ph[i].offset + ph[i].filesz > size || ph[i].filesz > ph[i].memsz)
-            return GZ_EINVAL;
-        if (as_alloc_region(as, ph[i].vaddr, ph[i].memsz, REGION_OWNED))
-            return GZ_ENOMEM;
-        if (copy_to_as(as, ph[i].vaddr, (const uint8_t *)image + ph[i].offset, ph[i].filesz))
-            return GZ_EINVAL;
+    struct gz_image_info main;
+    memset(start, 0, sizeof(*start));
+    int rv = image_map(as, image, size, &main, USER_TEXT_BASE);
+    if (rv) return rv;
+    const struct gz_elf_ehdr *eh = image;
+    const struct gz_elf_phdr *ph = (const void *)((const uint8_t *)image + eh->phoff);
+    const char *interp = NULL;
+    bool executable_entry = false;
+    for (unsigned i = 0; i < main.phnum; i++) {
+        const struct gz_elf_phdr *p = &main.ph[i];
+        if (p->type == GZ_PT_LOAD && (p->flags & GZ_PF_X) && main.entry >= main.bias + p->vaddr &&
+            main.entry - main.bias - p->vaddr < p->memsz) executable_entry = true;
     }
-    *entry = eh->entry;
+    if (!executable_entry) return GZ_EINVAL;
+    for (unsigned i = 0; i < eh->phnum; i++) {
+        if (ph[i].type != GZ_PT_INTERP) continue;
+        if (interp || !gz_elf_range(ph[i].offset, ph[i].filesz, size) || ph[i].filesz != sizeof("/lib/ld-glaze.so.1")) return GZ_EINVAL;
+        interp = (const char *)image + ph[i].offset;
+        if (memcmp(interp, "/lib/ld-glaze.so.1", sizeof("/lib/ld-glaze.so.1"))) return GZ_EINVAL;
+    }
+    *entry = main.entry;
+    if (!interp) return eh->type == GZ_ET_EXEC && !main.dynamic ? 0 : GZ_EINVAL;
+    if (eh->type != GZ_ET_DYN || !main.dynamic) return GZ_EINVAL;
+    uint32_t isize;
+    const void *idata = romfs_find(interp, &isize);
+    if (!idata) return GZ_ENOENT;
+    struct gz_image_info loader;
+    rv = image_map(as, idata, isize, &loader, 0);
+    if (rv || loader.base != GZ_LD_BASE || loader.dynamic) return GZ_EINVAL;
+    start->abi = GZ_LD_ABI; start->main = main; *entry = loader.entry;
     return 0;
 }

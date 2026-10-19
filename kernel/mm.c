@@ -6,10 +6,9 @@
  * walk without branching. PTEs are stored directly in VR41xx EntryLo format
  * (see mips.h).
  *
- * TODO(real hardware): the VR4131 D-cache is virtually indexed with an 8 KiB
- * way, so KSEG0 and user aliases of a page can land in different cache
- * colours. The emulator does not model cache contents; real hardware will
- * need colour-matched allocation or explicit writeback around copies.
+ * Owned pages and ELF images match the cache colour of their KSEG0 alias
+ * (VR4131 UM 1.6.3: two-way 16 KiB caches, 8 KiB per way). Existing device
+ * and resource mappings retain their own cache policy.
  */
 
 #include "kernel.h"
@@ -58,6 +57,31 @@ void *page_alloc(void)
         }
     }
     return NULL;
+}
+
+/* VR4131 UM 1.6.3: virtual-indexed 16 KiB, two-way caches (8 KiB/way).
+ * Keep the extra index bit (VA bit 12) identical to KSEG0's physical alias. */
+void *page_alloc_colour(uint32_t va)
+{
+    for (uint32_t n = 0; n < NPAGES; n++) {
+        uint32_t i = (alloc_hint + n) % NPAGES;
+        if (!page_used[i] && !((i * PAGE_SIZE ^ va) & 0x1000u)) {
+            page_used[i] = 1; free_count--; alloc_hint = i + 1;
+            void *page = (void *)KSEG0(i * PAGE_SIZE);
+            memset(page, 0, PAGE_SIZE); return page;
+        }
+    }
+    return NULL;
+}
+
+/* VR4131 UM 1.6.3 (split I/D caches), ch.23 remark 3 (store/CACHE hazard).
+ * MIPS III Hit_Writeback_Inv_D=0x15, Hit_Invalidate_I=0x10. A 16-byte stride
+ * covers both 16-byte D and 32-byte I lines. Run before publishing new code. */
+void mm_sync_code(void *kva, uint32_t len)
+{
+    uintptr_t start = (uintptr_t)kva & ~15u, end = (uintptr_t)kva + len;
+    for (uintptr_t a = start; a < end; a += 16)
+        __asm__ volatile(".set push\n.set mips3\nnop\nnop\ncache 0x15, 0(%0)\ncache 0x10, 0(%0)\nsync\n.set pop" :: "r"(a) : "memory");
 }
 
 /* n physically contiguous zeroed pages (kernel stacks). */
@@ -147,109 +171,143 @@ pte_t as_lookup(struct addrspace *as, uint32_t va)
     return slot ? *slot : 0;
 }
 
-static struct region *region_add(struct addrspace *as, uint32_t va, uint32_t npages, int kind, int shm_id)
+/* Region descriptors grow a page at a time; unloaded images return empty pages. */
+struct region *as_region_add(struct addrspace *as, uint32_t va, uint32_t npages, int kind, int id)
 {
-    for (int i = 0; i < MAX_REGIONS; i++) {
-        struct region *r = &as->regions[i];
-        if (!r->kind) {
-            r->va = va;
-            r->npages = npages;
-            r->kind = kind;
-            r->shm_id = shm_id;
-            return r;
+    struct region_page **link = &as->regions;
+    for (;;) {
+        if (!*link) {
+            *link = page_alloc();
+            if (!*link) return NULL;
         }
+        for (unsigned i = 0; i < ARRAY_SIZE((*link)->entry); i++) {
+            struct region *r = &(*link)->entry[i];
+            if (!r->kind) {
+                *r = (struct region){ va, npages, kind, id };
+                return r;
+            }
+        }
+        link = &(*link)->next;
     }
-    return NULL;
 }
 
-/* Map fresh zeroed, owned pages over [va, va+len). Already-mapped pages are
- * left alone (ELF segments may share a page). */
+void as_region_drop(struct addrspace *as, struct region *r)
+{
+    r->kind = 0;
+    struct region_page **link = &as->regions;
+    while (*link) {
+        struct region_page *p = *link;
+        bool used = false;
+        for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) used |= p->entry[i].kind != 0;
+        if (!used) { *link = p->next; page_free(p); }
+        else link = &p->next;
+    }
+}
+
+void as_unmap_page(struct addrspace *as, uint32_t va, bool owned)
+{
+    pte_t *slot = pte_slot(as, va, false);
+    if (slot && (*slot & PTE_V)) {
+        if (owned) page_free((void *)KSEG0(PTE_PA(*slot)));
+        *slot = 0;
+    }
+}
+
+void as_prune_tables(struct addrspace *as)
+{
+    for (int i = 0; i < 1024; i++) {
+        if (as->pgd[i] == empty_pt) continue;
+        bool used = false;
+        for (int j = 0; j < 1024; j++) used |= (as->pgd[i][j] & PTE_V) != 0;
+        if (!used) { page_free(as->pgd[i]); as->pgd[i] = empty_pt; }
+    }
+    tlb_flush_all();
+}
+
+/* Existing thread-stack slots may be reused, but partial overlaps are invalid. */
 int as_alloc_region(struct addrspace *as, uint32_t va, uint32_t len, int kind)
 {
-    uint32_t start = va & ~(PAGE_SIZE - 1);
-    uint32_t end = ALIGN_UP(va + len, PAGE_SIZE);
-    uint32_t added = 0;
-
+    if (!len || va >= USER_TOP || len > USER_TOP - va || va + len > USER_TOP - PAGE_SIZE + 1)
+        return GZ_EINVAL;
+    uint32_t start = va & ~(PAGE_SIZE - 1), end = ALIGN_UP(va + len, PAGE_SIZE), mapped = 0;
+    for (uint32_t a = start; a < end; a += PAGE_SIZE) mapped += (as_lookup(as, a) & PTE_V) != 0;
+    if (mapped) return mapped == (end - start) / PAGE_SIZE ? 0 : GZ_EINVAL;
+    struct region *r = as_region_add(as, start, 0, kind, -1);
+    if (!r) return GZ_ENOMEM;
     for (uint32_t a = start; a < end; a += PAGE_SIZE) {
-        if (as_lookup(as, a) & PTE_V)
-            continue;
-        void *page = page_alloc();
+        void *page = page_alloc_colour(a);
         if (!page || as_map_page(as, a, PHYS(page), PTE_CACHED | PTE_D | PTE_V)) {
-            if (page)
-                page_free(page);
+            if (page) page_free(page);
+            for (uint32_t b = start; b < a; b += PAGE_SIZE) as_unmap_page(as, b, true);
+            as_region_drop(as, r); as_prune_tables(as);
             return GZ_ENOMEM;
         }
-        added++;
+        r->npages++;
     }
-    if (added && !region_add(as, start, (end - start) / PAGE_SIZE, kind, -1))
-        return GZ_ENOMEM;
     return 0;
 }
 
 uint32_t as_mmap_anon(struct addrspace *as, uint32_t len)
 {
     uint32_t va = as->mmap_top;
-
+    if (!len || len > GZ_DSO_BASE - va - PAGE_SIZE) return 0;
     len = ALIGN_UP(len, PAGE_SIZE);
-    if (!len || va + len >= USER_STACK_TOP - USER_STACK_SIZE)
-        return 0;
-    if (as_alloc_region(as, va, len, REGION_OWNED))
-        return 0;
-    as->mmap_top += len + PAGE_SIZE;    /* unmapped guard page */
+    if (as_alloc_region(as, va, len, REGION_OWNED)) return 0;
+    as->mmap_top += len + PAGE_SIZE;
     return va;
 }
 
 uint32_t as_map_phys(struct addrspace *as, uint32_t pa, uint32_t len, uint32_t cache)
 {
     uint32_t va = as->mmap_top;
-
+    if (!len || len > GZ_DSO_BASE - va - PAGE_SIZE || (pa & (PAGE_SIZE - 1))) return 0;
     len = ALIGN_UP(len, PAGE_SIZE);
+    struct region *r = as_region_add(as, va, 0, REGION_DEVICE, -1);
+    if (!r) return 0;
     for (uint32_t off = 0; off < len; off += PAGE_SIZE) {
-        if (as_map_page(as, va + off, pa + off, cache | PTE_D | PTE_V))
-            return 0;
+        if (as_map_page(as, va + off, pa + off, cache | PTE_D | PTE_V)) {
+            for (uint32_t b = 0; b < off; b += PAGE_SIZE) as_unmap_page(as, va + b, false);
+            as_region_drop(as, r); as_prune_tables(as); return 0;
+        }
+        r->npages++;
     }
-    if (!region_add(as, va, len / PAGE_SIZE, REGION_DEVICE, -1))
-        return 0;
     as->mmap_top += len + PAGE_SIZE;
     return va;
 }
 
-/* Used by shm.c to map an existing set of frames. */
 uint32_t as_map_frames(struct addrspace *as, const uint32_t *frames, uint32_t npages, int shm_id)
 {
     uint32_t va = as->mmap_top;
-
+    if (!npages || npages > (GZ_DSO_BASE - va - PAGE_SIZE) / PAGE_SIZE) return 0;
+    struct region *r = as_region_add(as, va, 0, REGION_SHM, shm_id);
+    if (!r) return 0;
     for (uint32_t i = 0; i < npages; i++) {
-        if (as_map_page(as, va + i * PAGE_SIZE, frames[i], PTE_CACHED | PTE_D | PTE_V))
-            return 0;
+        if (as_map_page(as, va + i * PAGE_SIZE, frames[i], PTE_CACHED | PTE_D | PTE_V)) {
+            for (uint32_t j = 0; j < i; j++) as_unmap_page(as, va + j * PAGE_SIZE, false);
+            as_region_drop(as, r); as_prune_tables(as); return 0;
+        }
+        r->npages++;
     }
-    if (!region_add(as, va, npages, REGION_SHM, shm_id))
-        return 0;
     as->mmap_top += npages * PAGE_SIZE + PAGE_SIZE;
     return va;
 }
 
 void as_destroy(struct addrspace *as)
 {
-    for (int i = 0; i < MAX_REGIONS; i++) {
-        struct region *r = &as->regions[i];
-        if (r->kind == REGION_OWNED) {
-            for (uint32_t p = 0; p < r->npages; p++) {
-                pte_t pte = as_lookup(as, r->va + p * PAGE_SIZE);
-                if (pte & PTE_V)
-                    page_free((void *)KSEG0(PTE_PA(pte)));
-            }
-        } else if (r->kind == REGION_SHM) {
-            shm_unref(r->shm_id);
+    for (struct region_page *p = as->regions; p;) {
+        for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) {
+            struct region *r = &p->entry[i];
+            if (r->kind == REGION_IMAGE) image_release_region(as, r);
+            else if (r->kind == REGION_OWNED) {
+                for (uint32_t j = 0; j < r->npages; j++) as_unmap_page(as, r->va + j * PAGE_SIZE, true);
+            } else if (r->kind == REGION_SHM) shm_unref(r->shm_id);
         }
-        r->kind = 0;
+        struct region_page *next = p->next;
+        page_free(p); p = next;
     }
-    for (int i = 0; i < 1024; i++) {
-        if (as->pgd[i] != empty_pt)
-            page_free(as->pgd[i]);
-    }
-    page_free(as->pgd);
-    as->pgd = NULL;
+    as->regions = NULL;
+    for (int i = 0; i < 1024; i++) if (as->pgd[i] != empty_pt) page_free(as->pgd[i]);
+    page_free(as->pgd); as->pgd = NULL;
 }
 
 void as_activate(struct addrspace *as)

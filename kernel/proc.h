@@ -5,6 +5,7 @@
 #include "types.h"
 #include "trapframe.h"
 #include <glaze/abi.h>
+#include <glaze/loader.h>
 
 #define PAGE_SIZE       4096u
 #define PAGE_SHIFT      12
@@ -15,7 +16,6 @@
 #define MAX_SEMS        256
 #define MAX_STACK_SLOTS 32          /* threads besides main, per process */
 #define MAX_PORTS       64
-#define MAX_REGIONS     32
 #define MAX_SHM         32
 
 #define USER_TEXT_BASE  0x00400000u
@@ -29,13 +29,15 @@
 typedef uint32_t pte_t;
 
 void mm_init(void);
+void *page_alloc_colour(uint32_t va);
+void mm_sync_code(void *kva, uint32_t len);
 void *page_alloc(void);             /* zeroed KSEG0 page, or NULL */
 void *page_alloc_n(uint32_t n);      /* contiguous */
 void page_free(void *kva);
 uint32_t mm_free_pages(void);
 uint32_t mm_total_pages(void);
 
-enum region_kind { REGION_OWNED = 1, REGION_SHM, REGION_DEVICE };
+enum region_kind { REGION_OWNED = 1, REGION_SHM, REGION_DEVICE, REGION_IMAGE };
 
 struct region {
     uint32_t va, npages;
@@ -47,8 +49,24 @@ struct addrspace {
     pte_t **pgd;                    /* 1024 entries, KSEG0 page-table ptrs */
     uint8_t asid;
     uint32_t mmap_top;
-    struct region regions[MAX_REGIONS];
+    struct region_page *regions;
 };
+
+struct region_page {
+    struct region_page *next;
+    struct region entry[(PAGE_SIZE - sizeof(void *)) / sizeof(struct region)];
+};
+struct region *as_region_add(struct addrspace *, uint32_t, uint32_t, int, int);
+void as_region_drop(struct addrspace *, struct region *);
+void as_unmap_page(struct addrspace *, uint32_t, bool);
+void as_prune_tables(struct addrspace *);
+int image_map(struct addrspace *, const void *, uint32_t, struct gz_image_info *, uint32_t);
+int image_map_user(struct addrspace *, uint32_t, uint32_t, uint32_t, uint32_t);
+int image_release(struct addrspace *, uint32_t);
+void image_release_region(struct addrspace *, struct region *);
+int image_seal(struct addrspace *, uint32_t);
+int image_query(struct addrspace *, uint32_t, uint32_t);
+int image_stats(struct addrspace *, uint32_t);
 
 int as_create(struct addrspace *as, uint8_t asid);
 void as_destroy(struct addrspace *as);
@@ -193,7 +211,7 @@ const void *romfs_find(const char *name, uint32_t *size);
 void romfs_list(void);
 
 /* elf.c */
-int elf_load(struct addrspace *as, const void *image, uint32_t size, uint32_t *entry);
+int elf_load(struct addrspace *as, const void *image, uint32_t size, uint32_t *entry, struct gz_ld_start *start);
 
 /* syscall.c */
 void syscall_dispatch(struct trapframe *tf);

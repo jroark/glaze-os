@@ -33,10 +33,17 @@ The cross toolchain comes from the be300 `mips-cross-dev` Docker image:
 ```sh
 ./build.sh                 # -> out/glaze.bin (16 MiB NAND image)
 ./build.sh INIT=bin/ktest  # kernel self-test image
+./build.sh OUT=out/static DYNAMIC=0 # optional fully static build
 ```
 
 The build also compiles `host/mkfsimg` with the host's C compiler (`HOSTCC`,
 default `cc`) to build the factory file system from `userdata/`.
+
+Apps and SpringBoard share `libc.so.1`, `libgfx.so.1` and `libui.so.1` by
+default; the audio server and Videos also share `libmedia.so.1`. Native C plugins can use `dlopen`, `dlsym`, `dlclose` and `dlerror`,
+loading from romfs or the writable filesystem. The file and network servers
+remain static. See [Dynamic libraries](docs/DYNAMIC_LIBRARIES.md) for the ABI,
+plugin build instructions, unloading rules, tests and measured savings.
 
 To regenerate assets (macOS, needs Swift). The sample photos go to
 `userdata/Pictures`, not romfs:
@@ -92,6 +99,7 @@ Romfs holds only the OS. Everything else lives in the file system:
 | `/Library/Preferences` | Settings, one file per key (`lib/include/glaze/prefs.h`: `pref_get`, `pref_put`) |
 | `/Library/Notes` | Notes: an `index` file and one `<id>.txt` per note |
 | `/Library/Caches` | Data apps can rebuild, such as Photos' thumbnails |
+| `/Library/Libraries` | Native shared libraries and plugins |
 
 A new NAND image already holds a formatted volume with the contents of
 `userdata/`, built by `host/mkfsimg` with the same flash code the server

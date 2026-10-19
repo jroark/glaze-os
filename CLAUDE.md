@@ -16,7 +16,7 @@ make -C host fstest               # native build of the file-system stack test
 
 There is no linter; the build uses `-Wall -Wextra` and should stay warning-free. `compile_flags.txt` is for clangd.
 
-`main.o`, `input.o` and `romfs.img` are always rebuilt because `INIT`, `BUILD_ID` and `INPUT_SCRIPT` are baked into them. Every directory under `apps/` and `servers/` becomes a program, `bin/<dirname>` in romfs, with no Makefile edit. Assets in `assets/gen/` are checked in; they are regenerated only on macOS with `swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures`.
+`main.o`, `input.o` and `romfs.img` are always rebuilt because `INIT`, `BUILD_ID` and `INPUT_SCRIPT` are baked into them. Every directory under `apps/` and `servers/` becomes a program, `bin/<dirname>` in romfs, with no Makefile edit, except the optional `ldtest*` and `ldmem` test apps. Assets in `assets/gen/` are checked in; they are regenerated only on macOS with `swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures`.
 
 Romfs is for the OS and built-in apps only. User files, settings and app data belong in the file system: `userdata/` is the factory volume, which `host/mkfsimg` (built with `HOSTCC`, default `cc`) formats into `out/fs.img` and `tools/mk_nand.py --fs-image` places at 0x500000. Don't name files in `userdata/` with spaces, since make lists them.
 
@@ -36,7 +36,7 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 
 ## Toolchain constraints
 
-- Everything is built `-march=mips2 -mabi=32 -mno-abicalls -fno-pic -G 0 -msoft-float`, freestanding and static. The VR4131 is MIPS III without CLZ or MIPS32 SPECIAL2 ops, and the emulator executes 32-bit code only.
+- All targets use `-march=mips2 -mabi=32 -G 0 -msoft-float` and are freestanding. Kernel, SPL, interpreter and bootstrap services use `-mno-abicalls -fno-pic`; shared libraries and apps use `-mabicalls -fPIC`. The VR4131 is MIPS III without CLZ or MIPS32 SPECIAL2 ops, and the emulator executes 32-bit code only.
 - Nothing links libgcc. Compiler helpers live in `lib/libc` (`divdi3.c` for 64-bit division, `bitops.c` for `__popcountsi2`, `__ctzsi2`, `__clzsi2` and `__bswapsi2`). An "undefined reference to `__…si2`" means another helper is needed there.
 - The libc is minimal (`lib/libc/include`). Check it has a function before using it, or add it to `lib/libc/string.c` and similar. The kernel compiles `lib/libc/string.c` and `divdi3.c` too.
 - The VR4131 has no LL/SC (VR4131 UM: "does not support LL, LLD, SC, SCD"), so there are no userspace atomics: every lock is a kernel semaphore (`gz_mutex` in `glaze/thread.h`).
@@ -80,6 +80,8 @@ and shared text editor.
 
 **UI libraries.** `libgfx` (`lib/gfx`) is a software RGB565 renderer for GZI images and GZF fonts; the formats are described in `lib/include/glaze/gfx.h`. `libui` (`lib/ui`) provides the nav bar, bar buttons, grouped cells, alerts, the keyboard, inertial scroll views and push/pop transitions. Apps follow the Settings/Notes pattern: draw the whole view, keep hit rects, `redraw()` after events, and use `ui_transition(draw_fn, forward)` for navigation. `host/` builds `libgfx` natively to render SpringBoard previews.
 
+**Dynamic linking.** Apps and SpringBoard are PIE by default, sharing libc, gfx and UI through `lib/ldso` and `kernel/image.c`. `fs` and `net` stay static; `bin/audio` is dynamic. Read-only image frames are shared; writable data/GOT/BSS are private. Use the export maps and existing PIC rules for libraries; never embed another libc or static client archive in a plugin. `dlclose` releases an unreachable library after destructors: callers must stop its threads/callbacks and discard pointers first. No Linux compatibility, compiler TLS or C++ runtime. See `docs/DYNAMIC_LIBRARIES.md`. Run `make -C host elf-test`, `LD_TESTS=1 INIT=bin/ldtest`, and ordinary `ktest` after loader changes. Use `OUT=out/static DYNAMIC=0` for the fallback; keep build variants in separate output directories.
+
 **File system** (`servers/fs`, `glaze/fs.h`, client in `lib/libc/fs.c`):
 - littlefs runs on the Dhara NAND translation layer, both vendored unmodified in `third_party/` and built into `libfsstack.a`. Don't edit them; put changes in `servers/fs/ftl.c`.
 - ECC is in-band: the spare area is synthesized by the emulator and absent from image files. Each page gets a 4-bit BCH code stored in the unused tail (bytes 480–511) of the checkpoint page Dhara writes after every 3 data pages.
@@ -93,7 +95,7 @@ and shared text editor.
 - Wave output is a Casio ping-pong DMA block in the Kj window (registers `AUD_*` in `kernel/hw.h`), not the VRC4173 AIU. Its map and start/stop sequences come from WinCE's wavedev.dll (be300 `docs/BE300_AUDIO.md`, emulator model `src/hw/aiu.c`). Samples are S16LE, mono or interleaved stereo, at 8000/11025/16000/22050/32000/44100 Hz.
 - The driver refills two 4 KiB DMA buffers (written through KSEG1) from a 64 KiB ring that `SYS_AUDIO_WRITE` fills, pads with silence on underrun, and notifies the bound port with `GZ_NOTIFY_AUDIO` below half full. A drained buffer raises GIRQ0 bit 8; the timer tick polls too. `frames_played` counts only ring frames that have been played, and is the clock for positions and A/V sync.
 - The server is single-threaded: it decodes one MP3 frame or WAV chunk at a time between non-blocking receives while the ring has room. Player mode decodes files itself (Helix MP3, WAV PCM / IMA ADPCM) and survives the app; stream mode takes PCM from one client and resamples it (`media_rs_*`, linear, to the nearest hardware rate). Opening a stream pauses the player, which seeks back on resume.
-- `lib/media` (`libmedia.a`, with Helix) is integer-only: RIFF/WAV, IMA ADPCM, AVI index (idx1, or a movi walk), MP3 probing (ID3, Xing TOC), the resampler, and default Huffman tables for MJPEG frames that omit them. Helix is vendored with one change, a portable C branch in `real/assembly.h`.
+- `lib/media` is integer-only and builds `libmedia.so.1` (exports `media_*`, `lib/media/exports.map`); Helix is a private PIC archive (`out/pic/libhelix.a`) linked into `bin/audio` only, and `DYNAMIC=0` puts both in `libmedia.a`. Per-program extras for dynamic links are the `PROG_CFLAGS_*`/`PROG_DEPS_*`/`PROG_LDLIBS_*` variables in the Makefile. `lib/media` covers RIFF/WAV, IMA ADPCM, AVI index (idx1, or a movi walk), MP3 probing (ID3, Xing TOC), the resampler, and default Huffman tables for MJPEG frames that omit them. Helix is vendored with one change, a portable C branch in `real/assembly.h`.
 - Flash reads (about 70 KB/s sequentially, slower as seek-and-read) cost more than decoding. Videos therefore reads the AVI front to back through a read-ahead window and skips late frames; keep media at the bitrates of the samples in `userdata/Music` and `userdata/Movies`.
 
 **Browser** (`apps/browser`, "Browser" on the home screen):
@@ -106,6 +108,6 @@ and shared text editor.
 ## Hardware notes
 
 Register addresses and bit meanings follow the VR4131 and VRC4173 user's manuals and the be300 emulator's models (the `be300` and `mipsel-cross-image` repos hold the manuals, hardware dumps and the Linux port). Cite the manual section in comments when touching hardware code. Some things are known not to match real hardware yet:
-- **D-cache colouring:** the virtually indexed D-cache can give a page's kernel and user mappings different cache colours. The emulator doesn't model cache contents (TODO in `kernel/mm.c`).
+- **D-cache colouring:** owned pages and ELF mappings match their KSEG0 cache colour, with code publication cache maintenance. Existing device/resource/shared-memory policies remain; the emulator doesn't model cache contents, so real-hardware validation is still required.
 - **Factory bad-block marks:** these sit in the spare area and are never read.
 - **PCMCIA card setup:** the NE2000 driver assumes the card already decodes I/O at port 0x300, as the emulator's does. A real card needs its CIS read and its configuration option register written through attribute memory first.

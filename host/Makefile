@@ -47,10 +47,15 @@ mediatest: mediatest.c $(MEDIA)
 	$(CC) $(MEDIA_CFLAGS) -o $@ $^ -lm
 
 clean:
-	rm -f sheet preview fstest mkfsimg browse mediatest stowaway-test *.bmp *.png
+	rm -f sheet preview fstest mkfsimg browse mediatest stowaway-test elf-test *.bmp *.png
 
 # Byte decoder and shared text editing, with ASan/UBSan.
 stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $^
 	./$@
 .PHONY: stowaway-test
+
+elf-test: ../tests/elf.c ../lib/include/glaze/elf.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ ../tests/elf.c
+	./$@
+.PHONY: elf-test

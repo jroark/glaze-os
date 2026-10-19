@@ -19,6 +19,8 @@ struct gz_tcb {
     int err;                    /* errno */
     void (*fn)(void *);
     void *arg;
+    char dl_error[160];          /* dlerror: independent of compiler TLS */
+    bool dl_pending;
     void *tls[2];               /* thread-local slots for libraries (lwIP) */
 };
 
