@@ -166,6 +166,11 @@ void syscall_dispatch(struct trapframe *tf)
     (void)a3;
     tf->epc += 4;
     switch (tf->regs[R_V0]) {
+    case SYS_IMAGE_QUERY:   rv = image_query(AS, a0, a1); break;
+    case SYS_IMAGE_MAP:     rv = image_map_user(AS, a0, a1, a2, a3); break;
+    case SYS_IMAGE_RELEASE: rv = image_release(AS, a0); break;
+    case SYS_IMAGE_SEAL:    rv = image_seal(AS, a0); break;
+    case SYS_IMAGE_STATS:   rv = image_stats(AS, a0); break;
     case SYS_EXIT:          rv = sys_exit(a0); break;
     case SYS_YIELD:         rv = sys_yield(); break;
     case SYS_SLEEP_MS:      rv = sys_sleep_ms(a0); break;

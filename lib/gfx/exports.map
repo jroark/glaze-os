@@ -1,0 +1,1 @@
+{ global: gfx_*; res_image; res_font; ui_font; local: *; };

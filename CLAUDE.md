@@ -16,7 +16,7 @@ make -C host fstest               # native build of the file-system stack test
 
 There is no linter; the build uses `-Wall -Wextra` and should stay warning-free. `compile_flags.txt` is for clangd.
 
-`main.o`, `input.o` and `romfs.img` are always rebuilt because `INIT`, `BUILD_ID` and `INPUT_SCRIPT` are baked into them. Every directory under `apps/` and `servers/` becomes a program, `bin/<dirname>` in romfs, with no Makefile edit. Assets in `assets/gen/` are checked in; they are regenerated only on macOS with `swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures`.
+`main.o`, `input.o` and `romfs.img` are always rebuilt because `INIT`, `BUILD_ID` and `INPUT_SCRIPT` are baked into them. Every directory under `apps/` and `servers/` becomes a program, `bin/<dirname>` in romfs, with no Makefile edit, except the optional `ldtest*` and `ldmem` test apps. Assets in `assets/gen/` are checked in; they are regenerated only on macOS with `swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures`.
 
 Romfs is for the OS and built-in apps only. User files, settings and app data belong in the file system: `userdata/` is the factory volume, which `host/mkfsimg` (built with `HOSTCC`, default `cc`) formats into `out/fs.img` and `tools/mk_nand.py --fs-image` places at 0x500000. Don't name files in `userdata/` with spaces, since make lists them.
 
@@ -35,7 +35,7 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 
 ## Toolchain constraints
 
-- Everything is built `-march=mips2 -mabi=32 -mno-abicalls -fno-pic -G 0 -msoft-float`, freestanding and static. The VR4131 is MIPS III without CLZ or MIPS32 SPECIAL2 ops, and the emulator executes 32-bit code only.
+- All targets use `-march=mips2 -mabi=32 -G 0 -msoft-float` and are freestanding. Kernel, SPL, interpreter and bootstrap services use `-mno-abicalls -fno-pic`; shared libraries and apps use `-mabicalls -fPIC`. The VR4131 is MIPS III without CLZ or MIPS32 SPECIAL2 ops, and the emulator executes 32-bit code only.
 - Nothing links libgcc. Compiler helpers live in `lib/libc` (`divdi3.c` for 64-bit division, `bitops.c` for `__popcountsi2`, `__ctzsi2`, `__clzsi2` and `__bswapsi2`). An "undefined reference to `__…si2`" means another helper is needed there.
 - The libc is minimal (`lib/libc/include`). Check it has a function before using it, or add it to `lib/libc/string.c` and similar. The kernel compiles `lib/libc/string.c` and `divdi3.c` too.
 - The VR4131 has no LL/SC (VR4131 UM: "does not support LL, LLD, SC, SCD"), so there are no userspace atomics: every lock is a kernel semaphore (`gz_mutex` in `glaze/thread.h`).
@@ -79,6 +79,8 @@ and shared text editor.
 
 **UI libraries.** `libgfx` (`lib/gfx`) is a software RGB565 renderer for GZI images and GZF fonts; the formats are described in `lib/include/glaze/gfx.h`. `libui` (`lib/ui`) provides the nav bar, bar buttons, grouped cells, alerts, the keyboard, inertial scroll views and push/pop transitions. Apps follow the Settings/Notes pattern: draw the whole view, keep hit rects, `redraw()` after events, and use `ui_transition(draw_fn, forward)` for navigation. `host/` builds `libgfx` natively to render SpringBoard previews.
 
+**Dynamic linking.** Apps and SpringBoard are PIE by default, sharing libc, gfx and UI through `lib/ldso` and `kernel/image.c`. `fs` and `net` stay static. Read-only image frames are shared; writable data/GOT/BSS are private. Use the export maps and existing PIC rules for libraries; never embed another libc or static client archive in a plugin. `dlclose` releases an unreachable library after destructors: callers must stop its threads/callbacks and discard pointers first. No Linux compatibility, compiler TLS or C++ runtime. See `docs/DYNAMIC_LIBRARIES.md`. Run `make -C host elf-test`, `LD_TESTS=1 INIT=bin/ldtest`, and ordinary `ktest` after loader changes. Use `OUT=out/static DYNAMIC=0` for the fallback; keep build variants in separate output directories.
+
 **File system** (`servers/fs`, `glaze/fs.h`, client in `lib/libc/fs.c`):
 - littlefs runs on the Dhara NAND translation layer, both vendored unmodified in `third_party/` and built into `libfsstack.a`. Don't edit them; put changes in `servers/fs/ftl.c`.
 - ECC is in-band: the spare area is synthesized by the emulator and absent from image files. Each page gets a 4-bit BCH code stored in the unused tail (bytes 480–511) of the checkpoint page Dhara writes after every 3 data pages.
@@ -98,6 +100,6 @@ and shared text editor.
 ## Hardware notes
 
 Register addresses and bit meanings follow the VR4131 and VRC4173 user's manuals and the be300 emulator's models (the `be300` and `mipsel-cross-image` repos hold the manuals, hardware dumps and the Linux port). Cite the manual section in comments when touching hardware code. Some things are known not to match real hardware yet:
-- **D-cache colouring:** the virtually indexed D-cache can give a page's kernel and user mappings different cache colours. The emulator doesn't model cache contents (TODO in `kernel/mm.c`).
+- **D-cache colouring:** owned pages and ELF mappings match their KSEG0 cache colour, with code publication cache maintenance. Existing device/resource/shared-memory policies remain; the emulator doesn't model cache contents, so real-hardware validation is still required.
 - **Factory bad-block marks:** these sit in the spare area and are never read.
 - **PCMCIA card setup:** the NE2000 driver assumes the card already decodes I/O at port 0x300, as the emulator's does. A real card needs its CIS read and its configuration option register written through attribute memory first.
