@@ -6,6 +6,7 @@
  */
 
 #include <glaze/fs.h>
+#include <glaze/pkg.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
@@ -22,8 +23,8 @@
 #define MARGIN          10
 #define TEXT_LINE_H     17
 
-enum view { V_LIST, V_NAME, V_TEXT, V_IMAGE, V_INFO };
-enum kind { K_FOLDER, K_TEXT, K_IMAGE, K_OTHER };
+enum view { V_LIST, V_NAME, V_TEXT, V_IMAGE, V_INFO, V_PACKAGE };
+enum kind { K_FOLDER, K_TEXT, K_IMAGE, K_PACKAGE, K_OTHER };
 
 static enum view view = V_LIST;
 
@@ -39,8 +40,11 @@ static int list_err;                /* listing failed with this error */
 
 /* Touch state. */
 static int pressed_row = -1;
-static enum { P_NONE, P_BACK, P_EDIT, P_NEWFOLDER, P_DELETE, P_BADGE, P_CANCEL, P_SAVE } pressed;
+static enum {
+    P_NONE, P_BACK, P_EDIT, P_NEWFOLDER, P_DELETE, P_BADGE, P_CANCEL, P_SAVE, P_FLASH, P_CARD
+} pressed;
 static gfx_rect back_rect, edit_rect, newfolder_rect, delete_rect, cancel_rect, save_rect;
+static gfx_rect flash_rect, card_rect;
 
 /* Alert: a message, or a confirmation for deleting a non-empty folder. */
 static bool alert_open, alert_confirm;
@@ -65,6 +69,16 @@ static struct ui_scroll text_scroll;
 static uint8_t *image_buf;
 static gfx_image image;
 static bool image_ok;
+
+/* Package sheet (glaze/pkg.h). */
+static struct pkg_info pkg;
+static int pkg_err;                 /* the package can't be read */
+static char pkg_replaces[16];       /* version already installed, or "" */
+static bool pkg_card;               /* a card is in */
+static bool pkg_busy;
+static uint8_t pkg_icon_buf[16 * 1024];
+static gfx_image pkg_icon;
+static bool pkg_icon_ok;
 
 /* ---- helpers -------------------------------------------------------------- */
 
@@ -105,12 +119,14 @@ static enum kind kind_of(const struct fs_dirent *e)
         return K_TEXT;
     if (has_ext(e->name, "gzi"))
         return K_IMAGE;
+    if (has_ext(e->name, "gzp"))
+        return K_PACKAGE;
     return K_OTHER;
 }
 
 static const char *kind_name(enum kind k)
 {
-    static const char *const names[] = { "Folder", "Text Document", "Picture", "Document" };
+    static const char *const names[] = { "Folder", "Text Document", "Picture", "App Package", "Document" };
     return names[k];
 }
 
@@ -161,29 +177,6 @@ static void show_alert(const char *title, const char *msg)
     alert_open = true;
     alert_confirm = false;
     alert_pressed = -1;
-}
-
-/* Deletes a file or a folder with everything in it. */
-static int remove_all(const char *path)
-{
-    struct fs_stat st;
-    int rv = fs_stat(path, &st);
-
-    if (rv < 0)
-        return rv;
-    if (st.type == FS_DIR) {
-        struct fs_dirent e;
-        char child[FS_PATH_MAX];
-        /* Always take the first entry: the listing shrinks as we go. */
-        while ((rv = fs_list(path, 0, &e, 1)) == 1) {
-            join(child, path, e.name);
-            if ((rv = remove_all(child)) < 0)
-                return rv;
-        }
-        if (rv < 0)
-            return rv;
-    }
-    return fs_remove(path);
 }
 
 /* ---- loading ---------------------------------------------------------------- */
@@ -295,6 +288,12 @@ static void draw_doc_glyph(gfx_surface *s, int x, int y, enum kind k)
         gfx_vgradient(s, pic, 0x3D8FD6, 0xB9E1F7, 255);
         gfx_fill(s, gfx_r(pic.x, pic.y + 7, pic.w, 4), 0x4E9A35);
         gfx_circle(s, pic.x + 8, pic.y + 4, 2, 0xFFD23C, 255);
+    } else if (k == K_PACKAGE) {
+        /* A small cardboard box. */
+        gfx_rect box = gfx_r(page.x + 2, page.y + 8, page.w - 4, 11);
+        gfx_vgradient(s, box, 0xD9A55E, 0xA8743A, 255);
+        gfx_fill(s, gfx_r(box.x, box.y, box.w, 3), 0xE8BE7E);
+        gfx_fill(s, gfx_r(box.x + box.w / 2 - 1, box.y, 2, box.h), 0xF3E2C0);
     } else if (k == K_TEXT) {
         for (int i = 0; i < 5; i++)
             gfx_fill(s, gfx_r(page.x + 3, page.y + 7 + i * 3, i == 4 ? 7 : page.w - 6, 1), 0x8E9AAB);
@@ -524,6 +523,50 @@ static void draw_info(gfx_surface *s)
                     "Files can't open this kind of document.", 0x4C566C, 255);
 }
 
+/* An app package: what it is, and where to install it. */
+static void draw_package(gfx_surface *s)
+{
+    const gfx_font *tf = ui_font(FONT_B17), *df = ui_font(FONT_R12);
+    int y = UI_NAV_H + 14;
+    char line[64], size[16];
+
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    draw_viewer_nav(s, 0);
+    if (pkg_err) {
+        gfx_text_center(s, 0, y + 40, UI_W, ui_font(FONT_B14), "This package is damaged.", 0x4C566C, 255);
+        gfx_text_center(s, 0, y + 62, UI_W, df, fs_strerror(pkg_err), 0x4C566C, 255);
+        flash_rect = card_rect = gfx_r(0, 0, 0, 0);
+        return;
+    }
+    if (pkg_icon_ok) {
+        gfx_draw_image(s, (UI_W - pkg_icon.w) / 2, y, &pkg_icon, 255);
+        y += pkg_icon.h + 8;
+    }
+    gfx_text_center(s, 0, y, UI_W, tf, pkg.name, UI_TEXT, 255);
+    y += tf->line_height + 2;
+    format_size(ents[open_row].size, size, sizeof(size));
+    snprintf(line, sizeof(line), "Version %s, %s", pkg.version[0] ? pkg.version : "1.0", size);
+    gfx_text_center(s, 0, y, UI_W, df, line, 0x4C566C, 255);
+    y += df->line_height;
+    if (pkg_replaces[0]) {
+        snprintf(line, sizeof(line), "Replaces the installed version %s.", pkg_replaces);
+        gfx_text_center(s, 0, y, UI_W, df, line, 0x4C566C, 255);
+    }
+    flash_rect = gfx_r(20, UI_H - 96, UI_W - 40, 36);
+    card_rect = gfx_r(20, UI_H - 52, UI_W - 40, 36);
+    if (pkg_busy) {
+        gfx_text_center(s, 0, UI_H - 70, UI_W, ui_font(FONT_B14), "Installing" GFX_CH_ELLIPSIS, UI_TEXT, 255);
+        return;
+    }
+    ui_draw_button(s, flash_rect, "Install on Flash", pressed == P_FLASH);
+    if (pkg_card) {
+        ui_draw_button(s, card_rect, "Install on Card", pressed == P_CARD);
+    } else {
+        gfx_text_center(s, 0, card_rect.y + 10, UI_W, df, "Insert a card to install on it.", 0x6C7686, 255);
+        card_rect = gfx_r(0, 0, 0, 0);
+    }
+}
+
 static void draw_view(gfx_surface *s)
 {
     switch (view) {
@@ -532,6 +575,7 @@ static void draw_view(gfx_surface *s)
     case V_TEXT: draw_text(s); break;
     case V_IMAGE: draw_image(s); break;
     case V_INFO: draw_info(s); break;
+    case V_PACKAGE: draw_package(s); break;
     }
     if (alert_open)
         ui_draw_alert(s, alert_title, alert_msg, alert_confirm ? "Cancel" : "OK",
@@ -579,6 +623,43 @@ static void go_up(void)
     go(V_LIST, false);
 }
 
+static void load_package(int row)
+{
+    char path[FS_PATH_MAX], bundle[PKG_BUNDLE_MAX];
+    struct pkg_info old;
+    struct fs_stat card;
+
+    join(path, cwd, ents[row].name);
+    pkg_err = pkg_read_info(path, &pkg);
+    int n = pkg_err ? -1 : pkg_read_entry(path, "res/icon.gzi", pkg_icon_buf, sizeof(pkg_icon_buf));
+    pkg_icon_ok = n > 0 && gfx_image_parse(&pkg_icon, pkg_icon_buf, (size_t)n);
+    pkg_replaces[0] = 0;
+    if (!pkg_err && pkg_find(pkg.id, bundle) == 0 && pkg_bundle_info(bundle, &old) == 0)
+        strlcpy(pkg_replaces, old.version[0] ? old.version : "1.0", sizeof(pkg_replaces));
+    pkg_card = fs_stat("/Card", &card) == 0;     /* statvfs would fall back to the flash */
+    pkg_busy = false;
+}
+
+static void install_package(bool card)
+{
+    char path[FS_PATH_MAX], bundle[PKG_BUNDLE_MAX], msg[64];
+
+    pkg_busy = true;
+    redraw();
+    join(path, cwd, ents[open_row].name);
+    int rv = pkg_install(path, card ? "/Card" : "", bundle);
+    pkg_busy = false;
+    if (rv) {
+        show_alert("Cannot Install", fs_strerror(rv));
+        return;
+    }
+    snprintf(msg, sizeof(msg), "\"%s\" is on the Home screen.", pkg.name);
+    show_alert("App Installed", msg);
+    load_package(open_row);         /* now "replaces" the installed copy */
+    if (card || !strcmp(cwd, "/"))
+        load_dir();
+}
+
 static void open_entry(int row)
 {
     open_row = row;
@@ -586,6 +667,7 @@ static void open_entry(int row)
     case K_FOLDER: enter_folder(row); return;
     case K_TEXT: load_text(row); go(V_TEXT, true); return;
     case K_IMAGE: load_image(row); go(V_IMAGE, true); return;
+    case K_PACKAGE: load_package(row); go(V_PACKAGE, true); return;
     case K_OTHER: go(V_INFO, true); return;
     }
 }
@@ -629,7 +711,7 @@ static void delete_row(int row)
     char path[FS_PATH_MAX];
 
     join(path, cwd, ents[row].name);
-    int rv = remove_all(path);
+    int rv = fs_remove_all(path);
     load_dir();
     if (rv < 0)
         show_alert("Can't Delete", fs_strerror(rv));
@@ -799,6 +881,22 @@ static void viewer_event(const struct gz_input_event *e)
     if (e->type == GZ_EV_TOUCH_DOWN && gfx_rect_contains(back_rect, e->x, e->y)) {
         pressed = P_BACK;
         return;
+    }
+    if (view == V_PACKAGE && !pkg_busy) {
+        if (e->type == GZ_EV_TOUCH_DOWN) {
+            pressed = gfx_rect_contains(flash_rect, e->x, e->y) ? P_FLASH
+                    : gfx_rect_contains(card_rect, e->x, e->y) ? P_CARD : P_NONE;
+            return;
+        }
+        if (pressed == P_FLASH || pressed == P_CARD) {
+            if (e->type == GZ_EV_TOUCH_UP) {
+                bool card = pressed == P_CARD;
+                pressed = P_NONE;
+                if (gfx_rect_contains(card ? card_rect : flash_rect, e->x, e->y))
+                    install_package(card);
+            }
+            return;
+        }
     }
     if (pressed == P_BACK) {
         if (e->type == GZ_EV_TOUCH_UP) {

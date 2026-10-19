@@ -3,6 +3,7 @@
 #include <glaze/fs.h>
 #include <glaze/sys.h>
 #include <glaze/thread.h>
+#include <stdio.h>
 #include <string.h>
 
 static int port, session = -1;
@@ -197,6 +198,29 @@ int fs_mkdirs(const char *path)
             return rv;
     }
     return 0;
+}
+
+/* Always takes a folder's first entry: the listing shrinks as we go. */
+int fs_remove_all(const char *path)
+{
+    struct fs_stat st;
+    int rv = fs_stat(path, &st);
+
+    if (rv < 0)
+        return rv;
+    if (st.type == FS_DIR) {
+        struct fs_dirent e;
+        char child[FS_PATH_MAX];
+        while ((rv = fs_list(path, 0, &e, 1)) == 1) {
+            if ((size_t)snprintf(child, sizeof(child), "%s/%s", strcmp(path, "/") ? path : "", e.name) >= sizeof(child))
+                return GZ_EINVAL;
+            if ((rv = fs_remove_all(child)) < 0)
+                return rv;
+        }
+        if (rv < 0)
+            return rv;
+    }
+    return fs_remove(path);
 }
 
 int fs_remove(const char *path)

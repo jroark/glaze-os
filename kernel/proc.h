@@ -61,6 +61,8 @@ void as_region_drop(struct addrspace *, struct region *);
 void as_unmap_page(struct addrspace *, uint32_t, bool);
 void as_prune_tables(struct addrspace *);
 int image_map(struct addrspace *, const void *, uint32_t, struct gz_image_info *, uint32_t);
+int image_map_exec(struct addrspace *, struct addrspace *, const void *, uint32_t, uint32_t, struct gz_image_info *,
+                   uint32_t *, char *, uint32_t);
 int image_map_user(struct addrspace *, uint32_t, uint32_t, uint32_t, uint32_t);
 int image_release(struct addrspace *, uint32_t);
 void image_release_region(struct addrspace *, struct region *);
@@ -167,6 +169,8 @@ struct thread *thread_by_tid(int tid);
 extern bool need_resched;
 
 struct proc *proc_spawn(const char *path, int parent, uint32_t flags);
+struct proc *proc_spawn_image(struct addrspace *src_as, uint32_t src, uint32_t size, const char *name,
+                              int parent, uint32_t flags);
 struct proc *proc_by_pid(int pid);
 void proc_exit(struct proc *p, int code);
 void proc_reap(void);
@@ -211,7 +215,8 @@ const void *romfs_find(const char *name, uint32_t *size);
 void romfs_list(void);
 
 /* elf.c */
-int elf_load(struct addrspace *as, const void *image, uint32_t size, uint32_t *entry, struct gz_ld_start *start);
+int elf_load(struct addrspace *as, struct addrspace *src_as, const void *rom, uint32_t src, uint32_t size,
+             uint32_t *entry, struct gz_ld_start *start);
 
 /* syscall.c */
 void syscall_dispatch(struct trapframe *tf);

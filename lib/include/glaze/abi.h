@@ -60,6 +60,7 @@ enum {
     SYS_CF_INFO,
     SYS_CF_READ,
     SYS_CF_WRITE,
+    SYS_SPAWN_IMAGE,        /* an installed app's ELF from a buffer, unprivileged */
     SYS_COUNT
 };
 

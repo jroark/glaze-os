@@ -8,6 +8,7 @@
 #include <glaze/audio.h>
 #include <glaze/fs.h>
 #include <glaze/net.h>
+#include <glaze/pkg.h>
 #include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/thread.h>
@@ -248,6 +249,74 @@ static void test_fs(void)
 /* A CompactFlash card with a FAT volume, as /Card. Boot with --cf <image>
  * (tools/mkcfimg.sh) to run it; ktest leaves /Card/KTEST.TXT behind so the
  * image can be checked on the host after a clean shutdown. */
+static bool listed_hello;
+
+static void list_one(const char *bundle, const struct pkg_info *info, void *arg)
+{
+    (void)arg;
+    listed_hello |= !strcmp(info->id, "hello") && !strcmp(bundle, "/Applications/hello.app");
+}
+
+/* Installed apps: spawning an ELF from memory, and packages (glaze/pkg.h)
+ * on the flash and, with a card, on /Card. Needs /Documents/hello.gzp from
+ * the factory volume. */
+static void test_packages(void)
+{
+    static uint8_t buf[64];
+    struct pkg_info info;
+    struct fs_stat st;
+    char bundle[PKG_BUNDLE_MAX];
+    uint32_t size;
+    const void *elf = gz_romfs_map("bin/ktest_pong", &size);
+
+    int pid = elf ? gz_spawn_image(elf, size, "pong-image") : GZ_ENOENT;
+    CHECK(pid > 0 && gz_proc_alive(pid), "spawn from an ELF in memory");
+    if (pid > 0)
+        gz_kill(pid);
+    memset(buf, 0x5A, sizeof(buf));
+    CHECK(gz_spawn_image(buf, sizeof(buf), "junk") == GZ_EINVAL, "spawn rejects a bad ELF");
+    elf = gz_romfs_map("bin/fs", &size);
+    CHECK(elf && gz_spawn_image(elf, size, "static") == GZ_EINVAL, "spawn from memory needs the dynamic linker");
+
+    fs_write_file("/ktest.gzp", "GZPK not really", 15);
+    CHECK(pkg_read_info("/ktest.gzp", &info) == GZ_EINVAL, "pkg rejects a damaged package");
+    fs_remove("/ktest.gzp");
+    if (pkg_read_info("/Documents/hello.gzp", &info) != 0) {
+        printf("ktest: SKIP packages (no /Documents/hello.gzp)\n");
+        return;
+    }
+    CHECK(!strcmp(info.id, "hello") && !strcmp(info.name, "Hello") && !strcmp(info.exec, "app"), "pkg read info");
+    if (pkg_find("hello", bundle) == 0)
+        pkg_uninstall(bundle);
+    CHECK(pkg_install("/Documents/hello.gzp", "", bundle) == 0 && !strcmp(bundle, "/Applications/hello.app") &&
+          fs_stat("/Applications/hello.app/app", &st) == 0 && st.size > 0 &&
+          fs_stat("/Applications/hello.app/res/icon.gzi", &st) == 0 &&
+          fs_stat("/Applications/hello.app.tmp", &st) == GZ_ENOENT, "pkg install on flash");
+    listed_hello = false;
+    CHECK(pkg_bundle_info(bundle, &info) == 0 && pkg_list("", list_one, NULL) >= 1 && listed_hello, "pkg list");
+    CHECK(pkg_install("/Documents/hello.gzp", "", bundle) == 0 && pkg_find("hello", bundle) == 0 &&
+          !strcmp(bundle, "/Applications/hello.app"), "pkg reinstall replaces");
+
+    /* The installed binary runs (it has no SpringBoard here, so just stop it). */
+    static uint8_t app[64 * 1024];
+    int n = fs_read_file("/Applications/hello.app/app", app, sizeof(app));
+    pid = n > 0 ? gz_spawn_image(app, (uint32_t)n, "hello") : n;
+    CHECK(pid > 0, "spawn an installed app");
+    if (pid > 0)
+        gz_kill(pid);
+
+    if (fs_stat("/Card", &st) == 0) {
+        CHECK(pkg_install("/Documents/hello.gzp", "/Card", bundle) == 0 &&
+              !strcmp(bundle, "/Card/Applications/hello.app") &&
+              fs_stat("/Card/Applications/hello.app/app", &st) == 0 &&
+              fs_stat("/Applications/hello.app", &st) == GZ_ENOENT, "pkg install moves to the card");
+        CHECK(pkg_uninstall(bundle) == 0 && fs_stat(bundle, &st) == GZ_ENOENT, "pkg uninstall from the card");
+    } else {
+        CHECK(pkg_uninstall(bundle) == 0 && fs_stat(bundle, &st) == GZ_ENOENT, "pkg uninstall");
+    }
+    CHECK(pkg_find("hello", bundle) == GZ_ENOENT, "pkg gone after uninstall");
+}
+
 static void test_card(void)
 {
     static uint8_t data[20000], back[20000];
@@ -737,6 +806,7 @@ int main(void)
     test_threads();
     test_fs();
     test_card();
+    test_packages();
     test_prefs();
     test_audio();
     test_net();

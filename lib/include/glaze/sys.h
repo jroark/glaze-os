@@ -30,6 +30,10 @@ static inline void gz_yield(void) { GZ_SC0(SYS_YIELD); }
 static inline void gz_sleep_ms(uint32_t ms) { GZ_SC1(SYS_SLEEP_MS, ms); }
 static inline int gz_log(const char *s, uint32_t len) { return GZ_SC2(SYS_LOG, s, len); }
 static inline int gz_spawn(const char *path, uint32_t flags) { return GZ_SC2(SYS_SPAWN, path, flags); }
+/* Spawns an ELF held in memory (an installed app), always unprivileged; the
+ * kernel copies it, so the buffer may be freed at once. Returns the pid. */
+static inline int gz_spawn_image(const void *elf, uint32_t size, const char *name)
+{ return GZ_SC3(SYS_SPAWN_IMAGE, elf, size, name); }
 static inline int gz_kill(int pid) { return GZ_SC1(SYS_KILL, pid); }
 static inline int gz_getpid(void) { return GZ_SC0(SYS_GETPID); }
 static inline int gz_proc_alive(int pid) { return GZ_SC1(SYS_PROC_ALIVE, pid); }

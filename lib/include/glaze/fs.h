@@ -84,6 +84,8 @@ int fs_mkdir(const char *path);
 /* Creates a folder and any missing parents; an existing one is fine. */
 int fs_mkdirs(const char *path);
 int fs_remove(const char *path);
+/* Removes a file, or a folder and everything in it. */
+int fs_remove_all(const char *path);
 int fs_rename(const char *from, const char *to);
 int fs_statfs(struct fs_info *info);
 /* The volume holding `path`: the flash, or a CompactFlash card at /Card

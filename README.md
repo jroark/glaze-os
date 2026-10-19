@@ -17,11 +17,12 @@ boot ROM from NAND.
 | `servers/fs/` | File server: littlefs on Dhara on raw NAND, with ECC and bad-block handling (see below) |
 | `servers/net/` | Network server: lwIP (TCP, UDP, DHCP, DNS, ICMP) over the NE2000 (see below) |
 | `apps/` | Built-in apps, plus `ktest` (kernel self-tests) |
+| `packages/` | Installable apps, built as `.gzp` packages rather than into romfs (`hello`, the test app) |
 | `assets/` | Fonts (Bitstream Vera, see `assets/fonts/VeraCopyright.txt`) and generated art for romfs |
 | `userdata/` | Files the device ships with (sample pictures, a welcome note), built into the file system |
 | `host/` | Native libgfx build that renders previews of SpringBoard; `fstest`, the flash stack under fault injection; `mkfsimg`, which builds the factory file system |
 | `third_party/` | littlefs, Dhara and lwIP, unmodified (see `third_party/README.md`) |
-| `tools/` | NAND image packer, romfs builder, Swift asset generator |
+| `tools/` | NAND image packer, romfs and package builder, Swift asset generator, PNG-to-GZI converter |
 
 All artwork is original. The device has no radios, so the UI doesn't show
 signal or Wi-Fi indicators.
@@ -100,6 +101,7 @@ Romfs holds only the OS. Everything else lives in the file system:
 | `/Library/Notes` | Notes: an `index` file and one `<id>.txt` per note |
 | `/Library/Caches` | Data apps can rebuild, such as Photos' thumbnails |
 | `/Library/Libraries` | Native shared libraries and plugins |
+| `/Applications` | Installed apps, one `<id>.app` folder each (also `/Card/Applications`) |
 
 A new NAND image already holds a formatted volume with the contents of
 `userdata/`, built by `host/mkfsimg` with the same flash code the server
@@ -131,7 +133,34 @@ make -C host fstest && host/fstest 1
 ```
 
 Files (`apps/files`) browses the volume. It opens text files and pictures,
-and its Edit mode makes, renames and deletes folders and files.
+installs app packages, and its Edit mode makes, renames and deletes folders
+and files.
+
+## Installing apps
+
+Apps beyond the built-in ones come as packages: a `.gzp` file holding the
+app's `Info` (id, name, version), its executable and its resources
+(`lib/include/glaze/pkg.h`). Tap a package in Files and choose **Install on
+Flash** or **Install on Card**; it is unpacked into
+`/Applications/<id>.app` or `/Card/Applications/<id>.app`, and its icon
+appears on the home screen after the built-in apps. Installing a package
+whose app is already there replaces it, on either volume.
+
+To delete one, hold any icon until the icons wobble, tap the X on the app
+(built-in apps have none), and confirm. The app's folder goes, and with it
+the data the app kept there. Apps on a card disappear from the home screen
+while the card is out and come back with it.
+
+Installed apps run unprivileged: SpringBoard reads the executable and starts
+it with `SYS_SPAWN_IMAGE`, which only accepts programs that use the dynamic
+linker in romfs. They use the system fonts and libraries, and find their own
+resources in their folder through the usual `res_image`.
+
+`packages/hello` is a small example. `make` builds every directory under
+`packages/` into `out/pkg/<name>.gzp`; the factory volume gets a copy in
+`/Documents`, and `tools/mkcfimg.sh out/cf.img 16 16 out/pkg/hello.gzp` puts
+one on a card image. A package needs `Info`, `main.c` and a 44x44
+`icon.gzi` (`tools/mkgzi.py icon.png icon.gzi`).
 
 ## Networking
 

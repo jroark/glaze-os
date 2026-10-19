@@ -9,25 +9,28 @@
 #include <stdio.h>
 #include <string.h>
 
-const struct sb_app_info sb_apps[] = {
-    { "Calendar", "icon_calendar.gzi", "bin/calendar", SB_STATUS_GRAY, false },
-    { "Photos", "icon_photos.gzi", "bin/photos", SB_STATUS_BLACK, false },
-    { "Clock", "icon_clock.gzi", "bin/clock", SB_STATUS_BLACK, false },
-    { "Calculator", "icon_calculator.gzi", "bin/calculator", SB_STATUS_BLACK, false },
-    { "Files", "icon_files.gzi", "bin/files", SB_STATUS_GRAY, false },
-    { "Notes", "icon_notes.gzi", "bin/notes", SB_STATUS_GRAY, true },
-    { "Settings", "icon_settings.gzi", "bin/settings", SB_STATUS_GRAY, true },
-    { "Browser", "icon_web.gzi", "bin/browser", SB_STATUS_GRAY, false },
-    { "Music", "icon_music.gzi", "bin/music", SB_STATUS_BLACK, false },
-    { "Videos", "icon_video.gzi", "bin/video", SB_STATUS_BLACK, false },
+static const struct sb_app_info builtin_apps[] = {
+    { .label = "Calendar", .icon = "icon_calendar.gzi", .path = "bin/calendar", .status_style = SB_STATUS_GRAY },
+    { .label = "Photos", .icon = "icon_photos.gzi", .path = "bin/photos", .status_style = SB_STATUS_BLACK },
+    { .label = "Clock", .icon = "icon_clock.gzi", .path = "bin/clock", .status_style = SB_STATUS_BLACK },
+    { .label = "Calculator", .icon = "icon_calculator.gzi", .path = "bin/calculator", .status_style = SB_STATUS_BLACK },
+    { .label = "Files", .icon = "icon_files.gzi", .path = "bin/files", .status_style = SB_STATUS_GRAY },
+    { .label = "Notes", .icon = "icon_notes.gzi", .path = "bin/notes", .status_style = SB_STATUS_GRAY, .dock = true },
+    { .label = "Settings", .icon = "icon_settings.gzi", .path = "bin/settings", .status_style = SB_STATUS_GRAY,
+      .dock = true },
+    { .label = "Browser", .icon = "icon_web.gzi", .path = "bin/browser", .status_style = SB_STATUS_GRAY },
+    { .label = "Music", .icon = "icon_music.gzi", .path = "bin/music", .status_style = SB_STATUS_BLACK },
+    { .label = "Videos", .icon = "icon_video.gzi", .path = "bin/video", .status_style = SB_STATUS_BLACK },
 };
-const int sb_num_apps = sizeof(sb_apps) / sizeof(sb_apps[0]);
+struct sb_app_info sb_apps[SB_MAX_APPS];
+int sb_num_apps;
 
 const char *const sb_wallpapers[] = { "wall_aqua.gzi", "wall_dusk.gzi", "wall_meadow.gzi" };
 const int sb_num_wallpapers = 3;
 bool sb_24h;
 
 static gfx_image icons[SB_MAX_APPS];
+static bool icon_ok[SB_MAX_APPS];
 static gfx_image walls[3];
 static gfx_image knob;
 static bool walls_ok[3];
@@ -42,11 +45,22 @@ static const char *const months[12] = {
 
 void sb_draw_init(void)
 {
-    for (int i = 0; i < sb_num_apps; i++)
-        res_image(&icons[i], sb_apps[i].icon);
+    sb_num_apps = (int)(sizeof(builtin_apps) / sizeof(builtin_apps[0]));
+    for (int i = 0; i < sb_num_apps; i++) {
+        sb_apps[i] = builtin_apps[i];
+        sb_apps[i].present = true;
+        icon_ok[i] = res_image(&icons[i], sb_apps[i].icon);
+    }
     for (int i = 0; i < sb_num_wallpapers; i++)
         walls_ok[i] = res_image(&walls[i], sb_wallpapers[i]);
     res_image(&knob, "ui_knob.gzi");
+}
+
+void sb_set_icon(int app, const gfx_image *img)
+{
+    icon_ok[app] = img != NULL;
+    if (img)
+        icons[app] = *img;
 }
 
 void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt)
@@ -292,7 +306,7 @@ static int grid_index(int app)
     int n = 0;
 
     for (int i = 0; i < app; i++)
-        n += !sb_apps[i].dock;
+        n += sb_app_shown(i) && !sb_apps[i].dock;
     return n;
 }
 
@@ -301,7 +315,7 @@ static int dock_index(int app, int *count)
     int n = 0, idx = 0;
 
     for (int i = 0; i < sb_num_apps; i++) {
-        if (sb_apps[i].dock) {
+        if (sb_app_shown(i) && sb_apps[i].dock) {
             if (i == app)
                 idx = n;
             n++;
@@ -316,7 +330,7 @@ int sb_num_pages(void)
     int n = 0;
 
     for (int i = 0; i < sb_num_apps; i++)
-        n += !sb_apps[i].dock;
+        n += sb_app_shown(i) && !sb_apps[i].dock;
     return n ? (n + PER_PAGE - 1) / PER_PAGE : 1;
 }
 
@@ -336,12 +350,45 @@ gfx_rect sb_icon_rect(int app, int scroll_x)
 int sb_hit_icon(int x, int y, int scroll_x)
 {
     for (int i = 0; i < sb_num_apps; i++) {
+        if (!sb_app_shown(i))
+            continue;
         gfx_rect r = sb_icon_rect(i, scroll_x);
         r = gfx_r(r.x - 6, r.y - 4, r.w + 12, r.h + 18);
         if (gfx_rect_contains(r, x, y))
             return i;
     }
     return -1;
+}
+
+gfx_rect sb_delete_rect(int app, int scroll_x)
+{
+    gfx_rect r = sb_icon_rect(app, scroll_x);
+
+    return gfx_r(r.x - 12, r.y - 12, 26, 26);
+}
+
+/* Black circled X at the icon's top-left corner, for deleting it. */
+static void draw_delete_button(gfx_surface *s, gfx_rect icon)
+{
+    int cx = icon.x + 1, cy = icon.y + 1;
+
+    gfx_circle(s, cx, cy + 1, 10, 0x000000, 70);                /* shadow */
+    gfx_circle(s, cx, cy, 10, 0xFFFFFF, 255);
+    gfx_circle(s, cx, cy, 8, 0x202020, 255);
+    for (int d = -3; d <= 3; d++) {
+        gfx_fill(s, gfx_r(cx + d, cy + d, 2, 2), 0xFFFFFF);
+        gfx_fill(s, gfx_r(cx + d, cy - d, 2, 2), 0xFFFFFF);
+    }
+}
+
+/* An installed app without an icon: a grey tile with its initial. */
+static void draw_generic_icon(gfx_surface *s, gfx_rect r, const char *label)
+{
+    char initial[2] = { label[0], 0 };
+
+    gfx_round_rect_vgradient(s, r, 9, 0x9AA3AE, 0x4E5763, 255);
+    gfx_text_center(s, r.x, r.y + (r.h - ui_font(FONT_B20)->line_height) / 2, r.w, ui_font(FONT_B20),
+                    initial, 0xFFFFFF, 255);
 }
 
 /* Red count at the icon's top-right corner, like iPhone OS. */
@@ -365,7 +412,12 @@ static void draw_icon(gfx_surface *s, const struct sb_view *v, int app, gfx_rect
 {
     const gfx_font *lab = ui_font(FONT_B9);
 
-    gfx_draw_image(s, r.x, r.y, &icons[app], 255);
+    if (v->jiggle)                      /* neighbours wobble in opposition */
+        r.x += ((app + v->jiggle_phase) & 1) ? 1 : -1, r.y += ((app + v->jiggle_phase) & 2) ? 1 : 0;
+    if (icon_ok[app])
+        gfx_draw_image(s, r.x, r.y, &icons[app], 255);
+    else
+        draw_generic_icon(s, r, sb_apps[app].label);
     if (!strcmp(sb_apps[app].icon, "icon_calendar.gzi")) {
         /* Calendar's icon shows today's date. */
         char day[4];
@@ -379,6 +431,8 @@ static void draw_icon(gfx_surface *s, const struct sb_view *v, int app, gfx_rect
         draw_badge(s, r, v->badges[app]);
     int tw = gfx_text_width(lab, sb_apps[app].label);
     gfx_text_shadow(s, r.x + (r.w - tw) / 2, r.y + r.h + 2, lab, sb_apps[app].label, 0xFFFFFF, 0x000000, 1, 255);
+    if (v->jiggle && sb_apps[app].installed)
+        draw_delete_button(s, r);
 }
 
 static void draw_dock(gfx_surface *s, const struct sb_view *v)
@@ -391,7 +445,7 @@ static void draw_dock(gfx_surface *s, const struct sb_view *v)
     gfx_fill_alpha(s, gfx_r(0, DOCK_Y, SCREEN_W, 1), 0xFFFFFF, 160);
     gfx_fill_alpha(s, gfx_r(0, DOCK_Y + 1, SCREEN_W, 1), 0x000000, 60);
     for (int i = 0; i < sb_num_apps; i++) {
-        if (sb_apps[i].dock)
+        if (sb_app_shown(i) && sb_apps[i].dock)
             draw_icon(s, v, i, sb_icon_rect(i, 0));
     }
 }
@@ -417,7 +471,7 @@ void sb_draw_home(gfx_surface *s, const struct sb_view *v)
     if (gfx_rect_intersect(gfx_r(0, SB_STATUS_H, SCREEN_W, DOCK_Y - SB_STATUS_H), saved, &grid)) {
         s->clip = grid;
         for (int i = 0; i < sb_num_apps; i++) {
-            if (!sb_apps[i].dock) {
+            if (sb_app_shown(i) && !sb_apps[i].dock) {
                 gfx_rect r = sb_icon_rect(i, v->scroll_x);
                 if (r.x + r.w + 20 > 0 && r.x - 20 < SCREEN_W)
                     draw_icon(s, v, i, r);

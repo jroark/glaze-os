@@ -1,6 +1,6 @@
 /*
- * Resource access: images and fonts from romfs "res/" on the device, or
- * from assets/gen on the host preview build.
+ * Resource access: images and fonts from romfs "res/" (then an installed
+ * app's bundle) on the device, or from assets/gen on the host preview build.
  */
 #ifndef GLAZE_RES_H
 #define GLAZE_RES_H
@@ -8,6 +8,10 @@
 #include <glaze/gfx.h>
 
 const void *res_map(const char *name, uint32_t *size);
+/* An installed app's bundle folder (glaze/pkg.h), searched after romfs;
+ * "" for built-in apps. ui_init sets it from SpringBoard. */
+void res_set_bundle(const char *path);
+const char *res_bundle(void);
 bool res_image(gfx_image *img, const char *name);
 bool res_font(gfx_font *f, const char *name);
 

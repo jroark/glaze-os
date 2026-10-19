@@ -29,22 +29,35 @@
 #define KNOB_H          36
 #define KNOB_TRAVEL     (TRACK_W - KNOB_W - 4)
 
+/* Built-in apps come first, then installed ones (glaze/pkg.h). An app keeps
+ * its index for the session, so badges and notes indexed by it stay put:
+ * an app on a removed card is hidden (!present), an uninstalled one leaves
+ * an empty slot (path ""). */
 struct sb_app_info {
-    const char *label;
-    const char *icon;           /* res name */
-    const char *path;           /* romfs binary */
+    char label[32];
+    char icon[24];              /* res name; installed apps load res/icon.gzi */
+    char path[48];              /* romfs binary, or an installed app's bundle */
+    char exec[16];              /* installed: the executable in the bundle */
+    char id[28];                /* installed: package id (process name) */
     int status_style;
     bool dock;
+    bool installed;
+    bool present;
 };
 
-#define SB_MAX_APPS     16
+#define SB_MAX_APPS     32
 #define SB_MAX_NOTES    16          /* scheduled, all apps together */
 #define SB_LOCK_NOTES   4           /* shown on the lock screen */
 #define LOCK_NOTE_H     32
 #define BANNER_H        44          /* below the status bar */
 
-extern const struct sb_app_info sb_apps[];
-extern const int sb_num_apps;
+extern struct sb_app_info sb_apps[SB_MAX_APPS];
+extern int sb_num_apps;
+
+static inline bool sb_app_shown(int i)
+{
+    return sb_apps[i].present && sb_apps[i].path[0];
+}
 
 struct sb_note {
     int app;                    /* index into sb_apps */
@@ -72,6 +85,8 @@ struct sb_view {
     const struct sb_note *lock_notes;   /* delivered while locked, newest first */
     int num_lock_notes;
     struct ui_passcode pin;     /* passcode entry after the slide */
+    bool jiggle;                /* editing the home screen: icons wobble */
+    int jiggle_phase;
 };
 
 extern bool sb_24h;
@@ -79,6 +94,8 @@ extern const char *const sb_wallpapers[];
 extern const int sb_num_wallpapers;
 
 void sb_draw_init(void);
+/* An installed app's icon (NULL for the generic one); data must stay alive. */
+void sb_set_icon(int app, const gfx_image *img);
 void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt);
 void sb_draw_status(gfx_surface *s, const struct sb_clock *c, int style, bool padlock);
 void sb_draw_wallpaper(gfx_surface *s, const struct sb_view *v, gfx_rect r);
@@ -92,6 +109,8 @@ void sb_draw_home(gfx_surface *s, const struct sb_view *v);
 int sb_num_pages(void);
 gfx_rect sb_icon_rect(int app, int scroll_x);
 int sb_hit_icon(int x, int y, int scroll_x);
+/* Jiggle mode: the delete button of an installed app's icon. */
+gfx_rect sb_delete_rect(int app, int scroll_x);
 /* Notification banner over the top of the screen, below the status bar. */
 void sb_draw_banner(gfx_surface *s, const struct sb_note *n);
 
@@ -101,6 +120,16 @@ extern struct sb_note sb_delivered[SB_LOCK_NOTES];
 extern int sb_num_delivered;
 
 void notify_load(void);
+/* apps.c changed the list: drop an uninstalled app's badge and notes, or
+ * pick up saved ones for an app that appeared. */
+void notify_forget(int app);
+void notify_attach(int app);
+
+/* apps.c: installed apps. */
+void apps_scan(bool card_only);     /* updates sb_apps[] */
+bool apps_changed(void);            /* since the last call: redraw */
+int apps_launch(int app);           /* pid, or an error */
+int apps_uninstall(int app);
 int notify_app_for_path(const char *path);
 void notify_set_badge(int app, uint32_t count);
 void notify_add_badge(int app, uint32_t n);

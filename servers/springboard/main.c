@@ -6,6 +6,7 @@
 
 #include "sb_internal.h"
 
+#include <glaze/fs.h>
 #include <glaze/notify.h>
 #include <glaze/passcode.h>
 #include <glaze/prefs.h>
@@ -38,6 +39,9 @@ enum state {
 #define PIN_WAIT_MS     60000   /* for this long, doubling per further miss */
 #define PIN_WAIT_MAX    (15 * 60000)
 #define MAX_CLIENTS     4
+#define HOLD_MS         1000    /* press on an icon to edit the home screen */
+#define JIGGLE_MS       100
+#define CARD_POLL_MS    2000    /* look for apps on a card coming or going */
 #define SURFACE_BYTES   (SB_APP_W * SB_APP_H * 2)
 #define SHM_HEADER      4096
 
@@ -81,6 +85,16 @@ static struct sb_note banner;
 static bool banner_queued, banner_visible, banner_touch;
 static uint32_t banner_until;
 static int launch_after_home = -1;
+
+/* An alert over the home screen: confirm deleting an app, or a message. */
+static struct {
+    bool open;
+    int app;                    /* deleting this app, or -1 for a message */
+    char title[48], msg[96];
+    gfx_rect r1, r2;
+    int pressed;
+} alert = { .app = -1, .pressed = -1 };
+static uint32_t down_ms, jiggle_next, card_poll_next;
 
 /* Passcode entry. Wrong tries are counted until the right one, in RAM. */
 static char pin[UI_PASSCODE_LEN + 1];
@@ -209,14 +223,34 @@ static void render_track(void)
 static void render_home(void)
 {
     sb_draw_home(&bb, &view);
+    if (alert.open) {
+        bool del = alert.app >= 0;
+        ui_draw_alert(&bb, alert.title, alert.msg, del ? "Cancel" : "OK", del ? "Delete" : NULL,
+                      &alert.r1, &alert.r2, alert.pressed);
+    }
     flush_all();
     overlay_banner();
+}
+
+static void show_alert(int app, const char *title, const char *msg)
+{
+    alert.open = true;
+    alert.app = app;
+    alert.pressed = -1;
+    strlcpy(alert.title, title, sizeof(alert.title));
+    strlcpy(alert.msg, msg, sizeof(alert.msg));
+    view.pressed = -1;
+    render_home();
 }
 
 static void render_grid(void)
 {
     gfx_rect r = gfx_r(0, SB_STATUS_H, SCREEN_W, DOCK_Y - SB_STATUS_H);
 
+    if (alert.open || view.jiggle) {        /* those cover the dock too */
+        render_home();
+        return;
+    }
     gfx_set_clip(&bb, r);
     sb_draw_home(&bb, &view);
     gfx_reset_clip(&bb);
@@ -316,11 +350,21 @@ static void launch(int index)
     app_cleanup();
     shared->head = shared->tail = 0;
     memset(app_surf.px, 0xFF, SURFACE_BYTES);
-    app_pid = gz_spawn(sb_apps[index].path, 0);
+    if (sb_apps[index].installed) {
+        strlcpy(shared->bundle, sb_apps[index].path, sizeof(shared->bundle));
+        app_pid = apps_launch(index);
+    } else {
+        shared->bundle[0] = 0;
+        app_pid = gz_spawn(sb_apps[index].path, 0);
+    }
     if (app_pid < 0) {
-        snprintf(msg, sizeof(msg), "springboard: cannot launch %s\n", sb_apps[index].path);
+        snprintf(msg, sizeof(msg), "springboard: cannot launch %s (%d)\n", sb_apps[index].path, app_pid);
         gz_log(msg, (uint32_t)strlen(msg));
         app_pid = 0;
+        if (sb_apps[index].installed) {
+            snprintf(msg, sizeof(msg), "\"%s\" could not be opened.", sb_apps[index].label);
+            show_alert(-1, "Cannot Open App", msg);
+        }
         return;
     }
     app_index = index;
@@ -365,6 +409,7 @@ static void lock_device(void)
 {
     lock_over_app = (state == ST_APP);
     banner_visible = banner_touch = false;
+    view.jiggle = alert.open = false;
     state = ST_LOCK;
     anim.active = false;
     view.knob_x = 0;
@@ -575,10 +620,89 @@ static int page_count(void)
     return sb_num_pages();
 }
 
+/* After the app list changed: keep the scroll position on a real page. */
+static bool rescan(bool card_only)
+{
+    apps_scan(card_only);
+    if (!apps_changed())
+        return false;
+    int max = (page_count() - 1) * SCREEN_W;
+    if (view.scroll_x > max)
+        view.scroll_x = max;
+    if (app_index >= 0 && !sb_app_shown(app_index))
+        app_index = -1;
+    return true;
+}
+
+static void end_jiggle(void)
+{
+    if (!view.jiggle)
+        return;
+    view.jiggle = false;
+    render_home();
+}
+
+/* The icon goes at once; removing the files takes a few seconds of flash
+ * writes, and a failure brings it back with the rescan. */
+static void delete_app(int app)
+{
+    char msg[64];
+
+    sb_apps[app].present = false;
+    render_home();
+    int rv = apps_uninstall(app);
+    rescan(false);
+    if (rv) {
+        snprintf(msg, sizeof(msg), "%s", fs_strerror(rv));
+        show_alert(-1, "Cannot Delete App", msg);
+    } else {
+        render_home();
+    }
+}
+
+static bool alert_touch(const struct gz_input_event *e)
+{
+    if (!alert.open)
+        return false;
+    int hit = gfx_rect_contains(alert.r1, e->x, e->y) ? 0
+            : alert.app >= 0 && gfx_rect_contains(alert.r2, e->x, e->y) ? 1 : -1;
+    if (e->type != GZ_EV_TOUCH_UP) {
+        if (hit != alert.pressed) {
+            alert.pressed = hit;
+            render_home();
+        }
+        return true;
+    }
+    alert.pressed = -1;
+    if (hit < 0) {
+        render_home();
+        return true;
+    }
+    alert.open = false;
+    if (hit == 1)
+        delete_app(alert.app);
+    else
+        render_home();
+    return true;
+}
+
+static int delete_hit(int x, int y)
+{
+    for (int i = 0; i < sb_num_apps; i++) {
+        if (sb_app_shown(i) && sb_apps[i].installed && gfx_rect_contains(sb_delete_rect(i, view.scroll_x), x, y))
+            return i;
+    }
+    return -1;
+}
+
+static int delete_pressed = -1;
+
 static void home_touch(const struct gz_input_event *e)
 {
     int page = (view.scroll_x + SCREEN_W / 2) / SCREEN_W;
 
+    if (alert_touch(e))
+        return;
     switch (e->type) {
     case GZ_EV_TOUCH_DOWN:
         anim.active = false;
@@ -586,7 +710,12 @@ static void home_touch(const struct gz_input_event *e)
         swiping = false;
         down_x = e->x;
         down_y = e->y;
+        down_ms = now_ms();
         track_move(e, true);
+        if (view.jiggle) {
+            delete_pressed = delete_hit(e->x, e->y);
+            break;                      /* icons don't open while editing */
+        }
         view.pressed = sb_hit_icon(e->x, e->y, view.scroll_x);
         if (view.pressed >= 0)
             render_home();
@@ -621,6 +750,20 @@ static void home_touch(const struct gz_input_event *e)
         if (!touching)
             break;
         touching = false;
+        if (view.jiggle && !swiping) {
+            int app = delete_pressed;
+            delete_pressed = -1;
+            if (app >= 0 && delete_hit(e->x, e->y) == app) {
+                char msg[96];
+                snprintf(msg, sizeof(msg), "Deleting this app will also\ndelete all of its data.");
+                char title[48];
+                snprintf(title, sizeof(title), "Delete \"%s\"?", sb_apps[app].label);
+                show_alert(app, title, msg);
+            } else if (sb_hit_icon(e->x, e->y, view.scroll_x) < 0 && e->y < DOCK_Y) {
+                end_jiggle();           /* a tap on empty space ends editing */
+            }
+            break;
+        }
         if (swiping) {
             int target = (view.scroll_x + SCREEN_W / 2) / SCREEN_W;
             if (velocity < -40)
@@ -667,7 +810,11 @@ static void handle_key(const struct gz_input_event *e)
     case GZ_KEY_HOME:
         if (state == ST_APP)
             begin_zoom_out();
-        else if (state == ST_HOME && view.scroll_x != 0)
+        else if (state == ST_HOME && (view.jiggle || alert.open)) {
+            alert.open = false;
+            view.jiggle = false;
+            render_home();
+        } else if (state == ST_HOME && view.scroll_x != 0)
             anim_start(view.scroll_x, 0, PAGE_MS);
         break;
     default:
@@ -964,6 +1111,7 @@ static void frame(void)
                 render_app();
             } else {
                 app_cleanup();
+                rescan(false);          /* the app may have been Files installing one */
                 state = ST_HOME;
                 render_home();
                 if (launch_after_home >= 0)
@@ -1023,6 +1171,8 @@ int main(void)
     init_surfaces();
     sb_draw_init();
     load_settings();
+    apps_scan(false);                   /* before notify_load: it keys on bundles */
+    apps_changed();
     notify_load();
     view.pressed = -1;
     view.badges = sb_badges;
@@ -1052,6 +1202,14 @@ int main(void)
         }
         if (pin_wait)
             timeout = MIN(timeout, 1000);   /* count down "Try again" */
+        if (state == ST_HOME && !anim.active) {
+            if (view.jiggle)
+                timeout = MIN(timeout, MAX((int)(jiggle_next - t), 0));
+            else if (touching && !swiping && view.pressed >= 0)
+                timeout = MIN(timeout, MAX((int)(down_ms + HOLD_MS - t), 0));
+            if (!touching)
+                timeout = MIN(timeout, MAX((int)(card_poll_next - t), 0));
+        }
         int due = notify_next_ms(now_secs());
         if (due >= 0)
             timeout = MIN(timeout, due);
@@ -1084,6 +1242,24 @@ int main(void)
             shimmer_next = t + 60;
         }
 
+        if (state == ST_HOME && !anim.active) {
+            if (!view.jiggle && touching && !swiping && view.pressed >= 0 && t - down_ms >= HOLD_MS) {
+                view.jiggle = true;     /* held: edit the home screen */
+                view.pressed = -1;
+                jiggle_next = t;
+            }
+            if (view.jiggle && (int)(t - jiggle_next) >= 0) {
+                view.jiggle_phase++;
+                render_home();
+                jiggle_next = t + JIGGLE_MS;
+            }
+            if (!touching && !alert.open && (int)(t - card_poll_next) >= 0) {
+                if (rescan(true))
+                    render_home();
+                card_poll_next = now_ms() + CARD_POLL_MS;
+            }
+        }
+
         if (state == ST_LAUNCH_WAIT && t - launch_t0 > LAUNCH_TIMEOUT)
             begin_zoom_in();                    /* show whatever it has */
 
@@ -1093,6 +1269,7 @@ int main(void)
             app_cleanup();
             if (was_front) {
                 load_settings();
+                rescan(false);
                 anim.active = false;
                 state = ST_HOME;
                 render_home();

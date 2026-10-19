@@ -58,6 +58,17 @@ static int sys_spawn(uint32_t upath, uint32_t flags)
     return p ? p->pid : GZ_ENOENT;
 }
 
+/* Installed apps never get privileges: only romfs programs are trusted. */
+static int sys_spawn_image(uint32_t ubuf, uint32_t size, uint32_t uname)
+{
+    char name[16];
+
+    if (copy_str_from_as(AS, name, uname, sizeof(name)) <= 0 || !gz_elf_range(ubuf, size, USER_TOP))
+        return GZ_EINVAL;
+    struct proc *p = proc_spawn_image(AS, ubuf, size, name, cur->proc->pid, 0);
+    return p ? p->pid : GZ_EINVAL;
+}
+
 static int sys_kill(uint32_t pid)
 {
     struct proc *p = proc_by_pid((int)pid);
@@ -176,6 +187,7 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_SLEEP_MS:      rv = sys_sleep_ms(a0); break;
     case SYS_LOG:           rv = sys_log(a0, a1); break;
     case SYS_SPAWN:         rv = sys_spawn(a0, a1); break;
+    case SYS_SPAWN_IMAGE:   rv = sys_spawn_image(a0, a1, a2); break;
     case SYS_KILL:          rv = sys_kill(a0); break;
     case SYS_PORT_CREATE:   rv = ipc_port_create(cur->proc); break;
     case SYS_PORT_REGISTER: rv = sys_port_register(a0, a1); break;

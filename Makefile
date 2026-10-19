@@ -333,6 +333,29 @@ $(OUT)/boot/%.o: boot/%.c $(OUT)/kernel_consts.flags
 $(OUT)/spl.elf: $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o boot/spl.lds
 	$(LD) -m elf32ltsmip -T boot/spl.lds -o $@ $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o
 
+# ---- app packages -------------------------------------------------------------
+# Apps that are installed rather than built in (glaze/pkg.h). packages/<name>
+# holds the sources, Info and icon.gzi; the build links the app like a built-in
+# one, never puts it in romfs, and packs it as out/pkg/<name>.gzp. Installed
+# apps run on the dynamic linker, so there are none in a DYNAMIC=0 build.
+
+PKG_DIRS := $(wildcard packages/*)
+PKG_NAMES := $(notdir $(PKG_DIRS))
+ifeq ($(DYNAMIC),1)
+$(foreach d,$(PKG_DIRS),$(eval $(call DYNAMIC_template,$(d))))
+PKG_FILES := $(foreach p,$(PKG_NAMES),$(OUT)/pkg/$(p).gzp)
+else
+PKG_FILES :=
+endif
+
+$(OUT)/pkg/%.gzp: $(OUT)/bin/%.elf packages/%/Info packages/%/icon.gzi tools/mkromfs.py
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) --strip-all $< $(OUT)/pkg/$*.app
+	$(PYTHON) tools/mkromfs.py --package $@ Info=packages/$*/Info app=$(OUT)/pkg/$*.app \
+	    res/icon.gzi=packages/$*/icon.gzi
+
+packages: $(PKG_FILES)
+
 # ---- factory file system ------------------------------------------------------
 # User files the device ships with (userdata/), formatted into the file
 # server's region by the same flash stack it runs. Romfs holds only the OS.
@@ -345,8 +368,9 @@ $(OUT)/host/mkfsimg: $(MKFSIMG_SRCS) servers/fs/ftl.h servers/fs/folders.h
 	@mkdir -p $(dir $@)
 	$(HOSTCC) -std=gnu11 -O2 -Wall -Iservers/fs $(FS_INC) -o $@ $(MKFSIMG_SRCS)
 
-$(OUT)/fs.img: $(OUT)/host/mkfsimg $(USERDATA_FILES) lib/include/glaze/abi.h
-	$(OUT)/host/mkfsimg userdata $(FS_BLOCKS) $@
+# The packages go in /Documents, ready to install from Files.
+$(OUT)/fs.img: $(OUT)/host/mkfsimg $(USERDATA_FILES) $(PKG_FILES) lib/include/glaze/abi.h
+	$(OUT)/host/mkfsimg userdata $(FS_BLOCKS) $@ $(foreach f,$(PKG_FILES),/Documents/$(notdir $(f))=$(f))
 
 # ---- NAND image -------------------------------------------------------------
 
@@ -360,6 +384,6 @@ clean:
 	rm -rf $(OUT)
 
 FORCE:
-.PHONY: all clean FORCE
+.PHONY: all clean packages FORCE
 
 -include $(shell find $(OUT) -name '*.d' 2>/dev/null)

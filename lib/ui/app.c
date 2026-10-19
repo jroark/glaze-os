@@ -32,6 +32,7 @@ void ui_init(int status_style)
     if (!base)
         exit(1);
     ui.shared = (struct sb_shared *)base;
+    res_set_bundle(ui.shared->bundle);
     gfx_surface_init(&ui.surf, (uint16_t *)(base + ui.shared->surface_offset), (int)r.w[2], (int)r.w[3],
                      (int)ui.shared->stride);
     ui.dirty = gfx_r(0, 0, 0, 0);
