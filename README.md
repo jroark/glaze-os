@@ -140,8 +140,9 @@ Apps use `lib/include/glaze/net.h`: `net_resolve`, `net_socket`,
 
 - **Settings > Network** shows the card, the address, router and DNS server,
   and pings the router.
-- **Web** (`apps/web`) fetches a page over HTTP/1.0 and shows its text. There
-  is no TLS, so https:// addresses are refused.
+- **Browser** (`apps/browser`) loads web pages over HTTP/1.1 and renders
+  their HTML, CSS and images. There is no TLS, so https:// pages show a "not
+  supported" page.
 
 The emulator's NAT resolves names and opens TCP connections on the host, so
 the guest reaches whatever the host can. Without a card, the network server
