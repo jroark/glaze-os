@@ -1,6 +1,7 @@
 /*
  * File system: client API and the protocol of the file server (servers/fs),
- * which keeps a littlefs volume on the flash above the key/value store.
+ * which keeps a littlefs volume on the flash above the key/value store and
+ * shows a CompactFlash card's FAT volume, when there is one, as /Card.
  *
  * A client sends FS_HELLO with its pid and gets a session: an index plus a
  * shared-memory buffer the server keeps for it. Paths and data travel in
@@ -33,7 +34,7 @@ enum {
     FS_MKDIR,               /* buf: path */
     FS_REMOVE,              /* buf: path (a file or an empty directory) */
     FS_RENAME,              /* buf: old path, then new path at FS_PATH_MAX */
-    FS_STATFS,              /* -> buf: struct fs_info */
+    FS_STATFS,              /* w2 = 1: buf: path of the volume -> buf: struct fs_info */
     FS_FORMAT,              /* erase everything */
 };
 
@@ -85,6 +86,9 @@ int fs_mkdirs(const char *path);
 int fs_remove(const char *path);
 int fs_rename(const char *from, const char *to);
 int fs_statfs(struct fs_info *info);
+/* The volume holding `path`: the flash, or a CompactFlash card at /Card
+ * (whose flash_blocks and ECC counts are 0). */
+int fs_statvfs(const char *path, struct fs_info *info);
 int fs_format(void);
 
 /* Whole-file helpers: bytes read (up to max) or written, or an error. */

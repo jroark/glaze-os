@@ -12,6 +12,7 @@ make -j8                          # same, natively, if mipsel-linux-gnu-gcc is i
 make -j8 INIT=bin/ktest           # boot the kernel self-test instead of SpringBoard
 make -j8 INPUT_SCRIPT=tests/x.txt # replay scripted input (see Testing)
 make -C host fstest               # native build of the file-system stack test
+make -C host fat-test             # CF/FAT volume test on FAT12/16/32 images, then fsck.fat
 ```
 
 There is no linter; the build uses `-Wall -Wextra` and should stay warning-free. `compile_flags.txt` is for clangd.
@@ -25,13 +26,16 @@ Romfs is for the OS and built-in apps only. User files, settings and app data be
 ```sh
 be300 --nand out/glaze.bin --rtc-host-time > stdout.log 2> stderr.log
 be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet card
+tools/mkcfimg.sh out/cf.img [size_mb [12|16|32]] [files...]  # FAT image (dosfstools, mtools)
+be300 --nand out/glaze.bin --rtc-host-time --cf out/cf.img    # with a CompactFlash card
 ```
 
 - The emulator writes NAND back into the image, so boot a copy when you need a clean flash. Kernel and `printf` output goes to the emulator's stdout. A screenshot (`screenshot_*.bmp`) is saved on orderly shutdown, including SIGTERM from `timeout`. With no display, `SDL_VIDEODRIVER=dummy` runs it headless and still saves the screenshot.
-- **ktest** (`apps/ktest`): build with `INIT=bin/ktest`, boot, and grep stdout for `ktest: FAIL` / `ktest: ALL PASS`. It covers IPC, shm, sleep, faults, threads and semaphores, the file server and preferences, the audio server (stream clock and underruns, MP3 play/seek/pause, ADPCM WAV), and with `--ne2000` the network: DHCP, ping, DNS through the NAT, TCP/UDP over lwIP's loopback through both `glaze/net.h` and BSD sockets. Boot it both with and without `--ne2000`; without a card the network cases print `SKIP`. It prints `INFO` for an internet fetch it can't require.
+- **ktest** (`apps/ktest`): build with `INIT=bin/ktest`, boot, and grep stdout for `ktest: FAIL` / `ktest: ALL PASS`. It covers IPC, shm, sleep, faults, threads and semaphores, the file server and preferences, the audio server (stream clock and underruns, MP3 play/seek/pause, ADPCM WAV), and with `--ne2000` the network: DHCP, ping, DNS through the NAT, TCP/UDP over lwIP's loopback through both `glaze/net.h` and BSD sockets. Boot it both with and without `--ne2000`; without a card the network cases print `SKIP`. With `--cf <image>` it also tests `/Card` (and leaves `KTEST.TXT` on it); without a card those cases print `SKIP`. It prints `INFO` for an internet fetch it can't require.
 - **Scripted UI tests**: `tests/*.txt` replay timed events (`<ms> tap x y`, `drag ...`, `key ok|esc|...|home`) from inside the kernel, in screen coordinates. `tests/run.sh tests/t_x.txt` builds, boots and converts the final screenshot, but it uses the macOS tools `gtimeout` and `sips`. Scripted events bypass the touch panel and its interrupts.
 - **Real touch path**: `tests/touch.sh tests/touch_unlock.act` drives the emulator window with xdotool on an X display (`Xvfb :99 &`, then `DISPLAY=:99`). Action coordinates are window/screen pixels; app surfaces start 16 px lower, under the status bar.
 - **Audio**: boot with `--audio` to hear it and `--log-mmio` for the emulator's `[AIU] start`/`stop` lines. Its host output is resampled and drops samples under load, so check exactness against the guest DMA buffers rather than a capture. `make -C host mediatest` then `tests/mediatest.py` decodes `userdata/Music` and `userdata/Movies` with libmedia and Helix natively and compares with ffmpeg (ADPCM is bit-exact, MP3 about 89 dB).
+- **CompactFlash**: `make -C host fat-test` runs `servers/fs/card.c` and FatFs (with ASan/UBSan) on fresh FAT12/16/32 images, including card swaps and a full volume, then checks each with `fsck.fat -n`. The emulator writes a CF image back only on orderly shutdown.
 - **Flash stack**: `host/fstest [seed [wear|flips|bad|cuts|format]]` runs `servers/fs/ftl.c` plus littlefs and Dhara on a RAM NAND model with bit flips, failing blocks and power cuts. A full run takes several minutes; pass a phase name to run one.
 
 ## Toolchain constraints
@@ -45,7 +49,7 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 
 **Boot.** The boot ROM loads the SPL (`boot/`) from the B000FF container at NAND 0x4000. The SPL streams the flat kernel from 0x14000 to 0x80010000 and jumps to it. The SPL bakes in the kernel's load, entry and size from `tools/elf_consts.py`; `tools/mk_nand.py` packs the image.
 
-**Flash layout.** 0x500000 to the end is the file server's region (`FLASH_FS_OFFSET`, `GZ_FLASH_BLOCKS`). There is no other persistent store. The romfs (apps and assets) is linked into the kernel image itself (`kernel/romfs_blob.S`, `tools/mkromfs.py`), and files in it are page-aligned so they can be mapped into user space.
+**Flash layout.** 0x500000 to the end is the file server's region (`FLASH_FS_OFFSET`, `GZ_FLASH_BLOCKS`). There is no other persistent store on the device; a CompactFlash card mounts as `/Card`. The romfs (apps and assets) is linked into the kernel image itself (`kernel/romfs_blob.S`, `tools/mkromfs.py`), and files in it are page-aligned so they can be mapped into user space.
 
 **Kernel** (`kernel/`):
 - Non-preemptive: kernel code runs with interrupts disabled, and user threads are preempted from the timer tick.
@@ -53,7 +57,7 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 - Two-level page tables hold PTEs in VR41xx EntryLo format (`mips.h`). The VR41xx TLB layout differs from standard R4000.
 - IPC is synchronous send/recv/reply on named ports with 64-byte messages (`struct gz_msg`), plus per-port notification bits. Bulk data goes through shared memory (`SYS_SHM_*`).
 - Syscall numbers and the ABI are in `lib/include/glaze/abi.h` (shared with userspace); user wrappers are in `glaze/sys.h`.
-- Device access is gated by process flags. `PROC_PRIVILEGED` (framebuffer, input) can be passed down by a privileged spawner. `PROC_FLASH` (raw NAND), `PROC_NET` (Ethernet frames) and `PROC_AUDIO` (wave output) are granted only by the kernel, to `bin/fs`, `bin/net` and `bin/audio`; `sys_spawn` masks other flags.
+- Device access is gated by process flags. `PROC_PRIVILEGED` (framebuffer, input) can be passed down by a privileged spawner. `PROC_FLASH` (raw NAND and the CF card's sectors), `PROC_NET` (Ethernet frames) and `PROC_AUDIO` (wave output) are granted only by the kernel, to `bin/fs`, `bin/net` and `bin/audio`; `sys_spawn` masks other flags.
 - The kernel spawns `bin/fs`, `bin/net`, `bin/audio` and then `INIT` (default `bin/springboard`) at boot.
 - Processes may have extra threads (`SYS_THREAD_CREATE`, libc `gz_thread_create`). Each gets a 64 KiB stack in a 64 KiB-aligned slot below the main stack (with an unmapped guard); libc keeps a per-thread block at the stack's base (`gz_self()`: tid, `errno`, TLS slots). The last thread to exit ends the process. Synchronization is the kernel's process-private counting semaphores (`kernel/sem.c`, `SYS_SEM_*`, with timeouts); libc's recursive `gz_mutex` sits on them, and malloc and the fs/net clients lock only once a process has a second thread.
 
@@ -89,7 +93,13 @@ and shared text editor.
 - littlefs's block count is fixed from the geometry, not from `dhara_map_capacity`, which changes between mounts.
 - Clients get a session with an 8 KiB shared buffer; paths and data travel in it.
 - Layout: `/Documents`, `/Pictures` (Photos' Camera Roll), `/Music`, `/Movies`, `/Library/Preferences` (settings, one file per key, via `glaze/prefs.h`), `/Library/Notes`, `/Library/Caches` (rebuildable). A blank or erased volume gets only the folders in `servers/fs/folders.h`.
+- A CompactFlash card with a FAT volume appears as `/Card` (`servers/fs/card.c`, FatFs in `third_party/fatfs`, configured by its `ffconf.h`): a synthetic first entry of `/`, mounted from a partition table's first FAT partition or a table-less volume. `/Card` itself can't be removed, renamed or created on the flash, and renames between volumes fail. `fs_statvfs(path)` reports the volume holding a path. The server calls `card_check()` before each request; it compares the kernel's card generation and remounts, and handles from a previous card fail with `GZ_EIO`. Long names are UTF-8; hidden and system entries are not listed.
 - Reads are slow, about 1.5 s for a 150 KB picture in the emulator, so apps should cache derived data (Photos keeps thumbnails in `/Library/Caches/Photos`) and load in the background.
+
+**CompactFlash** (`kernel/drivers/cf.c`, `SYS_CF_*`, file server only):
+- The card shares the PCMCIA socket with the NE2000; `cf_init()` runs after `ne2000_init()` and only probes when no NE2000 answered. Its CIS (attribute memory at 0x0A00D000, even bytes) must not have a FUNCID other than fixed disk.
+- ATA in I/O mode at the secondary IDE ports: taskfile at 0x0A00C170, device control at 0x0A00C376 (`hw.h`). Polled PIO, LBA28, IDENTIFY / READ SECTORS / WRITE SECTORS only, at most 8 sectors per call; the emulator signals no command completion and implements no MULTIPLE commands.
+- No hot-plug interrupt: `SYS_CF_INFO` resamples the socket status and re-identifies on a change, bumping `generation`. The emulator's `--cf` and `--ne2000` together put the card in an undecoded slot, so use one or the other.
 
 **Audio** (`kernel/drivers/audio.c`, `servers/audio`, `glaze/audio.h`, client in `lib/libc/audio.c`, decoders in `lib/media`):
 - Wave output is a Casio ping-pong DMA block in the Kj window (registers `AUD_*` in `kernel/hw.h`), not the VRC4173 AIU. Its map and start/stop sequences come from WinCE's wavedev.dll (be300 `docs/BE300_AUDIO.md`, emulator model `src/hw/aiu.c`). Samples are S16LE, mono or interleaved stereo, at 8000/11025/16000/22050/32000/44100 Hz.
@@ -110,4 +120,4 @@ and shared text editor.
 Register addresses and bit meanings follow the VR4131 and VRC4173 user's manuals and the be300 emulator's models (the `be300` and `mipsel-cross-image` repos hold the manuals, hardware dumps and the Linux port). Cite the manual section in comments when touching hardware code. Some things are known not to match real hardware yet:
 - **D-cache colouring:** owned pages and ELF mappings match their KSEG0 cache colour, with code publication cache maintenance. Existing device/resource/shared-memory policies remain; the emulator doesn't model cache contents, so real-hardware validation is still required.
 - **Factory bad-block marks:** these sit in the spare area and are never read.
-- **PCMCIA card setup:** the NE2000 driver assumes the card already decodes I/O at port 0x300, as the emulator's does. A real card needs its CIS read and its configuration option register written through attribute memory first.
+- **PCMCIA card setup:** the NE2000 and CF drivers assume the card already decodes I/O at port 0x300, as the emulator's does, and that a CF card decodes the secondary IDE ports. A real card needs its configuration option register written through attribute memory first.
