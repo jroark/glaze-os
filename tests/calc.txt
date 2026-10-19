@@ -1,0 +1,8 @@
+# Unlock, open Calculator, compute 12 + 3 = 15.
+3000 drag 40 280 235 280 500
+4500 tap 210 48
+6500 tap 30 263
+6900 tap 89 263
+7300 tap 207 226
+7700 tap 148 263
+8100 tap 207 281

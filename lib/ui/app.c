@@ -1,0 +1,98 @@
+/* libui: connection to SpringBoard, event queue, presentation. */
+
+#include <glaze/sys.h>
+#include <glaze/ui.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+struct ui_app ui;
+
+void ui_init(int status_style)
+{
+    struct gz_msg m, r;
+
+    ui.port = gz_port_create();
+    for (int tries = 0; (ui.sb_port = gz_port_lookup(SB_PORT_NAME)) < 0; tries++) {
+        if (tries > 200)
+            exit(1);
+        gz_sleep_ms(5);
+    }
+    memset(&m, 0, sizeof(m));
+    m.w[0] = SB_HELLO;
+    m.w[1] = (uint32_t)ui.port;
+    m.w[2] = (uint32_t)status_style;
+    m.w[3] = (uint32_t)gz_getpid();
+    if (gz_send(ui.sb_port, &m, &r) || r.w[0]) {
+        puts("ui: SpringBoard refused HELLO");
+        exit(1);
+    }
+    uint8_t *base = gz_shm_map((int)r.w[1]);
+    if (!base)
+        exit(1);
+    ui.shared = (struct sb_shared *)base;
+    gfx_surface_init(&ui.surf, (uint16_t *)(base + ui.shared->surface_offset), (int)r.w[2], (int)r.w[3],
+                     (int)ui.shared->stride);
+    ui.dirty = gfx_r(0, 0, 0, 0);
+}
+
+int ui_next_event(struct gz_input_event *ev, int timeout_ms)
+{
+    uint32_t start = gz_time_ms();
+
+    for (;;) {
+        struct sb_shared *sh = ui.shared;
+        if (sh->tail != sh->head) {
+            *ev = sh->ev[sh->tail % SB_RING];
+            sh->tail++;
+            return 1;
+        }
+        int wait = timeout_ms;
+        if (timeout_ms >= 0) {
+            int elapsed = (int)(gz_time_ms() - start);
+            if (elapsed >= timeout_ms)
+                return 0;
+            wait = timeout_ms - elapsed;
+        }
+        struct gz_msg m;
+        if (gz_recv(ui.port, &m, wait) == GZ_ETIMEDOUT)
+            return 0;
+    }
+}
+
+void ui_invalidate(gfx_rect r)
+{
+    gfx_rect c;
+
+    if (gfx_rect_intersect(r, gfx_r(0, 0, ui.surf.w, ui.surf.h), &c))
+        ui.dirty = gfx_rect_union(ui.dirty, c);
+}
+
+void ui_invalidate_all(void)
+{
+    ui.dirty = gfx_r(0, 0, ui.surf.w, ui.surf.h);
+}
+
+void ui_present(void)
+{
+    struct gz_msg m, r;
+
+    if (gfx_rect_empty(ui.dirty))
+        return;
+    memset(&m, 0, sizeof(m));
+    m.w[0] = SB_PRESENT;
+    m.w[1] = (uint32_t)ui.dirty.x;
+    m.w[2] = (uint32_t)ui.dirty.y;
+    m.w[3] = (uint32_t)ui.dirty.w;
+    m.w[4] = (uint32_t)ui.dirty.h;
+    gz_send(ui.sb_port, &m, &r);
+    ui.dirty = gfx_r(0, 0, 0, 0);
+}
+
+int ui_ease_out(uint32_t t, uint32_t dur)
+{
+    if (t >= dur)
+        return 1024;
+    int x = (int)(t * 1024 / dur), inv = 1024 - x;
+    return 1024 - inv * inv / 1024 * inv / 1024;
+}

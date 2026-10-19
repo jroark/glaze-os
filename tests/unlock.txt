@@ -1,0 +1,2 @@
+# Unlock: drag the knob across the track, then wait on the home screen.
+3000 drag 40 280 235 280 500

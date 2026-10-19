@@ -1,0 +1,8 @@
+-xc
+-std=gnu11
+-ffreestanding
+--target=mipsel-unknown-none-elf
+-Ilib/include
+-Ikernel
+-DGLAZE_BUILD="dev"
+-Ilib/libc/include
