@@ -20,7 +20,8 @@
  * requests carry the sender's pid in w3 and are accepted only from the
  * current app; their text travels in sb_shared.req.
  *
- * Other processes (servers) post for an app named by its romfs path through
+ * Other processes (servers) post for an app named by its romfs path (an
+ * installed app's bundle folder, glaze/pkg.h) through
  * the *_FOR requests, after SB_CLIENT_OPEN hands them a request page of their
  * own (client in lib/libc/notify.c). The kernel does not identify senders,
  * so these are not authenticated: any process may badge or notify any app.
@@ -60,7 +61,7 @@ enum {
 
 /* Text of a notification request; path is used only by the *_FOR requests. */
 struct sb_note_req {
-    char path[48];                  /* romfs binary, "bin/clock" */
+    char path[48];                  /* "bin/clock", or "/Applications/hello.app" */
     char title[32];
     char body[96];
 };
@@ -72,6 +73,7 @@ struct sb_shared {
     uint32_t surface_offset;        /* bytes from the start of the shm */
     uint32_t stride;                /* pixels */
     struct sb_note_req req;         /* written by the app before a request */
+    char bundle[48];                /* an installed app's bundle folder, else "" */
 };
 
 /* App-level events beyond the kernel's input codes. */

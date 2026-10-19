@@ -2,6 +2,7 @@
 
 #include <glaze/sys.h>
 #include <glaze/ui.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -224,8 +225,15 @@ void ui_draw_alert(gfx_surface *s, const char *title, const char *msg, const cha
     gfx_round_rect_vgradient(s, box, 9, 0x2F4A7D, 0x0E2550, 235);
     gfx_round_rect(s, gfx_r(box.x, box.y, box.w, 40), 9, 0xFFFFFF, 30);
     gfx_text_center(s, box.x, box.y + 10, box.w, tf, title, 0xFFFFFF, 255);
-    if (msg)
-        gfx_text_center(s, box.x, box.y + 34, box.w, mf, msg, 0xFFFFFF, 255);
+    /* Up to two lines, split at a newline. */
+    for (int y = box.y + 34; msg && *msg && y < box.y + 34 + 2 * mf->line_height; y += mf->line_height) {
+        const char *nl = strchr(msg, '\n');
+        char line[96];
+        size_t n = nl ? (size_t)(nl - msg) : strlen(msg);
+        snprintf(line, sizeof(line), "%.*s", (int)n, msg);
+        gfx_text_center(s, box.x, y, box.w, mf, line, 0xFFFFFF, 255);
+        msg = nl ? nl + 1 : NULL;
+    }
     int bw = b2 ? (box.w - 30) / 2 : box.w - 20;
     gfx_rect a = gfx_r(box.x + 10, box.y + box.h - 42, bw, 30);
     gfx_rect b = gfx_r(a.x + bw + 10, a.y, bw, 30);

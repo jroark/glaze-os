@@ -143,7 +143,8 @@ int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
 
 /* ---- alert -------------------------------------------------------------- */
 
-/* Draws a modal alert over the whole surface; returns button rects. */
+/* Draws a modal alert over the whole surface; returns button rects. The
+ * message may have two lines, split by a newline. pressed: 0 or 1, or -1. */
 void ui_draw_alert(gfx_surface *s, const char *title, const char *msg, const char *b1, const char *b2,
                    gfx_rect *r1, gfx_rect *r2, int pressed);
 
