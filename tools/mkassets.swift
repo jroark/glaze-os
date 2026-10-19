@@ -365,6 +365,36 @@ func makeIcons() {
         ctx.restoreGState()
     }
 
+    icon("web") { ctx in
+        vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 44), 0xF4F6F8, 0xB9C2CC)
+        let c = CGPoint(x: 22, y: 22)
+        let disc = CGRect(x: 6, y: 6, width: 32, height: 32)
+        fill(ctx, CGPath(ellipseIn: disc.offsetBy(dx: 0, dy: 1), transform: nil), col(0x1E2328, 0.3))
+        ctx.saveGState()
+        ctx.addEllipse(in: disc)
+        ctx.clip()
+        gradient(ctx, [(0x5CC0F8, 1, 0), (0x0F5FC9, 1, 1)], from: CGPoint(x: 0, y: 6), to: CGPoint(x: 0, y: 38))
+        ctx.restoreGState()
+        ctx.setStrokeColor(col(0xFFFFFF))
+        ctx.setLineWidth(1.2)
+        ctx.strokeEllipse(in: disc.insetBy(dx: 2.5, dy: 2.5))
+        for i in 0..<16 {
+            let a = CGFloat(i) / 16 * 2 * .pi
+            let r0: CGFloat = i % 4 == 0 ? 9.5 : 11
+            ctx.setLineWidth(i % 4 == 0 ? 1.2 : 0.7)
+            ctx.move(to: CGPoint(x: c.x + sin(a) * r0, y: c.y - cos(a) * r0))
+            ctx.addLine(to: CGPoint(x: c.x + sin(a) * 12.5, y: c.y - cos(a) * 12.5))
+            ctx.strokePath()
+        }
+        // The needle points north-east: red tip, white tail.
+        let tip = CGPoint(x: c.x + 9.5, y: c.y - 9.5), tail = CGPoint(x: c.x - 9.5, y: c.y + 9.5)
+        let side1 = CGPoint(x: c.x - 2.2, y: c.y - 2.2), side2 = CGPoint(x: c.x + 2.2, y: c.y + 2.2)
+        let red = CGMutablePath(); red.addLines(between: [tip, side1, side2]); red.closeSubpath()
+        let white = CGMutablePath(); white.addLines(between: [tail, side1, side2]); white.closeSubpath()
+        fill(ctx, red, col(0xE8302A))
+        fill(ctx, white, col(0xFFFFFF))
+        fill(ctx, CGPath(ellipseIn: CGRect(x: c.x - 1.3, y: c.y - 1.3, width: 2.6, height: 2.6), transform: nil), col(0x2A2A2A))
+    }
     icon("calendar") { ctx in
         vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 44), 0xFFFFFF, 0xDCDCDC)
         vgrad(ctx, CGRect(x: 0, y: 0, width: 44, height: 13), 0xF0544A, 0xB51D15)

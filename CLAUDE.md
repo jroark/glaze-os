@@ -22,10 +22,11 @@ There is no linter; the build uses `-Wall -Wextra` and should stay warning-free.
 
 ```sh
 be300 --nand out/glaze.bin --rtc-host-time > stdout.log 2> stderr.log
+be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet card
 ```
 
 - The emulator writes NAND back into the image, so boot a copy when you need a clean flash. Kernel and `printf` output goes to the emulator's stdout. A screenshot (`screenshot_*.bmp`) is saved on orderly shutdown, including SIGTERM from `timeout`. With no display, `SDL_VIDEODRIVER=dummy` runs it headless and still saves the screenshot.
-- **ktest** (`apps/ktest`): build with `INIT=bin/ktest`, boot, and grep stdout for `ktest: FAIL` / `ktest: ALL PASS`. It covers IPC, shm, sleep, faults, the KV store and the file server.
+- **ktest** (`apps/ktest`): build with `INIT=bin/ktest`, boot, and grep stdout for `ktest: FAIL` / `ktest: ALL PASS`. It covers IPC, shm, sleep, faults, the KV store and the file server, and with `--ne2000` the network: DHCP, ping, DNS through the NAT, and TCP/UDP over lwIP's loopback. Boot it both with and without `--ne2000`; without a card the network cases print `SKIP`. It prints `INFO` for an internet fetch it can't require.
 - **Scripted UI tests**: `tests/*.txt` replay timed events (`<ms> tap x y`, `drag ...`, `key ok|esc|...|home`) from inside the kernel, in screen coordinates. `tests/run.sh tests/t_x.txt` builds, boots and converts the final screenshot, but it uses the macOS tools `gtimeout` and `sips`. Scripted events bypass the touch panel and its interrupts.
 - **Real touch path**: `tests/touch.sh tests/touch_unlock.act` drives the emulator window with xdotool on an X display (`Xvfb :99 &`, then `DISPLAY=:99`). Action coordinates are window/screen pixels; app surfaces start 16 px lower, under the status bar.
 - **Flash stack**: `host/fstest [seed [wear|flips|bad|cuts|format]]` runs `servers/fs/ftl.c` plus littlefs and Dhara on a RAM NAND model with bit flips, failing blocks and power cuts. A full run takes several minutes; pass a phase name to run one.
@@ -48,8 +49,8 @@ be300 --nand out/glaze.bin --rtc-host-time > stdout.log 2> stderr.log
 - Two-level page tables hold PTEs in VR41xx EntryLo format (`mips.h`). The VR41xx TLB layout differs from standard R4000.
 - IPC is synchronous send/recv/reply on named ports with 64-byte messages (`struct gz_msg`), plus per-port notification bits. Bulk data goes through shared memory (`SYS_SHM_*`).
 - Syscall numbers and the ABI are in `lib/include/glaze/abi.h` (shared with userspace); user wrappers are in `glaze/sys.h`.
-- Device access is gated by process flags. `PROC_PRIVILEGED` (framebuffer, input) can be passed down by a privileged spawner. `PROC_FLASH` (raw NAND) is granted only by the kernel, to `bin/fs`; `sys_spawn` masks other flags.
-- The kernel spawns `bin/fs` and then `INIT` (default `bin/springboard`) at boot.
+- Device access is gated by process flags. `PROC_PRIVILEGED` (framebuffer, input) can be passed down by a privileged spawner. `PROC_FLASH` (raw NAND) and `PROC_NET` (Ethernet frames) are granted only by the kernel, to `bin/fs` and `bin/net`; `sys_spawn` masks other flags.
+- The kernel spawns `bin/fs`, `bin/net` and then `INIT` (default `bin/springboard`) at boot.
 
 **Input.** Touch comes from the VRC4173 PIU, through GIRQ0 to GIU line 0 to IP2 (`kernel/drivers/irq.c`, `input.c`); buttons are polled and also arrive on GIRQ0. Events go into a kernel ring that only the bound compositor drains. SpringBoard forwards events to the foreground app through the shared ring in `struct sb_shared`. `ui_next_event` coalesces consecutive moves.
 
@@ -58,6 +59,12 @@ be300 --nand out/glaze.bin --rtc-host-time > stdout.log 2> stderr.log
 - The app draws into the surface and calls `ui_present()`, which blocks until the dirty rectangle is on screen.
 - The Home button kills the app, so apps must save state eagerly (Notes debounces its saves).
 - The home-screen app list is the `sb_apps[]` table in `servers/springboard/draw.c`; icons are `assets/gen/icon_*.gzi`.
+
+**Networking** (`kernel/drivers/ne2000.c`, `servers/net`, `glaze/net.h`, client in `lib/libc/net.c`):
+- The NE2000 sits in the PCMCIA card I/O window at 0x0A00C300 once bit 2 of the bridge register 0x0A00A01C is set; its interrupt is GIRQ0 bit 0, which also carries CF state changes. The driver queues received frames in the kernel and notifies the port bound with `SYS_NET_BIND` (`GZ_NOTIFY_NET`); the timer tick polls it too.
+- The server runs lwIP (vendored unmodified in `third_party/lwip`, built into `libnetstack.a`) with `NO_SYS`, from one loop that handles requests, frames and lwIP timers. Its options are in `servers/net/lwipopts.h`.
+- Sessions mirror the file server's (8 KiB shared buffer). Calls that wait (connect, accept, recv, resolve, ping) get deferred replies: the server keeps the sender's token and answers from an lwIP callback or at the deadline.
+- lwIP won't route 127.0.0.0/8 out of the Ethernet interface, so the guest can't reach the host's loopback through the NAT; use the host's own address.
 
 **UI libraries.** `libgfx` (`lib/gfx`) is a software RGB565 renderer for GZI images and GZF fonts; the formats are described in `lib/include/glaze/gfx.h`. `libui` (`lib/ui`) provides the nav bar, bar buttons, grouped cells, alerts, the keyboard, inertial scroll views and push/pop transitions. Apps follow the Settings/Notes pattern: draw the whole view, keep hit rects, `redraw()` after events, and use `ui_transition(draw_fn, forward)` for navigation. `host/` builds `libgfx` natively to render SpringBoard previews.
 
@@ -73,3 +80,4 @@ be300 --nand out/glaze.bin --rtc-host-time > stdout.log 2> stderr.log
 Register addresses and bit meanings follow the VR4131 and VRC4173 user's manuals and the be300 emulator's models (the `be300` and `mipsel-cross-image` repos hold the manuals, hardware dumps and the Linux port). Cite the manual section in comments when touching hardware code. Some things are known not to match real hardware yet:
 - **D-cache colouring:** the virtually indexed D-cache can give a page's kernel and user mappings different cache colours. The emulator doesn't model cache contents (TODO in `kernel/mm.c`).
 - **Factory bad-block marks:** these sit in the spare area and are never read.
+- **PCMCIA card setup:** the NE2000 driver assumes the card already decodes I/O at port 0x300, as the emulator's does. A real card needs its CIS read and its configuration option register written through attribute memory first.

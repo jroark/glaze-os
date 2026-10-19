@@ -121,6 +121,7 @@ struct proc {
 
 #define PROC_PRIVILEGED     0x1     /* may map the framebuffer, bind input */
 #define PROC_FLASH          0x2     /* raw NAND (kernel-granted, file server) */
+#define PROC_NET            0x4     /* Ethernet frames (kernel-granted, net server) */
 
 extern struct thread *cur;
 extern uint32_t cur_kstack_top;

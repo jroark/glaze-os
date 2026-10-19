@@ -11,14 +11,15 @@ boot ROM from NAND.
 | --- | --- |
 | `boot/` | Stage-1 SPL loaded by the boot ROM; it streams the kernel from NAND |
 | `kernel/` | Exceptions, TLB/page tables, scheduler, IPC, shared memory, ELF loader, romfs, syscalls |
-| `kernel/drivers/` | ICU/GIU interrupt cascade, PIU touch, buttons, RTC, NAND, key/value store, raw flash for the file server |
+| `kernel/drivers/` | ICU/GIU interrupt cascade, PIU touch, buttons, RTC, NAND, key/value store, raw flash for the file server, NE2000 Ethernet |
 | `lib/` | Minimal libc, `libgfx` (RGB565 software renderer), `libui` (widgets, keyboard, transitions) |
 | `servers/springboard/` | Compositor, lock screen, home screen, app launching |
 | `servers/fs/` | File server: littlefs on Dhara on raw NAND, with ECC and bad-block handling (see below) |
+| `servers/net/` | Network server: lwIP (TCP, UDP, DHCP, DNS, ICMP) over the NE2000 (see below) |
 | `apps/` | Built-in apps, plus `ktest` (kernel self-tests) |
 | `assets/` | Fonts (Bitstream Vera, see `assets/fonts/VeraCopyright.txt`) and generated art |
 | `host/` | Native libgfx build that renders previews of SpringBoard; `fstest`, the flash stack under fault injection |
-| `third_party/` | littlefs and Dhara, unmodified (see `third_party/README.md`) |
+| `third_party/` | littlefs, Dhara and lwIP, unmodified (see `third_party/README.md`) |
 | `tools/` | NAND image packer, romfs builder, Swift asset generator |
 
 All artwork is original. The device has no radios, so the UI doesn't show
@@ -46,7 +47,8 @@ be300 --nand out/glaze.bin --rtc-host-time
 ```
 
 The emulator writes NAND back to the image, so work on a copy if you want a
-clean store each run.
+clean store each run. Add `--ne2000` to insert the emulated PCMCIA Ethernet
+card (see Networking).
 
 For unattended UI tests, build with `INPUT_SCRIPT=tests/calc.txt`. The kernel
 then replays the timed touch and key events in that file (see
@@ -103,3 +105,26 @@ make -C host fstest && host/fstest 1
 
 Files (`apps/files`) browses the volume. It opens text files and pictures,
 and its Edit mode makes, renames and deletes folders and files.
+
+## Networking
+
+With an NE2000 PCMCIA card (`--ne2000` on the emulator), Glaze gets an
+address by DHCP and can reach the network. The kernel driver
+(`kernel/drivers/ne2000.c`) only moves Ethernet frames, and only for the
+network server in `servers/net`, which runs
+[lwIP](https://savannah.nongnu.org/projects/lwip/). If DHCP doesn't answer
+within ten seconds, it falls back to 10.0.0.1/8 with 10.0.0.254 as router
+and DNS server, the addresses of the emulator's NAT gateway.
+
+Apps use `lib/include/glaze/net.h`: `net_resolve`, `net_socket`,
+`net_connect`, `net_send`, `net_recv`, `net_bind`/`net_listen`/`net_accept`,
+`net_sendto`/`net_recvfrom` and `net_ping`. Calls that wait take a timeout.
+
+- **Settings > Network** shows the card, the address, router and DNS server,
+  and pings the router.
+- **Web** (`apps/web`) fetches a page over HTTP/1.0 and shows its text. There
+  is no TLS, so https:// addresses are refused.
+
+The emulator's NAT resolves names and opens TCP connections on the host, so
+the guest reaches whatever the host can. Without a card, the network server
+reports "No Card" and calls fail with `GZ_ENETDOWN`.

@@ -1,16 +1,18 @@
-/* Settings: wallpaper, date & time, about. */
+/* Settings: network, wallpaper, date & time, about. */
 
+#include <glaze/net.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
 #include <string.h>
 
-enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT };
+enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
     R_TZ_DOWN, R_TZ_UP, R_FIELD_DOWN, R_FIELD_UP = R_FIELD_DOWN + 8,
     R_WALL0 = R_FIELD_UP + 8, R_PREV_CANCEL = R_WALL0 + 8, R_PREV_SET, R_BACK,
+    R_NETWORK, R_PING,
 };
 
 struct hit {
@@ -23,6 +25,7 @@ static struct hit hits[40];
 static int nhits;
 static int pressed = R_NONE;
 static int preview_wall;
+static char ping_result[24];
 
 static const char *const wall_names[] = { "wall_aqua.gzi", "wall_dusk.gzi", "wall_meadow.gzi" };
 static gfx_image walls[3];
@@ -119,12 +122,27 @@ static void section_gap(void)
 
 /* ---- views -------------------------------------------------------------- */
 
+static const char *net_state_name(uint32_t state)
+{
+    switch (state) {
+    case NET_CONFIGURING:   return "Connecting" GFX_CH_ELLIPSIS;
+    case NET_UP:            return "Connected";
+    case NET_UP_STATIC:     return "Connected (static)";
+    default:                return "No Card";
+    }
+}
+
 static void draw_root(gfx_surface *s)
 {
     nhits = 0;
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
     ui_draw_navbar(s, "Settings", NULL, NULL, 0);
     section_y = UI_NAV_H + 12;
+    struct net_status st;
+    if (net_status(&st) < 0)
+        st.state = NET_NO_CARD;
+    cell(s, 0, "Network", net_state_name(st.state), true, R_NETWORK);
+    section_gap();
     cell(s, 1, "Wallpaper", NULL, true, R_WALLPAPER);
     cell(s, 3, "Date & Time", NULL, true, R_DATETIME);
     section_gap();
@@ -230,6 +248,38 @@ static void draw_about(gfx_surface *s)
     cell(s, 3, "Uptime", up, false, 0);
 }
 
+static void draw_network(gfx_surface *s)
+{
+    struct net_status st;
+    char mac[20], addr[16], mask[16], gw[16], dns[16];
+
+    if (net_status(&st) < 0)
+        memset(&st, 0, sizeof(st));
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Network", "Settings", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    if (st.state == NET_NO_CARD) {
+        cell(s, 0, "Status", "No Card", false, 0);
+        gfx_text_center(s, 0, section_y + 10, UI_W, ui_font(FONT_R12),
+                        "Insert an NE2000 Ethernet card.", 0x4C566C, 255);
+        return;
+    }
+    snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+             st.mac[0], st.mac[1], st.mac[2], st.mac[3], st.mac[4], st.mac[5]);
+    cell(s, 1, "Status", net_state_name(st.state), false, 0);
+    cell(s, 3, "MAC", mac, false, 0);
+    section_gap();
+    bool up = st.state == NET_UP || st.state == NET_UP_STATIC;
+    cell(s, 1, "IP Address", up ? net_ntoa(st.addr, addr) : "", false, 0);
+    cell(s, 2, "Subnet Mask", up ? net_ntoa(st.mask, mask) : "", false, 0);
+    cell(s, 2, "Router", up ? net_ntoa(st.gateway, gw) : "", false, 0);
+    cell(s, 3, "DNS", up ? net_ntoa(st.dns, dns) : "", false, 0);
+    section_gap();
+    cell(s, 0, "Ping Router", ping_result, up, up ? R_PING : 0);
+}
+
 static void draw_view(gfx_surface *s, enum view v)
 {
     switch (v) {
@@ -238,6 +288,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_PREVIEW: draw_preview(s); break;
     case V_DATETIME: draw_datetime(s); break;
     case V_ABOUT: draw_about(s); break;
+    case V_NETWORK: draw_network(s); break;
     }
 }
 
@@ -308,6 +359,21 @@ static void activate(int id)
     case R_WALLPAPER: go(V_WALLPAPER, true); return;
     case R_DATETIME: go(V_DATETIME, true); return;
     case R_ABOUT: go(V_ABOUT, true); return;
+    case R_NETWORK:
+        ping_result[0] = 0;
+        go(V_NETWORK, true);
+        return;
+    case R_PING: {
+        struct net_status st;
+        strcpy(ping_result, "Pinging" GFX_CH_ELLIPSIS);
+        redraw();
+        int ms = net_status(&st) < 0 ? GZ_ENETDOWN : net_ping(st.gateway, 2000);
+        if (ms >= 0)
+            snprintf(ping_result, sizeof(ping_result), "%d ms", ms);
+        else
+            strcpy(ping_result, ms == GZ_ETIMEDOUT ? "No reply" : "Failed");
+        break;
+    }
     case R_PREV_CANCEL:
         go(V_WALLPAPER, false);
         return;
@@ -350,7 +416,7 @@ int main(void)
 
     for (;;) {
         struct gz_input_event ev;
-        int timeout = view == V_ABOUT || view == V_DATETIME ? 1000 : -1;
+        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK ? 1000 : -1;
         if (!ui_next_event(&ev, timeout)) {
             redraw();               /* live uptime / clock */
             continue;

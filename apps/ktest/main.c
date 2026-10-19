@@ -1,7 +1,8 @@
 /* Kernel self-test: IPC round trips, notifications, sleep, shm, malloc, faults,
- * the key/value store and the file server. */
+ * the key/value store, the file server and, with an NE2000, the network. */
 
 #include <glaze/fs.h>
+#include <glaze/net.h>
 #include <glaze/sys.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +76,124 @@ static void test_fs(void)
     uint32_t t2 = gz_time_ms();
     fs_remove("/ktest.bin");
     printf("ktest: fs wrote 20000 bytes in %u ms, read in %u ms\n", t1 - t0, t2 - t1);
+}
+
+static char *first_line(char *s)
+{
+    s[strcspn(s, "\r\n")] = 0;
+    return s;
+}
+
+static int http_get(uint32_t addr, uint16_t port, const char *host, char *out, uint32_t max)
+{
+    char req[128];
+    int s = net_socket(NET_TCP), rv, n = 0;
+
+    if (s < 0)
+        return s;
+    rv = net_connect(s, addr, port, 3000);
+    if (rv == 0) {
+        snprintf(req, sizeof(req), "GET / HTTP/1.0\r\nHost: %s\r\n\r\n", host);
+        rv = net_send(s, req, (uint32_t)strlen(req));
+    }
+    while (rv >= 0 && (uint32_t)n < max - 1) {
+        rv = net_recv(s, out + n, max - 1 - (uint32_t)n, 5000);
+        if (rv <= 0)
+            break;
+        n += rv;
+    }
+    out[n] = 0;
+    net_close(s);
+    return rv < 0 ? rv : n;
+}
+
+static void test_net(void)
+{
+    static uint8_t frame[64], data[20000], back[20000];
+    static char page[4096];
+    struct net_status st;
+    char a[16];
+
+    CHECK(gz_net_send(frame, sizeof(frame)) == GZ_EPERM && gz_net_recv(frame, sizeof(frame)) == GZ_EPERM,
+          "net syscalls denied to apps");
+    CHECK(net_status(&st) == 0, "net status");
+    if (st.state == NET_NO_CARD) {
+        printf("ktest: SKIP network (no NE2000; boot with --ne2000)\n");
+        CHECK(net_socket(NET_TCP) == GZ_ENETDOWN, "net down without a card");
+        return;
+    }
+    CHECK(net_wait_up(15000) == 0 && net_status(&st) == 0 && st.addr, "net address");
+    printf("ktest: net %s state %u\n", net_ntoa(st.addr, a), st.state);
+
+    int rtt = net_ping(st.gateway, 3000);
+    CHECK(rtt >= 0, "net ping router");
+    CHECK(net_ping(st.addr, 3000) >= 0, "net ping self");
+
+    uint32_t ip = 0;
+    CHECK(net_resolve("localhost", &ip, 5000) == 0 && ip == NET_IP(127, 0, 0, 1), "net resolve via router");
+    CHECK(net_resolve("10.1.2.3", &ip, 1000) == 0 && ip == NET_IP(10, 1, 2, 3), "net resolve literal");
+    CHECK(net_aton("192.168.1.20", &ip) == 0 && ip == NET_IP(192, 168, 1, 20) &&
+          net_aton("1.2.3", &ip) == GZ_EINVAL && net_aton("1.2.3.256", &ip) == GZ_EINVAL, "net aton");
+
+    /* TCP to ourselves: the listener queues the connection, so one thread
+     * can connect first and accept afterwards. */
+    int l = net_socket(NET_TCP);
+    CHECK(l >= 0 && net_bind(l, 7000) == 7000 && net_listen(l) == 0, "tcp listen");
+    int c = net_socket(NET_TCP);
+    CHECK(net_connect(c, st.addr, 7000, 3000) == 0, "tcp connect");
+    uint32_t peer = 0;
+    uint16_t peer_port = 0;
+    int srv = net_accept(l, &peer, &peer_port, 1000);
+    CHECK(srv >= 0 && peer == st.addr && peer_port, "tcp accept");
+    for (uint32_t i = 0; i < sizeof(data); i++)
+        data[i] = (uint8_t)(i * 7 + (i >> 8));
+    bool ok = true;
+    uint32_t got = 0, sent = 0;
+    while (ok && got < sizeof(back)) {
+        /* Send in slices so the receiver drains the window in between. */
+        if (sent < sizeof(data)) {
+            uint32_t n = MIN(sizeof(data) - sent, 3000u);
+            ok = net_send(c, data + sent, n) == (int)n;
+            sent += n;
+        }
+        int rv = net_recv(srv, back + got, sizeof(back) - got, 2000);
+        ok = ok && rv > 0;
+        got += rv > 0 ? (uint32_t)rv : 0;
+    }
+    CHECK(ok && got == sizeof(data) && !memcmp(data, back, sizeof(data)), "tcp 20000 bytes");
+    uint32_t t1 = gz_time_ms();
+    int rv = net_recv(srv, back, 16, 100);
+    uint32_t dt = gz_time_ms() - t1;
+    CHECK(rv == GZ_ETIMEDOUT && dt >= 100 && dt < 400, "tcp recv timeout");
+    net_close(c);
+    CHECK(net_recv(srv, back, 16, 2000) == 0, "tcp peer close");
+    net_close(srv);
+    CHECK(net_accept(l, NULL, NULL, 0) == GZ_ETIMEDOUT, "tcp accept timeout");
+    c = net_socket(NET_TCP);
+    CHECK(net_connect(c, st.addr, 7001, 3000) == GZ_ECONNREFUSED, "tcp connect refused");
+    net_close(c);
+    net_close(l);
+
+    /* UDP to ourselves. */
+    int u1 = net_socket(NET_UDP), u2 = net_socket(NET_UDP);
+    CHECK(u1 >= 0 && u2 >= 0 && net_bind(u1, 7002) == 7002, "udp bind");
+    CHECK(net_sendto(u2, "hello", 5, st.addr, 7002) == 5, "udp sendto");
+    char dg[16] = { 0 };
+    rv = net_recvfrom(u1, dg, sizeof(dg), &peer, &peer_port, 1000);
+    CHECK(rv == 5 && !memcmp(dg, "hello", 5) && peer == st.addr, "udp recvfrom");
+    CHECK(net_recvfrom(u1, dg, sizeof(dg), NULL, NULL, 50) == GZ_ETIMEDOUT, "udp recv timeout");
+    net_close(u1);
+    net_close(u2);
+
+    /* An HTTP/1.0 GET through the router; the wider internet may not be
+     * reachable from where the emulator runs. */
+    if (net_resolve("example.com", &ip, 5000) == 0) {
+        rv = http_get(ip, 80, "example.com", page, sizeof(page));
+        printf("ktest: INFO example.com %s: %s\n", net_ntoa(ip, a),
+               rv > 0 ? first_line(page) : net_strerror(rv));
+    } else {
+        printf("ktest: INFO no internet DNS\n");
+    }
 }
 
 int main(void)
@@ -184,6 +303,7 @@ int main(void)
     CHECK(gz_kv_get("ktest.boots", &boots2, sizeof(boots2)) == 4 && boots2 == boots, "kv counter after compaction");
 
     test_fs();
+    test_net();
 
     struct gz_sysinfo si;
     gz_sysinfo(&si);

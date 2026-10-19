@@ -75,4 +75,5 @@ void timer_irq(void)
     write_c0_compare(next_compare);     /* also acknowledges IP7 */
     sched_timer_tick(time_us());
     input_poll();
+    ne2000_irq();
 }
