@@ -11,6 +11,10 @@ FS := ../servers/fs/ftl.c ../third_party/littlefs/lfs.c ../third_party/littlefs/
 FS_CFLAGS := -std=gnu11 -O2 -g -Wall -I../servers/fs -I../third_party/littlefs -I../third_party/dhara \
     -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR
 
+# The file server's CompactFlash volume (FatFs), against an image file.
+FAT := ../servers/fs/card.c ../third_party/fatfs/ff.c ../third_party/fatfs/ffunicode.c
+FAT_CFLAGS := $(CFLAGS) -I../servers/fs -I../third_party/fatfs -fsanitize=address,undefined
+
 # The browser engine, rendering pages to BMPs.
 WEB := $(filter-out ../apps/browser/main.c,$(wildcard ../apps/browser/*.c))
 WEB_CFLAGS := $(CFLAGS) -I../third_party/stb -fsanitize=address,undefined
@@ -21,7 +25,7 @@ MEDIA := $(wildcard ../lib/media/*.c ../third_party/helix-mp3/*.c ../third_party
 MEDIA_CFLAGS := $(CFLAGS) -Wno-unused-but-set-variable -I../third_party/helix-mp3/pub -I../third_party/stb \
     -fsanitize=address,undefined -fno-sanitize=shift
 
-all: sheet preview fstest mkfsimg browse mediatest
+all: sheet preview fstest fattest mkfsimg browse mediatest
 
 sheet: sheet.c hostres.c $(GFX)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -36,6 +40,19 @@ shots: preview
 fstest: fstest.c $(FS)
 	$(CC) $(FS_CFLAGS) -o $@ $^
 
+fattest: fattest.c $(FAT) ../servers/fs/card.h
+	$(CC) $(FAT_CFLAGS) -o $@ fattest.c $(FAT)
+
+# fattest on fresh FAT12, FAT16 and FAT32 images, each checked with fsck.fat
+# afterwards (needs dosfstools and mtools).
+fat-test: fattest
+	set -e; for f in "12 4" "16 16" "32 64"; do set -- $$f; \
+	    ../tools/mkcfimg.sh fat$$1.img $$2 $$1 ../userdata/Documents >/dev/null; \
+	    ./fattest fat$$1.img >fat$$1.log || { grep FAIL fat$$1.log; exit 1; }; \
+	    fsck.fat -n fat$$1.img >/dev/null; echo "FAT$$1: fattest and fsck.fat pass"; \
+	    rm -f fat$$1.img fat$$1.log; done
+.PHONY: fat-test
+
 # The top-level Makefile builds its own copy into out/host for the image.
 mkfsimg: mkfsimg.c $(FS)
 	$(CC) $(FS_CFLAGS) -o $@ $^
@@ -47,7 +64,7 @@ mediatest: mediatest.c $(MEDIA)
 	$(CC) $(MEDIA_CFLAGS) -o $@ $^ -lm
 
 clean:
-	rm -f sheet preview fstest mkfsimg browse mediatest stowaway-test elf-test *.bmp *.png
+	rm -f sheet preview fstest fattest mkfsimg browse mediatest stowaway-test elf-test *.bmp *.png
 
 # Byte decoder and shared text editing, with ASan/UBSan.
 stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c

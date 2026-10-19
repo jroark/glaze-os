@@ -27,6 +27,7 @@ void kmain(void)
     rtc_init();
     input_init();
     ne2000_init();
+    cf_init();
     audio_init();
     ipc_init();
     sched_init();

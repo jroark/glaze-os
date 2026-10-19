@@ -74,6 +74,12 @@ static inline int gz_flash_read(uint32_t page, void *buf) { return GZ_SC2(SYS_FL
 static inline int gz_flash_prog(uint32_t page, const void *buf) { return GZ_SC2(SYS_FLASH_PROG, page, buf); }
 static inline int gz_flash_erase(uint32_t block) { return GZ_SC1(SYS_FLASH_ERASE, block); }
 
+/* CompactFlash, file server only. lba and count are in GZ_CF_SECTOR units,
+ * at most GZ_CF_IO_MAX bytes per call. */
+static inline int gz_cf_info(struct gz_cf_info *info) { return GZ_SC1(SYS_CF_INFO, info); }
+static inline int gz_cf_read(uint32_t lba, uint32_t count, void *buf) { return GZ_SC3(SYS_CF_READ, lba, count, buf); }
+static inline int gz_cf_write(uint32_t lba, uint32_t count, const void *buf) { return GZ_SC3(SYS_CF_WRITE, lba, count, buf); }
+
 /* Network server only (see servers/net). */
 static inline int gz_net_info(struct gz_netif_info *info) { return GZ_SC1(SYS_NET_INFO, info); }
 static inline int gz_net_bind(int port) { return GZ_SC1(SYS_NET_BIND, port); }

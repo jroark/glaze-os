@@ -57,6 +57,9 @@ enum {
     SYS_AUDIO_WRITE,
     SYS_AUDIO_STOP,
     SYS_AUDIO_STATUS,
+    SYS_CF_INFO,
+    SYS_CF_READ,
+    SYS_CF_WRITE,
     SYS_COUNT
 };
 
@@ -187,6 +190,19 @@ struct gz_audio_status {
     uint32_t queued;            /* bytes waiting in the ring */
     uint32_t frames_played;     /* ring frames played since boot */
     uint32_t underruns;         /* buffers padded with silence while running */
+};
+
+/* SYS_CF_*: a CompactFlash ATA card's 512-byte sectors, for the file
+ * server (PROC_FLASH). generation changes whenever the card is inserted,
+ * removed or swapped. */
+#define GZ_CF_SECTOR    512
+#define GZ_CF_IO_MAX    4096    /* bytes per SYS_CF_READ / SYS_CF_WRITE */
+
+struct gz_cf_info {
+    uint32_t present;           /* an ATA card answered IDENTIFY */
+    uint32_t generation;
+    uint32_t sectors;
+    char model[44];
 };
 
 #define GZ_FB_WIDTH     240

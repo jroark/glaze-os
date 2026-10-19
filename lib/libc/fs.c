@@ -229,6 +229,20 @@ int fs_statfs(struct fs_info *info)
     return rv;
 }
 
+int fs_statvfs(const char *path, struct fs_info *info)
+{
+    SESSION_LOCKED();
+    int rv = connect();
+
+    if (!rv)
+        rv = put_path(path, 0);
+    if (!rv)
+        rv = call(FS_STATFS, 1, 0, 0, NULL);
+    if (rv >= 0)
+        memcpy(info, buf, sizeof(*info));
+    return rv;
+}
+
 int fs_format(void)
 {
     SESSION_LOCKED();

@@ -55,13 +55,15 @@ $(eval $(call LIB_template,c,$(LIBC_SRCS)))
 $(eval $(call LIB_template,gfx,$(LIBGFX_SRCS)))
 $(eval $(call LIB_template,ui,$(LIBUI_SRCS)))
 
-# littlefs and Dhara for the file server (third_party/README.md).
-FS_INC := -Ithird_party/littlefs -Ithird_party/dhara -DLFS_NO_DEBUG -DLFS_NO_WARN \
-    -DLFS_NO_ERROR -DLFS_NO_ASSERT
+# littlefs and Dhara for the file server's flash, FatFs for CompactFlash
+# cards (third_party/README.md).
+FS_INC := -Ithird_party/littlefs -Ithird_party/dhara -Ithird_party/fatfs -DLFS_NO_DEBUG \
+    -DLFS_NO_WARN -DLFS_NO_ERROR -DLFS_NO_ASSERT
 FSSTACK_SRCS := third_party/littlefs/lfs.c third_party/littlefs/lfs_util.c \
     third_party/dhara/dhara/map.c third_party/dhara/dhara/journal.c \
     third_party/dhara/dhara/error.c third_party/dhara/ecc/bch.c third_party/dhara/ecc/gf13.c
-FSSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(FSSTACK_SRCS))
+FATFS_SRCS := third_party/fatfs/ff.c third_party/fatfs/ffunicode.c
+FSSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(FSSTACK_SRCS) $(FATFS_SRCS))
 
 # lwIP for the network server; its port headers live in servers/net.
 NET_INC := -Ithird_party/lwip/src/include -Iservers/net

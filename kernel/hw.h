@@ -107,6 +107,18 @@
 #define NE_DATA16           REG16(NE_BASE + 0x10)
 #define NE_RESET            REG8(NE_BASE + 0x1F)
 
+/* CompactFlash ATA card in the same window, in I/O mode at the secondary
+ * IDE ports: the taskfile at ISA 0x170..0x177 and device control /
+ * alternate status at 0x376 (CF+ spec 4.1 "I/O Primary/Secondary"; be300
+ * src/devices/nand_window.c, the Linux port's pata_platform resources).
+ * The card information structure is attribute memory at 0x0A00D000, one
+ * tuple byte per even address (PC Card spec, "Attribute Memory"). */
+#define CF_ATA_BASE         0x0A00C170u
+#define CF_ATA(r)           REG8(CF_ATA_BASE + (r))
+#define CF_ATA_DATA16       REG16(CF_ATA_BASE)
+#define CF_ATA_CTL          REG8(0x0A00C376u)
+#define CF_CIS(i)           REG8(0x0A00D000u + 2 * (i))
+
 /* VRC4173 SIU UART, register stride 4 (doc: UARTs). */
 #define UART_BASE           0x0A008680u
 #define UART_THR            REG8(UART_BASE + 0 * 4)

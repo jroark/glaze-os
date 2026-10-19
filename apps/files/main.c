@@ -124,6 +124,13 @@ static void format_size(uint32_t bytes, char *buf, size_t n)
         snprintf(buf, n, "%u.%u MB", bytes / (1024 * 1024), bytes % (1024 * 1024) * 10 / (1024 * 1024));
 }
 
+/* The root's "Card" entry: a CompactFlash card's volume, which can't be
+ * renamed or deleted. */
+static bool is_card(int row)
+{
+    return !strcmp(cwd, "/") && ents[row].type == FS_DIR && !strcmp(ents[row].name, "Card");
+}
+
 static void join(char *out, const char *dir, const char *name)
 {
     snprintf(out, FS_PATH_MAX, "%s%s%s", dir, strcmp(dir, "/") ? "/" : "", name);
@@ -193,7 +200,7 @@ static void load_dir(void)
     list_err = n < 0 ? n : 0;
     nents = n < 0 ? 0 : n;
     qsort(ents, (size_t)nents, sizeof(ents[0]), ent_cmp);
-    if (fs_statfs(&info) < 0)
+    if (fs_statvfs(cwd, &info) < 0)
         memset(&info, 0, sizeof(info));
     confirm_row = -1;
     pressed_row = -1;
@@ -261,6 +268,17 @@ static void draw_folder_glyph(gfx_surface *s, int x, int y)
     gfx_round_rect_vgradient(s, gfx_r(x, y + 10, 24, 12), 2, 0xFFDB7A, 0xE9A93C, 255);
 }
 
+/* A CompactFlash card: a dark slab with a label and a row of contacts. */
+static void draw_card_glyph(gfx_surface *s, int x, int y)
+{
+    gfx_round_rect_vgradient(s, gfx_r(x + 1, y + 2, 22, 20), 2, 0x5A6270, 0x2E343D, 255);
+    gfx_fill(s, gfx_r(x + 4, y + 5, 16, 9), 0xD8DCE2);
+    gfx_fill(s, gfx_r(x + 6, y + 8, 12, 1), 0x7A8290);
+    gfx_fill(s, gfx_r(x + 6, y + 10, 8, 1), 0x7A8290);
+    for (int i = 0; i < 5; i++)
+        gfx_fill(s, gfx_r(x + 4 + i * 4, y + 18, 2, 2), 0xC9A64A);
+}
+
 static void draw_doc_glyph(gfx_surface *s, int x, int y, enum kind k)
 {
     gfx_rect page = gfx_r(x + 4, y + 1, 17, 22);
@@ -305,10 +323,13 @@ static void draw_row(gfx_surface *s, int i, int y)
     if (sel)
         gfx_vgradient(s, gfx_r(0, y, UI_W, ROW_H - 1), UI_SELECT_TOP, UI_SELECT_BOTTOM, 255);
     if (editing) {
-        draw_badge(s, MARGIN + 7, y + ROW_H / 2, confirm_row == i);
+        if (!is_card(i))
+            draw_badge(s, MARGIN + 7, y + ROW_H / 2, confirm_row == i);
         x += BADGE_W;
     }
-    if (k == K_FOLDER)
+    if (is_card(i))
+        draw_card_glyph(s, x, y + (ROW_H - 24) / 2);
+    else if (k == K_FOLDER)
         draw_folder_glyph(s, x, y + (ROW_H - 24) / 2);
     else
         draw_doc_glyph(s, x, y + (ROW_H - 24) / 2, k);
@@ -724,6 +745,8 @@ static void list_event(const struct gz_input_event *e)
     }
     if (confirm_row >= 0) {
         confirm_row = -1;       /* any other tap cancels a pending delete */
+    } else if (editing && is_card(row)) {
+        /* the card's volume stays as it is */
     } else if (editing && badge) {
         confirm_row = row;
     } else if (editing) {

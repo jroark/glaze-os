@@ -210,6 +210,9 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_AUDIO_WRITE:   rv = sys_audio_write(cur->proc, a0, a1); break;
     case SYS_AUDIO_STOP:    rv = sys_audio_stop(cur->proc, a0); break;
     case SYS_AUDIO_STATUS:  rv = sys_audio_status(cur->proc, a0); break;
+    case SYS_CF_INFO:       rv = sys_cf_info(cur->proc, a0); break;
+    case SYS_CF_READ:       rv = sys_cf_read(cur->proc, a0, a1, a2); break;
+    case SYS_CF_WRITE:      rv = sys_cf_write(cur->proc, a0, a1, a2); break;
     case SYS_THREAD_CREATE: rv = thread_spawn(a0, a1); break;
     case SYS_THREAD_EXIT:   rv = thread_exit(); break;
     case SYS_GETTID:        rv = cur->tid; break;

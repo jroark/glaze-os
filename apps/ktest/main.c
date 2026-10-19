@@ -25,7 +25,8 @@ static bool fs_raw_denied(void)
 {
     static uint8_t page[GZ_FLASH_PAGE_SIZE];
 
-    return gz_flash_read(0, page) == GZ_EPERM && gz_flash_erase(0) == GZ_EPERM;
+    return gz_flash_read(0, page) == GZ_EPERM && gz_flash_erase(0) == GZ_EPERM &&
+           gz_cf_read(0, 1, page) == GZ_EPERM;
 }
 
 #define CHECK(cond, what) do { \
@@ -242,6 +243,72 @@ static void test_fs(void)
     uint32_t t2 = gz_time_ms();
     fs_remove("/ktest.bin");
     printf("ktest: fs wrote 20000 bytes in %u ms, read in %u ms\n", t1 - t0, t2 - t1);
+}
+
+/* A CompactFlash card with a FAT volume, as /Card. Boot with --cf <image>
+ * (tools/mkcfimg.sh) to run it; ktest leaves /Card/KTEST.TXT behind so the
+ * image can be checked on the host after a clean shutdown. */
+static void test_card(void)
+{
+    static uint8_t data[20000], back[20000];
+    struct fs_dirent ents[16];
+    struct fs_stat st;
+    struct fs_info info;
+
+    if (fs_stat("/Card", &st) < 0) {
+        printf("ktest: SKIP card (no CF card; boot with --cf <image>)\n");
+        return;
+    }
+    CHECK(st.type == FS_DIR, "card stat /Card");
+    int n = fs_list("/", 0, ents, 16), found = 0;
+    for (int i = 0; i < n; i++)
+        found |= ents[i].type == FS_DIR && !strcmp(ents[i].name, "Card");
+    CHECK(found, "card listed in /");
+    CHECK(fs_statvfs("/Card", &info) == 0 && info.mounted == 0 && info.total > 0 &&
+          info.used <= info.total && info.flash_blocks == 0, "card statvfs");
+    printf("ktest: card %u KiB used of %u\n", info.used / 1024, info.total / 1024);
+
+    for (unsigned i = 0; i < sizeof(data); i++)
+        data[i] = (uint8_t)(i * 13 + i / 509);
+    fs_remove("/Card/ktest dir/Long file name.bin");
+    fs_remove("/Card/ktest dir/moved.bin");
+    fs_remove("/Card/ktest dir");
+    CHECK(fs_mkdir("/Card/ktest dir") == 0 && fs_mkdir("/Card/ktest dir") == GZ_EEXIST, "card mkdir");
+    CHECK(fs_write_file("/Card/ktest dir/Long file name.bin", data, sizeof(data)) == (int)sizeof(data) &&
+          fs_read_file("/Card/ktest dir/Long file name.bin", back, sizeof(back)) == (int)sizeof(back) &&
+          !memcmp(data, back, sizeof(data)), "card write/read 20000 bytes");
+    CHECK(fs_stat("/Card/ktest dir/Long file name.bin", &st) == 0 && st.type == FS_FILE &&
+          st.size == sizeof(data), "card stat file");
+
+    int fd = fs_open("/Card/ktest dir/Long file name.bin", FS_O_READ | FS_O_WRITE);
+    CHECK(fd >= 0 && fs_seek(fd, 10000, FS_SEEK_SET) == 10000 && fs_write(fd, "glaze", 5) == 5 &&
+          fs_seek(fd, -5, FS_SEEK_CUR) == 10000 && fs_read(fd, back, 5) == 5 && !memcmp(back, "glaze", 5) &&
+          fs_seek(fd, 0, FS_SEEK_END) == (int)sizeof(data) && fs_close(fd) == 0, "card seek/overwrite");
+    fd = fs_open("/Card/ktest dir/Long file name.bin", FS_O_WRITE | FS_O_APPEND);
+    CHECK(fd >= 0 && fs_seek(fd, 0, FS_SEEK_SET) == 0 && fs_write(fd, "end", 3) == 3 && fs_close(fd) == 0 &&
+          fs_stat("/Card/ktest dir/Long file name.bin", &st) == 0 && st.size == sizeof(data) + 3, "card append");
+    fd = fs_open("/Card/ktest dir/Long file name.bin", FS_O_WRITE | FS_O_TRUNC);
+    CHECK(fd >= 0 && fs_close(fd) == 0 && fs_stat("/Card/ktest dir/Long file name.bin", &st) == 0 &&
+          st.size == 0, "card truncate");
+
+    CHECK(fs_rename("/Card/ktest dir/Long file name.bin", "/Card/ktest dir/moved.bin") == 0 &&
+          fs_stat("/Card/ktest dir/Long file name.bin", &st) == GZ_ENOENT, "card rename");
+    CHECK(fs_rename("/Card/ktest dir/moved.bin", "/moved.bin") == GZ_EINVAL, "card no cross-volume rename");
+    CHECK(fs_remove("/Card") == GZ_EPERM && fs_mkdir("/Card") == GZ_EEXIST, "card mount point protected");
+    n = fs_list("/Card/ktest dir", 0, ents, 16);
+    CHECK(n == 1 && !strcmp(ents[0].name, "moved.bin"), "card list");
+    CHECK(fs_remove("/Card/ktest dir") == GZ_ENOTEMPTY, "card remove non-empty dir");
+    CHECK(fs_remove("/Card/ktest dir/moved.bin") == 0 && fs_remove("/Card/ktest dir") == 0 &&
+          fs_stat("/Card/ktest dir", &st) == GZ_ENOENT, "card remove");
+
+    uint32_t t0 = gz_time_ms();
+    fs_write_file("/Card/ktest.bin", data, sizeof(data));
+    uint32_t t1 = gz_time_ms();
+    fs_read_file("/Card/ktest.bin", back, sizeof(back));
+    uint32_t t2 = gz_time_ms();
+    fs_remove("/Card/ktest.bin");
+    printf("ktest: card wrote 20000 bytes in %u ms, read in %u ms\n", t1 - t0, t2 - t1);
+    CHECK(fs_write_file("/Card/KTEST.TXT", "written by ktest\n", 17) == 17, "card leave KTEST.TXT");
 }
 
 static char *first_line(char *s)
@@ -669,6 +736,7 @@ int main(void)
 
     test_threads();
     test_fs();
+    test_card();
     test_prefs();
     test_audio();
     test_net();

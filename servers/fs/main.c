@@ -1,12 +1,14 @@
 /*
  * File server: littlefs on Dhara on the flash region the kernel grants
- * (SYS_FLASH_*), served over IPC to apps (see glaze/fs.h and ftl.c).
+ * (SYS_FLASH_*), served over IPC to apps (see glaze/fs.h and ftl.c), plus
+ * a CompactFlash card's FAT volume as /Card (card.c).
  */
 
 #include <glaze/fs.h>
 #include <glaze/sys.h>
 #include <stdio.h>
 #include <string.h>
+#include "card.h"
 #include "folders.h"
 #include "ftl.h"
 
@@ -21,8 +23,12 @@ struct session {
 
 struct file {
     bool used;
+    bool card;              /* on /Card, else littlefs */
     int session;
-    lfs_file_t f;
+    union {
+        lfs_file_t f;
+        struct card_file cf;
+    };
 };
 
 static lfs_t lfs;
@@ -53,6 +59,39 @@ void ftl_log(const char *msg)
 
     snprintf(line, sizeof(line), "%s\n", msg);
     gz_log(line, (uint32_t)strlen(line));
+}
+
+/* ---- platform hooks for card.c and FatFs ---------------------------------- */
+
+int card_raw_info(struct gz_cf_info *info)
+{
+    return gz_cf_info(info);
+}
+
+int card_raw_read(uint32_t lba, uint32_t count, void *buf)
+{
+    return gz_cf_read(lba, count, buf);
+}
+
+int card_raw_write(uint32_t lba, uint32_t count, const void *buf)
+{
+    return gz_cf_write(lba, count, buf);
+}
+
+void card_log(const char *msg)
+{
+    ftl_log(msg);
+}
+
+/* FAT timestamps: local time, two-second resolution, from 1980. */
+DWORD get_fattime(void)
+{
+    struct gz_datetime t;
+
+    if (gz_rtc_get(&t) < 0 || t.year < 1980)
+        return (DWORD)(2026 - 1980) << 25 | 1u << 21 | 1u << 16;
+    return (DWORD)(t.year - 1980) << 25 | (DWORD)t.month << 21 | (DWORD)t.day << 16 |
+           (DWORD)t.hour << 11 | (DWORD)t.minute << 5 | t.second / 2u;
 }
 
 /* ---- helpers --------------------------------------------------------------- */
@@ -96,7 +135,10 @@ static void close_session_files(int sess)
 {
     for (int i = 0; i < MAX_FILES; i++) {
         if (files[i].used && files[i].session == sess) {
-            lfs_file_close(&lfs, &files[i].f);
+            if (files[i].card)
+                card_close(&files[i].cf);
+            else
+                lfs_file_close(&lfs, &files[i].f);
             files[i].used = false;
         }
     }
@@ -138,13 +180,38 @@ static int op_list(struct session *s, const char *path, uint32_t skip, struct gz
     struct lfs_info info;
     lfs_dir_t dir;
     int n = 0, rv;
+    const char *cpath = card_path(path);
+    bool root = !strcmp(path, "/") || !path[0];
 
+    if (cpath) {
+        bool more = false;
+        rv = card_list(cpath, skip, out, max, &more);
+        r->w[1] = more;
+        return rv;
+    }
+    if (mount_err)
+        return mount_err;
     rv = lfs_dir_open(&lfs, &dir, path);
     if (rv)
         return gz_err(rv);
+    /* A mounted card is the root's first entry (written only now: the path
+     * shares the buffer with the entries). */
+    if (root && !card_status()) {
+        if (skip) {
+            skip--;
+        } else {
+            memset(&out[0], 0, sizeof(out[0]));
+            out[0].type = FS_DIR;
+            strlcpy(out[0].name, CARD_NAME, sizeof(out[0].name));
+            out[0].name_len = (uint8_t)strlen(out[0].name);
+            n = 1;
+        }
+    }
     while ((rv = lfs_dir_read(&lfs, &dir, &info)) > 0) {
         if (!strcmp(info.name, ".") || !strcmp(info.name, ".."))
             continue;
+        if (root && !strcmp(info.name, CARD_NAME))
+            continue;           /* never made by this server; see op_mkdir */
         if (skip) {
             skip--;
             continue;
@@ -172,6 +239,18 @@ static int op_open(int sess, const char *path, uint32_t flags)
         ;
     if (h == MAX_FILES)
         return GZ_EFULL;
+    const char *cpath = card_path(path);
+    if (cpath) {
+        int rv = card_open(&files[h].cf, cpath, flags);
+        if (rv)
+            return rv;
+        files[h].used = true;
+        files[h].card = true;
+        files[h].session = sess;
+        return h;
+    }
+    if (mount_err)
+        return mount_err;
     if ((flags & (FS_O_READ | FS_O_WRITE)) == (FS_O_READ | FS_O_WRITE))
         lflags = LFS_O_RDWR;
     else
@@ -188,6 +267,7 @@ static int op_open(int sess, const char *path, uint32_t flags)
     if (rv)
         return gz_err(rv);
     files[h].used = true;
+    files[h].card = false;
     files[h].session = sess;
     return h;
 }
@@ -196,8 +276,18 @@ static int op_stat(struct session *s, const char *path)
 {
     struct lfs_info info;
     struct fs_stat st;
-    int rv = lfs_stat(&lfs, path, &info);
+    const char *cpath = card_path(path);
+    int rv;
 
+    if (cpath) {
+        rv = card_stat(cpath, &st);
+        if (!rv)
+            memcpy(s->buf, &st, sizeof(st));
+        return rv;
+    }
+    if (mount_err)
+        return mount_err;
+    rv = lfs_stat(&lfs, path, &info);
     if (rv)
         return gz_err(rv);
     st.type = info.type == LFS_TYPE_DIR ? FS_DIR : FS_FILE;
@@ -206,10 +296,19 @@ static int op_stat(struct session *s, const char *path)
     return 0;
 }
 
-static int op_statfs(struct session *s)
+static int op_statfs(struct session *s, uint32_t by_path)
 {
     struct ftl_stats st;
     struct fs_info info;
+    const char *path = by_path ? path_arg(s, 0) : "/";
+
+    if (!path)
+        return GZ_EINVAL;
+    if (card_path(path)) {
+        int rv = card_statfs(&info);
+        memcpy(s->buf, &info, sizeof(info));
+        return rv;
+    }
 
     ftl_get_stats(&st);
     memset(&info, 0, sizeof(info));
@@ -251,17 +350,18 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
     if (sess < 0 || sess >= MAX_SESSIONS || !sessions[sess].pid)
         return GZ_EPERM;
     struct session *s = &sessions[sess];
+    card_check();
     if (op == FS_STATFS)
-        return op_statfs(s);
+        return op_statfs(s, m->w[2]);
     if (op == FS_FORMAT)
         return op_format();
-    if (mount_err)
-        return mount_err;
 
     const char *path = path_arg(s, 0);
+    const char *cpath = path ? card_path(path) : NULL;
     struct file *f = file_arg(sess, m->w[2]);
     int rv;
 
+    /* Card files and paths go to card.c; the rest needs the flash volume. */
     switch (op) {
     case FS_STAT:
         return path ? op_stat(s, path) : GZ_EINVAL;
@@ -272,32 +372,57 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
     case FS_READ:
         if (!f)
             return GZ_EINVAL;
+        if (f->card)
+            return card_read(&f->cf, s->buf, MIN(m->w[3], FS_IO_MAX));
         rv = lfs_file_read(&lfs, &f->f, s->buf, MIN(m->w[3], FS_IO_MAX));
         return gz_err(rv);
     case FS_WRITE:
         if (!f)
             return GZ_EINVAL;
+        if (f->card)
+            return card_write(&f->cf, s->buf, MIN(m->w[3], FS_IO_MAX));
         rv = lfs_file_write(&lfs, &f->f, s->buf, MIN(m->w[3], FS_IO_MAX));
         return gz_err(rv);
     case FS_SEEK: {
         static const int whence[] = { LFS_SEEK_SET, LFS_SEEK_CUR, LFS_SEEK_END };
         if (!f || m->w[4] > FS_SEEK_END)
             return GZ_EINVAL;
+        if (f->card)
+            return card_seek(&f->cf, (int32_t)m->w[3], m->w[4]);
         return gz_err(lfs_file_seek(&lfs, &f->f, (lfs_soff_t)m->w[3], whence[m->w[4]]));
     }
     case FS_CLOSE:
         if (!f)
             return GZ_EINVAL;
-        rv = lfs_file_close(&lfs, &f->f);
+        rv = f->card ? card_close(&f->cf) : gz_err(lfs_file_close(&lfs, &f->f));
         f->used = false;
-        return gz_err(rv);
+        return rv;
     case FS_MKDIR:
-        return path ? gz_err(lfs_mkdir(&lfs, path)) : GZ_EINVAL;
     case FS_REMOVE:
-        return path ? gz_err(lfs_remove(&lfs, path)) : GZ_EINVAL;
+        if (!path)
+            return GZ_EINVAL;
+        /* /Card itself is the mount point, on the card or not. */
+        if (cpath && !cpath[0])
+            return op == FS_MKDIR ? GZ_EEXIST : GZ_EPERM;
+        if (cpath)
+            return op == FS_MKDIR ? card_mkdir(cpath) : card_remove(cpath);
+        if (mount_err)
+            return mount_err;
+        return gz_err(op == FS_MKDIR ? lfs_mkdir(&lfs, path) : lfs_remove(&lfs, path));
     case FS_RENAME: {
         const char *to = path_arg(s, FS_PATH_MAX);
-        return path && to ? gz_err(lfs_rename(&lfs, path, to)) : GZ_EINVAL;
+        if (!path || !to)
+            return GZ_EINVAL;
+        const char *cto = card_path(to);
+        if ((cpath && !cpath[0]) || (cto && !cto[0]))
+            return GZ_EPERM;
+        if (!cpath != !cto)
+            return GZ_EINVAL;   /* no moves between volumes */
+        if (cpath)
+            return card_rename(cpath, cto);
+        if (mount_err)
+            return mount_err;
+        return gz_err(lfs_rename(&lfs, path, to));
     }
     default:
         return GZ_EINVAL;
