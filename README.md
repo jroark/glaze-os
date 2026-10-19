@@ -147,3 +147,27 @@ Apps use `lib/include/glaze/net.h`: `net_resolve`, `net_socket`,
 The emulator's NAT resolves names and opens TCP connections on the host, so
 the guest reaches whatever the host can. Without a card, the network server
 reports "No Card" and calls fail with `GZ_ENETDOWN`.
+
+### Stowaway keyboard
+
+Boot with `be300 --nand out/glaze.bin --rtc-host-time --stowaway-keyboard`
+(or enable the web emulator's Stowaway option before starting Glaze).
+Glaze probes the dock once at boot. After the `FA FD` handshake, Notes,
+Files naming dialogs, and Browser addresses/form fields accept
+physical input and hide the on-screen keyboard, reclaiming its space. Tap a
+field to focus it. Without a detected dock, the existing touch keyboard remains.
+
+The initial layout is US ASCII, with Shift, Caps Lock, editing/navigation keys,
+and software key repeat. Enter submits single-line fields and inserts a newline
+in multiline editors; Tab advances between Browser text fields. Home moves the
+text cursor and does not act as the device's Rocket button. Ctrl/Alt character
+combinations and unmapped keys are ignored. Live attach/detach is not supported;
+restart to change the dock configuration. The scancode map follows the emulator's
+inferred map and still needs validation on a physical Stowaway.
+
+The companion UART is shared with the dock, so kernel logs switch to the VR4131
+DSIU after detection. Emulator stdout continues to carry those logs. The SPL's
+early companion-UART output is consumed by the dock model when enabled.
+
+Run `make -C host stowaway-test` for native decoder/editor tests with ASan/UBSan.
+See [tests/STOWAWAY.md](tests/STOWAWAY.md) for emulator regression checks.

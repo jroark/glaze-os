@@ -5,11 +5,27 @@
 
 #include <stdarg.h>
 
+static bool debug_uart;
+
+void console_use_debug_uart(void)
+{
+    /* VR4131 UM sections 18.2.2/18.2.10: DSIUTH/DSIULS at
+     * PA 0x0F000820/0x0F000825; NK OAL 0x80078308 uses this TX path.
+     * Use its independent TX path when the dock owns the companion SIU. */
+    debug_uart = true;
+}
+
 void uart_putc(char c)
 {
-    while (!(UART_LSR & UART_LSR_THRE))
-        ;
-    UART_THR = (uint8_t)c;
+    if (debug_uart) {
+        while (!(REG8(0x0F000820u + 5) & UART_LSR_THRE))
+            ;
+        REG8(0x0F000820u) = (uint8_t)c;
+    } else {
+        while (!(UART_LSR & UART_LSR_THRE))
+            ;
+        UART_THR = (uint8_t)c;
+    }
 }
 
 void kputs(const char *s)

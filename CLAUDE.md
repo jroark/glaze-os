@@ -56,7 +56,13 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 - The kernel spawns `bin/fs`, `bin/net` and then `INIT` (default `bin/springboard`) at boot.
 - Processes may have extra threads (`SYS_THREAD_CREATE`, libc `gz_thread_create`). Each gets a 64 KiB stack in a 64 KiB-aligned slot below the main stack (with an unmapped guard); libc keeps a per-thread block at the stack's base (`gz_self()`: tid, `errno`, TLS slots). The last thread to exit ends the process. Synchronization is the kernel's process-private counting semaphores (`kernel/sem.c`, `SYS_SEM_*`, with timeouts); libc's recursive `gz_mutex` sits on them, and malloc and the fs/net clients lock only once a process has a second thread.
 
-**Input.** Touch comes from the VRC4173 PIU, through GIRQ0 to GIU line 0 to IP2 (`kernel/drivers/irq.c`, `input.c`); buttons are polled and also arrive on GIRQ0. Events go into a kernel ring that only the bound compositor drains. SpringBoard forwards events to the foreground app through the shared ring in `struct sb_shared`. `ui_next_event` coalesces consecutive moves.
+**Input.** Touch comes from the VRC4173 PIU, through GIRQ0 to GIU line 0 to IP2 (`kernel/drivers/irq.c`, `input.c`); buttons are polled and also arrive on GIRQ0. Events go into a kernel ring that only the bound compositor drains. SpringBoard forwards events to the foreground app through the shared ring in `struct sb_shared`. `ui_next_event` coalesces consecutive moves. Stowaway is detected once at boot
+(`kernel/drivers/stowaway*.c`); UART RX is polled on the timer tick. `GZ_EV_TEXT`
+and keyboard key events pass through SpringBoard to the foreground app.
+`SYS_INPUT_STATUS` reports dock presence, passed in `SB_HELLO` reply word 4;
+`ui_has_hardware_keyboard()` / `ui_keyboard_height()` separate editing focus
+from on-screen keyboard layout. `make -C host stowaway-test` checks the decoder
+and shared text editor.
 
 **SpringBoard ↔ app protocol** (`glaze/sb.h`, `lib/ui/app.c`):
 - An app sends `SB_HELLO` and receives a shared-memory 240x304 surface; the top 16 rows of the screen are SpringBoard's status bar.

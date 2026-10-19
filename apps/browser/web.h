@@ -344,6 +344,7 @@ struct ctl {
     struct node **opts;
     char *value;                /* text value (arena, cap bytes) */
     int len, cap;
+    int cursor;                /* insertion position while focused */
     const char *init;           /* initial value, for reset */
     bool init_checked;
     int init_sel;

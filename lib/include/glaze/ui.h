@@ -15,6 +15,7 @@
 
 struct ui_app {
     int sb_port, port;
+    bool hardware_keyboard;
     struct sb_shared *shared;
     gfx_surface surf;
     gfx_rect dirty;
@@ -24,6 +25,13 @@ extern struct ui_app ui;
 
 /* Connects to SpringBoard and maps the app surface; exits on failure. */
 void ui_init(int status_style);
+bool ui_has_hardware_keyboard(void);
+/* Height reserved for the on-screen keyboard (zero with a dock). */
+int ui_keyboard_height(void);
+/* Physical text/Enter/Backspace, or zero; other key events stay available. */
+int ui_input_char(const struct gz_input_event *e);
+/* Edit an ASCII buffer at *cursor; handles movement/deletion/text. */
+bool ui_edit_input(char *text, int cap, int *cursor, const struct gz_input_event *e, bool multiline);
 /* Next input event, waiting up to timeout_ms (-1 = forever). 1 = event,
  * 0 = timeout. */
 int ui_next_event(struct gz_input_event *ev, int timeout_ms);

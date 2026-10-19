@@ -451,6 +451,11 @@ static void handle_input(void)
                 handle_key(e);
                 continue;
             }
+            if (e->type == GZ_EV_TEXT) {
+                if (state == ST_APP)
+                    send_event(e);
+                continue;
+            }
             switch (state) {
             case ST_LOCK:
                 lock_touch(e);
@@ -487,6 +492,7 @@ static void handle_msg(int token, struct gz_msg *m)
         r.w[1] = (uint32_t)shm_id;
         r.w[2] = SB_APP_W;
         r.w[3] = SB_APP_H;
+        r.w[4] = (uint32_t)gz_input_status();
         break;
     case SB_PRESENT: {
         gfx_rect d = gfx_r((int)m->w[1], (int)m->w[2], (int)m->w[3], (int)m->w[4]);

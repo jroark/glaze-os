@@ -23,7 +23,7 @@
 #define SB_APP_H            (GZ_FB_HEIGHT - SB_STATUS_H)
 
 enum {
-    SB_HELLO = 1,           /* w1 = app event port, w2 = status style */
+    SB_HELLO = 1,           /* w1 = app event port, w2 = status style; reply w4 = GZ_INPUT_* */
     SB_PRESENT,             /* w1..w4 = dirty x, y, w, h */
     SB_SET_STATUS,          /* w1 = status style */
 };
