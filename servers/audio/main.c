@@ -571,10 +571,11 @@ static int stream_write(struct session *s, uint32_t len)
         if (!out_flush_pend() || !used)
             break;
     }
-    /* Start once there is something to play, like the player's priming. */
+    /* Start once there is something to play, like the player's priming, or
+     * at a zero-length write, which marks the end of the data. */
     struct gz_audio_status st;
     status(&st);
-    if (!hw_running && st.queued >= MIN(PRIME_BYTES, GZ_AUDIO_RING / 2)) {
+    if (!hw_running && st.queued && (st.queued >= PRIME_BYTES || !len)) {
         stream_base = st.frames_played;
         out_start();
     }
@@ -586,11 +587,6 @@ static int stream_clock(struct gz_msg *r)
     struct gz_audio_status st;
 
     status(&st);
-    if (!hw_running && st.queued) {
-        /* Not started yet (still priming): start now so the clock moves. */
-        stream_base = st.frames_played;
-        out_start();
-    }
     r->w[1] = hw_rate ? (uint32_t)((uint64_t)(st.frames_played - stream_base) * 1000 / hw_rate) : 0;
     r->w[2] = hw_rate ? (uint32_t)((uint64_t)(st.queued / 2 + pend_len) / hw_ch * 1000 / hw_rate) : 0;
     return 0;

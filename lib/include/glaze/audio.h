@@ -34,7 +34,8 @@ enum {
     AUD_PREV,               /* restarts the track if more than 3 s in */
     AUD_STATE,              /* -> buf: struct audio_state */
     AUD_STREAM_OPEN,        /* w2 = rate, w3 = channels */
-    AUD_STREAM_WRITE,       /* w2 = bytes of PCM in buf -> bytes accepted */
+    AUD_STREAM_WRITE,       /* w2 = bytes of PCM in buf -> bytes accepted;
+                               0 bytes: no more for now, start playing */
     AUD_STREAM_CLOCK,       /* -> w1 = ms played, w2 = ms queued */
     AUD_STREAM_CLOSE,
 };
@@ -65,7 +66,9 @@ int audio_get_state(struct audio_state *st);
 
 int audio_stream_open(uint32_t rate, int channels);
 /* Bytes of `pcm` accepted (whole frames, at most AUDIO_BUF_SIZE); 0 when
- * the server's buffer is full. GZ_EBUSY once the player took over. */
+ * the server's buffer is full. GZ_EBUSY once the player took over. Output
+ * starts once a little is buffered, or at a write of 0 bytes. The clock
+ * counts what has been heard, so it stands still while nothing plays. */
 int audio_stream_write(const void *pcm, uint32_t len);
 int audio_stream_clock(uint32_t *played_ms, uint32_t *queued_ms);
 int audio_stream_close(void);
