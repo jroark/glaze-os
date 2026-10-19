@@ -83,9 +83,9 @@
 #define PIU_STBL            REG16(PIU_BASE + 0x0C)
 #define PIU_PAGE0           (PIU_BASE + 0x20)
 #define PIU_PAGE1           (PIU_BASE + 0x50)
-#define PIUCNT_PADATSTART   0x0004u
-#define PIUCNT_PIUSEQEN     0x0100u
-#define PIUCNT_PIUPWR       0x0200u
+#define PIUCNT_PIUPWR       0x0002u
+#define PIUCNT_PIUSEQEN     0x0004u
+#define PIUCNT_PADATSTART   0x0100u
 #define PIUCNT_PENDOWN      0x2000u
 #define PIUINT_PENCHG       0x01u
 #define PIUINT_DATALOST     0x04u

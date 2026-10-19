@@ -50,6 +50,14 @@ For unattended UI tests, build with `INPUT_SCRIPT=tests/calc.txt`. The kernel
 then replays the timed touch and key events in that file (see
 `kernel/drivers/input.c`).
 
+Scripted input skips the touch panel. To test the real PIU and interrupt
+path, `tests/touch.sh` drives the emulator window with xdotool on an X display
+(Linux, needs Xvfb, xdotool and ImageMagick):
+
+```sh
+Xvfb :99 & DISPLAY=:99 tests/touch.sh tests/touch_unlock.act
+```
+
 ## Memory map
 
 | NAND offset | Contents |
