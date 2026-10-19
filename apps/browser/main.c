@@ -9,10 +9,11 @@
  *
  * The engine (web.h, load.h) does the rest. State that survives the Home
  * button lives in the file system: /Browser/state (the current page and
- * scroll position) and /Browser/bookmarks.
+ * scroll position), /Browser/bookmarks, and /Browser/seed (tls.c).
  */
 
 #include <glaze/fs.h>
+#include <glaze/notify.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <netdb.h>
@@ -41,6 +42,7 @@
 #define START_URL   "res:start.html"
 #define STATE_PATH  "/Browser/state"
 #define MARKS_PATH  "/Browser/bookmarks"
+#define SEED_PATH   "/Browser/seed"     /* for TLS's random numbers */
 
 enum view { V_PAGE, V_BOOKMARKS, V_PICKER };
 enum mode { M_BROWSE, M_URL, M_FIELD };
@@ -166,6 +168,43 @@ int plat_resolve_poll(int id, uint32_t *addr)
 void plat_resolve_cancel(int id)
 {
     lookups[id].used = false;
+}
+
+const void *plat_roots(uint32_t *size)
+{
+    return gz_romfs_map("ssl/roots.der", size);
+}
+
+long long plat_time(void)
+{
+    struct gz_datetime dt;
+
+    if (gz_rtc_get(&dt) < 0)
+        return 0;
+    return (long long)gz_dt_to_secs(&dt) + 946684800;   /* 2000-01-01 in Unix time */
+}
+
+/* There's no hardware random source: the microsecond clock read after each
+ * trip through the scheduler varies with interrupts, network and flash
+ * traffic, and other processes. */
+void plat_noise(uint8_t *buf, int n)
+{
+    for (int i = 0; i < n; i++) {
+        gz_yield();
+        uint64_t t = gz_time_us();
+        buf[i] = (uint8_t)(t ^ t >> 8 ^ t >> 16);
+    }
+}
+
+void plat_load_seed(uint8_t *seed)
+{
+    fs_read_file(SEED_PATH, seed, PLAT_SEED_LEN);
+}
+
+void plat_save_seed(const uint8_t *seed)
+{
+    fs_mkdir("/Browser");
+    fs_write_file(SEED_PATH, seed, PLAT_SEED_LEN);
 }
 
 /* ---- persistence ---------------------------------------------------------------- */
@@ -397,9 +436,26 @@ static void draw_field(gfx_surface *s, bool editing)
         gfx_round_rect_vgradient(s, gfx_r(r.x + 1, r.y + 1, pw, r.h - 2), 5, 0xC9E0FA, 0x96C0F0, 255);
     }
     const char *u = page ? page->url : ld.url ? ld.url : "";
-    if (ld.state != LS_IDLE && ld.url)
+    bool shown = true;
+    if (ld.state != LS_IDLE && ld.url) {
         u = ld.url;
-    gfx_text_fit(s, r.x + 7, r.y + (r.h - f->line_height) / 2, text_w, f, display_url(u), 0x333333, 255);
+        shown = false;
+    }
+    int tx = r.x + 7;
+    if (shown && page && !page->is_error && !strncmp(u, "https:", 6)) {
+        /* A padlock: the page came over TLS with a verified certificate. */
+        int lx = tx, ly = r.y + r.h / 2 - 1;
+        uint32_t lc = 0x5A6474;
+        gfx_line_aa(s, (lx + 1) * 16 + 8, (ly + 1) * 16, (lx + 1) * 16 + 8, (ly - 3) * 16, 20, lc, 255);
+        gfx_line_aa(s, (lx + 6) * 16 + 8, (ly + 1) * 16, (lx + 6) * 16 + 8, (ly - 3) * 16, 20, lc, 255);
+        gfx_line_aa(s, (lx + 1) * 16 + 8, (ly - 3) * 16, (lx + 3) * 16, (ly - 5) * 16, 20, lc, 255);
+        gfx_line_aa(s, (lx + 5) * 16, (ly - 5) * 16, (lx + 6) * 16 + 8, (ly - 3) * 16, 20, lc, 255);
+        gfx_line_aa(s, (lx + 3) * 16, (ly - 5) * 16, (lx + 5) * 16, (ly - 5) * 16, 20, lc, 255);
+        gfx_round_rect(s, gfx_r(lx, ly, 8, 6), 1, lc, 255);
+        tx += 11;
+        text_w -= 11;
+    }
+    gfx_text_fit(s, tx, r.y + (r.h - f->line_height) / 2, text_w, f, display_url(u), 0x333333, 255);
 
     /* Reload, or stop while loading. */
     int cx = r.x + r.w - 12, cy = r.y + r.h / 2;

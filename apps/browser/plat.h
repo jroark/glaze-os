@@ -21,4 +21,15 @@ int plat_resolve_start(const char *host);
 int plat_resolve_poll(int id, uint32_t *addr);
 void plat_resolve_cancel(int id);
 
+/* TLS (tls.c). The trusted roots: concatenated DER certificates, or NULL. */
+const void *plat_roots(uint32_t *size);
+/* Seconds since 1970 by the clock (local time is close enough). */
+long long plat_time(void);
+/* Fills buf with timing noise, a little entropy per byte at best. */
+void plat_noise(uint8_t *buf, int n);
+/* A random seed kept between runs: load leaves seed alone if there is none. */
+#define PLAT_SEED_LEN   32
+void plat_load_seed(uint8_t *seed);
+void plat_save_seed(const uint8_t *seed);
+
 #endif

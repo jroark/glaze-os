@@ -12,16 +12,35 @@
 
 #define CONN_AGAIN  1           /* conn_read/conn_write: try later */
 
+struct WOLFSSL;
+
 struct conn {
     int fd;
-    bool connected;
+    bool connected;             /* TCP, and the TLS handshake if any */
+    bool tcp_up;
+    int err;                    /* errno of the last socket failure under TLS */
+    struct WOLFSSL *tls;        /* NULL for plain TCP */
+    char *host;                 /* TLS: the server name, malloc'd */
+    int port;
 };
 
-int conn_open(struct conn *c, uint32_t addr, int port);    /* 0 or WE_* */
+/* tls_host is the name to verify the server's certificate against, or NULL
+ * for plain TCP. */
+int conn_open(struct conn *c, uint32_t addr, int port, const char *tls_host);  /* 0 or WE_* */
 int conn_ready(struct conn *c);         /* 1 connected, 0 pending, WE_* */
 int conn_read(struct conn *c, void *buf, int n);    /* bytes, 0 at EOF, -CONN_AGAIN, WE_* */
 int conn_write(struct conn *c, const void *buf, int n);
 void conn_close(struct conn *c);
+
+/* ---- TLS (tls.c, wolfSSL) ------------------------------------------------------ */
+
+/* A new client session for host (SNI, certificate name), resuming a recent
+ * session with host:port when there is one; NULL with *err set to WE_*. */
+struct WOLFSSL *tls_new(const char *host, int port, int *err);
+/* Keeps the session of a finished connection for resumption, then frees it. */
+void tls_free(struct WOLFSSL *ssl, const char *host, int port);
+/* WE_* for a failed handshake, read or write (wolfSSL's error code). */
+int tls_error(int code);
 
 /* ---- HTTP ------------------------------------------------------------------- */
 

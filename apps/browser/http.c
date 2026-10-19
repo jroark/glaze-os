@@ -1,7 +1,8 @@
 /*
- * HTTP/1.1 client: one request per connection (Connection: close), as a
- * state machine stepped by the loader. Handles Content-Length, chunked
- * transfer coding, gzip/deflate content coding, and interim 1xx replies.
+ * HTTP/1.1 client: one request per connection (Connection: close), over
+ * TLS for https, as a state machine stepped by the loader. Handles
+ * Content-Length, chunked transfer coding, gzip/deflate content coding, and
+ * interim 1xx replies.
  * Redirects and cookies are the loader's business.
  */
 
@@ -17,7 +18,7 @@
 #include <strings.h>
 
 #define HEAD_MAX        (16 * 1024)
-#define CONNECT_MS      20000
+#define CONNECT_MS      30000   /* including the TLS handshake */
 #define IDLE_MS         30000
 #define USER_AGENT      "Mozilla/5.0 (Glaze; BE-300) GlazeWeb/1.0"
 
@@ -28,6 +29,7 @@ struct http {
     int state;
     char host[URL_HOST_MAX];
     int port;
+    bool https;
     int resolve_id;
     uint32_t cached_addr;
     bool have_addr;
@@ -118,7 +120,8 @@ struct http *http_start(const char *url, const char *post, int post_len, const c
     h->content_length = -1;
     h->max_body = max_body;
     strcpy(h->host, u.host);
-    h->port = u.port > 0 ? u.port : 80;
+    h->https = !strcmp(u.scheme, "https");
+    h->port = u.port > 0 ? u.port : url_default_port(u.scheme);
 
     size_t cap = strlen(u.path) + strlen(u.query) + strlen(u.host) + (cookies ? strlen(cookies) : 0) +
                  (size_t)(post ? post_len : 0) + 512;
@@ -128,7 +131,7 @@ struct http *http_start(const char *url, const char *post, int post_len, const c
         return NULL;
     }
     char hostport[URL_HOST_MAX + 8];
-    if (h->port != 80)
+    if (h->port != url_default_port(u.scheme))
         snprintf(hostport, sizeof(hostport), "%s:%d", u.host, h->port);
     else
         snprintf(hostport, sizeof(hostport), "%s", u.host);
@@ -339,7 +342,7 @@ int http_step(struct http *h)
                     return rv;
                 dns_remember(h->host, addr);
             }
-            if ((rv = conn_open(&h->c, addr, h->port)) < 0)
+            if ((rv = conn_open(&h->c, addr, h->port, h->https ? h->host : NULL)) < 0)
                 return rv;
             h->state = H_CONNECT;
             h->last = now;

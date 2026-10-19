@@ -8,3 +8,5 @@ mkfsimg
 browse
 mediatest
 fattest
+libwolfssl.a
+wolfssl.o/

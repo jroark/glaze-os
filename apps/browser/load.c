@@ -45,6 +45,7 @@ struct page *load_error_page(const char *url, int err)
              ".u{color:#8A8F99;font-size:12px}</style></head><body>"
              "<h1>Cannot Open Page</h1><p>%s</p><p class=u>%s</p></body></html>",
              web_strerror(err), esc);
+    p->is_error = true;
     page_set_html(p, html);
     page_style(p);
     return p;
