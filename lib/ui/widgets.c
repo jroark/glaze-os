@@ -5,30 +5,38 @@
 #include <stdlib.h>
 #include <string.h>
 
-static gfx_image back_img[2];
-static bool back_loaded[2];
+static gfx_image back_img[3];
+static bool back_loaded[3];
+static const char *const back_names[3] = { "ui_back.gzi", "ui_back_dark.gzi", "ui_back_brown.gzi" };
 
 static const gfx_image *back_image(int style)
 {
-    style = style ? 1 : 0;
+    if (style < 0 || style > 2)
+        style = 0;
     if (!back_loaded[style])
-        back_loaded[style] = res_image(&back_img[style], style ? "ui_back_dark.gzi" : "ui_back.gzi");
+        back_loaded[style] = res_image(&back_img[style], back_names[style]);
     return &back_img[style];
 }
+
+/* Nav bar palettes: blue pinstripe, black, Notes leather. */
+static const uint32_t nav_pal[3][5] = {
+    { 0xB4C0D0, 0x8B9DB5, 0x8093AD, 0x6D84A2, UI_NAV_LINE },
+    { 0x6A6A6A, 0x3C3C3C, 0x2A2A2A, 0x111111, 0x000000 },
+    { 0xC79A6A, 0xA27243, 0x93653A, 0x74471F, 0x3A220C },
+};
+static const uint32_t nav_shadow[3] = { 0x3E4E66, 0x000000, 0x4A2C10 };
 
 gfx_rect ui_draw_navbar(gfx_surface *s, const char *title, const char *back, gfx_rect *back_rect, int style)
 {
     gfx_rect r = gfx_r(0, 0, UI_W, UI_NAV_H);
     int half = UI_NAV_H / 2;
 
-    if (style) {
-        gfx_vgradient(s, gfx_r(0, 0, UI_W, half), 0x6A6A6A, 0x3C3C3C, 255);
-        gfx_vgradient(s, gfx_r(0, half, UI_W, UI_NAV_H - half), 0x2A2A2A, 0x111111, 255);
-    } else {
-        gfx_vgradient(s, gfx_r(0, 0, UI_W, half), 0xB4C0D0, 0x8B9DB5, 255);
-        gfx_vgradient(s, gfx_r(0, half, UI_W, UI_NAV_H - half), 0x8093AD, 0x6D84A2, 255);
-    }
-    gfx_fill(s, gfx_r(0, UI_NAV_H - 1, UI_W, 1), style ? 0x000000 : UI_NAV_LINE);
+    if (style < 0 || style > 2)
+        style = 0;
+    const uint32_t *pal = nav_pal[style];
+    gfx_vgradient(s, gfx_r(0, 0, UI_W, half), pal[0], pal[1], 255);
+    gfx_vgradient(s, gfx_r(0, half, UI_W, UI_NAV_H - half), pal[2], pal[3], 255);
+    gfx_fill(s, gfx_r(0, UI_NAV_H - 1, UI_W, 1), pal[4]);
     gfx_fill_alpha(s, gfx_r(0, 0, UI_W, 1), 0xFFFFFF, 90);
 
     const gfx_font *tf = ui_font(FONT_B14);
@@ -38,7 +46,7 @@ gfx_rect ui_draw_navbar(gfx_surface *s, const char *title, const char *back, gfx
         int bw = gfx_text_width(bf, back) + 22;
         gfx_rect br = gfx_r(5, (UI_NAV_H - 24) / 2, bw, 24);
         gfx_draw_3slice(s, br, back_image(style), 12, 6, 255);
-        gfx_text_shadow(s, br.x + 14, br.y + (24 - bf->line_height) / 2, bf, back, 0xFFFFFF, 0x2A3442, -1, 255);
+        gfx_text_shadow(s, br.x + 14, br.y + (24 - bf->line_height) / 2, bf, back, 0xFFFFFF, nav_shadow[style], -1, 255);
         if (back_rect)
             *back_rect = gfx_r(0, 0, br.x + br.w + 6, UI_NAV_H);
         left_edge = br.x + br.w + 6;
@@ -48,8 +56,7 @@ gfx_rect ui_draw_navbar(gfx_surface *s, const char *title, const char *back, gfx
         int tx = (UI_W - tw) / 2;
         if (tx < left_edge)
             tx = left_edge;
-        gfx_text_shadow(s, tx, (UI_NAV_H - tf->line_height) / 2, tf, title, 0xFFFFFF,
-                        style ? 0x000000 : 0x3E4E66, -1, 255);
+        gfx_text_shadow(s, tx, (UI_NAV_H - tf->line_height) / 2, tf, title, 0xFFFFFF, nav_shadow[style], -1, 255);
     }
     return r;
 }
@@ -63,6 +70,8 @@ gfx_rect ui_draw_bar_button(gfx_surface *s, const char *label, bool right, bool 
 
     if (blue) {
         top = 0x5E95F2; bottom = 0x2A63D4;
+    } else if (style == 2) {
+        top = 0xB08055; bottom = 0x6A421F;
     } else if (style) {
         top = 0x5A5A5A; bottom = 0x262626;
     } else {

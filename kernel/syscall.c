@@ -142,7 +142,7 @@ static int sys_sysinfo(uint32_t uout)
     struct gz_sysinfo si;
 
     memset(&si, 0, sizeof(si));
-    si.total_pages = mm_total_pages();
+    si.total_pages = SDRAM_SIZE / PAGE_SIZE;
     si.free_pages = mm_free_pages();
     si.nprocs = (uint32_t)proc_count();
     si.uptime_ms = (uint32_t)(time_us() / 1000u);

@@ -63,6 +63,8 @@ static int velocity;            /* px per 100 ms, smoothed */
 static int minute_shown = -1;
 static uint32_t shimmer_next;
 
+static void load_settings(void);
+
 /* ---- helpers ------------------------------------------------------------ */
 
 static uint32_t now_ms(void)
@@ -235,6 +237,7 @@ static void begin_zoom_in(void)
 
 static void begin_zoom_out(void)
 {
+    load_settings();
     view.pressed = -1;
     sb_draw_home(&snap, &view);
     state = ST_ZOOM_OUT;
@@ -574,12 +577,16 @@ static void init_surfaces(void)
     gfx_surface_init(&app_surf, (uint16_t *)(shm_base + SHM_HEADER), SB_APP_W, SB_APP_H, SB_APP_W);
 }
 
+/* Settings may change while an app runs; re-read them on the way home. */
 static void load_settings(void)
 {
-    int32_t wall = 0;
+    int32_t wall = 0, h24 = 0;
 
     if (gz_kv_get("sb.wallpaper", &wall, sizeof(wall)) == 4 && wall >= 0 && wall < sb_num_wallpapers)
         view.wallpaper = wall;
+    if (gz_kv_get("sb.24h", &h24, sizeof(h24)) == 4)
+        sb_24h = h24 != 0;
+    update_clock(true);
 }
 
 int main(void)
@@ -646,6 +653,7 @@ int main(void)
             app_pid = 0;
             app_cleanup();
             if (was_front) {
+                load_settings();
                 anim.active = false;
                 state = ST_HOME;
                 render_home();

@@ -557,6 +557,7 @@ func makeUI() {
     }
     backButton("ui_back.gzi", 0x7E93AF, 0x4A6383)
     backButton("ui_back_dark.gzi", 0x5A5A5A, 0x262626)
+    backButton("ui_back_brown.gzi", 0xB08055, 0x6A421F)
 
     // Tab bar icons (24 x 24 masks).
     func mask(_ name: String, _ draw: (CGContext) -> Void) {

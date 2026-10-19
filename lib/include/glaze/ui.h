@@ -53,8 +53,8 @@ void ui_present(void);
 #define UI_TAB_H            34
 
 /* Navigation bar with centred title; returns its rect. `back` (may be NULL)
- * draws a back button whose rect is stored in *back_rect. Style 0 = blue
- * pinstripe, 1 = black. */
+ * draws a back button whose rect is stored in *back_rect. Style 0 = blue,
+ * 1 = black, 2 = tan leather (Notes). */
 gfx_rect ui_draw_navbar(gfx_surface *s, const char *title, const char *back, gfx_rect *back_rect, int style);
 /* A bordered bar button on the right of the nav bar ("Edit", "+", "Done"). */
 gfx_rect ui_draw_bar_button(gfx_surface *s, const char *label, bool right, bool pressed, bool blue, int style);

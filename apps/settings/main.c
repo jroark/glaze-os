@@ -212,7 +212,7 @@ static void draw_about(gfx_surface *s)
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
     ui_draw_navbar(s, "About", "Settings", &back_rect, 0);
     add_hit(back_rect, R_BACK);
-    snprintf(ver, sizeof(ver), "1.0 (%s)", si.build);
+    snprintf(ver, sizeof(ver), "Glaze 1.0 (%s)", si.build);
     snprintf(cap, sizeof(cap), "%u MB", (si.total_pages * 4 + 1023) / 1024);
     snprintf(avail, sizeof(avail), "%u KB", si.free_pages * 4);
     snprintf(procs, sizeof(procs), "%u", si.nprocs);
@@ -220,7 +220,6 @@ static void draw_about(gfx_surface *s)
     snprintf(up, sizeof(up), "%u:%02u:%02u", sec / 3600, sec / 60 % 60, sec % 60);
     section_y = UI_NAV_H + 12;
     cell(s, 1, "Name", "BE-300", false, 0);
-    cell(s, 2, "Software", "Glaze", false, 0);
     cell(s, 2, "Version", ver, false, 0);
     cell(s, 3, "Model", "Casio BE-300", false, 0);
     section_gap();

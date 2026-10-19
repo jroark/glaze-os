@@ -21,6 +21,7 @@ const int sb_num_apps = sizeof(sb_apps) / sizeof(sb_apps[0]);
 
 const char *const sb_wallpapers[] = { "wall_aqua.gzi", "wall_dusk.gzi", "wall_meadow.gzi" };
 const int sb_num_wallpapers = 3;
+bool sb_24h;
 
 static gfx_image icons[16];
 static gfx_image walls[3];
@@ -48,8 +49,13 @@ void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt)
 {
     int h12 = dt->hour % 12 ? dt->hour % 12 : 12;
 
-    snprintf(c->status, sizeof(c->status), "%d:%02d %s", h12, dt->minute, dt->hour < 12 ? "AM" : "PM");
-    snprintf(c->big, sizeof(c->big), "%d:%02d", h12, dt->minute);
+    if (sb_24h) {
+        snprintf(c->status, sizeof(c->status), "%02d:%02d", dt->hour, dt->minute);
+        snprintf(c->big, sizeof(c->big), "%02d:%02d", dt->hour, dt->minute);
+    } else {
+        snprintf(c->status, sizeof(c->status), "%d:%02d %s", h12, dt->minute, dt->hour < 12 ? "AM" : "PM");
+        snprintf(c->big, sizeof(c->big), "%d:%02d", h12, dt->minute);
+    }
     snprintf(c->date, sizeof(c->date), "%s, %s %d", weekdays[dt->weekday % 7],
              months[(dt->month + 11) % 12], dt->day);
     strncpy(c->weekday, weekdays[dt->weekday % 7], sizeof(c->weekday) - 1);

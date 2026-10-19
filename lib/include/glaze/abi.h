@@ -100,8 +100,8 @@ struct gz_datetime {
 #define GZ_KV_DELETE    0xFFFFFFFFu
 
 struct gz_sysinfo {
-    uint32_t total_pages;
-    uint32_t free_pages;
+    uint32_t total_pages;       /* all of SDRAM */
+    uint32_t free_pages;        /* available to processes */
     uint32_t nprocs;
     uint32_t uptime_ms;
     uint32_t cpu_prid;

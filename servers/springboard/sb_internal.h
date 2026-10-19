@@ -56,6 +56,7 @@ struct sb_view {
     int pressed;                /* app index under the finger, or -1 */
 };
 
+extern bool sb_24h;
 extern const char *const sb_wallpapers[];
 extern const int sb_num_wallpapers;
 
