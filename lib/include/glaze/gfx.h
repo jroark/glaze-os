@@ -48,7 +48,8 @@ typedef struct {
     const uint8_t *bitmap;
 } gfx_font;
 
-/* Extra glyphs past ASCII, usable in strings. */
+/* Extra glyphs past ASCII, usable in strings. Fonts also cover Latin-1
+ * (0xA0-0xFF) at its own code points; 0x88-0x9F render as '?'. */
 #define GFX_CH_TIMES    "\x7f"
 #define GFX_CH_DIVIDE   "\x80"
 #define GFX_CH_MINUS    "\x81"

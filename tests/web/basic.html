@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Engine test &mdash; basics</title>
+<style>
+  body { font-family: Helvetica, sans-serif; }
+  .note { background: #FFF6C8; border: 1px solid #E0C860; padding: 6px; margin: 8px 0; }
+  #lead { color: #444; font-size: 18px; }
+  table.grid td, table.grid th { border: 1px solid #999; padding: 2px 4px; }
+  ul.compact li { margin: 0; }
+  .right { text-align: right; }
+  @media print { body { display: none } }
+  @media (max-width: 480px) { .wide-only { display: none } }
+</style>
+</head>
+<body>
+<h1>Glaze Web</h1>
+<p id="lead">A <b>tiny</b> browser for the <i>BE-300</i>, with <a href="#links">links</a>,
+<code>code</code>, <u>underline</u>, <s>strike</s>, H<sub>2</sub>O and E=mc<sup>2</sup>.</p>
+<p class="wide-only">You should not see this line.</p>
+<div class="note">A note box with a border &amp; background. Caf&eacute; na&iuml;ve &ldquo;quotes&rdquo; &hellip; &copy; 2009 &bull; 5&times;3 &minus; 2.</div>
+<h2>Lists</h2>
+<ul>
+  <li>First item
+  <li>Second item with a much longer text that will certainly need to wrap across lines
+  <li>Nested:
+    <ul><li>circle one<li>circle two</ul>
+</ul>
+<ol start="3">
+  <li>three</li><li>four</li><li value="10">ten</li><li>eleven</li>
+</ol>
+<h2>Table</h2>
+<table class="grid" cellspacing="0">
+  <tr><th>Name</th><th>Size</th><th>Kind</th></tr>
+  <tr><td>notes.txt</td><td class="right">1 KB</td><td>Text</td></tr>
+  <tr><td bgcolor="#DDEEFF">photo.jpg</td><td class="right">300 KB</td><td>JPEG image</td></tr>
+</table>
+<h3>Preformatted</h3>
+<pre>int main(void)
+{
+    return 0;
+}</pre>
+<blockquote>Quoted text sits indented from both sides of the page.</blockquote>
+<h3 id="links">Form</h3>
+<form action="/search" method="get">
+  <input type="text" name="q" value="glaze" size="12"> <input type="submit" value="Go"><br>
+  <label><input type="checkbox" name="c" checked> remember</label>
+  <select name="s"><option>One<option selected>Two</select>
+</form>
+<hr>
+<p style="color: rgb(0, 128, 0); text-align: center">Centered green text.</p>
+<p><font color="red" size="2">Old-school red font</font> and <span style="background:yellow">highlighted</span>.</p>
+<dl><dt>Term</dt><dd>Definition of the term.</dd></dl>
+</body>
+</html>

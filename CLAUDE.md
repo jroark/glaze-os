@@ -82,6 +82,13 @@ be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet
 - Layout: `/Documents`, `/Pictures` (Photos' Camera Roll), `/Library/Preferences` (settings, one file per key, via `glaze/prefs.h`), `/Library/Notes`, `/Library/Caches` (rebuildable). A blank or erased volume gets only the folders in `servers/fs/folders.h`.
 - Reads are slow, about 1.5 s for a 150 KB picture in the emulator, so apps should cache derived data (Photos keeps thumbnails in `/Library/Caches/Photos`) and load in the background.
 
+**Browser** (`apps/browser`, "Browser" on the home screen):
+- The engine (`web.h`: `html.c`, `css.c`, `style.c`, `layout.c`, `paint.c`, `image.c`, `forms.c`, `page.c`) uses only libc and libgfx, so `make -C host browse` builds it natively (with ASan/UBSan): `host/browse <url | file.html> [out.bmp]` renders a page to a 240 px wide BMP, and `BROWSE_DUMP=1` prints the styled tree. `tests/web/basic.html` exercises it.
+- Engine text is Latin-1 plus libgfx's extra glyphs (`charset.c` maps everything else); the fonts cover 0xA0-0xFF. CSS px are laid out at 3/4 device px, so the screen is 320 CSS px wide. Layout is integer-only; wide tables are linearized; floats and positioning are ignored.
+- Network: `conn.c` (BSD sockets), `http.c` (HTTP/1.1, chunked, gzip via stb's zlib), `loader.c` (queue, redirects, cookies, cache), `load.c` (document, then CSS, then images). No TLS: https fails with a "not supported" page. `plat.h` is what differs between `main.c` (device) and `host/browse.c`.
+- `res:` URLs are the bundled pages in `assets/web` (romfs `web/`); the start page is `res:start.html`. State persists in `/Browser/state` and `/Browser/bookmarks`.
+- Images go through vendored `stb_image.h` (PNG, JPEG, GIF), downscaled at decode time; a page's decoded images are capped at 3 MiB.
+
 ## Hardware notes
 
 Register addresses and bit meanings follow the VR4131 and VRC4173 user's manuals and the be300 emulator's models (the `be300` and `mipsel-cross-image` repos hold the manuals, hardware dumps and the Linux port). Cite the manual section in comments when touching hardware code. Some things are known not to match real hardware yet:

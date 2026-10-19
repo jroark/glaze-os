@@ -57,6 +57,18 @@ int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap)
         }
         while (*fmt >= '0' && *fmt <= '9')
             width = width * 10 + (*fmt++ - '0');
+        int prec = -1;                  /* %.Ns and %.*s limit strings */
+        if (*fmt == '.') {
+            fmt++;
+            prec = 0;
+            if (*fmt == '*') {
+                prec = va_arg(ap, int);
+                fmt++;
+            } else {
+                while (*fmt >= '0' && *fmt <= '9')
+                    prec = prec * 10 + (*fmt++ - '0');
+            }
+        }
         if (*fmt == 'l')
             fmt++;
         switch (*fmt) {
@@ -82,12 +94,12 @@ int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap)
             const char *s = va_arg(ap, const char *);
             if (!s)
                 s = "(null)";
-            int len = (int)strlen(s);
+            int len = prec >= 0 ? (int)strnlen(s, (size_t)prec) : (int)strlen(s);
             if (!left)
                 for (int w = len; w < width; w++)
                     emit(&o, ' ');
-            while (*s)
-                emit(&o, *s++);
+            for (int i = 0; i < len; i++)
+                emit(&o, s[i]);
             if (left)
                 for (int w = len; w < width; w++)
                     emit(&o, ' ');

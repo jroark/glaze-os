@@ -104,13 +104,17 @@ int ui_tabbar_hit(int n, int x, int y);
 
 struct ui_keyboard {
     bool shift, numbers;
+    bool url;               /* web address layout: / . .com Go */
     int pressed;            /* key index, or -1 */
 };
 
+/* ui_keyboard_event's return for the ".com" key of the URL layout. */
+#define UI_KEY_DOTCOM   0x100
+
 void ui_keyboard_init(struct ui_keyboard *kb);
 void ui_draw_keyboard(gfx_surface *s, const struct ui_keyboard *kb, int y);
-/* Returns a character ('\b' backspace, '\n' return) when a key is released,
- * 0 otherwise; redraw if *changed is set. */
+/* Returns a character ('\b' backspace, '\n' return, UI_KEY_DOTCOM) when a
+ * key is released, 0 otherwise; redraw if *changed is set. */
 int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, int y, bool *changed);
 
 /* ---- alert -------------------------------------------------------------- */

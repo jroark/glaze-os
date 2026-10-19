@@ -23,6 +23,8 @@ static const char *const font_files[FONT_COUNT] = {
     "sans_r14.gzf", "sans_r17.gzf", "sans_r24.gzf", "sans_r44.gzf",
     "sans_b8.gzf", "sans_b9.gzf", "sans_b10.gzf", "sans_b11.gzf", "sans_b12.gzf",
     "sans_b13.gzf", "sans_b14.gzf", "sans_b17.gzf", "sans_b20.gzf",
+    "sans_i10.gzf", "sans_i11.gzf", "sans_i12.gzf", "sans_i13.gzf", "sans_i14.gzf",
+    "mono_r10.gzf", "mono_r11.gzf", "mono_r12.gzf",
 };
 
 const gfx_font *ui_font(int which)

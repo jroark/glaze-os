@@ -88,6 +88,7 @@ $(OUT)/lib/libnetstack.a: $(NETSTACK_OBJS)
 
 $(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
 $(OUT)/servers/net/%.o: USER_CFLAGS += $(NET_INC)
+$(OUT)/apps/browser/%.o: USER_CFLAGS += -Ithird_party/stb
 
 USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a \
     $(OUT)/lib/libnetstack.a
@@ -125,15 +126,18 @@ $(OUT)/romfs/bin/%: $(OUT)/bin/%.elf
 # and checked in under assets/gen.
 
 ASSET_FILES := $(wildcard assets/gen/*)
+# The browser's bundled pages, romfs "web/".
+WEB_FILES := $(wildcard assets/web/*)
 
 # ---- romfs ------------------------------------------------------------------
 
 ROMFS_BINS := $(foreach p,$(PROGS),$(OUT)/romfs/bin/$(p))
 
-$(OUT)/romfs.img: $(ROMFS_BINS) $(ASSET_FILES) tools/mkromfs.py
+$(OUT)/romfs.img: $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) tools/mkromfs.py
 	$(PYTHON) tools/mkromfs.py $@ \
 	    $(foreach p,$(PROGS),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
 	    $(foreach a,$(ASSET_FILES),res/$(notdir $(a))=$(a)) \
+	    $(foreach w,$(WEB_FILES),web/$(notdir $(w))=$(w)) \
 	    $(if $(INPUT_SCRIPT),test/input.txt=$(INPUT_SCRIPT))
 
 # ---- kernel -----------------------------------------------------------------

@@ -11,7 +11,11 @@ FS := ../servers/fs/ftl.c ../third_party/littlefs/lfs.c ../third_party/littlefs/
 FS_CFLAGS := -std=gnu11 -O2 -g -Wall -I../servers/fs -I../third_party/littlefs -I../third_party/dhara \
     -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR
 
-all: sheet preview fstest mkfsimg
+# The browser engine, rendering pages to BMPs.
+WEB := $(filter-out ../apps/browser/main.c,$(wildcard ../apps/browser/*.c))
+WEB_CFLAGS := $(CFLAGS) -I../third_party/stb -fsanitize=address,undefined
+
+all: sheet preview fstest mkfsimg browse
 
 sheet: sheet.c hostres.c $(GFX)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -30,5 +34,8 @@ fstest: fstest.c $(FS)
 mkfsimg: mkfsimg.c $(FS)
 	$(CC) $(FS_CFLAGS) -o $@ $^
 
+browse: browse.c hostres.c $(GFX) $(WEB) ../apps/browser/web.h
+	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB)
+
 clean:
-	rm -f sheet preview fstest mkfsimg *.bmp *.png
+	rm -f sheet preview fstest mkfsimg browse *.bmp *.png
