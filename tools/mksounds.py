@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Synthesizes the system sounds (servers/audio/sound.c) as 22050 Hz mono
-16-bit WAVs: UI clicks and the alert tones of glaze/audio.h.
+16-bit WAVs: UI clicks and the alert tones of glaze/audio.h. With --aim, it
+makes the AIM package's buddy and message sounds instead (packages/aim/res),
+in the spirit of the classic ones rather than copies of them.
 
     tools/mksounds.py assets/sounds
+    tools/mksounds.py --aim packages/aim/res
 
 The output is deterministic and checked in; rerun it after changing a sound.
 """
@@ -127,12 +130,51 @@ def sounds():
     return {k: fade_out(v) for k, v in s.items()}
 
 
+def sweep(f0, f1, dur, partials=((1, 1.0),), level=1.0):
+    """A tone gliding from f0 to f1 with a sine-shaped swell."""
+    out, phase = [], 0.0
+    n = secs(dur)
+    for i in range(n):
+        t = i / n
+        phase += 2 * math.pi * (f0 + (f1 - f0) * t) / RATE
+        out.append(level * math.sin(math.pi * t) * sum(a * math.sin(r * phase) for r, a in partials))
+    return out
+
+
+def aim_sounds():
+    rng = random.Random(1997)
+    s = {}
+
+    # A buddy signs on: a hinge's creak rising, then the latch.
+    creak = sweep(330, 520, 0.42, ((1, 1.0), (2, 0.5), (3, 0.35), (5, 0.2)))
+    for i in range(len(creak)):
+        creak[i] *= 0.6 + 0.4 * math.sin(2 * math.pi * 38 * i / RATE)
+    s["dooropen.wav"] = normalize(place(creak, mix(noise(0.05, 120, 0.5, rng), tone(1400, 0.04, decay=120)),
+                                        0.40), 0.6)
+
+    # A buddy signs off: a low thump with a rattle.
+    s["doorslam.wav"] = normalize(mix(tone(70, 0.35, ((1, 1.0), (2.1, 0.4)), decay=14),
+                                      noise(0.25, 22, 0.35, rng), place([], noise(0.12, 40, 0.8, rng), 0.05)), 0.7)
+
+    # Messages: a rising two-note blip in, a falling pop out.
+    blip = ((1, 1.0), (2, 0.2))
+    s["imrcv.wav"] = normalize(place(tone(784, 0.16, blip, decay=24), tone(1175, 0.22, blip, decay=20), 0.09), 0.6)
+    s["imsend.wav"] = normalize(concat(sweep(1500, 700, 0.07, ((1, 1.0),)), tone(620, 0.08, blip, decay=60)), 0.5)
+
+    return {k: fade_out(v) for k, v in s.items()}
+
+
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("usage: mksounds.py <out dir>")
-    os.makedirs(sys.argv[1], exist_ok=True)
-    for name, samples in sorted(sounds().items()):
-        write(os.path.join(sys.argv[1], name), samples)
+    args = sys.argv[1:]
+    make = sounds
+    if args[:1] == ["--aim"]:
+        make = aim_sounds
+        args = args[1:]
+    if len(args) != 1:
+        sys.exit("usage: mksounds.py [--aim] <out dir>")
+    os.makedirs(args[0], exist_ok=True)
+    for name, samples in sorted(make().items()):
+        write(os.path.join(args[0], name), samples)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,25 @@
+# AIM package, step 2: set the server, sign on, open a buddy and send an IM.
+# Boot the file system tests/t_aim_install.txt installed AIM into, with the
+# network card, against an OSCAR server on this host (any password, e.g.
+# Open OSCAR Server with DISABLE_AUTH=true) whose account "Glaze User" has
+# glazebob on its list, with glazebob signed on and echoing IMs:
+#   AIM_SECS=90 out/host/aim-test --live 127.0.0.1 5190 GlazeBob pw &
+#   FS_FROM=out/shots/t_aim_install/glaze.bin NET=1 tests/run.sh tests/t_aim.txt 44
+# Replace 192.168.68.53 below with this host's own address.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+7500 tap 120 223
+9000 tap 150 75
+10000 text 192.168.68.53
+11500 key enter
+12000 key enter
+13000 tap 30 31
+15000 tap 160 123
+16000 text Glaze User
+17000 key enter
+17500 text secret
+18500 key enter
+32000 tap 120 85
+34000 tap 90 302
+35000 text Hello from Glaze!
+36500 key enter

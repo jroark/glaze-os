@@ -22,12 +22,13 @@ int main(int argc, char **argv)
     assert(text);
     assert(fread(text, 1, n, f) == (size_t)n);
     fclose(f);
-    assert(store_parse(&catalog, text, n) && catalog.count == 6);
+    assert(store_parse(&catalog, text, n) && catalog.count == 7);
     assert(store_matches(&catalog.apps[0], "HELLO") && store_matches(&catalog.apps[0], "glaze") &&
            !store_matches(&catalog.apps[0], "not-an-app"));
     assert(!strcmp(catalog.apps[3].id,"minesweeper") && store_matches(&catalog.apps[3],"MINEFIELD"));
     assert(!strcmp(catalog.apps[4].id,"solitaire") && store_matches(&catalog.apps[4],"Klondike"));
     assert(!strcmp(catalog.apps[5].id,"taskmanager") && store_matches(&catalog.apps[5],"CPU"));
+    assert(!strcmp(catalog.apps[6].id,"aim") && store_matches(&catalog.apps[6],"buddies"));
     for (long i = 0; i < n; i++) {
         char c = text[i];
         text[i] = 0;
