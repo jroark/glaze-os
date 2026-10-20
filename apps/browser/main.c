@@ -654,7 +654,8 @@ static void draw_list(gfx_surface *s)
     if (!list.count)
         gfx_text_center(s, 0, UI_NAV_H + 60, UI_W, ui_font(FONT_B14), "No Bookmarks", 0x6A7280, 255);
     ui_draw_navbar(s, title, NULL, &back, 0);
-    ui_draw_bar_button(s, "Done", true, pressed == P_DONE, true, 0);
+    if (!marks_editing)         /* the left button ends editing */
+        ui_draw_bar_button(s, "Done", true, pressed == P_DONE, true, 0);
     if (view == V_BOOKMARKS)
         ui_draw_bar_button(s, marks_editing ? "Done" : "Edit", false, pressed == P_EDIT, marks_editing, 0);
 }
@@ -1019,7 +1020,7 @@ static void list_event(const struct gz_input_event *e)
         pressed = P_NONE;
         badge_press = false;
         if (e->y < UI_NAV_H) {
-            if (e->x >= UI_W - 70)
+            if (e->x >= UI_W - 70 && !marks_editing)
                 pressed = P_DONE;
             else if (e->x < 70 && view == V_BOOKMARKS)
                 pressed = P_EDIT;
