@@ -156,10 +156,11 @@ it with `SYS_SPAWN_IMAGE`, which only accepts programs that use the dynamic
 linker in romfs. They use the system fonts and libraries, and find their own
 resources in their folder through the usual `res_image`.
 
-`packages/hello` is a small example. `make` builds every directory under
-`packages/` into `out/pkg/<name>.gzp`; the factory volume gets a copy in
-`/Documents`, and `tools/mkcfimg.sh out/cf.img 16 16 out/pkg/hello.gzp` puts
-one on a card image. A package needs `Info`, `main.c` and a 44x44
+`packages/hello` is a small example, and `packages/minesweeper` and
+`packages/solitaire` are games. `make` builds every directory under
+`packages/` into `out/pkg/<name>.gzp`. They are not on the factory volume:
+`tools/mkcfimg.sh out/cf.img 16 16 out/pkg/*.gzp` puts them on a card image
+to install from Files. A package needs `Info`, `main.c` and a 44x44
 `icon.gzi` (`tools/mkgzi.py icon.png icon.gzi`).
 
 ## Networking

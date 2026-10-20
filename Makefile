@@ -339,8 +339,10 @@ $(OUT)/spl.elf: $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o boot/spl.lds
 # ---- app packages -------------------------------------------------------------
 # Apps that are installed rather than built in (glaze/pkg.h). packages/<name>
 # holds the sources, Info and icon.gzi; the build links the app like a built-in
-# one, never puts it in romfs, and packs it as out/pkg/<name>.gzp. Installed
-# apps run on the dynamic linker, so there are none in a DYNAMIC=0 build.
+# one, never puts it in romfs or on the factory volume, and packs it as
+# out/pkg/<name>.gzp, to be installed from a card (tools/mkcfimg.sh).
+# Installed apps run on the dynamic linker, so there are none in a DYNAMIC=0
+# build.
 
 PKG_DIRS := $(wildcard packages/*)
 PKG_NAMES := $(notdir $(PKG_DIRS))
@@ -371,9 +373,8 @@ $(OUT)/host/mkfsimg: $(MKFSIMG_SRCS) servers/fs/ftl.h servers/fs/folders.h
 	@mkdir -p $(dir $@)
 	$(HOSTCC) -std=gnu11 -O2 -Wall -Iservers/fs $(FS_INC) -o $@ $(MKFSIMG_SRCS)
 
-# The packages go in /Documents, ready to install from Files.
-$(OUT)/fs.img: $(OUT)/host/mkfsimg $(USERDATA_FILES) $(PKG_FILES) lib/include/glaze/abi.h
-	$(OUT)/host/mkfsimg userdata $(FS_BLOCKS) $@ $(foreach f,$(PKG_FILES),/Documents/$(notdir $(f))=$(f))
+$(OUT)/fs.img: $(OUT)/host/mkfsimg $(USERDATA_FILES) lib/include/glaze/abi.h
+	$(OUT)/host/mkfsimg userdata $(FS_BLOCKS) $@
 
 # ---- NAND image -------------------------------------------------------------
 
@@ -381,7 +382,7 @@ $(OUT)/glaze.bin: $(OUT)/spl.elf $(OUT)/kernel.elf $(OUT)/fs.img tools/mk_nand.p
 	$(PYTHON) tools/mk_nand.py --kernel $(OUT)/kernel.elf --spl $(OUT)/spl.elf \
 	    --fs-image $(OUT)/fs.img --out $@
 
-all: $(OUT)/glaze.bin
+all: $(OUT)/glaze.bin $(PKG_FILES)
 
 clean:
 	rm -rf $(OUT)

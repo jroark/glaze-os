@@ -261,8 +261,11 @@ static void list_one(const char *bundle, const struct pkg_info *info, void *arg)
 }
 
 /* Installed apps: spawning an ELF from memory, and packages (glaze/pkg.h)
- * on the flash and, with a card, on /Card. Needs /Documents/hello.gzp from
- * the factory volume. */
+ * installed on the flash and then on /Card. Packages aren't on the factory
+ * volume, so this needs a card holding out/pkg/hello.gzp
+ * (tools/mkcfimg.sh out/cf.img 16 16 out/pkg/hello.gzp). */
+#define HELLO_GZP "/Card/hello.gzp"
+
 static void test_packages(void)
 {
     static uint8_t buf[64];
@@ -284,20 +287,20 @@ static void test_packages(void)
     fs_write_file("/ktest.gzp", "GZPK not really", 15);
     CHECK(pkg_read_info("/ktest.gzp", &info) == GZ_EINVAL, "pkg rejects a damaged package");
     fs_remove("/ktest.gzp");
-    if (pkg_read_info("/Documents/hello.gzp", &info) != 0) {
-        printf("ktest: SKIP packages (no /Documents/hello.gzp)\n");
+    if (pkg_read_info(HELLO_GZP, &info) != 0) {
+        printf("ktest: SKIP packages (no " HELLO_GZP "; boot with --cf <image holding it>)\n");
         return;
     }
     CHECK(!strcmp(info.id, "hello") && !strcmp(info.name, "Hello") && !strcmp(info.exec, "app"), "pkg read info");
     if (pkg_find("hello", bundle) == 0)
         pkg_uninstall(bundle);
-    CHECK(pkg_install("/Documents/hello.gzp", "", bundle) == 0 && !strcmp(bundle, "/Applications/hello.app") &&
+    CHECK(pkg_install(HELLO_GZP, "", bundle) == 0 && !strcmp(bundle, "/Applications/hello.app") &&
           fs_stat("/Applications/hello.app/app", &st) == 0 && st.size > 0 &&
           fs_stat("/Applications/hello.app/res/icon.gzi", &st) == 0 &&
           fs_stat("/Applications/hello.app.tmp", &st) == GZ_ENOENT, "pkg install on flash");
     listed_hello = false;
     CHECK(pkg_bundle_info(bundle, &info) == 0 && pkg_list("", list_one, NULL) >= 1 && listed_hello, "pkg list");
-    CHECK(pkg_install("/Documents/hello.gzp", "", bundle) == 0 && pkg_find("hello", bundle) == 0 &&
+    CHECK(pkg_install(HELLO_GZP, "", bundle) == 0 && pkg_find("hello", bundle) == 0 &&
           !strcmp(bundle, "/Applications/hello.app"), "pkg reinstall replaces");
 
     /* The installed binary runs (it has no SpringBoard here, so just stop it). */
@@ -308,15 +311,10 @@ static void test_packages(void)
     if (pid > 0)
         gz_kill(pid);
 
-    if (fs_stat("/Card", &st) == 0) {
-        CHECK(pkg_install("/Documents/hello.gzp", "/Card", bundle) == 0 &&
-              !strcmp(bundle, "/Card/Applications/hello.app") &&
-              fs_stat("/Card/Applications/hello.app/app", &st) == 0 &&
-              fs_stat("/Applications/hello.app", &st) == GZ_ENOENT, "pkg install moves to the card");
-        CHECK(pkg_uninstall(bundle) == 0 && fs_stat(bundle, &st) == GZ_ENOENT, "pkg uninstall from the card");
-    } else {
-        CHECK(pkg_uninstall(bundle) == 0 && fs_stat(bundle, &st) == GZ_ENOENT, "pkg uninstall");
-    }
+    CHECK(pkg_install(HELLO_GZP, "/Card", bundle) == 0 && !strcmp(bundle, "/Card/Applications/hello.app") &&
+          fs_stat("/Card/Applications/hello.app/app", &st) == 0 &&
+          fs_stat("/Applications/hello.app", &st) == GZ_ENOENT, "pkg install moves to the card");
+    CHECK(pkg_uninstall(bundle) == 0 && fs_stat(bundle, &st) == GZ_ENOENT, "pkg uninstall from the card");
     CHECK(pkg_find("hello", bundle) == GZ_ENOENT, "pkg gone after uninstall");
 }
 

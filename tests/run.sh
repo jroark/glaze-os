@@ -1,6 +1,7 @@
 #!/bin/sh
 # Build Glaze with a scripted input file, boot it, and save the final screen.
 # usage: tests/run.sh tests/t_x.txt [seconds]
+# CF=<image> boots with a copy of that CompactFlash image (tools/mkcfimg.sh).
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 script=$1
@@ -12,7 +13,13 @@ mkdir -p "$out" "$out/$name"
 cp "$root/out/glaze.bin" "$out/$name/glaze.bin"
 cd "$out/$name"
 rm -f screenshot_*.bmp
-gtimeout "${secs}s" "${BE300:-../../../../be300/build-host/be300}" --nand glaze.bin --rtc-host-time \
+cf=
+if [ -n "$CF" ]; then
+    case $CF in /*) ;; *) CF=$root/$CF ;; esac
+    cp "$CF" cf.img
+    cf="--cf cf.img"
+fi
+gtimeout "${secs}s" "${BE300:-../../../../be300/build-host/be300}" --nand glaze.bin --rtc-host-time $cf \
     > stdout.log 2> stderr.log || true
 sips -s format png screenshot_*.bmp --out "$out/$name.png" >/dev/null
 grep -E "fault|PANIC|exception" stdout.log || true
