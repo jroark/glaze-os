@@ -82,7 +82,8 @@ Xvfb :99 & DISPLAY=:99 tests/touch.sh tests/touch_unlock.act
 | --- | --- |
 | `0x0` | Partition table |
 | `0x4000` | SPL (B000FF container) |
-| `0x14000` | Kernel plus romfs (the OS: built-in apps and their assets) |
+| `0x14000` | Kernel |
+| `0x40000` | romfs (the OS: built-in apps, libraries and assets), paged into RAM on use |
 | `0x500000` | File system (11 MiB, about 6.3 MiB usable): user files and settings |
 
 ## File system
