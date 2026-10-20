@@ -882,6 +882,8 @@ static void test_time(void)
 
 int main(void)
 {
+    uint32_t start_ms = gz_time_ms();
+
     printf("ktest: hello from pid %d\n", gz_getpid());
 
     /* malloc */
@@ -973,6 +975,8 @@ int main(void)
     struct gz_sysinfo si;
     gz_sysinfo(&si);
     printf("ktest: %u/%u pages free, %u procs\n", si.free_pages, si.total_pages, si.nprocs);
+    printf("ktest: done in %u ms, %u KiB free, %u KiB cached\n", gz_time_ms() - start_ms, si.free_pages * 4,
+           si.cache_pages * 4);
 
     printf("ktest: %s (%d failures)\n", failures ? "FAILED" : "ALL PASS", failures);
     for (;;)

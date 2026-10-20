@@ -163,6 +163,7 @@ struct gz_sysinfo {
     uint32_t uptime_ms;
     uint32_t cpu_prid;
     char build[32];
+    uint32_t cache_pages;       /* romfs page cache; reclaimed when memory runs low */
 };
 
 /* Version 1 task monitor ABI. Pass sizeof(struct gz_task_snapshot); older
