@@ -1209,6 +1209,7 @@ int main(void)
     update_clock(true);
     state = ST_LOCK;
     render_lock();
+    timesync_start(sb_port);
     puts("springboard: ready");
 
     for (;;) {
@@ -1245,6 +1246,10 @@ int main(void)
         if (tok == GZ_RECV_NOTIFY) {
             if (m.w[0] & GZ_NOTIFY_INPUT)
                 handle_input();
+            if (m.w[0] & SB_NOTIFY_TIME)
+                timesync_wake();
+            if (m.w[0] & (SB_NOTIFY_TIME | SB_NOTIFY_CLOCK))
+                minute_shown = -1;      /* redraw the clock below */
         } else if (tok > 0) {
             handle_msg(tok, &m);
         }

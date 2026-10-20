@@ -1,0 +1,9 @@
+# Settings > Date & Time: turn Set Automatically off (the date and time
+# steppers appear), open Time Zone and pick New York, which moves the clock
+# three hours ahead of Los Angeles.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 190
+8000 tap 120 115
+9500 tap 120 145
+11000 tap 120 295

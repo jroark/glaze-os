@@ -56,6 +56,9 @@ enum {
 };
 
 #define SB_NOTIFY_EVENTS    0x1u
+/* To SpringBoard's port: the clock or the NTP settings (glaze/tz.h)
+ * changed, so redraw the time and look at the settings again. */
+#define SB_NOTIFY_TIME      0x2u
 
 #define SB_RING             64
 

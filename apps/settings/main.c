@@ -2,23 +2,27 @@
 
 #include <glaze/audio.h>
 #include <glaze/net.h>
+#include <glaze/notify.h>
+#include <glaze/ntp.h>
 #include <glaze/passcode.h>
 #include <glaze/prefs.h>
 #include <glaze/sys.h>
+#include <glaze/tz.h>
 #include <glaze/ui.h>
 #include <stdio.h>
 #include <string.h>
 
-enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE };
+enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
-    R_TZ_DOWN, R_TZ_UP, R_FIELD_DOWN, R_FIELD_UP = R_FIELD_DOWN + 8,
+    R_NTP, R_ZONE, R_FIELD_DOWN, R_FIELD_UP = R_FIELD_DOWN + 8,
     R_WALL0 = R_FIELD_UP + 8, R_PREV_CANCEL = R_WALL0 + 8, R_PREV_SET, R_BACK,
     R_NETWORK, R_PING, R_PASSCODE, R_PIN_ON, R_PIN_OFF, R_PIN_CHANGE, R_PIN_CANCEL,
     R_SOUNDS, R_VOLUME, R_SND_KEYS, R_SND_TOUCH, R_SND_SWIPE, R_SND_LOCK,
     R_TONE_TIMER, R_TONE_CAL, R_TONE_NOTIFY,
     R_TONE0,                    /* R_TONE0 + n picks tone n; + AUDIO_TONES is None */
+    R_ZONE0 = R_TONE0 + 32,     /* R_ZONE0 + n picks time zone n */
 };
 
 struct hit {
@@ -45,7 +49,15 @@ static const char *const wall_names[] = { "wall_aqua.gzi", "wall_dusk.gzi", "wal
 static gfx_image walls[3];
 
 /* Persistent settings. */
-static int32_t s_wallpaper, s_24h, s_tz;
+static int32_t s_wallpaper, s_24h;
+
+/* Date & time (glaze/tz.h). sync_msg, when set, replaces the time of the
+ * last NTP sync under the switch. */
+static int32_t s_zone = TZ_LOS_ANGELES, s_auto = 1;
+static uint32_t s_synced;
+static char sync_msg[40];
+static struct ui_scroll zone_scroll;
+static bool zone_drag;
 
 /* Sounds (glaze/audio.h). The tones are, in order, the timer's, calendar
  * alerts' and other notifications'. */
@@ -61,7 +73,10 @@ static void load(void)
 {
     pref_get("sb.wallpaper", &s_wallpaper, 4);
     pref_get("sb.24h", &s_24h, 4);
-    pref_get("set.tz", &s_tz, 4);
+    s_zone = tz_current();
+    pref_get(TZ_PREF_AUTO, &s_auto, 4);
+    if (pref_get(TZ_PREF_SYNCED, &s_synced, 4) != 4)
+        s_synced = 0;
     pref_get(AUDIO_PREF_VOLUME, &s_volume, 4);
     pref_get(AUDIO_PREF_KEYS, &s_keys, 4);
     pref_get(AUDIO_PREF_TOUCH, &s_touch, 4);
@@ -77,6 +92,15 @@ static void load(void)
 static void save(const char *key, int32_t v)
 {
     pref_put(key, &v, 4);
+}
+
+/* Tells SpringBoard the clock or the NTP settings changed. */
+static void notify_time(void)
+{
+    int p = gz_port_lookup(SB_PORT_NAME);
+
+    if (p > 0)
+        gz_notify(p, SB_NOTIFY_TIME);
 }
 
 /* Saves a sound setting and has the audio server pick it up. */
@@ -244,7 +268,7 @@ static const char *const field_names[5] = { "Year", "Month", "Day", "Hour", "Min
 static void draw_datetime(gfx_surface *s)
 {
     struct gz_datetime dt;
-    char buf[24];
+    char buf[40];
 
     gz_rtc_get(&dt);
     nhits = 0;
@@ -252,9 +276,25 @@ static void draw_datetime(gfx_surface *s)
     ui_draw_navbar(s, "Date & Time", "Settings", &back_rect, 0);
     add_hit(back_rect, R_BACK);
     section_y = UI_NAV_H + 10;
-    switch_cell(s, 1, "24-Hour Time", s_24h, R_24H);
-    snprintf(buf, sizeof(buf), "UTC%s%d", s_tz < 0 ? GFX_CH_MINUS : "+", s_tz < 0 ? -s_tz : s_tz);
-    stepper_cell(s, 3, "Time Zone", buf, R_TZ_DOWN, R_TZ_UP);
+    switch_cell(s, 0, "24-Hour Time", s_24h, R_24H);
+    section_gap();
+    switch_cell(s, 1, "Set Automatically", s_auto, R_NTP);
+    cell(s, 3, "Time Zone", tz_get(s_zone)->name, true, R_ZONE);
+    if (s_auto) {
+        if (sync_msg[0]) {
+            strcpy(buf, sync_msg);
+        } else if (s_synced) {
+            struct gz_datetime st;
+            gz_secs_to_dt(s_synced, &st);
+            int h = s_24h ? st.hour : (st.hour + 11) % 12 + 1;
+            snprintf(buf, sizeof(buf), "Last synced %d/%d at %d:%02d%s", st.month, st.day, h, st.minute,
+                     s_24h ? "" : st.hour < 12 ? " AM" : " PM");
+        } else {
+            strcpy(buf, "Not synced yet");
+        }
+        gfx_text_center(s, 0, section_y + 8, UI_W, ui_font(FONT_R12), buf, 0x4C566C, 255);
+        return;
+    }
     section_gap();
     int values[5] = { dt.year, dt.month, dt.day, dt.hour, dt.minute };
     for (int i = 0; i < 5; i++) {
@@ -394,6 +434,38 @@ static void draw_tone(gfx_surface *s)
     }
 }
 
+static gfx_rect zone_area(void)
+{
+    return gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
+}
+
+static void draw_zone(gfx_surface *s)
+{
+    const gfx_font *lf = ui_font(FONT_B13);
+    gfx_surface c = *s;
+    gfx_rect area = zone_area();
+    int n = tz_count();
+
+    nhits = 0;
+    ui_draw_pinstripes(s, area);
+    gfx_rect_intersect(s->clip, area, &c.clip);
+    section_y = UI_NAV_H + 12 - zone_scroll.offset;
+    for (int i = 0; i < n; i++, section_y += UI_ROW_H) {
+        gfx_rect r = gfx_r(CELL_X, section_y, CELL_W, UI_ROW_H), vis;
+        if (!gfx_rect_intersect(r, area, &vis))
+            continue;
+        bool on = s_zone == i, sel = pressed == R_ZONE0 + i;
+        uint32_t ink = sel ? 0xFFFFFF : on ? UI_TEXT_DETAIL : UI_TEXT;
+        ui_draw_group_cell(&c, r, i == 0 ? 1 : i == n - 1 ? 3 : 2, sel);
+        gfx_text(&c, r.x + 10, r.y + (r.h - lf->line_height) / 2, lf, tz_get(i)->name, ink, 255);
+        if (on)
+            gfx_text(&c, r.x + r.w - 22, r.y + (r.h - lf->line_height) / 2, lf, GFX_CH_CHECK, ink, 255);
+        add_hit(vis, R_ZONE0 + i);
+    }
+    ui_draw_navbar(s, "Time Zone", "Date & Time", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+}
+
 static gfx_rect pin_area(void)
 {
     return gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
@@ -429,6 +501,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_PIN: draw_pin(s); break;
     case V_SOUNDS: draw_sounds(s); break;
     case V_TONE: draw_tone(s); break;
+    case V_ZONE: draw_zone(s); break;
     }
 }
 
@@ -476,6 +549,37 @@ static void adjust_field(int field, int delta)
         dt.day = (uint8_t)maxd;
     dt.second = 0;
     gz_rtc_set(&dt);
+    notify_time();
+}
+
+/* Sets the clock by NTP now, showing progress under the switch. */
+static void sync_now(void)
+{
+    strcpy(sync_msg, "Setting the time" GFX_CH_ELLIPSIS);
+    redraw();
+    int rv = ntp_sync();
+    if (rv == 0) {
+        sync_msg[0] = 0;
+        pref_get(TZ_PREF_SYNCED, &s_synced, 4);
+    } else {
+        snprintf(sync_msg, sizeof(sync_msg), "%s", rv == GZ_ETIMEDOUT ? "No reply from the time server"
+                                                                       : net_strerror(rv));
+    }
+}
+
+/* Moves the clock to a new zone: the RTC keeps local time. */
+static void set_zone(int zone)
+{
+    struct gz_datetime dt;
+
+    if (gz_rtc_get(&dt) == 0) {
+        uint32_t utc = tz_local_to_utc(s_zone, gz_dt_to_secs(&dt));
+        gz_secs_to_dt(tz_utc_to_local(zone, utc), &dt);
+        gz_rtc_set(&dt);
+    }
+    s_zone = zone;
+    save(TZ_PREF_ZONE, s_zone);
+    notify_time();
 }
 
 static void pin_start(int mode)
@@ -541,8 +645,8 @@ static void pin_key(int k)
 static void activate(int id)
 {
     if (id == R_BACK || id == R_PIN_CANCEL) {
-        go(view == V_PREVIEW ? V_WALLPAPER : view == V_PIN ? V_PASSCODE : view == V_TONE ? V_SOUNDS : V_ROOT,
-           false);
+        go(view == V_PREVIEW ? V_WALLPAPER : view == V_PIN ? V_PASSCODE : view == V_TONE ? V_SOUNDS
+           : view == V_ZONE ? V_DATETIME : V_ROOT, false);
         return;
     }
     switch (id) {
@@ -550,13 +654,19 @@ static void activate(int id)
         s_24h = !s_24h;
         save("sb.24h", s_24h);
         break;
-    case R_TZ_DOWN:
-    case R_TZ_UP:
-        s_tz += id == R_TZ_UP ? 1 : -1;
-        if (s_tz < -12) s_tz = -12;
-        if (s_tz > 14) s_tz = 14;
-        save("set.tz", s_tz);
+    case R_NTP:
+        s_auto = !s_auto;
+        save(TZ_PREF_AUTO, s_auto);
+        sync_msg[0] = 0;
+        if (s_auto)
+            sync_now();
+        notify_time();
         break;
+    case R_ZONE:
+        ui_scroll_reset(&zone_scroll, tz_count() * UI_ROW_H + 24, UI_H - UI_NAV_H);
+        zone_scroll.offset = MAX(0, MIN(s_zone * UI_ROW_H - 3 * UI_ROW_H, ui_scroll_max(&zone_scroll)));
+        go(V_ZONE, true);
+        return;
     case R_SOUNDS: go(V_SOUNDS, true); return;
     case R_SND_KEYS:
         s_keys = !s_keys;
@@ -581,7 +691,12 @@ static void activate(int id)
         go(V_TONE, true);
         return;
     case R_WALLPAPER: go(V_WALLPAPER, true); return;
-    case R_DATETIME: go(V_DATETIME, true); return;
+    case R_DATETIME:
+        sync_msg[0] = 0;
+        if (pref_get(TZ_PREF_SYNCED, &s_synced, 4) != 4)
+            s_synced = 0;
+        go(V_DATETIME, true);
+        return;
     case R_ABOUT: go(V_ABOUT, true); return;
     case R_PASSCODE: go(V_PASSCODE, true); return;
     case R_PIN_ON:
@@ -624,6 +739,12 @@ static void activate(int id)
             save_sound(tone_keys[tone_for], tone);
             if (tone != AUDIO_TONE_NONE)
                 audio_sound(AUDIO_SND_TONE + tone);
+            return;
+        }
+        if (id >= R_ZONE0 && id < R_ZONE0 + tz_count()) {
+            if (id - R_ZONE0 != s_zone)
+                set_zone(id - R_ZONE0);
+            go(V_DATETIME, false);
             return;
         }
         if (id >= R_FIELD_DOWN && id < R_FIELD_DOWN + 5)
@@ -683,6 +804,38 @@ static bool volume_touch(const struct gz_input_event *ev)
     return true;
 }
 
+static int hit_test(int x, int y);
+
+/* Scrolling and tapping the time zone list; false if the event is not
+ * for it (the nav bar's back button). */
+static bool zone_touch(const struct gz_input_event *ev)
+{
+    if (view != V_ZONE || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
+                           ev->type != GZ_EV_TOUCH_UP))
+        return false;
+    if (ev->type == GZ_EV_TOUCH_DOWN)
+        zone_drag = ev->y >= UI_NAV_H;
+    if (!zone_drag)
+        return false;
+    ui_scroll_event(&zone_scroll, ev, ev->y - UI_NAV_H);
+    if (ev->type == GZ_EV_TOUCH_DOWN)
+        pressed = hit_test(ev->x, ev->y);
+    else if (zone_scroll.moved)
+        pressed = R_NONE;
+    if (ev->type == GZ_EV_TOUCH_UP) {
+        int id = pressed;
+        zone_drag = false;
+        pressed = R_NONE;
+        if (id != R_NONE && hit_test(ev->x, ev->y) == id) {
+            activate(id);
+            if (view != V_ZONE)
+                return true;
+        }
+    }
+    redraw();
+    return true;
+}
+
 static int hit_test(int x, int y)
 {
     /* Later entries (buttons inside cells) take priority. */
@@ -704,11 +857,15 @@ int main(void)
     for (;;) {
         struct gz_input_event ev;
         int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK ? 1000 : -1;
+        if (view == V_ZONE && zone_scroll.animating)
+            timeout = 16;
         if (!ui_next_event(&ev, timeout)) {
-            redraw();               /* live uptime / clock */
+            if (view == V_ZONE)
+                ui_scroll_step(&zone_scroll);
+            redraw();               /* live uptime / clock, or scrolling */
             continue;
         }
-        if (pin_touch(&ev) || volume_touch(&ev))
+        if (pin_touch(&ev) || volume_touch(&ev) || zone_touch(&ev))
             continue;
         if (view == V_PIN && ev.type == GZ_EV_TEXT) {
             pin_key(ev.code);

@@ -143,4 +143,10 @@ bool notify_pop_due(uint32_t now, struct sb_note *out);
 void notify_deliver_locked(const struct sb_note *n);
 void notify_clear_delivered(void);
 
+/* timesync.c: NTP in a thread of its own. It notifies SpringBoard's port
+ * with SB_NOTIFY_CLOCK after setting the clock. */
+#define SB_NOTIFY_CLOCK     0x4u
+void timesync_start(int port);
+void timesync_wake(void);           /* SB_NOTIFY_TIME: settings changed */
+
 #endif
