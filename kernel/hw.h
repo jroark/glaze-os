@@ -178,6 +178,9 @@
 #define NAND_PAGES_PER_BLOCK 32u
 /* Flash layout above the kernel: the file server's region runs from here to
  * the end of the NAND. */
+/* romfs (tools/mkromfs.py) sits raw between the kernel and the file system;
+ * tools/mk_nand.py places it, and romfs.c pages it in. */
+#define ROMFS_OFFSET        0x40000u
 #define FLASH_FS_OFFSET     0x500000u
 
 #endif

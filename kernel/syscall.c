@@ -131,20 +131,17 @@ static int sys_fb_map(void)
 static int sys_romfs_map(uint32_t uname, uint32_t usize)
 {
     char name[48];
-    uint32_t size;
 
     if (copy_str_from_as(AS, name, uname, sizeof(name)) < 0)
         return GZ_EINVAL;
-    const void *data = romfs_find(name, &size);
-    if (!data)
+    const struct romfs_entry *e = romfs_lookup(name);
+    if (!e)
         return GZ_ENOENT;
-    /* Files are page aligned in the archive; map them read-only. */
-    uint32_t va = as_map_phys(AS, PHYS(data), size ? size : 1, PTE_CACHED);
+    /* Read-only, its pages read from NAND as the process touches them. */
+    uint32_t va = as_map_romfs(AS, romfs_index(e), e->size, e->offset);
     if (!va)
         return GZ_ENOMEM;
-    for (uint32_t off = 0; off < size; off += PAGE_SIZE)
-        as_map_page(AS, va + off, PHYS(data) + off, PTE_CACHED | PTE_V);
-    if (usize && copy_to_as(AS, usize, &size, sizeof(size)))
+    if (usize && copy_to_as(AS, usize, &e->size, sizeof(e->size)))
         return GZ_EINVAL;
     return (int)va;
 }
@@ -155,11 +152,14 @@ static int sys_sysinfo(uint32_t uout)
 
     memset(&si, 0, sizeof(si));
     si.total_pages = SDRAM_SIZE / PAGE_SIZE;
-    si.free_pages = mm_free_pages();
+    /* Cache pages nothing maps are taken back as soon as memory is needed. */
+    si.free_pages = mm_free_pages() + romfs_reclaimable_pages();
     si.nprocs = (uint32_t)proc_count();
     si.uptime_ms = (uint32_t)(time_us() / 1000u);
     si.cpu_prid = read_c0_prid();
     strncpy(si.build, GLAZE_BUILD, sizeof(si.build) - 1);
+    si.cache_pages = romfs_cache_pages();
+    si.reclaimable_pages = romfs_reclaimable_pages();
     return copy_to_as(AS, uout, &si, sizeof(si));
 }
 

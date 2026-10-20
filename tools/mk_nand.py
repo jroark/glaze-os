@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Pack a BE-300 stage-1 SPL, flat kernel image, and optional file-system
-region as a NAND boot dump.
+"""Pack a BE-300 stage-1 SPL, flat kernel image, romfs archive and
+file-system region as a NAND boot dump.
 
 Layout (matches WinCE's partition table convention; see
 build-host/All_nand_300_repacked.bin in the emulator source tree for the
@@ -12,11 +12,15 @@ reference image):
                          entry 2  : (start_sector=0xA0,     count=<kernel sectors>)
                          entry 3  : (start_sector=0x2800,   count=<fs sectors>)
                                     (only present when --fs-image is supplied)
-                         entries 4..7: 0xFFFFFFFF (unused)
+                         entry 4  : (start_sector=0x200,    count=<romfs sectors>)
+                                    (only present when --romfs is supplied)
+                         entries 5..7: 0xFFFFFFFF (unused)
   NAND[0x4000..)       partition 1 = SPL B000FF container
                          "B000FF\\n", image_start, image_length, records,
                          terminator (0, kernel_entry_via_SPL, 0xFFFFFFFF)
   NAND[0x14000..)      partition 2 = flat kernel binary (objcopy -O binary)
+  NAND[0x40000..)      partition 4 = romfs (tools/mkromfs.py), paged in by the
+                         kernel (kernel/romfs.c); not loaded by the SPL
   NAND[0x500000..)     partition 3 = the file server's region (host/mkfsimg)
   NAND[0x10000000-1]   padded with 0xFF to 16 MiB
 
@@ -34,6 +38,7 @@ from pathlib import Path
 NAND_IMAGE_SIZE = 16 * 1024 * 1024
 SPL_OFFSET = 0x4000
 KERNEL_OFFSET = 0x14000
+ROMFS_OFFSET = 0x40000     # kernel/hw.h ROMFS_OFFSET
 FS_OFFSET = 0x500000
 B000FF_SIG = b"B000FF\n"
 NAND_FILL = 0xFF
@@ -155,6 +160,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--kernel", required=True, help="Path to kernel ELF (used for the kernel partition)")
     ap.add_argument("--spl", required=True, help="Path to spl.elf (stage-1 SPL ELF)")
+    ap.add_argument("--romfs", help="romfs archive (tools/mkromfs.py) to place at NAND offset 0x{:X}, "
+                    "where the kernel pages it in".format(ROMFS_OFFSET))
     ap.add_argument("--fs-image", help="Optional file-system region image (host/mkfsimg) to place at NAND offset 0x{:X}".format(FS_OFFSET))
     ap.add_argument("--out", required=True, help="Output NAND image path")
     ap.add_argument("--chunk", type=lambda s: int(s, 0), default=DEFAULT_CHUNK,
@@ -164,6 +171,7 @@ def main() -> int:
     spl_elf = Path(args.spl).read_bytes()
     vmlinux = Path(args.kernel).read_bytes()
     fs_image = Path(args.fs_image).read_bytes() if args.fs_image else None
+    romfs = Path(args.romfs).read_bytes() if args.romfs else None
 
     # Build the SPL B000FF container.
     spl_container, spl_meta = build_b000ff(spl_elf, args.chunk)
@@ -179,10 +187,16 @@ def main() -> int:
     spl_sectors = (len(spl_container) + 511) // 512
     kernel_sectors = (len(kernel_flat) + 511) // 512
 
-    if KERNEL_OFFSET + kernel_sectors * 512 > FS_OFFSET:
+    kernel_end = ROMFS_OFFSET if romfs is not None else FS_OFFSET
+    if KERNEL_OFFSET + kernel_sectors * 512 > kernel_end:
         raise SystemExit(
-            f"kernel ({len(kernel_flat)} bytes) overflows the kernel partition; "
-            f"the file system starts at 0x{FS_OFFSET:X}"
+            f"kernel ({len(kernel_flat)} bytes) overflows the kernel partition, "
+            f"which ends at 0x{kernel_end:X}"
+        )
+    if romfs is not None and ROMFS_OFFSET + len(romfs) > FS_OFFSET:
+        raise SystemExit(
+            f"romfs ({len(romfs)} bytes) overflows its slot of 0x{FS_OFFSET - ROMFS_OFFSET:X} bytes "
+            f"before the file system at 0x{FS_OFFSET:X}"
         )
 
     image = bytearray([NAND_FILL]) * NAND_IMAGE_SIZE
@@ -205,6 +219,11 @@ def main() -> int:
         fs_sectors = (len(fs_image) + 511) // 512
         partitions.append((FS_OFFSET // 512, fs_sectors))
 
+    if romfs is not None:
+        image[ROMFS_OFFSET:ROMFS_OFFSET + len(romfs)] = romfs
+        romfs_sectors = (len(romfs) + 511) // 512
+        partitions.append((ROMFS_OFFSET // 512, romfs_sectors))    # after the FS entry
+
     write_partition_table(image, partitions)
 
     Path(args.out).write_bytes(image)
@@ -223,6 +242,11 @@ def main() -> int:
     if fs_image is not None:
         print(
             f"  FS slot      = sector 0x{FS_OFFSET // 512:X} count 0x{fs_sectors:X}"
+        )
+    if romfs is not None:
+        print(
+            f"  romfs slot   = sector 0x{ROMFS_OFFSET // 512:X} count 0x{romfs_sectors:X} "
+            f"({len(romfs) * 100 // (FS_OFFSET - ROMFS_OFFSET)}% full)"
         )
     print(f"  NAND size    = 0x{NAND_IMAGE_SIZE:X} ({NAND_IMAGE_SIZE >> 20} MiB)")
     return 0

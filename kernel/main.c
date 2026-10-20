@@ -22,6 +22,7 @@ void kmain(void)
 
     trap_init();
     mm_init();
+    romfs_init();               /* reads the archive's table from NAND */
     irq_init();
     timer_init();
     rtc_init();

@@ -158,12 +158,13 @@ struct gz_datetime {
 
 struct gz_sysinfo {
     uint32_t total_pages;       /* all of SDRAM */
-    uint32_t free_pages;        /* available to processes */
+    uint32_t free_pages;        /* available to processes, with reclaimable cache */
     uint32_t nprocs;
     uint32_t uptime_ms;
     uint32_t cpu_prid;
     char build[32];
-    uint32_t cache_pages;       /* romfs page cache; reclaimed when memory runs low */
+    uint32_t cache_pages;       /* romfs page cache (kernel/romfs.c) */
+    uint32_t reclaimable_pages; /* of those, pages no process maps: counted in free_pages */
 };
 
 /* Version 1 task monitor ABI. Pass sizeof(struct gz_task_snapshot); older

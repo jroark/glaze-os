@@ -68,7 +68,7 @@ int proc_task_stop(int pid)
 }
 
 /* The program is romfs data (rom), or size bytes at src in src_as. */
-static struct proc *spawn(const char *name, struct addrspace *src_as, const void *rom, uint32_t src,
+static struct proc *spawn(const char *name, struct addrspace *src_as, const struct romfs_entry *rom, uint32_t src,
                           uint32_t size, int parent, uint32_t flags)
 {
     uint32_t entry;
@@ -127,8 +127,7 @@ fail:
 
 struct proc *proc_spawn(const char *path, int parent, uint32_t flags)
 {
-    uint32_t size;
-    const void *image = romfs_find(path, &size);
+    const struct romfs_entry *image = romfs_lookup(path);
     const char *base = path;
 
     if (!image)
@@ -137,7 +136,7 @@ struct proc *proc_spawn(const char *path, int parent, uint32_t flags)
         if (*c == '/')
             base = c + 1;
     }
-    return spawn(base, NULL, image, 0, size, parent, flags);
+    return spawn(base, NULL, image, 0, image->size, parent, flags);
 }
 
 /* An installed app: the ELF is read by the spawner (SpringBoard) and copied
