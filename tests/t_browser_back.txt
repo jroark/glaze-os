@@ -1,0 +1,7 @@
+# Browser: follow the demo link, then go back (the start page's scroll returns).
+3000 drag 40 280 235 280 500
+4500 tap 150 120
+7000 key down
+7600 key down
+8500 tap 70 201
+11000 tap 24 303
