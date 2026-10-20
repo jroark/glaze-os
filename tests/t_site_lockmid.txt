@@ -1,0 +1,5 @@
+# Website (tools/mksite.py): hold the lock knob part way, where the
+# "slide to unlock" label has faded out.
+3000 down 42 280
+3100 move 92 280
+3200 move 142 280

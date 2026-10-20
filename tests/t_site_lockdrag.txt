@@ -1,0 +1,4 @@
+# Website (tools/mksite.py): hold the lock knob at the right end of the track.
+3000 down 42 280
+3100 move 120 280
+3200 move 230 280
