@@ -113,13 +113,20 @@ static int ecc_check(uint8_t *data, size_t len, const uint8_t *stored, bool requ
     return 0;
 }
 
-static int zero_bits(const uint8_t *p, size_t n)
+/* Only the error budget matters. Visit at most limit + 1 cleared bits,
+ * avoiding a software popcount call for every byte on the VR4131. */
+static bool zero_bits_within(const uint8_t *p, size_t n, unsigned limit)
 {
-    int z = 0;
-
-    for (size_t i = 0; i < n; i++)
-        z += __builtin_popcount((uint8_t)~p[i]);
-    return z;
+    for (size_t i = 0; i < n; i++) {
+        unsigned bits = (uint8_t)~p[i];
+        while (bits) {
+            if (!limit)
+                return false;
+            limit--;
+            bits &= bits - 1;
+        }
+    }
+    return true;
 }
 
 static bool all_ff(const uint8_t *p, size_t n)
@@ -182,13 +189,18 @@ static int raw_read(dhara_page_t p, uint8_t *buf)
 #define VERIFY_SLACK    2
 #define ERASED_SLACK    4
 
-static int diff_bits(const uint8_t *a, const uint8_t *b, size_t n)
+static bool diff_bits_within(const uint8_t *a, const uint8_t *b, size_t n, unsigned limit)
 {
-    int d = 0;
-
-    for (size_t i = 0; i < n; i++)
-        d += __builtin_popcount((uint8_t)(a[i] ^ b[i]));
-    return d;
+    for (size_t i = 0; i < n; i++) {
+        unsigned bits = a[i] ^ b[i];
+        while (bits) {
+            if (!limit)
+                return false;
+            limit--;
+            bits &= bits - 1;
+        }
+    }
+    return true;
 }
 
 static int raw_prog_verify(uint32_t phys, const uint8_t *buf)
@@ -196,7 +208,7 @@ static int raw_prog_verify(uint32_t phys, const uint8_t *buf)
     uint8_t check[PAGE];
 
     if (flash_raw_prog(phys, buf) || flash_raw_read(phys, check) ||
-        diff_bits(check, buf, PAGE) > VERIFY_SLACK)
+        !diff_bits_within(check, buf, PAGE, VERIFY_SLACK))
         return -1;
     return 0;
 }
@@ -209,7 +221,7 @@ static int raw_erase_verify(uint32_t phys_block)
         return -1;
     for (uint32_t i = 0; i < PPB; i++) {
         if (flash_raw_read(phys_block * PPB + i, check) ||
-            zero_bits(check, PAGE) > VERIFY_SLACK)
+            !zero_bits_within(check, PAGE, VERIFY_SLACK))
             return -1;
     }
     return 0;
@@ -221,7 +233,7 @@ static int raw_erase_verify(uint32_t phys_block)
  * nearly-all-0xFF page taken for erased costs nothing (journal.c, cp_free). */
 static bool reads_erased(const uint8_t *buf)
 {
-    return zero_bits(buf, PAGE) <= ERASED_SLACK;
+    return zero_bits_within(buf, PAGE, ERASED_SLACK);
 }
 
 /* Reads and corrects checkpoint page `p` into cp_buf. A checkpoint whose
