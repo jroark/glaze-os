@@ -750,12 +750,45 @@ func makeStoreAssets() {
     saveDir = original
 }
 
+func makeTaskManagerAssets() {
+    let original = saveDir
+    let root = URL(fileURLWithPath: outDir).deletingLastPathComponent().deletingLastPathComponent()
+    saveDir = root.appendingPathComponent("packages/taskmanager").path
+    icon("taskmanager") { ctx in
+        gradient(ctx, [(0x427C84, 1, 0), (0x102D39, 1, 1)], from: .zero, to: CGPoint(x: 0, y: 44))
+        ctx.setStrokeColor(col(0x6DA7A0, 0.45)); ctx.setLineWidth(0.6)
+        for x in stride(from: 7, to: 44, by: 8) {
+            ctx.move(to: CGPoint(x: x, y: 5)); ctx.addLine(to: CGPoint(x: x, y: 39))
+        }
+        for y in stride(from: 8, to: 40, by: 7) {
+            ctx.move(to: CGPoint(x: 4, y: y)); ctx.addLine(to: CGPoint(x: 40, y: y))
+        }
+        ctx.strokePath()
+        let points: [(CGFloat, CGFloat)] = [(4,27),(12,27),(17,15),(22,34),(27,10),(32,25),(40,25)]
+        ctx.setLineJoin(.round); ctx.setLineCap(.round)
+        for (width, color, alpha): (CGFloat, UInt32, CGFloat) in [(5,0x5FF1A0,0.2),(2,0xBAFFCE,1)] {
+            ctx.setStrokeColor(col(color, alpha)); ctx.setLineWidth(width)
+            ctx.move(to: CGPoint(x: points[0].0, y: points[0].1))
+            for p in points.dropFirst() { ctx.addLine(to: CGPoint(x: p.0, y: p.1)) }
+            ctx.strokePath()
+        }
+    }
+    try? FileManager.default.removeItem(atPath: "\(saveDir)/icon.gzi")
+    try! FileManager.default.moveItem(atPath: "\(saveDir)/icon_taskmanager.gzi", toPath: "\(saveDir)/icon.gzi")
+    saveDir = original
+}
+
 // MARK: - Main
 
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+if CommandLine.arguments.contains("--taskmanager-only") {
+    makeTaskManagerAssets()
+    exit(0)
+}
 try? FileManager.default.createDirectory(atPath: photoDir, withIntermediateDirectories: true)
 if CommandLine.arguments.contains("--store-only") {
     makeStoreAssets()
+    makeTaskManagerAssets()
     exit(0)
 }
 for size in [9, 10, 11, 12, 13, 14, 17, 24, 44] {
@@ -777,3 +810,4 @@ makeUI()
 print("assets written to \(outDir)")
 
 makeStoreAssets()
+makeTaskManagerAssets()

@@ -3,7 +3,7 @@
 The built-in App Store has Search and Updates tabs. Search lists every app
 before a query is entered and matches names, developers, summaries and descriptions.
 Apps are free and curated in `store/apps.json`; there are no accounts or payments.
-The catalog includes Hello, Fifteen, Sketch, Minesweeper and Solitaire.
+The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire and Task Manager.
 
 ## Build and publish
 
@@ -109,6 +109,9 @@ Hello after updating; allow at least 160 seconds of guest time. The
 `t_appstore_minesweeper.txt` and `t_appstore_solitaire.txt` scenarios each
 install a new game from the scrolled catalog, play it, and reopen its saved
 game. Run these with a local store endpoint and allow 70 seconds of guest time.
+`t_appstore_taskmanager.txt` installs Task Manager from the six-app catalog and
+exercises its tabs, process details and pause/resume. Allow 75 guest seconds.
+See [Task Manager](TASK_MANAGER.md) for its kernel ABI and offline checks.
 
 Regenerate original store and launch-app artwork without rewriting other art:
 

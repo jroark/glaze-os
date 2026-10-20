@@ -21,6 +21,30 @@ static int next_tid_gen = 1;
 static struct thread *runq_head[NPRIO], *runq_tail[NPRIO];
 static struct thread *idle_thread;
 static struct context sched_boot_ctx;
+static uint64_t account_since, busy_us;
+
+/* Also called when sampling, so the currently running slice is included.
+ * Kernel execution is serialized with interrupts disabled. */
+uint64_t sched_account(uint64_t now)
+{
+    uint64_t elapsed = now - account_since;
+    if (cur && cur != idle_thread) {
+        busy_us += elapsed;
+        if (cur->proc) cur->proc->cpu_us += elapsed;
+    }
+    account_since = now;
+    return busy_us;
+}
+
+void sched_task_info(struct proc *p, struct gz_task_info *info)
+{
+    for (int i = 0; i < MAX_THREADS; i++) {
+        struct thread *t = &threads[i];
+        if (t->proc != p || t->state == T_UNUSED || t->state == T_ZOMBIE) continue;
+        info->threads++;
+        info->runnable += t->state == T_RUNNING || t->state == T_RUNNABLE;
+    }
+}
 
 /* Threads waiting with a timeout, unsorted (the table is small). */
 static struct thread *timed[MAX_THREADS];
@@ -214,6 +238,7 @@ void schedule(void)
     struct thread *prev = cur;
     struct thread *next;
 
+    sched_account(time_us());
     need_resched = false;
     if (prev && prev->state == T_RUNNING) {
         prev->state = T_RUNNABLE;

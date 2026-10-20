@@ -28,5 +28,11 @@
     "developer": "Glaze",
     "summary": "Klondike on the go. Deal yourself in.",
     "description": "Build four foundations from ace to king in classic Klondike Solitaire. Choose draw one or draw three, drag cards or tap to move them, and undo a move when you need to. Your deal is saved after every move."
+  },
+  {
+    "id": "taskmanager",
+    "developer": "Glaze",
+    "summary": "Live CPU, memory and running tasks.",
+    "description": "Watch CPU and memory history, inspect running tasks and their threads, and end managed apps with confirmation. Pause to inspect a sample. System services stay protected. CPU and task features require an updated Glaze OS; memory and uptime work on older builds."
   }
 ]

@@ -356,7 +356,7 @@ static void launch(int index)
         app_pid = apps_launch(index);
     } else {
         shared->bundle[0] = 0;
-        app_pid = gz_spawn(sb_apps[index].path, 0);
+        app_pid = gz_spawn(sb_apps[index].path, GZ_SPAWN_APP);
     }
     if (app_pid < 0) {
         snprintf(msg, sizeof(msg), "springboard: cannot launch %s (%d)\n", sb_apps[index].path, app_pid);

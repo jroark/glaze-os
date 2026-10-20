@@ -1,0 +1,16 @@
+# Install Task Manager from a six-app catalog (local server or live HTTPS).
+# Boot with --rtc-host-time --ne2000. Allow 75 seconds of guest time.
+3000 drag 40 280 235 280 500
+4500 tap 30 190
+18000 drag 120 235 120 87 800
+22000 tap 110 232
+25000 tap 180 112
+26000 tap 180 112
+48000 key home
+51000 tap 90 190
+55000 tap 175 68
+58000 tap 110 126
+61000 tap 28 30
+64000 tap 65 68
+67000 tap 208 30
+70000 tap 208 30

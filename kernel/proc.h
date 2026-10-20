@@ -144,12 +144,14 @@ struct proc {
     bool dying;
     int exit_code;
     uint32_t stack_slots;           /* bitmap of thread stacks in use */
+    uint64_t cpu_us;                /* accumulated scheduled time, all threads */
 };
 
 #define PROC_PRIVILEGED     0x1     /* may map the framebuffer, bind input */
 #define PROC_FLASH          0x2     /* raw NAND (kernel-granted, file server) */
 #define PROC_NET            0x4     /* Ethernet frames (kernel-granted, net server) */
 #define PROC_AUDIO          0x8     /* wave output (kernel-granted, audio server) */
+#define PROC_APP            0x10    /* managed foreground app, may be ended */
 
 extern struct thread *cur;
 extern uint32_t cur_kstack_top;
@@ -177,7 +179,11 @@ void proc_reap(void);
 void sched_kill_proc_threads(struct proc *p);
 int sched_reap_threads(struct proc *p);
 int sched_live_threads(struct proc *p);
+uint64_t sched_account(uint64_t now);
+void sched_task_info(struct proc *p, struct gz_task_info *info);
 int proc_count(void);
+int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size);
+int proc_task_stop(int pid);
 int thread_spawn(uint32_t entry, uint32_t arg);
 int thread_exit(void);
 

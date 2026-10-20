@@ -39,6 +39,12 @@ The initial release contains five apps. All public objects and cache headers
 were verified, and anonymous S3 access was confirmed denied. Use stack outputs
 as the source of truth if these resources are replaced later.
 
+Task Manager 1.0 was published as the sixth app on October 19, 2026. The
+publisher verified the catalog, all packages/icons and cache headers over
+public HTTPS, and confirmed that the S3 origin remains private. Task Manager's
+CPU and task features need the updated kernel; older OS builds retain its
+memory and uptime view. See [Task Manager](TASK_MANAGER.md).
+
 ## Create or update the stack
 
 The working CLI login for the initial setup is the `linux4be` profile. Specify
@@ -77,7 +83,7 @@ Keep the ACM validation CNAME in place for automatic certificate renewal.
 
 ## Publish a release
 
-Build the five-app catalog, validate it locally, then publish:
+Build the catalog, validate it locally, then publish:
 
 ```
 ./build.sh store

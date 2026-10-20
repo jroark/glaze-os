@@ -51,8 +51,8 @@ static int sys_spawn(uint32_t upath, uint32_t flags)
 
     if (copy_str_from_as(AS, path, upath, sizeof(path)) < 0)
         return GZ_EINVAL;
-    flags &= PROC_PRIVILEGED;     /* other flags are kernel-granted */
-    if ((flags & PROC_PRIVILEGED) && !PRIV())
+    flags &= PROC_PRIVILEGED | PROC_APP;     /* other flags are kernel-granted */
+    if (flags && !PRIV())
         return GZ_EPERM;
     struct proc *p = proc_spawn(path, cur->proc->pid, flags);
     return p ? p->pid : GZ_ENOENT;
@@ -65,7 +65,7 @@ static int sys_spawn_image(uint32_t ubuf, uint32_t size, uint32_t uname)
 
     if (copy_str_from_as(AS, name, uname, sizeof(name)) <= 0 || !gz_elf_range(ubuf, size, USER_TOP))
         return GZ_EINVAL;
-    struct proc *p = proc_spawn_image(AS, ubuf, size, name, cur->proc->pid, 0);
+    struct proc *p = proc_spawn_image(AS, ubuf, size, name, cur->proc->pid, PROC_APP);
     return p ? p->pid : GZ_EINVAL;
 }
 
@@ -207,6 +207,8 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_INPUT_BIND:    rv = PRIV() ? input_bind((int)a0) : GZ_EPERM; break;
     case SYS_INPUT_READ:    rv = PRIV() ? input_read(AS, a0, a1) : GZ_EPERM; break;
     case SYS_SYSINFO:       rv = sys_sysinfo(a0); break;
+    case SYS_TASK_SNAPSHOT: rv = proc_snapshot(AS, a0, a1); break;
+    case SYS_TASK_STOP:     rv = proc_task_stop((int)a0); break;
     case SYS_GETPID:        rv = cur->proc->pid; break;
     case SYS_ROMFS_MAP:     rv = sys_romfs_map(a0, a1); break;
     case SYS_PROC_ALIVE:    rv = sys_proc_alive(a0); break;

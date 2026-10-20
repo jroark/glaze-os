@@ -129,6 +129,14 @@ settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main
 	../out/host/settings-test
 .PHONY: settings-test
 
+taskmanager-test: ../tests/taskmanager.c ../tests/taskmanager_sys.h ../packages/taskmanager/main.c ../packages/taskmanager/monitor.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/taskmanager_sys.h \
+	    -o ../out/host/taskmanager-test ../tests/taskmanager.c ../packages/taskmanager/monitor.c \
+	    hostres.c $(GFX) ../lib/ui/widgets.c ../lib/ui/list.c
+	../out/host/taskmanager-test
+.PHONY: taskmanager-test
+
 gfx-bench: ../tests/gfx_bench.c ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -o ../out/host/gfx-bench $^

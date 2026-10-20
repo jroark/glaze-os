@@ -168,10 +168,15 @@ to install from Files. A package needs `Info`, `main.c` and a 44x44
 
 The native **App Store** offers Search and Updates in the early iPhone OS style.
 It installs free, curated packages over HTTPS and preserves saved data on update.
-The catalog includes Hello, Fifteen, Sketch, Minesweeper and Solitaire.
+The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire and Task Manager.
 Build it with `./build.sh store`; publish `out/store/` at `appstore.glaze-os.com`.
 See [App Store hosting and development](docs/APP_STORE.md) for setup and tests,
 and [AWS deployment](docs/APP_STORE_AWS.md) for S3, CloudFront and release publishing.
+
+**Task Manager** is an installable system monitor with CPU and memory history,
+a process list sorted by CPU usage, task details, pause/resume, and confirmed
+termination of managed apps. CPU and process monitoring need the current kernel;
+older OS builds still show memory and uptime. See [Task Manager](docs/TASK_MANAGER.md).
 
 ## Networking
 
