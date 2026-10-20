@@ -129,8 +129,26 @@ settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main
 	../out/host/settings-test
 .PHONY: settings-test
 
-gfx-bench: ../tests/gfx_bench.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
+gfx-bench: ../tests/gfx_bench.c ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -o ../out/host/gfx-bench $^
 	../out/host/gfx-bench
 .PHONY: gfx-bench
+
+gfx-text-test: ../tests/gfx_text.c ../lib/gfx/gfx.c ../lib/gfx/text.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/gfx-text-test $^
+	../out/host/gfx-text-test ../assets/gen/*.gzf
+.PHONY: gfx-text-test
+
+ftl-verify-test: ../tests/ftl_verify.c $(FS)
+	@mkdir -p ../out/host
+	$(CC) $(FS_CFLAGS) -fsanitize=address,undefined -o ../out/host/ftl-verify-test $^
+	../out/host/ftl-verify-test
+.PHONY: ftl-verify-test
+
+ftl-verify-bench: ../tests/ftl_verify.c $(FS)
+	@mkdir -p ../out/host
+	$(CC) $(FS_CFLAGS) -DFTL_BENCH -o ../out/host/ftl-verify-bench $^
+	../out/host/ftl-verify-bench
+.PHONY: ftl-verify-bench

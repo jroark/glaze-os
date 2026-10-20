@@ -95,14 +95,25 @@ void gfx_text_center(gfx_surface *s, int x, int y, int w, const gfx_font *f, con
 
 void gfx_text_fit(gfx_surface *s, int x, int y, int max_w, const gfx_font *f, const char *str, uint32_t rgb, int alpha)
 {
-    if (gfx_text_width(f, str) <= max_w) {
-        gfx_text(s, x, y, f, str, rgb, alpha);
+    int ell = gfx_text_width(f, GFX_CH_ELLIPSIS);
+    int adv = 0, n = 0, fit = 0;
+
+    /* Advances are nonnegative. Once the full label exceeds max_w, its
+     * remaining suffix cannot fit either; don't measure it or repeatedly
+     * remeasure shorter prefixes. Keep rounding identical to text_width. */
+    while (str[n]) {
+        adv += glyph(f, (unsigned char)str[n])->adv16;
+        int width = (adv + 8) >> 4;
+        if (width > max_w)
+            break;
+        n++;
+        if (width + ell <= max_w)
+            fit = n;
+    }
+    if (!str[n] && ((adv + 8) >> 4) <= max_w) {
+        gfx_text_n(s, x, y, f, str, n, rgb, alpha);
         return;
     }
-    int ell = gfx_text_width(f, GFX_CH_ELLIPSIS);
-    int n = (int)strlen(str);
-    while (n > 0 && gfx_text_width_n(f, str, n) + ell > max_w)
-        n--;
-    int w = gfx_text_n(s, x, y, f, str, n, rgb, alpha);
+    int w = gfx_text_n(s, x, y, f, str, fit, rgb, alpha);
     gfx_text(s, x + w, y, f, GFX_CH_ELLIPSIS, rgb, alpha);
 }

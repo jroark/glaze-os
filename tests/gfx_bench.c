@@ -25,21 +25,29 @@ struct renderer {
     void (*roundgrad)(gfx_surface *, gfx_rect, int, uint32_t, uint32_t, int);
     void (*gradient)(gfx_surface *, gfx_rect, uint32_t, uint32_t, int);
     void (*slice)(gfx_surface *, gfx_rect, const gfx_image *, int, int, int);
+    void (*textfit)(gfx_surface *, int, int, int, const gfx_font *, const char *, uint32_t, int);
 };
 #ifdef GFX_BASELINE
 void before_gfx_round_rect(gfx_surface *, gfx_rect, int, uint32_t, int);
 void before_gfx_round_rect_vgradient(gfx_surface *, gfx_rect, int, uint32_t, uint32_t, int);
 void before_gfx_vgradient(gfx_surface *, gfx_rect, uint32_t, uint32_t, int);
 void before_gfx_draw_3slice(gfx_surface *, gfx_rect, const gfx_image *, int, int, int);
+void before_gfx_text_fit(gfx_surface *, int, int, int, const gfx_font *, const char *, uint32_t, int);
 static const struct renderer baseline = {before_gfx_round_rect, before_gfx_round_rect_vgradient,
-                                         before_gfx_vgradient, before_gfx_draw_3slice};
+                                         before_gfx_vgradient, before_gfx_draw_3slice, before_gfx_text_fit};
 #endif
 static const struct renderer current = {gfx_round_rect, gfx_round_rect_vgradient, gfx_vgradient,
-                                        gfx_draw_3slice};
+                                        gfx_draw_3slice, gfx_text_fit};
 static uint16_t pixels[240 * 304], image[30 * 24];
 static uint8_t mask[30 * 24];
+/* Small synthetic glyphs isolate fitting cost from font rasterization. */
+static struct gfx_glyph glyphs[256];
+static uint8_t bitmap[5 * 7];
+static gfx_font font = {.ascent = 7, .count = 256, .glyphs = glyphs, .bitmap = bitmap};
+static char long_label[1024];
 static const char *names[] = {"solid cell",  "selected cell", "nav gradient",
-                              "back button", "bar button",    "alpha overlay"};
+                              "back button", "bar button",    "alpha overlay",
+                              "short label", "63-char label", "1023-char URL"};
 
 static void draw(const struct renderer *f, gfx_surface *s, int which)
 {
@@ -67,6 +75,20 @@ static void draw(const struct renderer *f, gfx_surface *s, int which)
     case 5:
         f->roundgrad(s, gfx_r(10, 30, 220, 70), 9, 0x2f4a7d, 0x0e2550, 235);
         break;
+    case 6:
+        f->textfit(s, 10, 10, 200, &font, "Short title", 0xffffff, 255);
+        break;
+    case 7: {
+        char label[64];
+        for (int i = 0; i < 63; i++)
+            label[i] = long_label[i];
+        label[63] = 0;
+        f->textfit(s, 10, 10, 160, &font, label, 0xffffff, 255);
+        break;
+    }
+    case 8:
+        f->textfit(s, 10, 10, 160, &font, long_label, 0xffffff, 255);
+        break;
     }
 }
 
@@ -78,8 +100,17 @@ int main(void)
         image[i] = (uint16_t)(i * 39);
         mask[i] = i % 7 ? 255 : 128;
     }
+    for (int i = 0; i < 256; i++) {
+        glyphs[i].adv16 = 88 + i % 17;
+        glyphs[i].w = 5;
+        glyphs[i].h = glyphs[i].top = 7;
+    }
+    for (int i = 0; i < 5 * 7; i++)
+        bitmap[i] = 255;
+    for (int i = 0; i < 1023; i++)
+        long_label[i] = 'a' + i % 26;
     for (int sample = 0; sample < 3; sample++) {
-        for (int which = 0; which < 6; which++) {
+        for (int which = 0; which < 9; which++) {
 #ifdef GFX_BASELINE
             uint64_t start = now_us();
             for (int i = 0; i < REPEATS; i++)

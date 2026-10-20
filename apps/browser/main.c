@@ -47,7 +47,7 @@
 enum view { V_PAGE, V_BOOKMARKS, V_PICKER };
 enum mode { M_BROWSE, M_URL, M_FIELD };
 enum press { P_NONE, P_FIELD, P_RELOAD, P_CANCEL, P_BACK, P_FWD, P_MARKS, P_ADD, P_HOME, P_DONE, P_EDIT,
-             P_ROW, P_CONTENT };
+             P_DELETE, P_CONTENT };
 
 struct entry {
     char *url;
@@ -72,10 +72,12 @@ static char pending_frag[256];
 static struct mark marks[MAX_MARKS];
 static int nmarks;
 static bool marks_editing;
+static int confirm_mark = -1;       /* bookmark showing its Delete button */
+static bool badge_press;
+static gfx_rect delete_rect;
 
 /* Input state. */
 static enum press pressed;
-static int pressed_row = -1;
 static struct node *press_link;     /* link highlighted under the finger */
 static struct ctl *press_ctl;
 static struct ctl *focus;           /* form field with the keyboard */
@@ -83,7 +85,7 @@ static struct ui_keyboard kb;
 static char edit_url[URL_MAX];
 static int url_cursor;
 static bool edit_fresh;             /* the first key replaces the whole address */
-static struct ui_scroll list_scroll;
+static struct ui_list list;
 static bool in_keyboard;
 static char toast[48];
 static uint32_t toast_until;
@@ -607,47 +609,50 @@ static int list_count(void)
 }
 
 #define ROW_H   44
+#define CELL_X  9
+#define TEXT_X  (CELL_X + 10)
+
+static void draw_list_row(gfx_surface *s, int i, gfx_rect row, bool pressed_here, void *ctx)
+{
+    gfx_rect r = gfx_r(CELL_X, row.y, UI_W - 2 * CELL_X, ROW_H);
+    bool sel = pressed_here && !marks_editing;
+    uint32_t ink = sel ? 0xFFFFFF : 0x000000;
+    int x = TEXT_X;
+
+    (void)ctx;
+    ui_draw_group_cell(s, r, ui_group_pos(i, list.count), sel);
+    if (view == V_BOOKMARKS) {
+        int right = r.x + r.w - 10;
+        if (marks_editing) {
+            ui_draw_delete_badge(s, x + 7, r.y + ROW_H / 2, confirm_mark == i);
+            x += UI_DELETE_BADGE_W;
+        }
+        if (confirm_mark == i) {
+            delete_rect = ui_draw_delete_button(s, r.x + r.w - 8, r.y + ROW_H / 2, pressed == P_DELETE);
+            right = delete_rect.x - 6;
+        }
+        gfx_text_fit(s, x, r.y + 5, right - x, ui_font(FONT_B13), marks[i].title, ink, 255);
+        gfx_text_fit(s, x, r.y + 24, right - x, ui_font(FONT_R11), display_url(marks[i].url),
+                     sel ? 0xFFFFFF : 0x7A808A, 255);
+    } else {
+        const char *t = focus->opts[i]->ctext;
+        gfx_text_fit(s, x, r.y + (ROW_H - ui_font(FONT_B14)->line_height) / 2, r.w - 40, ui_font(FONT_B14),
+                     t, i == focus->sel && !sel ? UI_TEXT_DETAIL : ink, 255);
+        if (i == focus->sel)
+            gfx_text(s, r.x + r.w - 24, r.y + (ROW_H - ui_font(FONT_B14)->line_height) / 2, ui_font(FONT_B14),
+                     GFX_CH_CHECK, sel ? 0xFFFFFF : UI_TEXT_DETAIL, 255);
+    }
+}
 
 static void draw_list(gfx_surface *s)
 {
     gfx_rect back;
     const char *title = view == V_BOOKMARKS ? "Bookmarks" : "Choose";
 
-    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
-    int n = list_count();
-    int top = UI_NAV_H + 10 - list_scroll.offset;
-    gfx_rect old = s->clip;
-    gfx_set_clip(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
-    for (int i = 0; i < n; i++) {
-        gfx_rect r = gfx_r(9, top + i * ROW_H, UI_W - 18, ROW_H);
-        if (r.y + r.h < UI_NAV_H || r.y > UI_H)
-            continue;
-        int pos = n == 1 ? 0 : i == 0 ? 1 : i == n - 1 ? 3 : 2;
-        ui_draw_group_cell(s, r, pos, pressed == P_ROW && pressed_row == i && !marks_editing);
-        bool sel = pressed == P_ROW && pressed_row == i && !marks_editing;
-        uint32_t ink = sel ? 0xFFFFFF : 0x000000;
-        int x = r.x + 10;
-        if (view == V_BOOKMARKS) {
-            if (marks_editing) {
-                gfx_circle(s, x + 8, r.y + ROW_H / 2, 8, 0xD02A20, 255);
-                gfx_fill(s, gfx_r(x + 3, r.y + ROW_H / 2 - 1, 10, 3), 0xFFFFFF);
-                x += 24;
-            }
-            gfx_text_fit(s, x, r.y + 5, r.x + r.w - x - 10, ui_font(FONT_B13), marks[i].title, ink, 255);
-            gfx_text_fit(s, x, r.y + 24, r.x + r.w - x - 10, ui_font(FONT_R11), display_url(marks[i].url),
-                         sel ? 0xFFFFFF : 0x7A808A, 255);
-        } else {
-            const char *t = focus->opts[i]->ctext;
-            gfx_text_fit(s, x, r.y + (ROW_H - ui_font(FONT_B14)->line_height) / 2, r.w - 40, ui_font(FONT_B14),
-                         t, i == focus->sel && !sel ? UI_TEXT_DETAIL : ink, 255);
-            if (i == focus->sel)
-                gfx_text(s, r.x + r.w - 24, r.y + (ROW_H - ui_font(FONT_B14)->line_height) / 2, ui_font(FONT_B14),
-                         GFX_CH_CHECK, sel ? 0xFFFFFF : UI_TEXT_DETAIL, 255);
-        }
-    }
-    if (!n)
+    ui_draw_pinstripes(s, list.area);
+    ui_list_draw(s, &list, draw_list_row, NULL);
+    if (!list.count)
         gfx_text_center(s, 0, UI_NAV_H + 60, UI_W, ui_font(FONT_B14), "No Bookmarks", 0x6A7280, 255);
-    s->clip = old;
     ui_draw_navbar(s, title, NULL, &back, 0);
     ui_draw_bar_button(s, "Done", true, pressed == P_DONE, true, 0);
     if (view == V_BOOKMARKS)
@@ -674,7 +679,10 @@ static void open_list(enum view v)
     view = v;
     pressed = P_NONE;
     marks_editing = false;
-    ui_scroll_reset(&list_scroll, list_count() * ROW_H + 20, UI_H - UI_NAV_H);
+    confirm_mark = -1;
+    ui_list_init(&list, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), ROW_H);
+    list.pad = list.footer_h = 10;
+    ui_list_reset(&list, list_count());
     ui_transition(draw_view, true);
 }
 
@@ -997,19 +1005,19 @@ static void browser_event(const struct gz_input_event *e)
     }
 }
 
-static int list_row_at(int y)
+static void delete_mark(int i)
 {
-    int r = (y - UI_NAV_H - 10 + list_scroll.offset);
-    if (y < UI_NAV_H || r < 0)
-        return -1;
-    r /= ROW_H;
-    return r < list_count() ? r : -1;
+    memmove(&marks[i], &marks[i + 1], sizeof(marks[0]) * (size_t)(nmarks - i - 1));
+    nmarks--;
+    save_marks();
+    ui_list_set_count(&list, nmarks);
 }
 
 static void list_event(const struct gz_input_event *e)
 {
     if (e->type == GZ_EV_TOUCH_DOWN) {
         pressed = P_NONE;
+        badge_press = false;
         if (e->y < UI_NAV_H) {
             if (e->x >= UI_W - 70)
                 pressed = P_DONE;
@@ -1017,19 +1025,18 @@ static void list_event(const struct gz_input_event *e)
                 pressed = P_EDIT;
             return;
         }
-        ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H);
-        pressed_row = list_row_at(e->y);
-        pressed = pressed_row >= 0 ? P_ROW : P_NONE;
-        return;
+        if (confirm_mark >= 0 && gfx_rect_contains(delete_rect, e->x, e->y)) {
+            pressed = P_DELETE;
+            return;
+        }
     }
-    if (pressed == P_ROW || pressed == P_NONE) {
-        if (ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H) && list_scroll.moved)
-            pressed = P_NONE;
-    }
+    bool dirty = false;
+    int row = ui_list_event(&list, e, &dirty);
+    if (e->type == GZ_EV_TOUCH_DOWN && marks_editing && list.pressed >= 0)
+        badge_press = e->x < TEXT_X + UI_DELETE_BADGE_W;
     if (e->type != GZ_EV_TOUCH_UP)
         return;
     enum press p = pressed;
-    int row = pressed_row;
     pressed = P_NONE;
     if (p == P_DONE && e->y < UI_NAV_H) {
         if (view == V_PICKER)
@@ -1037,16 +1044,21 @@ static void list_event(const struct gz_input_event *e)
         close_list();
     } else if (p == P_EDIT && e->y < UI_NAV_H) {
         marks_editing = !marks_editing;
-    } else if (p == P_ROW && !list_scroll.moved && list_row_at(e->y) == row) {
+        confirm_mark = -1;
+    } else if (p == P_DELETE) {
+        if (gfx_rect_contains(delete_rect, e->x, e->y))
+            delete_mark(confirm_mark);
+        confirm_mark = -1;
+    } else if (row >= 0) {
         if (view == V_PICKER) {
             focus->sel = row;
             focus = NULL;
             close_list();
+        } else if (confirm_mark >= 0) {
+            confirm_mark = -1;      /* any other tap cancels a pending delete */
         } else if (marks_editing) {
-            memmove(&marks[row], &marks[row + 1], sizeof(marks[0]) * (size_t)(nmarks - row - 1));
-            nmarks--;
-            save_marks();
-            list_scroll.content_h = nmarks * ROW_H + 20;
+            if (badge_press)
+                confirm_mark = row;
         } else {
             char url[256];
             snprintf(url, sizeof(url), "%s", marks[row].url);
@@ -1058,7 +1070,11 @@ static void list_event(const struct gz_input_event *e)
 
 static void back_key(void)
 {
-    if (view != V_PAGE) {
+    if (view != V_PAGE && confirm_mark >= 0) {
+        confirm_mark = -1;
+    } else if (view != V_PAGE && marks_editing) {
+        marks_editing = false;
+    } else if (view != V_PAGE) {
         focus = NULL;
         close_list();
     } else if (mode == M_URL) {
@@ -1155,7 +1171,7 @@ int main(void)
     for (;;) {
         struct gz_input_event ev;
         bool busy = ld.state != LS_IDLE;
-        struct ui_scroll *s = view == V_PAGE ? &sc : &list_scroll;
+        struct ui_scroll *s = view == V_PAGE ? &sc : &list.sc;
         int timeout = s->animating ? 16 : busy ? 30 : toast[0] || refresh_url ? 100 : scroll_changed ? 300 : -1;
         bool dirty = false;
 

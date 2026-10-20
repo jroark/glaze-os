@@ -30,7 +30,8 @@ static struct {
     gfx_image img;
     bool ok, tried;
 } icons[STORE_MAX_APPS];
-static struct ui_scroll scroll, detail_scroll;
+static struct ui_list list;
+static struct ui_scroll detail_scroll;
 static struct ui_keyboard keyboard;
 static int tab, selected = -1, rows[STORE_MAX_APPS], nrows, cursor;
 static char query[64], message[96];
@@ -58,7 +59,8 @@ static void rebuild(void)
     for (int i = 0; i < catalog.count; i++)
         if (tab ? local[i].update : store_matches(&catalog.apps[i], query))
             rows[nrows++] = i;
-    ui_scroll_reset(&scroll, nrows * ROW_H, list_height());
+    ui_list_set_area(&list, gfx_r(0, LIST_Y, UI_W, list_height()));
+    ui_list_reset(&list, nrows);
 }
 static bool installed(void)
 {
@@ -428,6 +430,28 @@ static void wrapped(gfx_surface *s, const char *text, int y, int width, const gf
         gfx_text_n(s, 12, y + i * f->line_height, f, text + starts[i], ui_line_len(text, starts, n, i), color,
                    255);
 }
+static void draw_row(gfx_surface *s, int r, gfx_rect rc, bool sel, void *ctx)
+{
+    (void)ctx;
+    int i = rows[r], y = rc.y;
+    struct store_app *a = &catalog.apps[i];
+    if (sel)
+        gfx_vgradient(s, gfx_r(0, y, UI_W, ROW_H - 1), UI_SELECT_TOP, UI_SELECT_BOTTOM, 255);
+    else
+        gfx_fill(s, gfx_r(0, y, UI_W, ROW_H), r % 2 ? 0xF7F8FA : 0xFFFFFF);
+    if (icons[i].ok)
+        gfx_draw_image(s, 9, y + 10, &icons[i].img, 255);
+    else {
+        gfx_round_rect_vgradient(s, gfx_r(9, y + 10, 44, 44), 8, 0x7CB2E0, 0x335F9F, 255);
+        gfx_text_center(s, 9, y + 20, 44, ui_font(FONT_B20), "+", 0xFFFFFF, 255);
+    }
+    gfx_text_fit(s, 62, y + 8, 132, ui_font(FONT_B14), a->name, sel ? 0xFFFFFF : UI_TEXT, 255);
+    gfx_text_fit(s, 62, y + 27, 154, ui_font(FONT_R10), a->summary, sel ? 0xFFFFFF : 0x526179, 255);
+    const char *label = local[i].update ? "Update" : local[i].installed ? "Installed" : "Free";
+    gfx_text(s, 62, y + 43, ui_font(FONT_B10), label, sel ? 0xFFFFFF : local[i].update ? 0x277124 : 0x385487, 255);
+    ui_draw_chevron(s, 224, y + 27, sel ? 0xFFFFFF : 0x7A879B);
+    gfx_fill(s, gfx_r(0, y + ROW_H - 1, UI_W, 1), 0xD3D8E0);
+}
 static void draw(gfx_surface *s)
 {
     gfx_fill(s, gfx_r(0, 0, UI_W, UI_H), 0xFFFFFF);
@@ -477,26 +501,8 @@ static void draw(gfx_surface *s)
                 gfx_fill(s, gfx_r(MIN(x, 220), 39, 1, 15), 0x2466C0);
             }
         }
-        gfx_set_clip(s, gfx_r(0, LIST_Y, 240, list_height()));
-        for (int r = 0; r < nrows; r++) {
-            int i = rows[r], y = LIST_Y + r * ROW_H - scroll.offset;
-            if (y + ROW_H < LIST_Y || y >= view_bottom())
-                continue;
-            struct store_app *a = &catalog.apps[i];
-            gfx_fill(s, gfx_r(0, y, 240, ROW_H), r % 2 ? 0xF7F8FA : 0xFFFFFF);
-            if (icons[i].ok)
-                gfx_draw_image(s, 9, y + 10, &icons[i].img, 255);
-            else {
-                gfx_round_rect_vgradient(s, gfx_r(9, y + 10, 44, 44), 8, 0x7CB2E0, 0x335F9F, 255);
-                gfx_text_center(s, 9, y + 20, 44, ui_font(FONT_B20), "+", 0xFFFFFF, 255);
-            }
-            gfx_text_fit(s, 62, y + 8, 132, ui_font(FONT_B14), a->name, UI_TEXT, 255);
-            gfx_text_fit(s, 62, y + 27, 154, ui_font(FONT_R10), a->summary, 0x526179, 255);
-            const char *label = local[i].update ? "Update" : local[i].installed ? "Installed" : "Free";
-            gfx_text(s, 62, y + 43, ui_font(FONT_B10), label, local[i].update ? 0x277124 : 0x385487, 255);
-            ui_draw_chevron(s, 224, y + 27, 0x7A879B);
-            gfx_fill(s, gfx_r(0, y + ROW_H - 1, 240, 1), 0xD3D8E0);
-        }
+        gfx_set_clip(s, list.area);
+        ui_list_draw(s, &list, draw_row, NULL);
         if (!nrows) {
             gfx_text_center(s, 4, LIST_Y + 35, 232, ui_font(FONT_B14),
                             tab      ? "All up to date"
@@ -555,6 +561,7 @@ static void show_details(int i)
 {
     selected = i;
     editing = false;
+    ui_list_set_area(&list, gfx_r(0, LIST_Y, UI_W, list_height()));
     armed = false;
     int starts[48], lines = ui_wrap(ui_font(FONT_R12), catalog.apps[i].description, 216, starts, 48);
     ui_scroll_reset(&detail_scroll, 180 + lines * ui_font(FONT_R12)->line_height, view_bottom() - UI_NAV_H);
@@ -583,6 +590,7 @@ int main(void)
 {
     ui_init(SB_STATUS_GRAY);
     ui_keyboard_init(&keyboard);
+    ui_list_init(&list, gfx_r(0, LIST_Y, UI_W, list_height()), ROW_H);
     fs_mkdirs(CACHE);
     fs_mkdirs("/Applications");
     fs_remove(CACHE "/download.tmp");
@@ -598,7 +606,6 @@ int main(void)
     refresh_catalog();
     redraw();
     struct gz_input_event e;
-    int down = -1;
     bool dirty = false;
     for (;;) {
         if (ui_next_event(&e, 20)) {
@@ -679,14 +686,10 @@ int main(void)
                         activate();
                 }
             } else {
-                if (e.type == GZ_EV_TOUCH_DOWN)
-                    down =
-                        (e.y >= LIST_Y && e.y < view_bottom()) ? (e.y - LIST_Y + scroll.offset) / ROW_H : -1;
-                if (e.y >= LIST_Y && e.y < view_bottom())
-                    dirty |= ui_scroll_event(&scroll, &e, e.y - LIST_Y);
-                else if (e.type == GZ_EV_TOUCH_UP && scroll.dragging)
-                    ui_scroll_event(&scroll, &e, e.y - LIST_Y);
-                if (e.type == GZ_EV_TOUCH_UP) {
+                int r = ui_list_event(&list, &e, &dirty);
+                if (r >= 0)
+                    show_details(rows[r]);
+                else if (e.type == GZ_EV_TOUCH_UP) {
                     if (gfx_rect_contains(refresh, e.x, e.y)) {
                         if (fetch) {
                             stop_fetch();
@@ -700,9 +703,7 @@ int main(void)
                     } else if (tab && gfx_rect_contains(all_button, e.x, e.y)) {
                         all_updates = true;
                         next_update();
-                    } else if (!scroll.moved && down >= 0 && down < nrows && e.y >= LIST_Y &&
-                               e.y < view_bottom() && down == (e.y - LIST_Y + scroll.offset) / ROW_H)
-                        show_details(rows[down]);
+                    }
                 }
             }
             if (!editing && e.type == GZ_EV_TOUCH_UP && e.y >= UI_H - UI_TAB_H) {
@@ -732,7 +733,7 @@ int main(void)
             }
             last_poll = gz_time_ms();
         }
-        dirty |= selected >= 0 ? ui_scroll_step(&detail_scroll) : ui_scroll_step(&scroll);
+        dirty |= selected >= 0 ? ui_scroll_step(&detail_scroll) : ui_scroll_step(&list.sc);
         if (dirty || ((fetch || editing) && gz_time_ms() - last_draw > 150)) {
             redraw();
             dirty = false;

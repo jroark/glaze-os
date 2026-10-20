@@ -43,8 +43,7 @@ static int nsongs;
 enum view { V_LIST, V_NOW };
 static enum view view = V_LIST;
 static struct audio_state st;
-static struct ui_scroll list_scroll;
-static int pressed_row = -1;
+static struct ui_list list;
 static bool pressed_now;
 static gfx_rect now_rect, back_rect;
 static int pressed_ctrl = -1;       /* 0 previous, 1 play/pause, 2 next */
@@ -146,39 +145,34 @@ static void fmt_time(char *buf, size_t n, uint32_t ms, bool minus)
 
 /* ---- list ------------------------------------------------------------------ */
 
-static int row_y(int i)
+static void draw_song(gfx_surface *s, int i, gfx_rect r, bool sel, void *ctx)
 {
-    return UI_NAV_H + i * ROW_H - list_scroll.offset;
+    const gfx_font *f = ui_font(FONT_B17);
+    int x = 10;
+
+    (void)ctx;
+    ui_draw_list_row(s, r, sel);
+    if (is_current(i)) {
+        /* The speaker mark of the original: a blue play arrow. */
+        triangle(s, 8, r.y + ROW_H / 2 - 6, 10, 12, 1, sel ? 0xFFFFFF : UI_BLUE_BUTTON);
+        x = 24;
+    }
+    gfx_text_fit(s, x, r.y + (ROW_H - f->line_height) / 2, UI_W - x - 10, f, songs[i].title,
+                 sel ? 0xFFFFFF : UI_TEXT, 255);
 }
 
 static void draw_list(gfx_surface *s)
 {
-    gfx_rect body = gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
-    const gfx_font *f = ui_font(FONT_B17), *sf = ui_font(FONT_R14);
+    gfx_rect body = list.area;
+    const gfx_font *sf = ui_font(FONT_R14);
 
     gfx_set_clip(s, body);
     gfx_fill(s, body, 0xFFFFFF);
-    for (int i = 0; i < nsongs; i++) {
-        int y = row_y(i);
-        if (y + ROW_H <= body.y || y >= body.y + body.h)
-            continue;
-        bool sel = i == pressed_row;
-        if (sel)
-            gfx_vgradient(s, gfx_r(0, y, UI_W, ROW_H - 1), UI_SELECT_TOP, UI_SELECT_BOTTOM, 255);
-        gfx_fill(s, gfx_r(0, y + ROW_H - 1, UI_W, 1), 0xD9D9D9);
-        int x = 10;
-        if (is_current(i)) {
-            /* The speaker mark of the original: a blue play arrow. */
-            triangle(s, 8, y + ROW_H / 2 - 6, 10, 12, 1, sel ? 0xFFFFFF : UI_BLUE_BUTTON);
-            x = 24;
-        }
-        gfx_text_fit(s, x, y + (ROW_H - f->line_height) / 2, UI_W - x - 10, f, songs[i].title,
-                     sel ? 0xFFFFFF : UI_TEXT, 255);
-    }
+    ui_list_draw(s, &list, draw_song, NULL);
     if (nsongs) {
         char count[24];
         snprintf(count, sizeof(count), nsongs == 1 ? "%d Song" : "%d Songs", nsongs);
-        gfx_text_center(s, 0, row_y(nsongs) + 12, UI_W, sf, count, 0x808080, 255);
+        gfx_text_center(s, 0, ui_list_row_y(&list, nsongs) + 12, UI_W, sf, count, 0x808080, 255);
     } else {
         gfx_text_center(s, 0, UI_NAV_H + 100, UI_W, ui_font(FONT_B17), "No Songs", 0x666666, 255);
         gfx_text_center(s, 0, UI_NAV_H + 126, UI_W, sf, "MP3 and WAV files you add", 0x888888, 255);
@@ -305,51 +299,30 @@ static void play_song(int i)
     show_now();
 }
 
-static int row_hit(int y)
-{
-    if (y < UI_NAV_H)
-        return -1;
-    int i = (y - UI_NAV_H + list_scroll.offset) / ROW_H;
-    return i < nsongs ? i : -1;
-}
-
 static void list_event(const struct gz_input_event *e)
 {
-    if (e->type == GZ_EV_TOUCH_DOWN) {
-        if (e->y < UI_NAV_H) {
-            pressed_now = gfx_rect_contains(now_rect, e->x, e->y);
-            if (pressed_now)
-                redraw();
-            return;
-        }
-        ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H);
-        pressed_row = row_hit(e->y);
-        redraw();
-    } else if (e->type == GZ_EV_TOUCH_MOVE) {
+    if (e->type == GZ_EV_TOUCH_DOWN && e->y < UI_NAV_H) {
+        pressed_now = gfx_rect_contains(now_rect, e->x, e->y);
         if (pressed_now)
-            return;
-        if (ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H)) {
-            if (list_scroll.moved)
-                pressed_row = -1;
             redraw();
-        }
-    } else if (e->type == GZ_EV_TOUCH_UP) {
-        if (pressed_now) {
+        return;
+    }
+    if (pressed_now) {
+        if (e->type == GZ_EV_TOUCH_UP) {
             pressed_now = false;
             if (gfx_rect_contains(now_rect, e->x, e->y))
                 show_now();
             else
                 redraw();
-            return;
         }
-        ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H);
-        int i = pressed_row;
-        pressed_row = -1;
-        if (i >= 0 && !list_scroll.moved && row_hit(e->y) == i)
-            play_song(i);
-        else
-            redraw();
+        return;
     }
+    bool dirty = false;
+    int i = ui_list_event(&list, e, &dirty);
+    if (i >= 0)
+        play_song(i);
+    else if (dirty)
+        redraw();
 }
 
 static uint32_t scrub_at(int x)
@@ -437,7 +410,9 @@ int main(void)
 {
     ui_init(SB_STATUS_BLACK);
     list_songs();
-    ui_scroll_reset(&list_scroll, nsongs * ROW_H + 40, UI_H - UI_NAV_H);
+    ui_list_init(&list, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), ROW_H);
+    list.footer_h = 40;     /* the song count */
+    ui_list_reset(&list, nsongs);
     poll_state();
     if (loaded() && st.state != AUDIO_STOPPED)
         view = V_NOW;
@@ -446,7 +421,7 @@ int main(void)
     uint32_t last_poll = gz_time_ms();
     for (;;) {
         struct gz_input_event ev;
-        int wait = list_scroll.animating && view == V_LIST ? 30 : POLL_MS;
+        int wait = list.sc.animating && view == V_LIST ? 30 : POLL_MS;
 
         if (ui_next_event(&ev, wait)) {
             if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
@@ -455,7 +430,7 @@ int main(void)
                 list_event(&ev);
             else
                 now_event(&ev);
-        } else if (view == V_LIST && ui_scroll_step(&list_scroll)) {
+        } else if (view == V_LIST && ui_scroll_step(&list.sc)) {
             redraw();
         }
         if (gz_time_ms() - last_poll >= POLL_MS) {
