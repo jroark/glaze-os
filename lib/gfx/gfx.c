@@ -123,23 +123,19 @@ static inline uint32_t lerp8(uint32_t a, uint32_t b, int num, int den)
     return (uint32_t)((int)a + ((int)b - (int)a) * num / den);
 }
 
+static void gradient_row(uint16_t row[4], gfx_rect r, int y, uint32_t top, uint32_t bottom);
+static void shade_span(uint16_t *p, int x, int end, const uint16_t row[4], int alpha);
+
 void gfx_vgradient(gfx_surface *s, gfx_rect r, uint32_t top, uint32_t bottom, int alpha)
 {
     gfx_rect c;
 
     if (alpha <= 0 || !gfx_rect_intersect(r, s->clip, &c))
         return;
-    int den = r.h > 1 ? r.h - 1 : 1;
     for (int y = c.y; y < c.y + c.h; y++) {
-        int t = y - r.y;
-        uint32_t cr = lerp8(top >> 16 & 0xFF, bottom >> 16 & 0xFF, t, den);
-        uint32_t cg = lerp8(top >> 8 & 0xFF, bottom >> 8 & 0xFF, t, den);
-        uint32_t cb = lerp8(top & 0xFF, bottom & 0xFF, t, den);
-        uint16_t *p = s->px + y * s->stride;
-        for (int x = c.x; x < c.x + c.w; x++) {
-            uint16_t px = dither565(cr, cg, cb, x, y);
-            p[x] = alpha >= 255 ? px : gfx_blend565(p[x], px, alpha);
-        }
+        uint16_t row[4];
+        gradient_row(row, r, y, top, bottom);
+        shade_span(s->px + y * s->stride, c.x, c.x + c.w, row, alpha);
     }
 }
 
@@ -214,68 +210,94 @@ static int rr_coverage(gfx_rect r, int rad, int x, int y)
     return disc_coverage(x, y, cx * 16, cy * 16, rad * 16);
 }
 
-typedef uint16_t (*shade_fn)(int x, int y, const void *ctx);
-
-struct grad_ctx {
-    gfx_rect r;
-    uint32_t top, bottom;
-};
-
-static uint16_t shade_grad(int x, int y, const void *vctx)
+/* Four pre-dithered colours cover a whole row. Keep the absolute screen
+ * phase so clipped and full draws produce identical pixels. */
+static void gradient_row(uint16_t row[4], gfx_rect r, int y, uint32_t top, uint32_t bottom)
 {
-    const struct grad_ctx *g = vctx;
-    int den = g->r.h > 1 ? g->r.h - 1 : 1, t = y - g->r.y;
+    int den = r.h > 1 ? r.h - 1 : 1, t = y - r.y;
+    uint32_t cr = lerp8(top >> 16 & 0xFF, bottom >> 16 & 0xFF, t, den);
+    uint32_t cg = lerp8(top >> 8 & 0xFF, bottom >> 8 & 0xFF, t, den);
+    uint32_t cb = lerp8(top & 0xFF, bottom & 0xFF, t, den);
 
-    return dither565(lerp8(g->top >> 16 & 0xFF, g->bottom >> 16 & 0xFF, t, den),
-                     lerp8(g->top >> 8 & 0xFF, g->bottom >> 8 & 0xFF, t, den),
-                     lerp8(g->top & 0xFF, g->bottom & 0xFF, t, den), x, y);
+    for (int x = 0; x < 4; x++)
+        row[x] = dither565(cr, cg, cb, x, y);
 }
 
-static void round_rect_shaded(gfx_surface *s, gfx_rect r, int rad, shade_fn shade, const void *ctx, int alpha)
+/* Interior spans have full coverage: no corner math or per-pixel shader. */
+static void shade_span(uint16_t *p, int x, int end, const uint16_t row[4], int alpha)
 {
-    gfx_rect c;
+    if (alpha >= 255) {
+        if (x < end && ((uintptr_t)(p + x) & 2)) {
+            p[x] = row[x & 3];
+            x++;
+        }
+        for (; x + 1 < end; x += 2)
+            *(uint32_t *)(p + x) = row[x & 3] | ((uint32_t)row[(x + 1) & 3] << 16);
+        if (x < end)
+            p[x] = row[x & 3];
+    } else {
+        for (; x < end; x++)
+            p[x] = gfx_blend565(p[x], row[x & 3], alpha);
+    }
+}
 
-    if (alpha <= 0 || !gfx_rect_intersect(r, s->clip, &c))
-        return;
-    rad = MIN(rad, MIN(r.w, r.h) / 2);
-    for (int y = c.y; y < c.y + c.h; y++) {
-        uint16_t *p = s->px + y * s->stride;
-        bool corner_row = y < r.y + rad || y >= r.y + r.h - rad;
-        for (int x = c.x; x < c.x + c.w; x++) {
-            int cov = 255;
-            if (corner_row && (x < r.x + rad || x >= r.x + r.w - rad)) {
-                cov = rr_coverage(r, rad, x, y);
-                if (!cov)
-                    continue;
-            }
+static void shade_corners(uint16_t *p, int x, int end, int y, gfx_rect r, int rad,
+                          const uint16_t row[4], int alpha)
+{
+    for (; x < end; x++) {
+        int cov = rr_coverage(r, rad, x, y);
+        if (cov) {
             int a = cov * alpha / 255;
-            uint16_t px = shade(x, y, ctx);
-            p[x] = a >= 255 ? px : gfx_blend565(p[x], px, a);
+            p[x] = a >= 255 ? row[x & 3] : gfx_blend565(p[x], row[x & 3], a);
         }
     }
 }
 
-static uint16_t shade_solid(int x, int y, const void *ctx)
+static void round_row(gfx_surface *s, gfx_rect r, gfx_rect c, int rad, int y,
+                      const uint16_t row[4], int alpha)
 {
-    return *(const uint16_t *)ctx;
+    uint16_t *p = s->px + y * s->stride;
+    int left = c.x, right = c.x + c.w;
+
+    if (y < r.y + rad || y >= r.y + r.h - rad) {
+        int mid_l = MIN(right, MAX(left, r.x + rad));
+        int mid_r = MAX(mid_l, MIN(right, r.x + r.w - rad));
+        shade_corners(p, left, mid_l, y, r, rad, row, alpha);
+        shade_span(p, mid_l, mid_r, row, alpha);
+        shade_corners(p, mid_r, right, y, r, rad, row, alpha);
+    } else {
+        shade_span(p, left, right, row, alpha);
+    }
 }
 
 void gfx_round_rect(gfx_surface *s, gfx_rect r, int radius, uint32_t rgb, int alpha)
 {
-    uint16_t c = RGB565(rgb);
+    gfx_rect c;
+    uint16_t col = RGB565(rgb), row[4] = { col, col, col, col };
 
     if (radius <= 0) {
         gfx_fill_alpha(s, r, rgb, alpha);
         return;
     }
-    round_rect_shaded(s, r, radius, shade_solid, &c, alpha);
+    if (alpha <= 0 || !gfx_rect_intersect(r, s->clip, &c))
+        return;
+    radius = MIN(radius, MIN(r.w, r.h) / 2);
+    for (int y = c.y; y < c.y + c.h; y++)
+        round_row(s, r, c, radius, y, row, alpha);
 }
 
 void gfx_round_rect_vgradient(gfx_surface *s, gfx_rect r, int radius, uint32_t top, uint32_t bottom, int alpha)
 {
-    struct grad_ctx g = { r, top, bottom };
+    gfx_rect c;
 
-    round_rect_shaded(s, r, radius, shade_grad, &g, alpha);
+    if (alpha <= 0 || !gfx_rect_intersect(r, s->clip, &c))
+        return;
+    radius = MAX(0, MIN(radius, MIN(r.w, r.h) / 2));
+    for (int y = c.y; y < c.y + c.h; y++) {
+        uint16_t row[4];
+        gradient_row(row, r, y, top, bottom);
+        round_row(s, r, c, radius, y, row, alpha);
+    }
 }
 
 void gfx_circle(gfx_surface *s, int cx, int cy, int radius, uint32_t rgb, int alpha)

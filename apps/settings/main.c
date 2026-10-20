@@ -197,21 +197,31 @@ static const char *net_state_name(uint32_t state)
     }
 }
 
+static bool cell_visible(const gfx_surface *s)
+{
+    gfx_rect c;
+
+    return gfx_rect_intersect(gfx_r(CELL_X, section_y, CELL_W, UI_ROW_H), s->clip, &c);
+}
+
 static void draw_root(gfx_surface *s)
 {
     nhits = 0;
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
     ui_draw_navbar(s, "Settings", NULL, NULL, 0);
     section_y = UI_NAV_H + 12;
-    struct net_status st;
-    if (net_status(&st) < 0)
+    struct net_status st = { .state = NET_NO_CARD };
+    if (cell_visible(s) && net_status(&st) < 0)
         st.state = NET_NO_CARD;
     cell(s, 0, "Network", net_state_name(st.state), true, R_NETWORK);
     section_gap();
     cell(s, 1, "Sounds", NULL, true, R_SOUNDS);
     cell(s, 2, "Wallpaper", NULL, true, R_WALLPAPER);
     cell(s, 2, "Date & Time", NULL, true, R_DATETIME);
-    cell(s, 3, "Passcode Lock", passcode_enabled() ? "On" : "Off", true, R_PASSCODE);
+    /* A clipped-out value needs no file-server round trip. The cell still
+     * registers its full hit rectangle below. */
+    bool enabled = cell_visible(s) && passcode_enabled();
+    cell(s, 3, "Passcode Lock", enabled ? "On" : "Off", true, R_PASSCODE);
     section_gap();
     cell(s, 0, "About", NULL, true, R_ABOUT);
 }
@@ -240,12 +250,8 @@ static void draw_wallpaper(gfx_surface *s)
 static void draw_preview(gfx_surface *s)
 {
     nhits = 0;
-    gfx_rect saved = s->clip;
-    gfx_surface sh = *s;
-    sh.px -= SB_STATUS_H * s->stride;   /* show the wallpaper as it sits on screen */
-    sh.clip = gfx_r(0, SB_STATUS_H, UI_W, UI_H);
-    gfx_draw_image(&sh, 0, 0, &walls[preview_wall], 255);
-    s->clip = saved;
+    /* Keep the caller's clip, including when repainting just a button. */
+    gfx_draw_image(s, 0, -SB_STATUS_H, &walls[preview_wall], 255);
     gfx_rect bar = gfx_r(0, UI_H - 44, UI_W, 44);
     gfx_fill_alpha(s, bar, 0x000000, 150);
     gfx_vgradient(s, gfx_r(0, bar.y, UI_W, 22), 0xFFFFFF, 0xFFFFFF, 25);
@@ -518,14 +524,49 @@ static void go(enum view v, bool forward)
     target_view = v;
     ui_transition(draw_target, forward);
     view = v;
-    draw_view(&ui.surf, view);      /* refresh hit rects for the live surface */
+    /* draw_target already built the complete hit table in view coordinates. */
+}
+
+static void redraw_rect(gfx_rect r)
+{
+    gfx_set_clip(&ui.surf, r);
+    if (gfx_rect_empty(ui.surf.clip)) {
+        gfx_reset_clip(&ui.surf);
+        return;
+    }
+    r = ui.surf.clip;
+    /* Every view still registers all its hits, independently of the clip. */
+    draw_view(&ui.surf, view);
+    gfx_reset_clip(&ui.surf);
+    ui_invalidate(r);
+    ui_present();
 }
 
 static void redraw(void)
 {
-    draw_view(&ui.surf, view);
-    ui_invalidate_all();
-    ui_present();
+    redraw_rect(gfx_r(0, 0, UI_W, UI_H));
+}
+
+static gfx_rect hit_rect(int id)
+{
+    gfx_rect r = gfx_r(0, 0, 0, 0);
+
+    if (id != R_NONE) {
+        for (int i = 0; i < nhits; i++) {
+            if (hits[i].id == id)
+                r = gfx_rect_union(r, hits[i].r);
+        }
+    }
+    return r;
+}
+
+static void press(int id)
+{
+    if (id == pressed)
+        return;
+    gfx_rect r = gfx_rect_union(hit_rect(pressed), hit_rect(id));
+    pressed = id;
+    redraw_rect(r);
 }
 
 /* ---- actions ------------------------------------------------------------ */
@@ -800,7 +841,7 @@ static bool volume_touch(const struct gz_input_event *ev)
         return true;
     }
     s_volume = v;
-    redraw();
+    redraw_rect(volume_rect);
     return true;
 }
 
@@ -817,6 +858,8 @@ static bool zone_touch(const struct gz_input_event *ev)
         zone_drag = ev->y >= UI_NAV_H;
     if (!zone_drag)
         return false;
+    int old_offset = zone_scroll.offset, old_pressed = pressed;
+    gfx_rect old_hit = hit_rect(pressed);
     ui_scroll_event(&zone_scroll, ev, ev->y - UI_NAV_H);
     if (ev->type == GZ_EV_TOUCH_DOWN)
         pressed = hit_test(ev->x, ev->y);
@@ -832,7 +875,10 @@ static bool zone_touch(const struct gz_input_event *ev)
                 return true;
         }
     }
-    redraw();
+    if (zone_scroll.offset != old_offset)
+        redraw_rect(zone_area());
+    else if (pressed != old_pressed)
+        redraw_rect(gfx_rect_union(old_hit, hit_rect(pressed)));
     return true;
 }
 
@@ -860,9 +906,14 @@ int main(void)
         if (view == V_ZONE && zone_scroll.animating)
             timeout = 16;
         if (!ui_next_event(&ev, timeout)) {
-            if (view == V_ZONE)
+            if (view == V_ZONE) {
+                int old_offset = zone_scroll.offset;
                 ui_scroll_step(&zone_scroll);
-            redraw();               /* live uptime / clock, or scrolling */
+                if (zone_scroll.offset != old_offset)
+                    redraw_rect(zone_area());
+            } else {
+                redraw_rect(zone_area());  /* live uptime / clock / network */
+            }
             continue;
         }
         if (pin_touch(&ev) || volume_touch(&ev) || zone_touch(&ev))
@@ -874,22 +925,22 @@ int main(void)
             continue;
         }
         if (ev.type == GZ_EV_TOUCH_DOWN) {
-            pressed = hit_test(ev.x, ev.y);
-            redraw();
+            press(hit_test(ev.x, ev.y));
         } else if (ev.type == GZ_EV_TOUCH_MOVE) {
             if (pressed != R_NONE && hit_test(ev.x, ev.y) != pressed) {
-                pressed = R_NONE;
-                redraw();
+                press(R_NONE);
             }
         } else if (ev.type == GZ_EV_TOUCH_UP) {
             int id = pressed;
-            pressed = R_NONE;
-            if (id != R_NONE)
+            if (id != R_NONE) {
+                enum view old_view = view;
+                pressed = R_NONE;
                 activate(id);
-            redraw();
+                if (view == old_view)
+                    redraw();      /* activation may change layout or values */
+            }
         } else if (ev.type == GZ_EV_KEY_DOWN && ev.code == GZ_KEY_ESC && view != V_ROOT) {
             activate(R_BACK);
-            redraw();
         } else if (ev.type == GZ_EV_KEY_DOWN && ev.code == GZ_KEY_BACKSPACE && view == V_PIN) {
             pin_key('\b');
             redraw();
