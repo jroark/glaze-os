@@ -43,7 +43,8 @@ actions still repaint the full view; this pass does not optimize persistent writ
 
 Run `make -C host gfx-test settings-test` for ASan/UBSan checks. Graphics tests
 compare 8,000 cases against scalar pixel oracles, including clipping, alpha,
-dithering, narrow buttons, odd strides, and untouched buffer guards. Settings
+dithering, narrow buttons, odd strides, and untouched buffer guards, and check
+that three-slice caps too wide for the image draw nothing. Settings
 tests compare partial and full pixels and hit tables across views, navigation,
 slider values, and time-zone overscroll; stationary input must not present.
 They also write preview images under `out/host/`.

@@ -4,6 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Two RGB565 pixels written as one word. may_alias tells the compiler the
+ * store can change the uint16_t pixels around it, so it doesn't reorder or
+ * drop their reads (no -fno-strict-aliasing in the build). */
+typedef uint32_t __attribute__((may_alias)) pixel_pair;
+
 /* 4x4 ordered-dither thresholds, 0..15. */
 static const uint8_t bayer4[4][4] = {
     { 0, 8, 2, 10 },
@@ -94,7 +99,7 @@ void gfx_fill(gfx_surface *s, gfx_rect r, uint32_t rgb)
             *p++ = c;
             n--;
         }
-        uint32_t *p32 = (uint32_t *)p;
+        pixel_pair *p32 = (pixel_pair *)p;
         for (; n >= 2; n -= 2)
             *p32++ = c2;
         if (n)
@@ -232,7 +237,7 @@ static void shade_span(uint16_t *p, int x, int end, const uint16_t row[4], int a
             x++;
         }
         for (; x + 1 < end; x += 2)
-            *(uint32_t *)(p + x) = row[x & 3] | ((uint32_t)row[(x + 1) & 3] << 16);
+            *(pixel_pair *)(p + x) = row[x & 3] | ((uint32_t)row[(x + 1) & 3] << 16);
         if (x < end)
             p[x] = row[x & 3];
     } else {

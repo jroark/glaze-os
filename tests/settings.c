@@ -134,7 +134,7 @@ static void require(bool ok, const char *what)
 
 static void compare_full(void)
 {
-    struct hit saved[40];
+    struct hit saved[sizeof(hits) / sizeof(hits[0])];
     int count = nhits;
     memcpy(saved, hits, sizeof(hits));
     gfx_surface s;
@@ -163,7 +163,7 @@ int main(void)
         pressed = R_NONE;
         redraw();
         compare_full();
-        int ids[40], count = nhits;
+        int ids[sizeof(hits) / sizeof(hits[0])], count = nhits;
         for (int i = 0; i < count; i++)
             ids[i] = hits[i].id;
         for (int i = 0; i < count; i++) {

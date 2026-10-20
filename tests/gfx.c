@@ -156,6 +156,17 @@ int main(void)
         if (memcmp(&a.clip, &e.clip, sizeof(a.clip)))
             return 1;
     }
-    puts("gfx: 8000 pixel comparisons PASS (including padding and guards)");
+    /* Caps that don't fit the image draw nothing (and read nothing past it). */
+    static const int bad_caps[][2] = {{30, 0}, {40, 6}, {20, 15}, {-1, 6}, {12, -1}};
+    for (unsigned i = 0; i < sizeof(bad_caps) / sizeof(bad_caps[0]); i++) {
+        for (int j = 0; j < WORDS; j++)
+            actual[j] = expected[j] = (uint16_t)next();
+        gfx_surface a;
+        gfx_surface_init(&a, actual + 3, W, H, STRIDE);
+        gfx_image img = {30, 24, pixels, mask};
+        gfx_draw_3slice(&a, gfx_r(4, 4, 60, 24), &img, bad_caps[i][0], bad_caps[i][1], 255);
+        check("three-slice bad caps", (int)i);
+    }
+    puts("gfx: 8005 pixel comparisons PASS (including padding, guards and bad caps)");
     return 0;
 }

@@ -180,7 +180,8 @@ void gfx_draw_3slice(gfx_surface *dst, gfx_rect dr, const gfx_image *img, int ca
     int mid_src = cap_l;    /* the column repeated across the middle */
     gfx_rect saved = dst->clip, c;
 
-    if (alpha <= 0)
+    /* The body column and the right cap must lie inside the image. */
+    if (alpha <= 0 || cap_l < 0 || cap_r < 0 || cap_l >= img->w || cap_l + cap_r > img->w)
         return;
     if (dr.w < cap_l + cap_r)
         dr.w = cap_l + cap_r;
