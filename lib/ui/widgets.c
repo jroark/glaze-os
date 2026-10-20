@@ -165,6 +165,11 @@ int ui_slider_value(gfx_rect r, int max, int x)
     return v < 0 ? 0 : v > max ? max : v;
 }
 
+int ui_group_pos(int i, int n)
+{
+    return n == 1 ? 0 : i == 0 ? 1 : i == n - 1 ? 3 : 2;
+}
+
 void ui_draw_group_cell(gfx_surface *s, gfx_rect r, int position, bool selected)
 {
     const int rad = 8;

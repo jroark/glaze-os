@@ -86,8 +86,7 @@ static int nvideos;
 
 enum view { V_LIST, V_PLAYER };
 static enum view view = V_LIST;
-static struct ui_scroll list_scroll;
-static int pressed_row = -1;
+static struct ui_list list;
 
 /* The open video. */
 static int fd = -1;
@@ -474,44 +473,39 @@ static void triangle(gfx_surface *s, int x, int y, int w, int h, uint32_t rgb)
     }
 }
 
-static int row_y(int i)
+static void draw_video(gfx_surface *s, int i, gfx_rect r, bool sel, void *ctx)
 {
-    return UI_NAV_H + i * ROW_H - list_scroll.offset;
+    struct video *v = &videos[i];
+    const gfx_font *f = ui_font(FONT_B14), *sf = ui_font(FONT_R12);
+    char dur[16];
+
+    (void)ctx;
+    ui_draw_list_row(s, r, sel);
+    gfx_rect tr = gfx_r(6, r.y + (ROW_H - THUMB_H) / 2, THUMB_W, THUMB_H);
+    if (v->has_thumb) {
+        gfx_surface t;
+        gfx_surface_init(&t, v->thumb_px, THUMB_W, THUMB_H, THUMB_W);
+        gfx_blit(s, tr.x, tr.y, &t, gfx_r(0, 0, THUMB_W, THUMB_H));
+    } else {
+        gfx_fill(s, tr, 0x202020);
+    }
+    int tx = tr.x + THUMB_W + 10;
+    gfx_text_fit(s, tx, r.y + 11, UI_W - tx - 24, f, v->title, sel ? 0xFFFFFF : UI_TEXT, 255);
+    if (v->duration_ms) {
+        fmt_time(dur, sizeof(dur), v->duration_ms, false);
+        gfx_text(s, tx, r.y + 31, sf, dur, sel ? 0xFFFFFF : 0x808080, 255);
+    }
+    ui_draw_chevron(s, UI_W - 16, r.y + ROW_H / 2 - 5, sel ? 0xFFFFFF : 0x9A9A9A);
 }
 
 static void draw_list(gfx_surface *s)
 {
-    gfx_rect body = gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
-    const gfx_font *f = ui_font(FONT_B14), *sf = ui_font(FONT_R12);
-    char dur[16];
+    gfx_rect body = list.area;
+    const gfx_font *sf = ui_font(FONT_R12);
 
     gfx_set_clip(s, body);
     gfx_fill(s, body, 0xFFFFFF);
-    for (int i = 0; i < nvideos; i++) {
-        struct video *v = &videos[i];
-        int y = row_y(i);
-        if (y + ROW_H <= body.y || y >= body.y + body.h)
-            continue;
-        bool sel = i == pressed_row;
-        if (sel)
-            gfx_vgradient(s, gfx_r(0, y, UI_W, ROW_H - 1), UI_SELECT_TOP, UI_SELECT_BOTTOM, 255);
-        gfx_fill(s, gfx_r(0, y + ROW_H - 1, UI_W, 1), 0xD9D9D9);
-        gfx_rect tr = gfx_r(6, y + (ROW_H - THUMB_H) / 2, THUMB_W, THUMB_H);
-        if (v->has_thumb) {
-            gfx_surface t;
-            gfx_surface_init(&t, v->thumb_px, THUMB_W, THUMB_H, THUMB_W);
-            gfx_blit(s, tr.x, tr.y, &t, gfx_r(0, 0, THUMB_W, THUMB_H));
-        } else {
-            gfx_fill(s, tr, 0x202020);
-        }
-        int tx = tr.x + THUMB_W + 10;
-        gfx_text_fit(s, tx, y + 11, UI_W - tx - 24, f, v->title, sel ? 0xFFFFFF : UI_TEXT, 255);
-        if (v->duration_ms) {
-            fmt_time(dur, sizeof(dur), v->duration_ms, false);
-            gfx_text(s, tx, y + 31, sf, dur, sel ? 0xFFFFFF : 0x808080, 255);
-        }
-        ui_draw_chevron(s, UI_W - 16, y + ROW_H / 2 - 5, sel ? 0xFFFFFF : 0x9A9A9A);
-    }
+    ui_list_draw(s, &list, draw_video, NULL);
     if (!nvideos) {
         gfx_text_center(s, 0, UI_NAV_H + 100, UI_W, ui_font(FONT_B17), "No Videos", 0x666666, 255);
         gfx_text_center(s, 0, UI_NAV_H + 126, UI_W, sf, "Motion-JPEG AVI files you add", 0x888888, 255);
@@ -711,37 +705,15 @@ static void play_step(void)
 
 /* ---- events -------------------------------------------------------------------- */
 
-static int row_hit(int y)
-{
-    if (y < UI_NAV_H)
-        return -1;
-    int i = (y - UI_NAV_H + list_scroll.offset) / ROW_H;
-    return i < nvideos ? i : -1;
-}
-
 static void list_event(const struct gz_input_event *e)
 {
-    if (e->type == GZ_EV_TOUCH_DOWN) {
-        if (e->y < UI_NAV_H)
-            return;
-        ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H);
-        pressed_row = row_hit(e->y);
+    bool dirty = false;
+    int i = ui_list_event(&list, e, &dirty);
+
+    if (i >= 0)
+        play_video(i);
+    else if (dirty)
         redraw();
-    } else if (e->type == GZ_EV_TOUCH_MOVE) {
-        if (ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H)) {
-            if (list_scroll.moved)
-                pressed_row = -1;
-            redraw();
-        }
-    } else if (e->type == GZ_EV_TOUCH_UP) {
-        ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H);
-        int i = pressed_row;
-        pressed_row = -1;
-        if (i >= 0 && !list_scroll.moved && row_hit(e->y) == i)
-            play_video(i);
-        else
-            redraw();
-    }
 }
 
 static uint32_t scrub_at(int x)
@@ -824,7 +796,8 @@ int main(void)
 {
     ui_init(SB_STATUS_BLACK);
     list_videos();
-    ui_scroll_reset(&list_scroll, nvideos * ROW_H, UI_H - UI_NAV_H);
+    ui_list_init(&list, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), ROW_H);
+    ui_list_reset(&list, nvideos);
     redraw();
 
     for (;;) {
@@ -833,8 +806,8 @@ int main(void)
 
         if (view == V_PLAYER && playing)
             wait = 10;
-        else if (view == V_LIST && (next_thumb() >= 0 || list_scroll.animating))
-            wait = list_scroll.animating ? 30 : 0;
+        else if (view == V_LIST && (next_thumb() >= 0 || list.sc.animating))
+            wait = list.sc.animating ? 30 : 0;
         if (ui_next_event(&ev, wait)) {
             if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
                 key_event(&ev);
@@ -847,7 +820,7 @@ int main(void)
         if (view == V_PLAYER) {
             if (playing)
                 play_step();
-        } else if (ui_scroll_step(&list_scroll)) {
+        } else if (ui_scroll_step(&list.sc)) {
             redraw();
         } else {
             int i = next_thumb();

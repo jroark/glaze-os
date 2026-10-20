@@ -17,7 +17,6 @@
 #define ROW_H           36
 #define TOOLBAR_H       34
 #define FOOTER_H        34
-#define BADGE_W         26
 #define TEXT_MAX        (32 * 1024)
 #define IMAGE_MAX       (256 * 1024)
 #define MARGIN          10
@@ -33,13 +32,12 @@ static char cwd[FS_PATH_MAX] = "/";
 static struct fs_dirent ents[MAX_ENTRIES];
 static int nents;
 static struct fs_info info;
-static struct ui_scroll list_scroll;
+static struct ui_list list;
 static bool editing;
 static int confirm_row = -1;        /* row showing its Delete button */
 static int list_err;                /* listing failed with this error */
 
 /* Touch state. */
-static int pressed_row = -1;
 static enum {
     P_NONE, P_BACK, P_EDIT, P_NEWFOLDER, P_DELETE, P_BADGE, P_CANCEL, P_SAVE, P_FLASH, P_CARD
 } pressed;
@@ -181,9 +179,9 @@ static void show_alert(const char *title, const char *msg)
 
 /* ---- loading ---------------------------------------------------------------- */
 
-static int list_h(void)
+static gfx_rect list_area(void)
 {
-    return UI_H - UI_NAV_H - (editing ? TOOLBAR_H : 0);
+    return gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H - (editing ? TOOLBAR_H : 0));
 }
 
 static void load_dir(void)
@@ -196,8 +194,8 @@ static void load_dir(void)
     if (fs_statvfs(cwd, &info) < 0)
         memset(&info, 0, sizeof(info));
     confirm_row = -1;
-    pressed_row = -1;
-    ui_scroll_reset(&list_scroll, nents * ROW_H + FOOTER_H, list_h());
+    ui_list_set_area(&list, list_area());
+    ui_list_reset(&list, nents);
 }
 
 static void load_text(int row)
@@ -300,21 +298,14 @@ static void draw_doc_glyph(gfx_surface *s, int x, int y, enum kind k)
     }
 }
 
-static void draw_badge(gfx_surface *s, int cx, int cy, bool armed)
-{
-    gfx_circle(s, cx, cy, 8, 0xFFFFFF, 255);
-    gfx_circle(s, cx, cy, 7, 0xD8261B, 255);
-    if (armed)
-        gfx_fill(s, gfx_r(cx - 1, cy - 4, 3, 9), 0xFFFFFF);
-    else
-        gfx_fill(s, gfx_r(cx - 4, cy - 1, 9, 3), 0xFFFFFF);
-}
-
-static void draw_row(gfx_surface *s, int i, int y)
+static void draw_row(gfx_surface *s, int i, gfx_rect r, bool pressed_here, void *ctx)
 {
     const struct fs_dirent *e = &ents[i];
     enum kind k = kind_of(e);
-    bool sel = i == pressed_row && confirm_row < 0;
+    bool sel = pressed_here && confirm_row < 0;
+    int y = r.y;
+
+    (void)ctx;
     const gfx_font *nf = ui_font(FONT_B13), *df = ui_font(FONT_R11);
     int x = MARGIN;
     char size[16];
@@ -323,8 +314,8 @@ static void draw_row(gfx_surface *s, int i, int y)
         gfx_vgradient(s, gfx_r(0, y, UI_W, ROW_H - 1), UI_SELECT_TOP, UI_SELECT_BOTTOM, 255);
     if (editing) {
         if (!is_card(i))
-            draw_badge(s, MARGIN + 7, y + ROW_H / 2, confirm_row == i);
-        x += BADGE_W;
+            ui_draw_delete_badge(s, MARGIN + 7, y + ROW_H / 2, confirm_row == i);
+        x += UI_DELETE_BADGE_W;
     }
     if (is_card(i))
         draw_card_glyph(s, x, y + (ROW_H - 24) / 2);
@@ -336,14 +327,7 @@ static void draw_row(gfx_surface *s, int i, int y)
 
     int right = UI_W - MARGIN;
     if (confirm_row == i) {
-        delete_rect = gfx_r(UI_W - 70, y + (ROW_H - 26) / 2, 62, 26);
-        bool p = pressed == P_DELETE;
-        gfx_round_rect(s, delete_rect, 5, 0x7A0E08, 255);
-        gfx_round_rect_vgradient(s, gfx_r(delete_rect.x + 1, delete_rect.y + 1, delete_rect.w - 2,
-                                          delete_rect.h - 2), 4, p ? 0xA8231A : 0xEE5A50,
-                                 p ? 0x7A0E08 : 0xC1170D, 255);
-        gfx_text_center(s, delete_rect.x, delete_rect.y + 6, delete_rect.w, ui_font(FONT_B12), "Delete",
-                        0xFFFFFF, 255);
+        delete_rect = ui_draw_delete_button(s, UI_W - 8, y + ROW_H / 2, pressed == P_DELETE);
         right = delete_rect.x - 6;
     } else if (k == K_FOLDER) {
         if (!editing)
@@ -379,18 +363,13 @@ static void draw_toolbar(gfx_surface *s)
 
 static void draw_list(gfx_surface *s)
 {
-    gfx_rect body = gfx_r(0, UI_NAV_H, UI_W, list_h());
+    gfx_rect body = list.area;
     char footer[64], avail[16], parent[FS_PATH_MAX];
 
     gfx_set_clip(s, body);
     gfx_fill(s, body, 0xFFFFFF);
-    for (int i = 0; i < nents; i++) {
-        int y = body.y + i * ROW_H - list_scroll.offset;
-        if (y + ROW_H < body.y || y > body.y + body.h)
-            continue;
-        draw_row(s, i, y);
-    }
-    int fy = body.y + nents * ROW_H - list_scroll.offset;
+    ui_list_draw(s, &list, draw_row, NULL);
+    int fy = ui_list_row_y(&list, nents);
     if (list_err) {
         gfx_text_center(s, 0, body.y + 90, UI_W, ui_font(FONT_B17), "Storage Unavailable", 0x999999, 255);
         gfx_text_center(s, 0, body.y + 116, UI_W, ui_font(FONT_R12), fs_strerror(list_err), 0x999999, 255);
@@ -592,7 +571,7 @@ static void redraw(void)
 static void go(enum view v, bool forward)
 {
     pressed = P_NONE;
-    pressed_row = -1;
+    list.pressed = -1;
     view = v;
     ui_transition(draw_view, forward);
 }
@@ -752,21 +731,10 @@ static void alert_event(const struct gz_input_event *e)
         delete_row(alert_row);
 }
 
-static int row_at(int y)
-{
-    int body_y = y - UI_NAV_H;
-
-    if (body_y < 0 || body_y >= list_h())
-        return -1;
-    int r = (body_y + list_scroll.offset) / ROW_H;
-    return r < nents ? r : -1;
-}
-
 static void list_event(const struct gz_input_event *e)
 {
     if (e->type == GZ_EV_TOUCH_DOWN) {
         pressed = P_NONE;
-        pressed_row = -1;
         if (gfx_rect_contains(back_rect, e->x, e->y))
             pressed = P_BACK;
         else if (gfx_rect_contains(edit_rect, e->x, e->y))
@@ -775,12 +743,11 @@ static void list_event(const struct gz_input_event *e)
             pressed = P_NEWFOLDER;
         else if (confirm_row >= 0 && gfx_rect_contains(delete_rect, e->x, e->y))
             pressed = P_DELETE;
-        else if (e->y >= UI_NAV_H && e->y < UI_NAV_H + list_h()) {
-            ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H);
-            int r = row_at(e->y);
-            if (editing && r >= 0 && e->x < MARGIN + BADGE_W)
+        else {
+            bool dirty = false;
+            ui_list_event(&list, e, &dirty);
+            if (editing && list.pressed >= 0 && e->x < MARGIN + UI_DELETE_BADGE_W)
                 pressed = P_BADGE;
-            pressed_row = r;
         }
         return;
     }
@@ -798,9 +765,7 @@ static void list_event(const struct gz_input_event *e)
             } else if (what == P_EDIT) {
                 editing = !editing;
                 confirm_row = -1;
-                list_scroll.view_h = list_h();
-                if (list_scroll.offset > ui_scroll_max(&list_scroll))
-                    list_scroll.offset = ui_scroll_max(&list_scroll);
+                ui_list_set_area(&list, list_area());
             } else if (what == P_NEWFOLDER) {
                 start_naming(true, -1);
             } else if (what == P_DELETE) {
@@ -812,19 +777,14 @@ static void list_event(const struct gz_input_event *e)
         return;
     }
 
-    if (e->y >= UI_NAV_H || e->type == GZ_EV_TOUCH_UP) {
-        if (ui_scroll_event(&list_scroll, e, e->y - UI_NAV_H) && list_scroll.moved)
-            pressed_row = -1;
-    }
+    bool dirty = false;
+    int row = ui_list_event(&list, e, &dirty);
     if (e->type != GZ_EV_TOUCH_UP)
         return;
-    int row = pressed_row;
     bool badge = pressed == P_BADGE;
-    pressed_row = -1;
     pressed = P_NONE;
-    if (row < 0 || list_scroll.moved || row_at(e->y) != row) {
+    if (row < 0)
         return;
-    }
     if (confirm_row >= 0) {
         confirm_row = -1;       /* any other tap cancels a pending delete */
     } else if (editing && is_card(row)) {
@@ -922,7 +882,7 @@ static void back_key(void)
         confirm_row = -1;
     } else if (editing) {
         editing = false;
-        list_scroll.view_h = list_h();
+        ui_list_set_area(&list, list_area());
     } else if (strcmp(cwd, "/")) {
         go_up();
     }
@@ -931,11 +891,13 @@ static void back_key(void)
 int main(void)
 {
     ui_init(SB_STATUS_GRAY);
+    ui_list_init(&list, list_area(), ROW_H);
+    list.footer_h = FOOTER_H;
     load_dir();
     redraw();
 
     for (;;) {
-        struct ui_scroll *sc = view == V_TEXT ? &text_scroll : &list_scroll;
+        struct ui_scroll *sc = view == V_TEXT ? &text_scroll : &list.sc;
         struct gz_input_event ev;
 
         if (ui_next_event(&ev, sc->animating ? 30 : -1)) {

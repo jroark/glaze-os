@@ -19,6 +19,7 @@
 #define MARGIN      12
 #define LINE_H      22
 #define TOOLBAR_H   34
+#define LIST_ROW_H  (LINE_H * 2 - 8)
 
 #define PAPER       0xFCF4B4
 #define RULE        0xD9CE8C
@@ -45,14 +46,14 @@ static bool editing;                /* editor has input focus */
 static bool dirty;
 static uint32_t last_edit;
 static struct ui_keyboard kb;
-static struct ui_scroll list_scroll, edit_scroll;
+static struct ui_list list;
+static struct ui_scroll edit_scroll;
 static int line_starts[600];
 static int nlines;
 static bool alert_open;
 static int alert_pressed = -1;
 
 /* Touch state. */
-static int pressed_row = -1;
 static bool pressed_plus, pressed_done, pressed_trash;
 static gfx_rect back_rect, plus_rect, done_rect, trash_rect, alert_cancel, alert_delete;
 static bool in_keyboard;
@@ -188,34 +189,33 @@ static void draw_paper(gfx_surface *s, gfx_rect r, int rule_y0, int offset)
 
 static char titles[MAX_NOTES][40];
 
+static void draw_note_row(gfx_surface *s, int i, gfx_rect r, bool sel, void *ctx)
+{
+    const gfx_font *f = ui_font(FONT_B14), *tf = ui_font(FONT_R11);
+    char tbuf[16];
+
+    (void)ctx;
+    if (sel)
+        gfx_vgradient(s, gfx_r(0, r.y, UI_W, r.h - 1), UI_SELECT_TOP, UI_SELECT_BOTTOM, 255);
+    short_time(&notes[i].dt, tbuf, sizeof(tbuf));
+    int tw = gfx_text_width(tf, tbuf);
+    gfx_text_fit(s, MARGIN, r.y + (r.h - f->line_height) / 2, UI_W - MARGIN * 2 - tw - 24, f, titles[i],
+                 sel ? 0xFFFFFF : INK, 255);
+    gfx_text(s, UI_W - 26 - tw, r.y + (r.h - tf->line_height) / 2 + 1, tf, tbuf, sel ? 0xFFFFFF : 0x8A7650, 255);
+    ui_draw_chevron(s, UI_W - 16, r.y + r.h / 2 - 5, sel ? 0xFFFFFF : 0x9A8A60);
+}
+
 static void draw_list(gfx_surface *s)
 {
-    char title[24], tbuf[16];
-    gfx_rect body = gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
-    const gfx_font *f = ui_font(FONT_B14), *tf = ui_font(FONT_R11);
-    int row_h = LINE_H * 2 - 8;
+    char title[24];
+    gfx_rect body = list.area;
 
     gfx_set_clip(s, body);
     gfx_fill(s, body, PAPER);
-    for (int i = 0; i < nnotes || i * row_h < body.h + list_scroll.offset; i++) {
-        int y = body.y + i * row_h - list_scroll.offset;
-        if (y + row_h < body.y)
-            continue;
-        if (y > body.y + body.h)
-            break;
-        gfx_fill(s, gfx_r(0, y + row_h - 1, UI_W, 1), RULE);
-        if (i >= nnotes)
-            continue;
-        if (i == pressed_row)
-            gfx_vgradient(s, gfx_r(0, y, UI_W, row_h - 1), UI_SELECT_TOP, UI_SELECT_BOTTOM, 255);
-        uint32_t ink = i == pressed_row ? 0xFFFFFF : INK;
-        short_time(&notes[i].dt, tbuf, sizeof(tbuf));
-        int tw = gfx_text_width(tf, tbuf);
-        gfx_text_fit(s, MARGIN, y + (row_h - f->line_height) / 2, UI_W - MARGIN * 2 - tw - 24, f, titles[i], ink, 255);
-        gfx_text(s, UI_W - 26 - tw, y + (row_h - tf->line_height) / 2 + 1, tf, tbuf,
-                 i == pressed_row ? 0xFFFFFF : 0x8A7650, 255);
-        ui_draw_chevron(s, UI_W - 16, y + row_h / 2 - 5, i == pressed_row ? 0xFFFFFF : 0x9A8A60);
-    }
+    /* The paper stays ruled at row pitch below the last note. */
+    for (int y = ui_list_row_y(&list, 0) + LIST_ROW_H - 1; y < body.y + body.h; y += LIST_ROW_H)
+        gfx_fill(s, gfx_r(0, y, UI_W, 1), RULE);
+    ui_list_draw(s, &list, draw_note_row, NULL);
     gfx_reset_clip(s);
 
     snprintf(title, sizeof(title), "Notes (%d)", nnotes);
@@ -227,7 +227,7 @@ static void refresh_titles(void)
 {
     for (int i = 0; i < nnotes; i++)
         title_of(i, titles[i], sizeof(titles[i]));
-    ui_scroll_reset(&list_scroll, nnotes * (LINE_H * 2 - 8), UI_H - UI_NAV_H);
+    ui_list_reset(&list, nnotes);
 }
 
 /* ---- editor view -------------------------------------------------------- */
@@ -430,17 +430,11 @@ static void place_cursor(int x, int y)
 
 static void list_event(const struct gz_input_event *e)
 {
-    int body_y = e->y - UI_NAV_H;
-    int row_h = LINE_H * 2 - 8;
-
     if (e->type == GZ_EV_TOUCH_DOWN) {
         pressed_plus = gfx_rect_contains(plus_rect, e->x, e->y);
-        pressed_row = -1;
-        if (!pressed_plus && body_y >= 0) {
-            ui_scroll_event(&list_scroll, e, body_y);
-            int r = (body_y + list_scroll.offset) / row_h;
-            if (r < nnotes && !list_scroll.moved)
-                pressed_row = r;
+        if (!pressed_plus) {
+            bool dirty = false;
+            ui_list_event(&list, e, &dirty);
         }
         redraw();
         return;
@@ -456,18 +450,12 @@ static void list_event(const struct gz_input_event *e)
         }
         return;
     }
-    if (ui_scroll_event(&list_scroll, e, body_y) || (list_scroll.moved && pressed_row >= 0)) {
-        pressed_row = -1;
+    bool dirty = false;
+    int r = ui_list_event(&list, e, &dirty);
+    if (r >= 0)
+        open_note(r, false);
+    else if (dirty)
         redraw();
-    }
-    if (e->type == GZ_EV_TOUCH_UP) {
-        int r = pressed_row;
-        pressed_row = -1;
-        if (r >= 0 && !list_scroll.moved)
-            open_note(r, false);
-        else
-            redraw();
-    }
 }
 
 static void edit_event(const struct gz_input_event *e)
@@ -583,12 +571,13 @@ static void physical_event(const struct gz_input_event *e)
 int main(void)
 {
     ui_init(SB_STATUS_GRAY);
+    ui_list_init(&list, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), LIST_ROW_H);
     load_index();
     refresh_titles();
     redraw();
 
     for (;;) {
-        struct ui_scroll *sc = view == V_LIST ? &list_scroll : &edit_scroll;
+        struct ui_scroll *sc = view == V_LIST ? &list.sc : &edit_scroll;
         int timeout = sc->animating ? 30 : dirty ? SAVE_IDLE : -1;
         struct gz_input_event ev;
 

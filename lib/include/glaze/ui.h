@@ -94,6 +94,8 @@ int ui_slider_value(gfx_rect r, int max, int x);
 #define UI_SWITCH_H 22
 /* Grouped-table cell background; position: 0 only, 1 top, 2 middle, 3 bottom. */
 void ui_draw_group_cell(gfx_surface *s, gfx_rect r, int position, bool selected);
+/* ui_draw_group_cell's position for row i of n. */
+int ui_group_pos(int i, int n);
 void ui_draw_chevron(gfx_surface *s, int x, int y, uint32_t rgb);
 
 /* ---- scroll views (inertial) -------------------------------------------- */
@@ -117,6 +119,49 @@ bool ui_scroll_event(struct ui_scroll *sc, const struct gz_input_event *e, int y
 /* Advance inertial motion; returns true while animating. */
 bool ui_scroll_step(struct ui_scroll *sc);
 int ui_scroll_max(const struct ui_scroll *sc);
+
+/* ---- lists ---------------------------------------------------------------- */
+
+/* A scrolling column of equal-height rows. Content is pad + count * row_h +
+ * footer_h; rows start pad px below the top of area. */
+struct ui_list {
+    struct ui_scroll sc;
+    gfx_rect area;          /* visible body, screen coordinates */
+    int row_h, pad, footer_h;
+    int count;
+    int pressed;            /* row under the finger, or -1 */
+};
+
+#define UI_LIST_SEPARATOR   0xD9D9D9
+
+typedef void (*ui_list_row_fn)(gfx_surface *s, int i, gfx_rect r, bool selected, void *ctx);
+
+void ui_list_init(struct ui_list *l, gfx_rect area, int row_h);
+/* Set the row count and scroll back to the top. */
+void ui_list_reset(struct ui_list *l, int count);
+/* Change the row count, keeping the scroll position where it still fits. */
+void ui_list_set_count(struct ui_list *l, int count);
+/* Resize the list's area, keeping the scroll position where it still fits. */
+void ui_list_set_area(struct ui_list *l, gfx_rect area);
+int ui_list_row_y(const struct ui_list *l, int i);
+/* Row at screen y, or -1. */
+int ui_list_row_at(const struct ui_list *l, int y);
+/* Feed a touch event. Returns the row tapped (on touch up, without
+ * scrolling, still over the row pressed), or -1. Sets *dirty when the list
+ * needs a redraw; touches that begin outside area are ignored. */
+int ui_list_event(struct ui_list *l, const struct gz_input_event *e, bool *dirty);
+/* Call draw_row for each visible row, clipped to area. */
+void ui_list_draw(gfx_surface *s, const struct ui_list *l, ui_list_row_fn draw_row, void *ctx);
+/* Plain-list row background: the selection gradient and a bottom separator. */
+void ui_draw_list_row(gfx_surface *s, gfx_rect r, bool selected);
+
+/* Edit-mode deletion: tapping a row's badge arms it (the bar turns upright)
+ * and shows a Delete button; tapping Delete confirms, and any other tap,
+ * leaving edit mode or Back cancels. */
+#define UI_DELETE_BADGE_W   26  /* badge column, from the row's left margin */
+void ui_draw_delete_badge(gfx_surface *s, int cx, int cy, bool armed);
+/* Draws the button with its right edge at right, centred on cy; returns its rect. */
+gfx_rect ui_draw_delete_button(gfx_surface *s, int right, int cy, bool pressed);
 
 /* ---- tab bar ------------------------------------------------------------ */
 
