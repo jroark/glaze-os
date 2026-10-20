@@ -1,0 +1,32 @@
+# Start tests/store_fixture.py first; build with APPSTORE_URL pointing to it.
+# Install and launch Hello, Fifteen and Sketch, then update Hello and check its saved tap count.
+3000 drag 40 280 235 280 500
+4500 tap 30 190
+13000 tap 100 112
+16000 tap 180 112
+17000 tap 180 112
+35000 key home
+38000 tap 90 190
+40000 tap 120 266
+42000 key home
+44000 tap 30 190
+49000 tap 110 175
+52000 tap 180 112
+53000 tap 180 112
+71000 key home
+74000 tap 150 190
+76000 tap 95 170
+78000 key home
+80000 tap 30 190
+85000 tap 110 235
+88000 tap 180 112
+89000 tap 180 112
+107000 key home
+110000 tap 210 190
+112000 drag 50 100 185 200 500
+114000 key home
+116000 tap 30 190
+121000 tap 180 305
+124000 tap 190 62
+142000 key home
+145000 tap 90 190

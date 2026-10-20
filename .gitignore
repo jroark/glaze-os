@@ -2,3 +2,5 @@ out/
 .DS_Store
 host/stowaway-test
 host/elf-test
+
+__pycache__/

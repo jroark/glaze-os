@@ -21,6 +21,7 @@ static const struct sb_app_info builtin_apps[] = {
     { .label = "Browser", .icon = "icon_web.gzi", .path = "bin/browser", .status_style = SB_STATUS_GRAY },
     { .label = "Music", .icon = "icon_music.gzi", .path = "bin/music", .status_style = SB_STATUS_BLACK },
     { .label = "Videos", .icon = "icon_video.gzi", .path = "bin/video", .status_style = SB_STATUS_BLACK },
+    { .label = "App Store", .icon = "icon_appstore.gzi", .path = "bin/appstore", .status_style = SB_STATUS_GRAY },
 };
 struct sb_app_info sb_apps[SB_MAX_APPS];
 int sb_num_apps;

@@ -300,8 +300,13 @@ static void test_packages(void)
           fs_stat("/Applications/hello.app.tmp", &st) == GZ_ENOENT, "pkg install on flash");
     listed_hello = false;
     CHECK(pkg_bundle_info(bundle, &info) == 0 && pkg_list("", list_one, NULL) >= 1 && listed_hello, "pkg list");
+    fs_mkdirs("/Applications/hello.app/data");
+    CHECK(fs_write_file("/Applications/hello.app/data/saved", "keep", 4) == 4, "pkg saved data fixture");
     CHECK(pkg_install(HELLO_GZP, "", bundle) == 0 && pkg_find("hello", bundle) == 0 &&
           !strcmp(bundle, "/Applications/hello.app"), "pkg reinstall replaces");
+    char saved[4];
+    CHECK(fs_read_file("/Applications/hello.app/data/saved", saved, sizeof(saved)) == 4 &&
+          !memcmp(saved, "keep", 4), "pkg reinstall preserves data");
 
     /* The installed binary runs (it has no SpringBoard here, so just stop it). */
     static uint8_t app[64 * 1024];
@@ -314,6 +319,8 @@ static void test_packages(void)
     CHECK(pkg_install(HELLO_GZP, "/Card", bundle) == 0 && !strcmp(bundle, "/Card/Applications/hello.app") &&
           fs_stat("/Card/Applications/hello.app/app", &st) == 0 &&
           fs_stat("/Applications/hello.app", &st) == GZ_ENOENT, "pkg install moves to the card");
+    CHECK(fs_read_file("/Card/Applications/hello.app/data/saved", saved, sizeof(saved)) == 4 &&
+          !memcmp(saved, "keep", 4), "pkg move preserves data");
     CHECK(pkg_uninstall(bundle) == 0 && fs_stat(bundle, &st) == GZ_ENOENT, "pkg uninstall from the card");
     CHECK(pkg_find("hello", bundle) == GZ_ENOENT, "pkg gone after uninstall");
 }

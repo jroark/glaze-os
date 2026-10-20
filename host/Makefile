@@ -92,3 +92,24 @@ elf-test: ../tests/elf.c ../lib/include/glaze/elf.h
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ ../tests/elf.c
 	./$@
 .PHONY: elf-test
+
+store-catalog-test: ../tests/store_catalog.c ../apps/appstore/catalog.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/store-catalog-test $^
+	../out/host/store-catalog-test ../out/store/catalog.txt
+	python3 ../tests/store_generator.py
+.PHONY: store-catalog-test
+
+store-package-test: ../tests/store_packages.c ../lib/libc/pkg.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/store-package-test $^
+	../out/host/store-package-test
+.PHONY: store-package-test
+
+store-http-test: libwolfssl.a
+	@mkdir -p ../out/host
+	$(CC) $(WEB_CFLAGS) -o ../out/host/store-http-test ../tests/store_http.c \
+	    ../apps/browser/http.c ../apps/browser/conn.c ../apps/browser/tls.c ../apps/browser/url.c \
+	    ../apps/appstore/inflate.c libwolfssl.a
+	python3 ../tests/store_transport.py
+.PHONY: store-http-test

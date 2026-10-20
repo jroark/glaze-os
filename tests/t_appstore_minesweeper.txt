@@ -1,0 +1,15 @@
+# Install minesweeper from the App Store's five-app catalog, play, and reopen.
+# Boot with --ne2000 and APPSTORE_URL pointing at a local out/store server.
+3000 drag 40 280 235 280 500
+4500 tap 30 190
+18000 drag 120 235 120 95 800
+22000 tap 110 160
+25000 tap 180 112
+26000 tap 180 112
+48000 key home
+51000 tap 90 190
+54000 down 16 98
+54600 up 16 98
+56000 tap 120 199
+58000 key home
+61000 tap 90 190

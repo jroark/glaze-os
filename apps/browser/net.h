@@ -49,6 +49,10 @@ struct http;
 /* GET (post == NULL) or POST of url; cookies may be NULL. */
 struct http *http_start(const char *url, const char *post, int post_len, const char *post_type,
                         const char *cookies, int max_body);
+/* A bounded, identity-encoded GET streamed to sink. Nonzero sink result
+ * aborts the fetch. The callback receives decoded HTTP transfer bytes. */
+struct http *http_start_stream(const char *url, int max_body,
+                               int (*sink)(const uint8_t *, int, void *), void *arg);
 int http_step(struct http *h);          /* 1 done, 0 pending, WE_* */
 int http_status(const struct http *h);
 /* The n-th header with this name (case-insensitive), or NULL. */

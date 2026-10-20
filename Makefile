@@ -127,6 +127,17 @@ $(OUT)/apps/video/%.o: USER_CFLAGS += -Ithird_party/stb
 
 # Per-program additions for dynamic links: compile flags, link inputs (built
 # first) and libraries.
+# The native store shares the Browser transport, not its renderer.
+PROG_EXTRA_appstore := apps/browser/http.c apps/browser/conn.c apps/browser/tls.c apps/browser/url.c
+APPSTORE_URL ?= https://appstore.glaze-os.com
+PROG_CFLAGS_appstore := -DAPPSTORE_URL='"$(APPSTORE_URL)"' -Iapps/browser -Ithird_party/stb $(WOLFSSL_INC)
+PROG_DEPS_appstore := $(OUT)/pic/libwolfssl.a
+PROG_LDLIBS_appstore := $(OUT)/pic/libwolfssl.a
+$(OUT)/apps/appstore/%.o: USER_CFLAGS += -DAPPSTORE_URL='"$(APPSTORE_URL)"' -Iapps/browser -Ithird_party/stb $(WOLFSSL_INC)
+# Pick up build-time endpoint changes without requiring a clean build.
+$(OUT)/apps/appstore/main.o $(OUT)/dyn/apps/appstore/main.o: FORCE
+
+
 PROG_CFLAGS_browser := -Ithird_party/stb $(WOLFSSL_INC)
 PROG_CFLAGS_video := -Ithird_party/stb
 PROG_CFLAGS_audio := $(HELIX_INC)
@@ -163,10 +174,10 @@ $(OUT)/servers/%.o: servers/%.c
 STATIC_PROGS := fs net
 
 define STATIC_template
-$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c)) $(OUT)/lib/crt0.o $(USER_LIBS) lib/user.lds
+$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/lib/crt0.o $(USER_LIBS) lib/user.lds
 	@mkdir -p $$(dir $$@)
 	$(LD) -m elf32ltsmip -T lib/user.lds --gc-sections -o $$@ $(OUT)/lib/crt0.o \
-	    $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c)) \
+	    $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) \
 	    --start-group $(USER_LIBS) --end-group
 endef
 
@@ -174,12 +185,12 @@ define DYNAMIC_template
 $(OUT)/dyn/$(1)/%.o: $(1)/%.c
 	@mkdir -p $$(dir $$@)
 	$(CC) $(PIC_CFLAGS) $(PROG_CFLAGS_$(notdir $(1))) -c -o $$@ $$<
-$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c)) $(OUT)/pic/crt0.o $(OUT)/pic/start.o $(SHARED_LIBS) \
+$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/pic/crt0.o $(OUT)/pic/start.o $(SHARED_LIBS) \
     $(PROG_DEPS_$(notdir $(1)))
 	@mkdir -p $$(dir $$@)
 	$(LD) $(DYN_LDFLAGS) -pie -e _start --export-dynamic --gc-sections \
 	    --dynamic-linker /lib/ld-glaze.so.1 -o $$@ $(OUT)/pic/crt0.o $(OUT)/pic/start.o \
-	    $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c)) \
+	    $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) \
 	    -L$(OUT)/shared --as-needed $(PROG_LDLIBS_$(notdir $(1))) -l:libui.so.1 -l:libgfx.so.1 -l:libc.so.1
 endef
 
@@ -391,3 +402,8 @@ FORCE:
 .PHONY: all clean packages FORCE
 
 -include $(shell find $(OUT) -name '*.d' 2>/dev/null)
+
+# Portable static store: run ./build.sh store, then publish out/store over HTTPS.
+store: packages
+	$(PYTHON) tools/mkstore.py --packages $(OUT)/pkg --output $(OUT)/store
+.PHONY: store
