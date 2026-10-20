@@ -180,6 +180,9 @@ void gfx_draw_3slice(gfx_surface *dst, gfx_rect dr, const gfx_image *img, int ca
     int mid_src = cap_l;    /* the column repeated across the middle */
     gfx_rect saved = dst->clip, c;
 
+    /* The body column and the right cap must lie inside the image. */
+    if (alpha <= 0 || cap_l < 0 || cap_r < 0 || cap_l >= img->w || cap_l + cap_r > img->w)
+        return;
     if (dr.w < cap_l + cap_r)
         dr.w = cap_l + cap_r;
     for (int part = 0; part < 3; part++) {
@@ -195,8 +198,20 @@ void gfx_draw_3slice(gfx_surface *dst, gfx_rect dr, const gfx_image *img, int ca
             continue;
         dst->clip = c;
         if (part == 1) {
-            for (int x = dx; x < dx + dw; x++)
-                gfx_draw_image(dst, x - sx, dr.y, img, alpha);
+            /* Sample one body column, once per destination pixel. Drawing
+             * the whole image here overlaps its caps and alpha edges. */
+            for (int y = c.y; y < c.y + c.h; y++) {
+                int si = (y - dr.y) * img->w + mid_src;
+                int a = img->alpha ? img->alpha[si] : 255;
+                if (alpha < 255)
+                    a = a * alpha / 255;
+                if (!a)
+                    continue;
+                uint16_t px = img->px[si];
+                uint16_t *d = dst->px + y * dst->stride;
+                for (int x = c.x; x < c.x + c.w; x++)
+                    d[x] = a >= 255 ? px : gfx_blend565(d[x], px, a);
+            }
         } else {
             gfx_draw_image(dst, dx - sx, dr.y, img, alpha);
         }

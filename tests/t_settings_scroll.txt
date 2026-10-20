@@ -1,0 +1,9 @@
+# Settings > Date & Time > Time Zone: fling both directions and return.
+# Run for 18 seconds; the final screen is Date & Time with its touch targets intact.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 190
+8000 tap 120 145
+9500 drag 120 265 120 85 450
+11500 drag 120 85 120 265 450
+14500 tap 30 31

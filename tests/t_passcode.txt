@@ -3,7 +3,7 @@
 # ends on the home screen. Boot it for about 30 s (tests/run.sh tests/t_passcode.txt 30).
 3000 drag 40 280 235 280 500
 4500 tap 150 285
-6500 tap 120 177
+6500 tap 120 207
 8000 tap 120 73
 9500 tap 40 176
 9800 tap 120 176

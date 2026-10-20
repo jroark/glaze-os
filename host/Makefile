@@ -113,3 +113,24 @@ store-http-test: libwolfssl.a
 	    ../apps/appstore/inflate.c libwolfssl.a
 	python3 ../tests/store_transport.py
 .PHONY: store-http-test
+
+# Scalar pixel oracles for clipping, alpha, dithering and three-slice sampling.
+gfx-test: ../tests/gfx.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/gfx-test $^
+	../out/host/gfx-test
+.PHONY: gfx-test
+
+settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/settings_sys.h \
+	    -o ../out/host/settings-test ../tests/settings.c hostres.c $(GFX) \
+	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c
+	../out/host/settings-test
+.PHONY: settings-test
+
+gfx-bench: ../tests/gfx_bench.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -o ../out/host/gfx-bench $^
+	../out/host/gfx-bench
+.PHONY: gfx-bench
