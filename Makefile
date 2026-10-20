@@ -364,11 +364,15 @@ else
 PKG_FILES :=
 endif
 
-$(OUT)/pkg/%.gzp: $(OUT)/bin/%.elf packages/%/Info packages/%/icon.gzi tools/mkromfs.py
+# Files in packages/<name>/res/ go in as res/<file>, next to the icon.
+PKG_RES = $(wildcard packages/$(1)/res/*)
+
+.SECONDEXPANSION:
+$(OUT)/pkg/%.gzp: $(OUT)/bin/%.elf packages/%/Info packages/%/icon.gzi $$(call PKG_RES,$$*) tools/mkromfs.py
 	@mkdir -p $(dir $@)
 	$(OBJCOPY) --strip-all $< $(OUT)/pkg/$*.app
 	$(PYTHON) tools/mkromfs.py --package $@ Info=packages/$*/Info app=$(OUT)/pkg/$*.app \
-	    res/icon.gzi=packages/$*/icon.gzi
+	    res/icon.gzi=packages/$*/icon.gzi $(foreach f,$(call PKG_RES,$*),res/$(notdir $(f))=$(f))
 
 packages: $(PKG_FILES)
 

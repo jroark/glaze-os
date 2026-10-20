@@ -34,5 +34,11 @@
     "developer": "Glaze",
     "summary": "Live CPU, memory and running tasks.",
     "description": "Watch CPU and memory history, inspect running tasks and their threads, and end managed apps with confirmation. Pause to inspect a sample. System services stay protected. CPU and task features require an updated Glaze OS; memory and uptime work on older builds."
+  },
+  {
+    "id": "aim",
+    "developer": "Glaze",
+    "summary": "Instant messages, the classic way.",
+    "description": "Sign on to an AIM revival server or your own OSCAR server and chat with your buddies. See who is online, away or idle, keep your Buddy List on the server, set an away message that answers for you, and hear doors open as friends sign on. Requires an Ethernet card."
   }
 ]

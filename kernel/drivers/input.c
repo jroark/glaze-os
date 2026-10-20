@@ -279,6 +279,7 @@ void input_script_load(void)
     static const struct { const char *name; uint16_t code; } keys[] = {
         { "ok", GZ_KEY_OK }, { "esc", GZ_KEY_ESC }, { "up", GZ_KEY_UP }, { "down", GZ_KEY_DOWN },
         { "left", GZ_KEY_LEFT }, { "right", GZ_KEY_RIGHT }, { "home", GZ_KEY_HOME }, { "power", GZ_KEY_POWER },
+        { "enter", GZ_KEY_ENTER }, { "backspace", GZ_KEY_BACKSPACE },
     };
     uint32_t size;
     const char *p = romfs_find("test/input.txt", &size);
@@ -312,6 +313,10 @@ void input_script_load(void)
                 script_add((uint32_t)(t + dur * i / steps), GZ_EV_TOUCH_MOVE, 0,
                            x + (x1 - x) * i / steps, y + (y1 - y) * i / steps);
             script_add((uint32_t)(t + dur + 20), GZ_EV_TOUCH_UP, 0, x1, y1);
+        } else if (word_is(p, "text")) {
+            /* The rest of the line, typed as GZ_EV_TEXT 40 ms apart. */
+            for (p += 5; p < end && *p != '\n' && *p != '\r'; p++, t += 40)
+                script_add((uint32_t)t, GZ_EV_TEXT, (uint8_t)*p, 0, 0);
         } else if (word_is(p, "key")) {
             p += 4;
             for (unsigned k = 0; k < ARRAY_SIZE(keys); k++) {

@@ -3,7 +3,7 @@
 The built-in App Store has Search and Updates tabs. Search lists every app
 before a query is entered and matches names, developers, summaries and descriptions.
 Apps are free and curated in `store/apps.json`; there are no accounts or payments.
-The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire and Task Manager.
+The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manager and AIM.
 
 ## Build and publish
 

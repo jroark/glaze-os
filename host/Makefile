@@ -137,6 +137,13 @@ taskmanager-test: ../tests/taskmanager.c ../tests/taskmanager_sys.h ../packages/
 	../out/host/taskmanager-test
 .PHONY: taskmanager-test
 
+aim-test: ../tests/aim.c ../packages/aim/oscar.c ../packages/aim/md5.c ../packages/aim/text.c ../packages/aim/oscar.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/aim-test ../tests/aim.c \
+	    ../packages/aim/oscar.c ../packages/aim/md5.c ../packages/aim/text.c
+	../out/host/aim-test
+.PHONY: aim-test
+
 gfx-bench: ../tests/gfx_bench.c ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -o ../out/host/gfx-bench $^
