@@ -1,5 +1,6 @@
 /* libui: connection to SpringBoard, event queue, presentation. */
 
+#include "sound.h"
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
@@ -54,6 +55,7 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
                 *ev = sh->ev[sh->tail % SB_RING];
                 sh->tail++;
             }
+            uisnd_event(ev);
             return 1;
         }
         int wait = timeout_ms;

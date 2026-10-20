@@ -6,6 +6,7 @@
 
 #include "sb_internal.h"
 
+#include <glaze/audio.h>
 #include <glaze/fs.h>
 #include <glaze/notify.h>
 #include <glaze/passcode.h>
@@ -415,12 +416,15 @@ static void lock_device(void)
     view.knob_x = 0;
     dragging_knob = false;
     touching = false;
+    audio_sound(AUDIO_SND_LOCK);
     update_clock(true);
     render_lock();
 }
 
 static void begin_unlock(void)
 {
+    audio_sound_stop();
+    audio_sound(AUDIO_SND_UNLOCK);
     notify_clear_delivered();
     view.num_lock_notes = 0;
     if (lock_over_app && app_index >= 0) {
@@ -532,8 +536,10 @@ static void passcode_touch(const struct gz_input_event *e)
     switch (e->type) {
     case GZ_EV_TOUCH_DOWN:
         view.pin.pressed = k;
-        if (k >= 0)
+        if (k >= 0) {
+            audio_sound(AUDIO_SND_KEY);
             render_passcode();
+        }
         break;
     case GZ_EV_TOUCH_MOVE:
         if (view.pin.pressed >= 0 && k != view.pin.pressed) {
@@ -750,6 +756,7 @@ static void home_touch(const struct gz_input_event *e)
         if (!touching)
             break;
         touching = false;
+        audio_sound(swiping ? AUDIO_SND_SWIPE : AUDIO_SND_TAP);
         if (view.jiggle && !swiping) {
             int app = delete_pressed;
             delete_pressed = -1;
@@ -808,6 +815,7 @@ static void handle_key(const struct gz_input_event *e)
             lock_device();
         break;
     case GZ_KEY_HOME:
+        audio_sound_stop();
         if (state == ST_APP)
             begin_zoom_out();
         else if (state == ST_HOME && (view.jiggle || alert.open)) {
@@ -837,6 +845,8 @@ static bool banner_touch_event(const struct gz_input_event *e)
         banner_touch = false;
         if (banner_visible && gfx_rect_contains(banner_rect(), e->x, e->y)) {
             int target = banner.app;
+            audio_sound_stop();
+            audio_sound(AUDIO_SND_TAP);
             if (state == ST_HOME) {
                 banner_visible = false;
                 launch(target);
@@ -900,8 +910,22 @@ static bool app_in_front(int app)
     return app_ready && app_index == app && (state == ST_APP || state == ST_ZOOM_IN);
 }
 
+/* Clock's notes are its timer, which rings until it is dismissed. */
+static void note_sound(const struct sb_note *n)
+{
+    const char *path = n->app >= 0 && n->app < sb_num_apps ? sb_apps[n->app].path : "";
+
+    if (!strcmp(path, "bin/clock"))
+        audio_sound(AUDIO_SND_TIMER);
+    else if (!strcmp(path, "bin/calendar"))
+        audio_sound(AUDIO_SND_CALENDAR);
+    else
+        audio_sound(AUDIO_SND_NOTIFY);
+}
+
 static void fire(const struct sb_note *n)
 {
+    note_sound(n);
     if (app_in_front(n->app)) {
         struct gz_input_event e = { .type = GZ_EV_APP_NOTIFY, .code = (uint16_t)n->id, .time_ms = now_ms() };
         send_event(&e);

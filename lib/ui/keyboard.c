@@ -1,5 +1,7 @@
 /* On-screen QWERTY keyboard (iPhone OS 1-3 style), 240 x 150. */
 
+#include "sound.h"
+#include <glaze/audio.h>
 #include <glaze/ui.h>
 #include <string.h>
 
@@ -164,6 +166,10 @@ int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
     case GZ_EV_TOUCH_MOVE:
         kb->pressed = (ky >= 0 && ky < UI_KB_H) ? hit(e->x, ky) : -1;
         *changed = kb->pressed != old;
+        if (e->type == GZ_EV_TOUCH_DOWN && kb->pressed >= 0) {
+            audio_sound(AUDIO_SND_KEY);
+            uisnd_sounded();
+        }
         return 0;
     case GZ_EV_TOUCH_UP: {
         int k = kb->pressed;

@@ -99,12 +99,14 @@ static inline int gz_image_query(const void *addr, struct gz_image_page *out) { 
 static inline int gz_image_stats(struct gz_image_stats *out) { return GZ_SC1(SYS_IMAGE_STATS, out); }
 
 /* Audio server only (see servers/audio). gz_audio_write returns the bytes
- * accepted; gz_audio_stop with flush 0 keeps queued PCM for a resume. */
+ * accepted; gz_audio_stop with flush 0 keeps queued PCM for a resume.
+ * gz_audio_mix queues effects (GZ_AUDIO_MIX_RING) in the output's format. */
 static inline int gz_audio_bind(int port) { return GZ_SC1(SYS_AUDIO_BIND, port); }
 static inline int gz_audio_start(uint32_t rate, uint32_t channels) { return GZ_SC2(SYS_AUDIO_START, rate, channels); }
 static inline int gz_audio_write(const void *pcm, uint32_t len) { return GZ_SC2(SYS_AUDIO_WRITE, pcm, len); }
 static inline int gz_audio_stop(int flush) { return GZ_SC1(SYS_AUDIO_STOP, flush); }
 static inline int gz_audio_status(struct gz_audio_status *st) { return GZ_SC1(SYS_AUDIO_STATUS, st); }
+static inline int gz_audio_mix(const void *pcm, uint32_t len) { return GZ_SC2(SYS_AUDIO_MIX, pcm, len); }
 
 /* Threads and semaphores; lib/include/glaze/thread.h has the libc layer. */
 static inline int gz_thread_spawn(void (*entry)(void *), void *arg) { return GZ_SC2(SYS_THREAD_CREATE, entry, arg); }

@@ -85,6 +85,11 @@ gfx_rect ui_draw_bar_button(gfx_surface *s, const char *label, bool right, bool 
 void ui_draw_pinstripes(gfx_surface *s, gfx_rect r);
 void ui_draw_button(gfx_surface *s, gfx_rect r, const char *label, bool pressed);
 void ui_draw_switch(gfx_surface *s, int x, int y, bool on);
+/* A horizontal slider whose thumb travels across `r` (also its touch area),
+ * at `value` of 0..max; ui_slider_value maps a touch's x to a value. */
+#define UI_SLIDER_THUMB 20
+void ui_draw_slider(gfx_surface *s, gfx_rect r, int value, int max);
+int ui_slider_value(gfx_rect r, int max, int x);
 #define UI_SWITCH_W 64
 #define UI_SWITCH_H 22
 /* Grouped-table cell background; position: 0 only, 1 top, 2 middle, 3 bottom. */

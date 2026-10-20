@@ -129,6 +129,47 @@ int audio_stream_clock(uint32_t *played_ms, uint32_t *queued_ms)
 
 int audio_stream_close(void) { SESSION_LOCKED(); return call(AUD_STREAM_CLOSE, 0, 0, NULL); }
 
+/* System sounds are notification bits on the server's port: no session,
+ * and no waiting, so the compositor can make them too. A sound asked for
+ * before the server is up is simply dropped. */
+static int sound_port(void)
+{
+    static int p;
+
+    if (p <= 0)
+        p = gz_port_lookup(AUDIO_PORT_NAME);
+    return p > 0 ? p : GZ_ENOENT;
+}
+
+static int sound_notify(uint32_t bits)
+{
+    int p = sound_port();
+
+    return p < 0 ? p : gz_notify(p, bits);
+}
+
+int audio_sound(int snd)
+{
+    if (snd < 0 || snd >= AUDIO_SND_TONE + AUDIO_TONES)
+        return GZ_EINVAL;
+    return sound_notify(1u << snd);
+}
+
+int audio_sound_stop(void) { return sound_notify(AUDIO_NOTIFY_STOP); }
+int audio_sound_reload(void) { return sound_notify(AUDIO_NOTIFY_RELOAD); }
+
+int audio_sound_busy(void)
+{
+    struct gz_msg m, r;
+    int p = sound_port();
+
+    if (p < 0)
+        return p;
+    memset(&m, 0, sizeof(m));
+    m.w[0] = AUD_SOUND_BUSY;
+    return gz_send(p, &m, &r) < 0 ? GZ_EIO : (int)r.w[0];
+}
+
 bool audio_is_playable(const char *name)
 {
     const char *dot = strrchr(name, '.');

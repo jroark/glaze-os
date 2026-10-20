@@ -14,6 +14,11 @@
  * buffer is refilled from the ring, padded with silence on underrun, and
  * the bound port is notified while the ring is below half full.
  *
+ * Effects (UI sounds and alerts) go into a second, smaller ring that each
+ * refill adds over the main ring's samples (or over the silence of an
+ * underrun) with saturation, so they are heard within a buffer or two
+ * however much music is queued. Both rings hold the output's format.
+ *
  * Open questions from BE300_AUDIO.md, followed as wavedev does: how the
  * enable and ack bits split across 0x8C4/0x8C8/0x8CC, and whether the
  * buffer registers read back the live DMA address (they are never read
@@ -29,15 +34,20 @@
 
 #define DMA_BYTES       PAGE_SIZE       /* per buffer; one page each */
 #define RING_BYTES      GZ_AUDIO_RING
+#define MIX_BYTES       GZ_AUDIO_MIX_RING
 #define CODEC_SPINS     100000
 
 static uint8_t *dma_buf[2];             /* KSEG1 aliases */
 static uint32_t dma_frames[2];          /* ring frames each buffer holds */
 static uint8_t ring[RING_BYTES];
 static uint32_t ring_head, ring_tail;   /* free-running byte counts */
+static uint8_t mix[MIX_BYTES];
+static uint32_t mix_head, mix_tail;
+static bool mix_used;                   /* a refill took effects since the last notify */
 
 static bool present;
 static bool running;
+static bool idle;                       /* started for the mix ring only */
 static int bound_port = -1;
 static uint32_t cur_rate, cur_channels;
 static uint32_t next_drain;             /* buffer the DMA finishes next */
@@ -65,6 +75,22 @@ static void codec_cmd(uint32_t cmd)
     AUD_CODEC_CMD = cmd;
 }
 
+/* Adds up to `len` bytes (whole frames) of the mix ring onto `d`,
+ * saturating. The ring only ever holds whole frames. */
+static void mix_in(uint8_t *d, uint32_t len)
+{
+    uint32_t n = MIN(mix_head - mix_tail, len);
+    int16_t *s = (int16_t *)d;
+
+    for (uint32_t k = 0; k < n; k += 2) {
+        uint32_t at = (mix_tail + k) % MIX_BYTES;
+        int32_t v = s[k / 2] + (int16_t)(mix[at] | mix[at + 1] << 8);
+        s[k / 2] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+    }
+    mix_tail += n;
+    mix_used |= n != 0;
+}
+
 /* Move up to one buffer of PCM from the ring into dma_buf[i]. */
 static void refill(uint32_t i)
 {
@@ -79,14 +105,20 @@ static void refill(uint32_t i)
     dma_frames[i] = n / frame;
     if (n < DMA_BYTES) {
         memset(d + n, 0, DMA_BYTES - n);
-        if (running && n < DMA_BYTES / frame * frame)
+        if (running && !idle && n < DMA_BYTES / frame * frame)
             underruns++;
     }
+    mix_in(d, DMA_BYTES / frame * frame);
 }
 
 static void notify_if_low(void)
 {
-    if (bound_port >= 0 && ring_head - ring_tail < RING_BYTES / 2)
+    /* An empty mix ring is the usual case: only one being drained asks
+     * for more. */
+    bool mix_low = mix_used && mix_head - mix_tail < MIX_BYTES / 2;
+
+    mix_used = false;
+    if (bound_port >= 0 && (ring_head - ring_tail < RING_BYTES / 2 || mix_low))
         ipc_notify(bound_port, GZ_NOTIFY_AUDIO);
 }
 
@@ -174,11 +206,14 @@ int sys_audio_start(struct proc *p, uint32_t rate, uint32_t channels)
 
     if (rv)
         return rv;
+    bool start_idle = channels & GZ_AUDIO_START_IDLE;
+    channels &= ~GZ_AUDIO_START_IDLE;
     if (rate_setup(rate, &code, &x2) || (channels != 1 && channels != 2))
         return GZ_EINVAL;
     if (running)
         hw_stop();
     running = false;
+    idle = start_idle;
     cur_rate = rate;
     cur_channels = channels;
     refill(0);
@@ -236,9 +271,34 @@ int sys_audio_stop(struct proc *p, uint32_t flush)
     if (running)
         hw_stop();
     running = false;
-    if (flush)
+    if (flush) {
         ring_tail = ring_head;
+        mix_tail = mix_head;
+    }
     return 0;
+}
+
+int sys_audio_mix(struct proc *p, uint32_t ubuf, uint32_t len)
+{
+    uint8_t chunk[256];
+    uint32_t done = 0;
+    int rv = check(p);
+
+    if (rv)
+        return rv;
+    /* Whole frames, so the mix stays aligned with the DMA buffers. */
+    uint32_t frame = cur_channels == 2 ? 4 : 2;
+    len = MIN(len, MIX_BYTES - (mix_head - mix_tail)) / frame * frame;
+    while (done < len) {
+        uint32_t n = MIN(len - done, sizeof(chunk));
+        if (copy_from_as(&p->as, chunk, ubuf + done, n))
+            return done ? (int)done : GZ_EINVAL;
+        for (uint32_t k = 0; k < n; k++)
+            mix[(mix_head + k) % MIX_BYTES] = chunk[k];
+        mix_head += n;
+        done += n;
+    }
+    return (int)done;
 }
 
 int sys_audio_status(struct proc *p, uint32_t uout)
@@ -255,5 +315,6 @@ int sys_audio_status(struct proc *p, uint32_t uout)
     st.queued = ring_head - ring_tail;
     st.frames_played = frames_played;
     st.underruns = underruns;
+    st.mix_queued = mix_head - mix_tail;
     return copy_to_as(&p->as, uout, &st, sizeof(st));
 }

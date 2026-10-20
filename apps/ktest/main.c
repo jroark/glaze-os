@@ -590,6 +590,7 @@ static void test_audio(void)
         if (t0 < 0 && played > 200) {
             t0 = (int64_t)gz_time_us();
             p0 = played;
+            audio_sound(AUDIO_SND_TONE);    /* mixed over the stream */
         }
         gz_sleep_ms(20);
     }
@@ -624,6 +625,17 @@ static void test_audio(void)
     gz_sleep_ms(300);
     audio_get_state(&st);
     CHECK(st.state == AUDIO_PAUSED && st.position_ms == paused_at, "audio pause");
+    /* A sound takes the output from the paused track, which then resumes
+     * where it was. */
+    audio_sound(AUDIO_SND_TONE);
+    gz_sleep_ms(1500);
+    audio_get_state(&st);
+    CHECK(st.state == AUDIO_PAUSED && st.position_ms == paused_at, "audio pause kept over a sound");
+    audio_resume();
+    gz_sleep_ms(700);
+    audio_get_state(&st);
+    CHECK(st.state == AUDIO_PLAYING && st.position_ms > paused_at && st.position_ms < paused_at + 1500,
+          "audio resume after a sound");
     CHECK(audio_play("/Music/Chime.wav") == 0, "audio play adpcm wav");
     gz_sleep_ms(1000);
     audio_get_state(&st);
@@ -631,6 +643,47 @@ static void test_audio(void)
     audio_stop();
     audio_get_state(&st);
     CHECK(st.state == AUDIO_STOPPED, "audio stop");
+}
+
+/* System sounds: notifications to the audio server, observed through
+ * audio_sound_busy. The output is idle here (test_audio stopped it). */
+static void test_sounds(void)
+{
+    struct audio_state st;
+    int32_t old_tone, tone = 4;     /* Alarm */
+    bool had_tone = pref_get(AUDIO_PREF_TONE_TIMER, &old_tone, 4) == 4;
+
+    audio_get_state(&st);
+    uint32_t under0 = st.underruns;
+    CHECK(audio_sound(-1) == GZ_EINVAL && audio_sound(AUDIO_SND_TONE + AUDIO_TONES) == GZ_EINVAL,
+          "sound ids checked");
+    CHECK(audio_sound(AUDIO_SND_TONE + 1) == 0, "sound request");
+    gz_sleep_ms(100);
+    CHECK(audio_sound_busy() == 1, "sound playing");
+    uint64_t start = gz_time_us();
+    while (audio_sound_busy() == 1 && gz_time_us() - start < 5000000)
+        gz_sleep_ms(50);
+    uint32_t ms = (uint32_t)((gz_time_us() - start) / 1000);
+    printf("ktest: sound played out %u ms after 100 ms\n", ms);
+    CHECK(ms > 1000 && ms < 3000, "sound plays out");
+    gz_sleep_ms(300);
+    audio_get_state(&st);
+    CHECK(st.underruns == under0 && st.state == AUDIO_STOPPED, "sound output idle without underruns");
+
+    /* The timer repeats until it is stopped. */
+    pref_put(AUDIO_PREF_TONE_TIMER, &tone, 4);
+    audio_sound_reload();
+    audio_sound(AUDIO_SND_TIMER);
+    gz_sleep_ms(3000);
+    CHECK(audio_sound_busy() == 1, "timer sound repeats");
+    audio_sound_stop();
+    gz_sleep_ms(100);
+    CHECK(audio_sound_busy() == 0, "timer sound stops");
+    if (had_tone)
+        pref_put(AUDIO_PREF_TONE_TIMER, &old_tone, 4);
+    else
+        pref_delete(AUDIO_PREF_TONE_TIMER);
+    audio_sound_reload();
 }
 
 static void test_net(void)
@@ -809,6 +862,7 @@ int main(void)
     test_packages();
     test_prefs();
     test_audio();
+    test_sounds();
     test_net();
 
     struct gz_sysinfo si;

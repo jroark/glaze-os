@@ -5,6 +5,7 @@
  * offset chosen in Settings > Date & Time ("set.tz", whole hours, no DST).
  */
 
+#include <glaze/audio.h>
 #include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
@@ -281,7 +282,10 @@ static void timer_press(int b)
     case B_H_UP: tm_hours = (tm_hours + 1) % 24; break;
     case B_M_DOWN: tm_minutes = (tm_minutes + 59) % 60; break;
     case B_M_UP: tm_minutes = (tm_minutes + 1) % 60; break;
-    case B_ALERT: tm_done = false; break;
+    case B_ALERT:
+        tm_done = false;
+        audio_sound_stop();
+        break;
     }
 }
 
@@ -330,6 +334,7 @@ int main(void)
     }
     draw();
 
+    bool rung = false;
     for (;;) {
         int timeout = 1000;
         if ((tab == TAB_STOPWATCH && sw_running) || (tab == TAB_TIMER && tm_running))
@@ -355,6 +360,7 @@ int main(void)
                 pressed = -1;
             } else if (ev.type == GZ_EV_APP_NOTIFY && ev.code == TIMER_NOTE && tm_running) {
                 tm_end = ui_now_secs();         /* SpringBoard's clock got there first */
+                rung = true;                    /* and it rang the timer */
             } else {
                 continue;
             }
@@ -364,6 +370,9 @@ int main(void)
             tm_done = true;
             tab = TAB_TIMER;
             ui_notify_cancel(TIMER_NOTE);       /* in front: no banner or badge */
+            if (!rung)
+                audio_sound(AUDIO_SND_TIMER);   /* rings until OK */
+            rung = false;
         }
         draw();
     }

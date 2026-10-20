@@ -1,0 +1,10 @@
+# Settings > Sounds: turn Touch Sounds on, drag the volume down to 3, pick
+# Chime for notifications (previewed), and go back to the Sounds page.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 117
+8000 tap 200 141
+9000 drag 200 71 120 71 400
+10500 tap 120 301
+12000 tap 120 103
+13000 tap 30 31
