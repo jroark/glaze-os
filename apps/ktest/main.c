@@ -359,6 +359,40 @@ static void test_packages(void)
     CHECK(pkg_find("hello", bundle) == GZ_ENOENT, "pkg gone after uninstall");
 }
 
+/* romfs lives in NAND and is paged in (kernel/romfs.c): a mapped file reads
+ * on touch, also when a syscall reads it first, and cache pages nothing maps
+ * are given back when memory runs out. */
+static void test_romfs_cache(void)
+{
+    struct gz_sysinfo a, b;
+    uint32_t size;
+    const uint8_t *p = gz_romfs_map("res/sans_r12.gzf", &size);
+
+    CHECK(p && size > 8 && !memcmp(p, "GZF1", 4), "romfs page read on touch");
+    p = gz_romfs_map("bin/ktest_pong", &size);
+    int fd = p ? fs_open("/ktest-romfs.bin", FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC) : -1;
+    CHECK(fd >= 0 && fs_write(fd, p + 4096, 4096) == 4096, "romfs page read by a syscall first");
+    if (fd >= 0) {
+        fs_close(fd);
+        fs_remove("/ktest-romfs.bin");
+    }
+    gz_sysinfo(&a);
+    CHECK(a.cache_pages > 0 && a.reclaimable_pages <= a.cache_pages && a.free_pages >= a.reclaimable_pages,
+          "romfs cache accounted");
+    if (a.reclaimable_pages < 16) {
+        printf("ktest: SKIP romfs reclaim (%u reclaimable pages)\n", a.reclaimable_pages);
+        return;
+    }
+    /* Take more than is truly free, so the allocator must drop cache pages. */
+    uint32_t truly_free = a.free_pages - a.reclaimable_pages, got = 0;
+    while (got < truly_free + a.reclaimable_pages / 2 && gz_mmap_anon(16 * 4096))
+        got += 16;
+    gz_sysinfo(&b);
+    printf("ktest: romfs reclaim took %u pages, %u truly free; cache %u -> %u pages\n", got, truly_free,
+           a.cache_pages, b.cache_pages);
+    CHECK(got > truly_free && b.cache_pages < a.cache_pages, "romfs cache reclaimed under memory pressure");
+}
+
 static void test_card(void)
 {
     static uint8_t data[20000], back[20000];
@@ -882,6 +916,8 @@ static void test_time(void)
 
 int main(void)
 {
+    uint32_t start_ms = gz_time_ms();
+
     printf("ktest: hello from pid %d\n", gz_getpid());
 
     /* malloc */
@@ -973,6 +1009,9 @@ int main(void)
     struct gz_sysinfo si;
     gz_sysinfo(&si);
     printf("ktest: %u/%u pages free, %u procs\n", si.free_pages, si.total_pages, si.nprocs);
+    printf("ktest: done in %u ms, %u KiB free, %u KiB cached\n", gz_time_ms() - start_ms, si.free_pages * 4,
+           si.cache_pages * 4);
+    test_romfs_cache();     /* last: it takes the memory it frees and keeps it */
 
     printf("ktest: %s (%d failures)\n", failures ? "FAILED" : "ALL PASS", failures);
     for (;;)

@@ -43,7 +43,11 @@ void mm_init(void)
             (uint32_t)__kernel_end, free_count * 4);
 }
 
-void *page_alloc(void)
+/* Out of free pages, the allocators drop romfs cache pages that nothing maps
+ * (romfs.c) and look again. */
+#define RECLAIM_BATCH   16
+
+static void *try_page_alloc(void)
 {
     for (uint32_t n = 0; n < NPAGES; n++) {
         uint32_t i = (alloc_hint + n) % NPAGES;
@@ -59,9 +63,18 @@ void *page_alloc(void)
     return NULL;
 }
 
+void *page_alloc(void)
+{
+    void *page;
+
+    while (!(page = try_page_alloc()) && romfs_reclaim(RECLAIM_BATCH))
+        ;
+    return page;
+}
+
 /* VR4131 UM 1.6.3: virtual-indexed 16 KiB, two-way caches (8 KiB/way).
  * Keep the extra index bit (VA bit 12) identical to KSEG0's physical alias. */
-void *page_alloc_colour(uint32_t va)
+static void *try_page_alloc_colour(uint32_t va)
 {
     for (uint32_t n = 0; n < NPAGES; n++) {
         uint32_t i = (alloc_hint + n) % NPAGES;
@@ -72,6 +85,15 @@ void *page_alloc_colour(uint32_t va)
         }
     }
     return NULL;
+}
+
+void *page_alloc_colour(uint32_t va)
+{
+    void *page;
+
+    while (!(page = try_page_alloc_colour(va)) && romfs_reclaim(RECLAIM_BATCH))
+        ;
+    return page;
 }
 
 /* VR4131 UM 1.6.3 (split I/D caches), ch.23 remark 3 (store/CACHE hazard).
@@ -85,7 +107,7 @@ void mm_sync_code(void *kva, uint32_t len)
 }
 
 /* n physically contiguous zeroed pages (kernel stacks). */
-void *page_alloc_n(uint32_t n)
+static void *try_page_alloc_n(uint32_t n)
 {
     for (uint32_t i = alloc_hint; i + n <= NPAGES; i++) {
         uint32_t j = 0;
@@ -105,12 +127,21 @@ void *page_alloc_n(uint32_t n)
     if (alloc_hint) {
         uint32_t saved = alloc_hint;
         alloc_hint = 0;
-        void *kva = page_alloc_n(n);
+        void *kva = try_page_alloc_n(n);
         if (!kva)
             alloc_hint = saved;
         return kva;
     }
     return NULL;
+}
+
+void *page_alloc_n(uint32_t n)
+{
+    void *kva = try_page_alloc_n(n);
+
+    if (!kva && romfs_reclaim(UINT32_MAX))      /* contiguity needs everything back */
+        kva = try_page_alloc_n(n);
+    return kva;
 }
 
 void page_free(void *kva)
@@ -279,6 +310,38 @@ uint32_t as_map_phys(struct addrspace *as, uint32_t pa, uint32_t len, uint32_t c
     return va;
 }
 
+/* A romfs file, read-only, faulted in page by page (romfs_fault). The VA
+ * shares the file's cache colour: bit 12 of its archive offset. */
+uint32_t as_map_romfs(struct addrspace *as, uint32_t index, uint32_t size, uint32_t colour)
+{
+    uint32_t va = as->mmap_top + ((as->mmap_top ^ colour) & 0x1000u);
+    uint32_t len = ALIGN_UP(size ? size : 1, PAGE_SIZE);
+    if (len > GZ_DSO_BASE - va - PAGE_SIZE) return 0;
+    if (!as_region_add(as, va, len / PAGE_SIZE, REGION_ROMFS, (int)index)) return 0;
+    as->mmap_top = va + len + PAGE_SIZE;
+    return va;
+}
+
+static struct region *region_at(struct addrspace *as, uint32_t va)
+{
+    for (struct region_page *p = as->regions; p; p = p->next)
+        for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) {
+            struct region *r = &p->entry[i];
+            if (r->kind && va >= r->va && va - r->va < r->npages * PAGE_SIZE) return r;
+        }
+    return NULL;
+}
+
+int as_fault(struct addrspace *as, uint32_t va, bool write)
+{
+    struct region *r = va < USER_TOP ? region_at(as, va) : NULL;
+
+    if (!r || write || (as_lookup(as, va) & PTE_V)) return GZ_EINVAL;     /* demand pages are read-only */
+    if (r->kind == REGION_ROMFS) return romfs_fault(as, r, va);
+    if (r->kind == REGION_IMAGE) return image_fault(as, r, va);
+    return GZ_EINVAL;
+}
+
 uint32_t as_map_frames(struct addrspace *as, const uint32_t *frames, uint32_t npages, int shm_id)
 {
     uint32_t va = as->mmap_top;
@@ -305,6 +368,12 @@ void as_destroy(struct addrspace *as)
             else if (r->kind == REGION_OWNED) {
                 for (uint32_t j = 0; j < r->npages; j++) as_unmap_page(as, r->va + j * PAGE_SIZE, true);
             } else if (r->kind == REGION_SHM) shm_unref(r->shm_id);
+            else if (r->kind == REGION_ROMFS) {
+                for (uint32_t j = 0; j < r->npages; j++) {
+                    pte_t pte = as_lookup(as, r->va + j * PAGE_SIZE);
+                    if (pte & PTE_V) romfs_map_unref(PTE_PA(pte));
+                }
+            }
         }
         struct region_page *next = p->next;
         page_free(p); p = next;
@@ -324,6 +393,10 @@ void as_activate(struct addrspace *as)
 static uint8_t *uva_to_kva(struct addrspace *as, uint32_t uva, bool write)
 {
     pte_t pte = as_lookup(as, uva);
+
+    /* A syscall may be handed data the process hasn't touched yet. */
+    if (!(pte & PTE_V) && !as_fault(as, uva, write))
+        pte = as_lookup(as, uva);
 
     if (!(pte & PTE_V) || (write && !(pte & PTE_D)))
         return NULL;

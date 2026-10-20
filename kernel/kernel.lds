@@ -21,12 +21,6 @@ SECTIONS {
         *(.sdata)
         *(.sdata.*)
     }
-    . = ALIGN(4096);
-    .romfs : {
-        __romfs_start = .;
-        KEEP(*(.romfs))
-        __romfs_end = .;
-    }
     . = ALIGN(16);
     .bss (NOLOAD) : {
         __bss_start = .;

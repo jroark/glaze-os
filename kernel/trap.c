@@ -54,6 +54,9 @@ void trap(struct trapframe *tf)
             irq_dispatch_ip2();
     } else if (exc == EXC_SYS && from_user) {
         syscall_dispatch(tf);
+    } else if (from_user && (exc == EXC_TLBL || exc == EXC_TLBS) &&
+               !as_fault(&cur->proc->as, tf->badvaddr, exc == EXC_TLBS)) {
+        /* A demand-paged page (romfs) came in; retry the access. */
     } else if (from_user) {
         kprintf("fault: %s in %s (pid %d)\n",
                 exc_names[exc] ? exc_names[exc] : "?", cur->proc->name, cur->proc->pid);

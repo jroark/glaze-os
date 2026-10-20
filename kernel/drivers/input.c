@@ -10,6 +10,7 @@
 #include "../kernel.h"
 #include "../hw.h"
 #include "../drivers.h"
+#include "../proc.h"
 
 /* Raw ADC endpoints (doc: Touch Panel, "Linux input driver guidance"). */
 #define ADC_Y_MIN   0x81E1u
@@ -281,12 +282,13 @@ void input_script_load(void)
         { "left", GZ_KEY_LEFT }, { "right", GZ_KEY_RIGHT }, { "home", GZ_KEY_HOME }, { "power", GZ_KEY_POWER },
         { "enter", GZ_KEY_ENTER }, { "backspace", GZ_KEY_BACKSPACE },
     };
-    uint32_t size;
-    const char *p = romfs_find("test/input.txt", &size);
-    const char *end = p + size;
+    const struct romfs_entry *e = romfs_lookup("test/input.txt");
+    char *text = e ? page_alloc_n(ALIGN_UP(e->size + 1, PAGE_SIZE) / PAGE_SIZE) : NULL;
 
-    if (!p)
+    /* Parsed from a NUL-terminated copy; the events keep no pointers into it. */
+    if (!text || romfs_read(e, 0, text, e->size))
         return;
+    const char *p = text, *end = text + e->size;
     while (p < end) {
         int t, x, y, x1, y1, dur;
         if (*p == '#' || *p == '\n' || *p == '\r') {

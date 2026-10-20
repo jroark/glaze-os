@@ -304,7 +304,7 @@ $(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILE
 KERNEL_SRCS := $(wildcard kernel/*.c kernel/*.S kernel/drivers/*.c)
 KERNEL_OBJS := $(patsubst %,$(OUT)/%.o,$(basename $(KERNEL_SRCS))) $(OUT)/kernel/string.o $(OUT)/kernel/divdi3.o
 KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -Ikernel -MMD \
-    -DGLAZE_ROMFS='"$(OUT)/romfs.img"' -DGLAZE_BUILD='"$(BUILD_ID)"' -DGLAZE_INIT='"$(INIT)"' \
+    -DGLAZE_BUILD='"$(BUILD_ID)"' -DGLAZE_INIT='"$(INIT)"' \
     $(if $(INPUT_SCRIPT),-DGLAZE_INPUT_SCRIPT)
 
 $(OUT)/kernel/%.o: kernel/%.c
@@ -319,8 +319,6 @@ $(OUT)/kernel/%.o: kernel/%.S
 $(OUT)/kernel/%.o: lib/libc/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
-
-$(OUT)/kernel/romfs_blob.o: $(OUT)/romfs.img
 
 # These bake in INIT/BUILD_ID/INPUT_SCRIPT; rebuild them every time.
 $(OUT)/kernel/main.o $(OUT)/kernel/drivers/input.o $(OUT)/romfs.img: FORCE
@@ -393,9 +391,11 @@ $(OUT)/fs.img: $(OUT)/host/mkfsimg $(USERDATA_FILES) lib/include/glaze/abi.h
 
 # ---- NAND image -------------------------------------------------------------
 
-$(OUT)/glaze.bin: $(OUT)/spl.elf $(OUT)/kernel.elf $(OUT)/fs.img tools/mk_nand.py
+# romfs sits raw in NAND after the kernel, not in the kernel image,
+# and the kernel pages it in (kernel/romfs.c).
+$(OUT)/glaze.bin: $(OUT)/spl.elf $(OUT)/kernel.elf $(OUT)/romfs.img $(OUT)/fs.img tools/mk_nand.py
 	$(PYTHON) tools/mk_nand.py --kernel $(OUT)/kernel.elf --spl $(OUT)/spl.elf \
-	    --fs-image $(OUT)/fs.img --out $@
+	    --romfs $(OUT)/romfs.img --fs-image $(OUT)/fs.img --out $@
 
 all: $(OUT)/glaze.bin $(PKG_FILES)
 

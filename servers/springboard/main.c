@@ -373,6 +373,16 @@ static void launch(int index)
     launch_t0 = now_ms();
 }
 
+/* Benchmark lines (tests/bench.sh): an event, its time in ms, and memory. */
+static void bench_log(const char *what, const char *app, uint32_t ms)
+{
+    struct gz_sysinfo si;
+
+    gz_sysinfo(&si);
+    printf("sb: %s%s%s %u ms free %u KiB cache %u KiB\n", what, app ? " " : "", app ? app : "", ms,
+           si.free_pages * 4, si.cache_pages * 4);
+}
+
 static void begin_zoom_in(void)
 {
     banner_visible = banner_touch = false;
@@ -1064,8 +1074,10 @@ static void handle_msg(int token, struct gz_msg *m)
         gfx_rect d = gfx_r((int)m->w[1], (int)m->w[2], (int)m->w[3], (int)m->w[4]);
         if (state == ST_APP)
             present_app_rect(d);
-        else if (state == ST_LAUNCH_WAIT)
+        else if (state == ST_LAUNCH_WAIT) {
+            bench_log("launch", app_index >= 0 ? sb_apps[app_index].path : "?", now_ms() - launch_t0);
             begin_zoom_in();
+        }
         break;
     }
     case SB_SET_STATUS:
@@ -1138,6 +1150,7 @@ static void frame(void)
                 rescan(false);          /* the app may have been Files installing one */
                 state = ST_HOME;
                 render_home();
+                bench_log("home", NULL, 0);
                 if (launch_after_home >= 0)
                     launch(launch_after_home);
                 launch_after_home = -1;
@@ -1211,6 +1224,7 @@ int main(void)
     render_lock();
     timesync_start(sb_port);
     puts("springboard: ready");
+    bench_log("ready", NULL, now_ms());
 
     for (;;) {
         uint32_t t = now_ms();

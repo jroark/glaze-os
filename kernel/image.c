@@ -1,5 +1,10 @@
 /* Immutable ELF snapshots and process-private instances. The kernel maps pages;
- * the userspace interpreter owns symbol lookup and relocation policy. */
+ * the userspace interpreter owns symbol lookup and relocation policy.
+ *
+ * An image comes from romfs (rom) or from bytes copied into frames[]. A romfs
+ * image's shared read-only pages are left unmapped and faulted in from the
+ * romfs page cache (image_fault), so only the pages a process touches are
+ * read from NAND; its private pages are copied when it is mapped. */
 #include "kernel.h"
 #include "proc.h"
 #include "mips.h"
@@ -8,7 +13,7 @@
 struct image {
     struct image *next;
     uint32_t refs, size, hash, lo, hi, dynamic, colour;
-    const uint8_t *rom;
+    const struct romfs_entry *rom;
     struct gz_elf_ehdr eh;
     struct gz_elf_phdr ph[GZ_ELF_PHMAX];
     uint32_t frames[GZ_ELF_MAX_SIZE / PAGE_SIZE];
@@ -16,20 +21,26 @@ struct image {
 _Static_assert(sizeof(struct image) <= PAGE_SIZE, "image descriptor fits one page");
 static struct image *images;
 
+/* NULL if a romfs page can't be read in (out of memory). */
 static const uint8_t *file_ptr(struct image *im, uint32_t off)
 {
-    return im->rom ? im->rom + off : (const uint8_t *)KSEG0(im->frames[off / PAGE_SIZE]) + off % PAGE_SIZE;
+    return im->rom ? romfs_ptr(im->rom, off) : (const uint8_t *)KSEG0(im->frames[off / PAGE_SIZE]) + off % PAGE_SIZE;
 }
-static void file_read(struct image *im, uint32_t off, void *dst, uint32_t len)
+static int file_read(struct image *im, uint32_t off, void *dst, uint32_t len)
 {
+    if (im->rom)
+        return romfs_read(im->rom, off, dst, len);
     while (len) {
         uint32_t n = MIN(len, PAGE_SIZE - off % PAGE_SIZE);
         memcpy(dst, file_ptr(im, off), n);
         off += n; dst = (uint8_t *)dst + n; len -= n;
     }
+    return 0;
 }
-static uint32_t file_pa(struct image *im, uint32_t off)
-{ return im->rom ? PHYS(im->rom + off) : im->frames[off / PAGE_SIZE]; }
+/* Where a file offset's page sits, for its cache colour (bit 12): the frame,
+ * or the romfs archive offset, which is a romfs cache frame's colour. */
+static uint32_t file_addr(struct image *im, uint32_t off)
+{ return im->rom ? im->rom->offset + off : im->frames[off / PAGE_SIZE]; }
 static void image_unref(struct image *im)
 {
     if (--im->refs) return;
@@ -41,9 +52,8 @@ static void image_unref(struct image *im)
 }
 static int validate(struct image *im)
 {
-    file_read(im, 0, &im->eh, sizeof(im->eh));
-    if (!gz_elf_header(&im->eh, im->size)) return GZ_EINVAL;
-    file_read(im, im->eh.phoff, im->ph, im->eh.phnum * sizeof(im->ph[0]));
+    if (file_read(im, 0, &im->eh, sizeof(im->eh)) || !gz_elf_header(&im->eh, im->size)) return GZ_EINVAL;
+    if (file_read(im, im->eh.phoff, im->ph, im->eh.phnum * sizeof(im->ph[0]))) return GZ_ENOMEM;
     im->lo = UINT32_MAX; im->hi = 0;
     bool executable_entry = false, colour_set = false;
     for (unsigned i = 0; i < im->eh.phnum; i++) {
@@ -53,7 +63,7 @@ static int validate(struct image *im)
         if (p->type == 0x70000003u) { /* MIPS .abiflags: o32 soft-float, no ASEs */
             uint8_t abi[24];
             if (p->filesz != sizeof(abi) || !gz_elf_range(p->offset, sizeof(abi), im->size)) return GZ_EINVAL;
-            file_read(im, p->offset, abi, sizeof(abi));
+            if (file_read(im, p->offset, abi, sizeof(abi))) return GZ_ENOMEM;
             if (abi[0] || abi[1] || abi[2] > 3 || abi[4] != 1 || abi[5] || abi[6] || abi[7] != 3 ||
                 abi[8] || abi[9] || abi[10] || abi[11] || abi[12] || abi[13] || abi[14] || abi[15]) return GZ_EINVAL;
         }
@@ -72,7 +82,7 @@ static int validate(struct image *im)
         im->lo = MIN(im->lo, lo); im->hi = MAX(im->hi, hi);
         if ((p->flags & GZ_PF_X) && im->eh.entry >= p->vaddr && im->eh.entry - p->vaddr < p->memsz) executable_entry = true;
         if (!colour_set && !(p->flags & GZ_PF_W) && p->filesz) {
-            im->colour = (file_pa(im, p->offset & ~(PAGE_SIZE - 1)) - lo) & 0x1000u;
+            im->colour = (file_addr(im, p->offset & ~(PAGE_SIZE - 1)) - lo) & 0x1000u;
             colour_set = true;
         }
     }
@@ -81,31 +91,32 @@ static int validate(struct image *im)
     return 0;
 }
 
-/* Input remains stable throughout a syscall: the kernel is non-preemptive. */
-static struct image *image_get(struct addrspace *as, const void *rom, uint32_t src, uint32_t size)
+/* Input remains stable throughout a syscall: the kernel is non-preemptive.
+ * A romfs image is shared by its entry, without reading it; byte images are
+ * shared by content. */
+static struct image *image_get(struct addrspace *as, const struct romfs_entry *rom, uint32_t src, uint32_t size)
 {
     if (size < sizeof(struct gz_elf_ehdr) || size > GZ_ELF_MAX_SIZE) return NULL;
     uint8_t buf[128]; uint32_t hash = 2166136261u;
     if (rom) {
-        for (struct image *im = images; im; im = im->next) if (im->rom == rom && im->size == size) { im->refs++; return im; }
-    }
-    for (uint32_t off = 0; off < size;) {
-        uint32_t n = MIN(size - off, sizeof(buf));
-        if (rom) memcpy(buf, (const uint8_t *)rom + off, n);
-        else if (copy_from_as(as, buf, src + off, n)) return NULL;
-        for (uint32_t i = 0; i < n; i++) hash = (hash ^ buf[i]) * 16777619u;
-        off += n;
-    }
-    for (struct image *im = images; im; im = im->next) {
-        if (im->size != size || im->hash != hash) continue;
-        bool equal = true;
-        for (uint32_t off = 0; off < size && equal;) {
-            uint32_t n = MIN(MIN(size - off, sizeof(buf)), PAGE_SIZE - off % PAGE_SIZE);
-            if (rom) memcpy(buf, (const uint8_t *)rom + off, n);
-            else if (copy_from_as(as, buf, src + off, n)) return NULL;
-            equal = !memcmp(buf, file_ptr(im, off), n); off += n;
+        for (struct image *im = images; im; im = im->next) if (im->rom == rom) { im->refs++; return im; }
+    } else {
+        for (uint32_t off = 0; off < size;) {
+            uint32_t n = MIN(size - off, sizeof(buf));
+            if (copy_from_as(as, buf, src + off, n)) return NULL;
+            for (uint32_t i = 0; i < n; i++) hash = (hash ^ buf[i]) * 16777619u;
+            off += n;
         }
-        if (equal) { im->refs++; return im; }
+        for (struct image *im = images; im; im = im->next) {
+            if (im->rom || im->size != size || im->hash != hash) continue;
+            bool equal = true;
+            for (uint32_t off = 0; off < size && equal;) {
+                uint32_t n = MIN(MIN(size - off, sizeof(buf)), PAGE_SIZE - off % PAGE_SIZE);
+                if (copy_from_as(as, buf, src + off, n)) return NULL;
+                equal = !memcmp(buf, file_ptr(im, off), n); off += n;
+            }
+            if (equal) { im->refs++; return im; }
+        }
     }
     struct image *im = page_alloc();
     if (!im) return NULL;
@@ -140,7 +151,9 @@ static bool available(struct addrspace *as, uint32_t base, uint32_t end)
         }
     return true;
 }
-static uint32_t shared_pa(struct image *im, uint32_t bias, uint32_t va)
+/* The file offset + 1 of a page mapped read-only straight from the file, or 0
+ * when it gets a private copy (writable, partly bss, or the wrong colour). */
+static uint32_t shared_off(struct image *im, uint32_t bias, uint32_t va)
 {
     uint32_t relative = va - bias;
     for (unsigned i = 0; i < im->eh.phnum; i++) {
@@ -150,10 +163,18 @@ static uint32_t shared_pa(struct image *im, uint32_t bias, uint32_t va)
             relative - lo >= ALIGN_UP(p->vaddr + p->memsz, PAGE_SIZE) - lo) continue;
         uint32_t off = (p->offset & ~(PAGE_SIZE - 1)) + relative - lo;
         if (off >= im->size) return 0;
-        uint32_t pa = file_pa(im, off);
-        if (!((pa ^ va) & 0x1000u)) return pa;
+        if (!((file_addr(im, off) ^ va) & 0x1000u)) return off + 1;
     }
     return 0;
+}
+/* A shared page's frame: the byte image's own, or the romfs cache frame (read
+ * in when load is set). 0 if it isn't shared, or isn't in the cache. */
+static uint32_t shared_pa(struct image *im, uint32_t bias, uint32_t va, bool load)
+{
+    uint32_t so = shared_off(im, bias, va);
+    if (!so) return 0;
+    if (!im->rom) return im->frames[(so - 1) / PAGE_SIZE];
+    return load ? romfs_frame(im->rom, so - 1) : romfs_cached_frame(im->rom, so - 1);
 }
 static int map_instance(struct addrspace *as, struct image *im, struct gz_image_info *info, uint32_t at)
 {
@@ -177,14 +198,20 @@ static int map_instance(struct addrspace *as, struct image *im, struct gz_image_
         if (p->type != GZ_PT_LOAD || !p->memsz) continue;
         uint32_t lo = p->vaddr & ~(PAGE_SIZE - 1), hi = ALIGN_UP(p->vaddr + p->memsz, PAGE_SIZE);
         for (uint32_t a = lo; a < hi; a += PAGE_SIZE) {
-            uint32_t pa = shared_pa(im, bias, bias + a);
+            if (im->rom && shared_off(im, bias, bias + a))
+                continue;               /* faulted in from the romfs cache (image_fault) */
+            uint32_t pa = shared_pa(im, bias, bias + a, false);
             bool own = !pa;
             void *page = NULL;
             if (own) {
                 page = page_alloc_colour(bias + a);
                 if (!page) goto fail;
                 uint32_t start = MAX(a, p->vaddr), end = MIN(a + PAGE_SIZE, p->vaddr + p->filesz);
-                if (end > start) file_read(im, p->offset + start - p->vaddr, (uint8_t *)page + start - a, end - start);
+                if (end > start &&
+                    file_read(im, p->offset + start - p->vaddr, (uint8_t *)page + start - a, end - start)) {
+                    page_free(page);
+                    goto fail;
+                }
                 pa = PHYS(page);
             }
             if (as_map_page(as, bias + a, pa, PTE_CACHED | PTE_V | ((p->flags & GZ_PF_W) ? PTE_D : 0))) {
@@ -203,9 +230,20 @@ fail:
     image_release_region(as, r); as_region_drop(as, r); as_prune_tables(as);
     return GZ_ENOMEM;
 }
+/* A read-only shared page of a romfs image, on first touch. */
+int image_fault(struct addrspace *as, struct region *r, uint32_t va)
+{
+    struct image *im = (void *)(uintptr_t)(uint32_t)r->shm_id;
+    va &= ~(PAGE_SIZE - 1);
+    uint32_t pa = im->rom ? shared_pa(im, r->va - im->lo, va, true) : 0;
+    if (!pa) return GZ_EINVAL;
+    int rv = as_map_page(as, va, pa, PTE_CACHED | PTE_V);
+    if (!rv) romfs_map_ref(pa);
+    return rv;
+}
 /* A program for a new process: from romfs, or from a buffer in the spawner's
  * address space (SYS_SPAWN_IMAGE). Its PT_INTERP, if any, is copied out. */
-int image_map_exec(struct addrspace *as, struct addrspace *src_as, const void *rom, uint32_t src, uint32_t size,
+int image_map_exec(struct addrspace *as, struct addrspace *src_as, const struct romfs_entry *rom, uint32_t src, uint32_t size,
                    struct gz_image_info *info, uint32_t *type, char *interp, uint32_t max)
 {
     struct image *im = image_get(src_as, rom, src, size);
@@ -218,24 +256,25 @@ int image_map_exec(struct addrspace *as, struct addrspace *src_as, const void *r
         if (interp[0] || !p->filesz || p->filesz > max || !gz_elf_range(p->offset, p->filesz, im->size)) {
             image_unref(im); return GZ_EINVAL;
         }
-        file_read(im, p->offset, interp, p->filesz);
+        if (file_read(im, p->offset, interp, p->filesz)) { image_unref(im); return GZ_ENOMEM; }
         if (interp[p->filesz - 1] || !interp[0]) { image_unref(im); return GZ_EINVAL; }
     }
     return map_instance(as, im, info, USER_TEXT_BASE);
 }
-int image_map(struct addrspace *as, const void *rom, uint32_t size, struct gz_image_info *info, uint32_t at)
+int image_map(struct addrspace *as, const struct romfs_entry *rom, uint32_t size, struct gz_image_info *info, uint32_t at)
 {
     struct image *im = image_get(as, rom, 0, size);
     return im ? map_instance(as, im, info, at) : GZ_EINVAL;
 }
 int image_map_user(struct addrspace *as, uint32_t src, uint32_t size, uint32_t flags, uint32_t out)
 {
-    const void *rom = NULL;
+    const struct romfs_entry *rom = NULL;
     if (flags == GZ_IMAGE_ROMFS) {
         char path[48];
         if (copy_str_from_as(as, path, src, sizeof(path)) < 0) return GZ_EINVAL;
-        rom = romfs_find(path, &size);
+        rom = romfs_lookup(path);
         if (!rom) return GZ_ENOENT;
+        size = rom->size;
     } else if (flags != GZ_IMAGE_BYTES || !gz_elf_range(src, size, USER_TOP)) return GZ_EINVAL;
     struct image *im = image_get(as, rom, src, size);
     if (!im) return GZ_EINVAL;
@@ -253,7 +292,10 @@ void image_release_region(struct addrspace *as, struct region *r)
     uint32_t bias = r->va - im->lo;
     for (uint32_t a = r->va; a < r->va + r->npages * PAGE_SIZE; a += PAGE_SIZE) {
         pte_t pte = as_lookup(as, a);
-        if (pte & PTE_V) as_unmap_page(as, a, PTE_PA(pte) != shared_pa(im, bias, a));
+        if (!(pte & PTE_V)) continue;
+        bool shared = PTE_PA(pte) == shared_pa(im, bias, a, false);
+        if (shared && im->rom) romfs_map_unref(PTE_PA(pte));
+        as_unmap_page(as, a, !shared);
     }
     image_unref(im); r->kind = 0;
 }
@@ -301,7 +343,7 @@ int image_stats(struct addrspace *as, uint32_t out)
             for (uint32_t a = r->va; a < r->va + r->npages * PAGE_SIZE; a += PAGE_SIZE) {
                 pte_t pte = as_lookup(as, a);
                 if (!(pte & PTE_V)) continue;
-                if (PTE_PA(pte) == shared_pa(im, r->va - im->lo, a)) stats.shared_pages++;
+                if (PTE_PA(pte) == shared_pa(im, r->va - im->lo, a, false)) stats.shared_pages++;
                 else stats.private_pages++;
             }
         }
@@ -316,6 +358,7 @@ int image_query(struct addrspace *as, uint32_t address, uint32_t out)
             struct region *r = &p->entry[i];
             if (r->kind != REGION_IMAGE || address < r->va || address - r->va >= r->npages * PAGE_SIZE) continue;
             pte_t pte = as_lookup(as, address);
+            if (!(pte & PTE_V) && !as_fault(as, address, false)) pte = as_lookup(as, address);  /* not touched yet */
             if (!(pte & PTE_V)) return GZ_EINVAL;
             struct image *im = (void *)(uintptr_t)(uint32_t)r->shm_id;
             struct gz_image_page page = { PTE_PA(pte), im->refs, (pte & PTE_D) != 0 };

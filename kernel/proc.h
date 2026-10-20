@@ -37,7 +37,8 @@ void page_free(void *kva);
 uint32_t mm_free_pages(void);
 uint32_t mm_total_pages(void);
 
-enum region_kind { REGION_OWNED = 1, REGION_SHM, REGION_DEVICE, REGION_IMAGE };
+/* REGION_ROMFS: a romfs file (shm_id is its entry index), faulted in. */
+enum region_kind { REGION_OWNED = 1, REGION_SHM, REGION_DEVICE, REGION_IMAGE, REGION_ROMFS };
 
 struct region {
     uint32_t va, npages;
@@ -60,15 +61,21 @@ struct region *as_region_add(struct addrspace *, uint32_t, uint32_t, int, int);
 void as_region_drop(struct addrspace *, struct region *);
 void as_unmap_page(struct addrspace *, uint32_t, bool);
 void as_prune_tables(struct addrspace *);
-int image_map(struct addrspace *, const void *, uint32_t, struct gz_image_info *, uint32_t);
-int image_map_exec(struct addrspace *, struct addrspace *, const void *, uint32_t, uint32_t, struct gz_image_info *,
-                   uint32_t *, char *, uint32_t);
+struct romfs_entry;
+int image_map(struct addrspace *, const struct romfs_entry *, uint32_t, struct gz_image_info *, uint32_t);
+int image_map_exec(struct addrspace *, struct addrspace *, const struct romfs_entry *, uint32_t, uint32_t,
+                   struct gz_image_info *, uint32_t *, char *, uint32_t);
 int image_map_user(struct addrspace *, uint32_t, uint32_t, uint32_t, uint32_t);
 int image_release(struct addrspace *, uint32_t);
 void image_release_region(struct addrspace *, struct region *);
 int image_seal(struct addrspace *, uint32_t);
 int image_query(struct addrspace *, uint32_t, uint32_t);
 int image_stats(struct addrspace *, uint32_t);
+int image_fault(struct addrspace *, struct region *, uint32_t va);
+int romfs_fault(struct addrspace *, struct region *, uint32_t va);
+/* A user access to an unmapped page of a demand-paged region; 0 if mapped. */
+int as_fault(struct addrspace *as, uint32_t va, bool write);
+uint32_t as_map_romfs(struct addrspace *as, uint32_t index, uint32_t size, uint32_t colour);
 
 int as_create(struct addrspace *as, uint8_t asid);
 void as_destroy(struct addrspace *as);
@@ -216,12 +223,30 @@ void timer_init(void);
 void timer_irq(void);
 uint64_t time_us(void);
 
-/* romfs.c */
-const void *romfs_find(const char *name, uint32_t *size);
+/* romfs.c: the archive in NAND, paged in through a shared cache. */
+struct romfs_entry {
+    char name[48];
+    uint32_t offset;            /* from the archive start, page aligned */
+    uint32_t size;
+};
+void romfs_init(void);
 void romfs_list(void);
+const struct romfs_entry *romfs_lookup(const char *name);
+uint32_t romfs_index(const struct romfs_entry *e);
+const struct romfs_entry *romfs_entry_at(uint32_t index);
+uint32_t romfs_frame(const struct romfs_entry *e, uint32_t off);         /* loads; 0 if out of memory */
+uint32_t romfs_cached_frame(const struct romfs_entry *e, uint32_t off);  /* no load; 0 if absent */
+const uint8_t *romfs_ptr(const struct romfs_entry *e, uint32_t off);     /* until the next allocation */
+int romfs_read(const struct romfs_entry *e, uint32_t off, void *dst, uint32_t len);
+bool romfs_is_cache_frame(uint32_t pa);
+void romfs_map_ref(uint32_t pa);
+void romfs_map_unref(uint32_t pa);
+uint32_t romfs_reclaim(uint32_t n);
+uint32_t romfs_cache_pages(void);
+uint32_t romfs_reclaimable_pages(void);
 
 /* elf.c */
-int elf_load(struct addrspace *as, struct addrspace *src_as, const void *rom, uint32_t src, uint32_t size,
+int elf_load(struct addrspace *as, struct addrspace *src_as, const struct romfs_entry *rom, uint32_t src, uint32_t size,
              uint32_t *entry, struct gz_ld_start *start);
 
 /* syscall.c */
