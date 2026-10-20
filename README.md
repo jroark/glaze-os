@@ -3,7 +3,8 @@
 A small microkernel OS for the Casio BE-300 (NEC VR4131 MIPS, 240x320 LCD) with
 a user interface in the style of early iPhone OS. It runs on the
 [be300 emulator](https://github.com/jroark/be300) and boots through the stock
-boot ROM from NAND.
+boot ROM from NAND. The project site is [glaze-os.com](https://glaze-os.com)
+(source in `site/`, see [Website](docs/WEBSITE.md)).
 
 ## What's here
 

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Build Glaze with a scripted input file, boot it, and save the final screen.
 # usage: tests/run.sh tests/t_x.txt [seconds]
-# CF=<image> boots with a copy of that CompactFlash image (tools/mkcfimg.sh).
+# CF=<image> boots with a copy of that CompactFlash image (tools/mkcfimg.sh);
+# NET=1 inserts the NE2000 Ethernet card instead.
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 script=$1
@@ -18,6 +19,8 @@ if [ -n "$CF" ]; then
     case $CF in /*) ;; *) CF=$root/$CF ;; esac
     cp "$CF" cf.img
     cf="--cf cf.img"
+elif [ -n "$NET" ]; then
+    cf=--ne2000
 fi
 gtimeout "${secs}s" "${BE300:-../../../../be300/build-host/be300}" --nand glaze.bin --rtc-host-time $cf \
     > stdout.log 2> stderr.log || true

@@ -3,8 +3,8 @@
 # top card (each goes to the first pile that takes it), drag the last
 # column's top card onto the first column, then go Home and reopen it to
 # check the deal was saved.
-# Needs a card holding the packages:
-#   tools/mkcfimg.sh out/cf.img 16 16 out/pkg/*.gzp
+# Needs a card holding exactly these packages, so the rows in Files match:
+#   tools/mkcfimg.sh out/cf.img 16 16 out/pkg/hello.gzp out/pkg/minesweeper.gzp out/pkg/solitaire.gzp
 # Boot it for about 40 s (CF=out/cf.img tests/run.sh tests/t_solitaire.txt 40).
 3000 drag 40 280 235 280 500
 4500 tap 30 120
@@ -13,7 +13,7 @@
 10500 tap 120 242
 15000 tap 120 203
 16000 key home
-18000 tap 30 192
+18000 tap 90 192
 21000 tap 18 57
 21600 tap 18 57
 22200 tap 18 57
@@ -27,4 +27,4 @@
 26400 tap 222 151
 27000 drag 222 151 18 121 600
 29000 key home
-31000 tap 30 192
+31000 tap 90 192
