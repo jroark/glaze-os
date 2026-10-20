@@ -62,6 +62,8 @@ enum {
     SYS_CF_WRITE,
     SYS_SPAWN_IMAGE,        /* an installed app's ELF from a buffer, unprivileged */
     SYS_AUDIO_MIX,          /* effects mixed over the ring at DMA refill */
+    SYS_TASK_SNAPSHOT,      /* atomic, read-only process/performance snapshot */
+    SYS_TASK_STOP,          /* end a managed app; system services are protected */
     SYS_COUNT
 };
 
@@ -161,6 +163,25 @@ struct gz_sysinfo {
     uint32_t uptime_ms;
     uint32_t cpu_prid;
     char build[32];
+};
+
+/* Version 1 task monitor ABI. Pass sizeof(struct gz_task_snapshot); older
+ * kernels return GZ_EINVAL. CPU time includes kernel work on a task's behalf.
+ * Mapped RAM includes shared pages in each process, excludes device/romfs
+ * mappings, and must not be summed to measure physical memory usage. */
+#define GZ_TASK_MAX 32
+#define GZ_TASK_APP  1u
+#define GZ_TASK_SELF 2u
+struct gz_task_info {
+    uint32_t pid, parent, flags;
+    uint32_t threads, runnable, mapped_pages;
+    uint64_t cpu_us;
+    char name[32];
+};
+struct gz_task_snapshot {
+    uint64_t time_us, busy_us;
+    uint32_t total_pages, free_pages, count, page_size;
+    struct gz_task_info tasks[GZ_TASK_MAX];
 };
 
 /* SYS_FLASH_*: the file server's NAND region (11 MiB from 0x500000). */

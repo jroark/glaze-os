@@ -1,10 +1,12 @@
 /* Process lifecycle: spawn from romfs, exit, and reaping. */
 
 #include "kernel.h"
+#include "hw.h"
 #include "mips.h"
 #include "proc.h"
 
 static struct proc procs[MAX_PROCS];
+_Static_assert(MAX_PROCS == GZ_TASK_MAX, "task snapshot must hold every process");
 static int pid_gen = 1;
 
 struct proc *proc_by_pid(int pid)
@@ -22,6 +24,47 @@ int proc_count(void)
     for (int i = 0; i < MAX_PROCS; i++)
         n += procs[i].used && !procs[i].dying;
     return n;
+}
+
+int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size)
+{
+    struct gz_task_snapshot s;
+    if (size != sizeof(s)) return GZ_EINVAL;
+    memset(&s, 0, sizeof(s));
+    s.time_us = time_us();
+    s.busy_us = sched_account(s.time_us);
+    s.total_pages = SDRAM_SIZE / PAGE_SIZE;
+    s.free_pages = mm_free_pages();
+    s.page_size = PAGE_SIZE;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        struct proc *p = &procs[i];
+        if (!p->used || p->dying) continue;
+        struct gz_task_info *t = &s.tasks[s.count++];
+        t->pid = (uint32_t)p->pid;
+        t->parent = (uint32_t)p->parent;
+        t->flags = (p->flags == PROC_APP ? GZ_TASK_APP : 0) |
+                   (p == cur->proc ? GZ_TASK_SELF : 0);
+        t->cpu_us = p->cpu_us;
+        strncpy(t->name, p->name, sizeof(t->name) - 1);
+        sched_task_info(p, t);
+        for (struct region_page *rp = p->as.regions; rp; rp = rp->next)
+            for (unsigned j = 0; j < ARRAY_SIZE(rp->entry); j++) {
+                struct region *r = &rp->entry[j];
+                if (r->kind != REGION_OWNED && r->kind != REGION_IMAGE && r->kind != REGION_SHM) continue;
+                for (uint32_t n = 0; n < r->npages; n++)
+                    t->mapped_pages += (as_lookup(&p->as, r->va + n * PAGE_SIZE) & PTE_V) != 0;
+            }
+    }
+    return copy_to_as(as, out, &s, sizeof(s));
+}
+
+int proc_task_stop(int pid)
+{
+    struct proc *p = proc_by_pid(pid);
+    if (!p) return GZ_ENOENT;
+    if (p == cur->proc || p->flags != PROC_APP) return GZ_EPERM;
+    proc_exit(p, -9);
+    return 0;
 }
 
 /* The program is romfs data (rom), or size bytes at src in src_as. */

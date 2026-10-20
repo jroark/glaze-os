@@ -1,0 +1,4 @@
+id=taskmanager
+name=Task Manager
+version=1.0
+exec=app

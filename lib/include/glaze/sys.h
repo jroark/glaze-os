@@ -24,6 +24,8 @@ static inline int __gz_sc(int n, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 #define GZ_SC3(n, a, b, c)  __gz_sc((n), (uint32_t)(a), (uint32_t)(b), (uint32_t)(c), 0)
 
 #define GZ_SPAWN_PRIVILEGED 0x1
+/* Only privileged spawners may mark a romfs program as a managed app. */
+#define GZ_SPAWN_APP 0x10
 
 static inline void gz_exit(int code) { GZ_SC1(SYS_EXIT, code); for (;;) ; }
 static inline void gz_yield(void) { GZ_SC0(SYS_YIELD); }
@@ -119,6 +121,10 @@ static inline int gz_sem_post(int sem) { return GZ_SC1(SYS_SEM_POST, sem); }
 static inline int gz_sem_destroy(int sem) { return GZ_SC1(SYS_SEM_DESTROY, sem); }
 
 static inline int gz_sysinfo(struct gz_sysinfo *si) { return GZ_SC1(SYS_SYSINFO, si); }
+static inline int gz_task_snapshot(struct gz_task_snapshot *s)
+{ return GZ_SC2(SYS_TASK_SNAPSHOT, s, sizeof(*s)); }
+/* Cannot stop the caller or system services. PIDs include a generation. */
+static inline int gz_task_stop(int pid) { return GZ_SC1(SYS_TASK_STOP, pid); }
 
 static inline const void *gz_romfs_map(const char *name, uint32_t *size)
 {

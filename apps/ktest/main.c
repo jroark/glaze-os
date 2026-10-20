@@ -38,6 +38,40 @@ static bool fs_raw_denied(void)
     else { printf("ktest: FAIL %s\n", what); failures++; } \
 } while (0)
 
+static void test_tasks(int peer_port)
+{
+    static struct gz_task_snapshot before, after;
+    CHECK(gz_task_snapshot(&before) == 0 && before.count > 0 && before.count <= GZ_TASK_MAX &&
+          before.page_size == 4096 && before.free_pages <= before.total_pages, "task snapshot");
+    CHECK(GZ_SC2(SYS_TASK_SNAPSHOT, &after, sizeof(after) - 1) == GZ_EINVAL &&
+          GZ_SC2(SYS_TASK_SNAPSHOT, 0, sizeof(after)) == GZ_EINVAL, "task snapshot rejects invalid buffers/size");
+    CHECK(gz_task_stop(gz_getpid()) == GZ_EPERM && gz_task_stop(-1) == GZ_ENOENT, "task stop protects self and stale PID");
+    bool self = false, protected = false;
+    for (unsigned i = 0; i < before.count; i++) {
+        struct gz_task_info *t = &before.tasks[i];
+        if (t->pid == (uint32_t)gz_getpid()) self = (t->flags & GZ_TASK_SELF) && t->threads && t->mapped_pages;
+        if (!strcmp(t->name, "fs")) protected = gz_task_stop((int)t->pid) == GZ_EPERM;
+    }
+    CHECK(self && protected, "task snapshot reports self; system services protected");
+    uint32_t start = gz_time_ms();
+    while ((uint32_t)(gz_time_ms() - start) < 30) ;
+    gz_task_snapshot(&after);
+    CHECK(after.time_us > before.time_us && after.busy_us > before.busy_us &&
+          after.busy_us - before.busy_us <= after.time_us - before.time_us, "task CPU counters measure scheduled time");
+    uint32_t size;
+    const void *elf = gz_romfs_map("bin/ktest_pong", &size);
+    int pid = elf ? gz_spawn_image(elf, size, "task-victim") : -1;
+    bool app = false;
+    gz_task_snapshot(&after);
+    for (unsigned i = 0; i < after.count; i++)
+        if (after.tasks[i].pid == (uint32_t)pid) app = after.tasks[i].flags == GZ_TASK_APP;
+    CHECK(pid > 0 && app, "installed app is a managed task");
+    struct gz_msg m = {{0xFFFFFFFB, (uint32_t)pid, (uint32_t)gz_getpid()}}, r;
+    CHECK(gz_send(peer_port, &m, &r) == 0 && r.w[0] == 31 && !gz_proc_alive(pid),
+          "unprivileged monitor can end apps, protects services/self, cannot grant privileges");
+    if (pid > 0 && gz_proc_alive(pid)) gz_kill(pid);
+}
+
 /* ---- threads -------------------------------------------------------------- */
 
 static int sem_go, sem_done;
@@ -685,7 +719,11 @@ static void test_sounds(void)
     gz_sleep_ms(3000);
     CHECK(audio_sound_busy() == 1, "timer sound repeats");
     audio_sound_stop();
-    gz_sleep_ms(100);
+    /* Stop is asynchronous; a partly mixed chunk can remain queued for
+     * more than 100 ms depending on the scheduler/DMA phase. */
+    start = gz_time_us();
+    while (audio_sound_busy() == 1 && gz_time_us() - start < 1000000)
+        gz_sleep_ms(20);
     CHECK(audio_sound_busy() == 0, "timer sound stops");
     if (had_tone)
         pref_put(AUDIO_PREF_TONE_TIMER, &old_tone, 4);
@@ -883,6 +921,7 @@ int main(void)
     dt = gz_time_ms() - t0;
     printf("ktest: 1000 IPC round trips in %u ms\n", dt);
     CHECK(ok, "ipc call/reply x1000");
+    test_tasks(port);
 
     /* shared memory: pong writes a pattern into a buffer we create */
     int shm = gz_shm_create(64 * 1024);

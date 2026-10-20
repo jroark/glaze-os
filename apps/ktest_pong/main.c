@@ -38,6 +38,16 @@ int main(void)
             gz_sleep_ms(10);
             gz_reply(tok, &m);
             gz_exit(0);
+        } else if (m.w[0] == 0xFFFFFFFB) {
+            /* Exercise monitor permissions from an ordinary app. */
+            struct gz_task_snapshot snapshot;
+            unsigned checks = 0;
+            if (gz_task_snapshot(&snapshot) == 0 && snapshot.count) checks |= 1;
+            if (gz_task_stop(gz_getpid()) == GZ_EPERM) checks |= 2;
+            if (gz_task_stop((int)m.w[2]) == GZ_EPERM) checks |= 4;
+            if (gz_spawn("bin/ktest_pong", GZ_SPAWN_APP) == GZ_EPERM) checks |= 8;
+            if (gz_task_stop((int)m.w[1]) == 0 && gz_task_stop((int)m.w[1]) == GZ_ENOENT) checks |= 16;
+            m.w[0] = checks;
         } else if (m.w[0] == 0xFFFFFFFD) {
             volatile uint32_t *bad = (uint32_t *)0;
             *bad = 1;

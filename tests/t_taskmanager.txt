@@ -1,0 +1,18 @@
+# Install from a card holding only taskmanager.gzp; exercise tabs, detail,
+# system protection, pause/resume, and relaunch. Boot for 78 guest seconds.
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+6500 tap 120 64
+8500 tap 120 64
+10500 tap 120 242
+45000 tap 120 203
+47000 key home
+50000 tap 90 192
+55000 tap 175 68
+58000 tap 110 126
+61000 tap 28 30
+64000 tap 65 68
+67000 tap 208 30
+70000 tap 208 30
+73000 key home
+76000 tap 90 192

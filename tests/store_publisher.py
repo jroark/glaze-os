@@ -63,7 +63,7 @@ class Publisher(unittest.TestCase):
         self.assertEqual(aws.writes[-1], 'catalog.txt')
         self.assertEqual(set(aws.writes[:-1]), set(self.assets))
         self.assertEqual(aws.objects['catalog.txt']['body'], self.catalog)
-        self.assertEqual(len(aws.writes), 11)
+        self.assertEqual(len(aws.writes), 2 * len(self.records) + 1)
         writes = list(aws.writes)
         publisher.publish(aws, self.config, self.directory, self.catalog, self.assets)
         self.assertEqual(writes, aws.writes)
