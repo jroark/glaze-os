@@ -271,18 +271,21 @@ ASSET_FILES := $(wildcard assets/gen/*)
 # (tools/mkroots.py).
 WEB_FILES := $(wildcard assets/web/*)
 SSL_FILES := $(wildcard assets/ssl/*)
+# System sounds, romfs "sounds/", synthesized by tools/mksounds.py and checked in.
+SOUND_FILES := $(wildcard assets/sounds/*)
 
 # ---- romfs ------------------------------------------------------------------
 
 ROMFS_BINS := $(foreach p,$(PROGS),$(OUT)/romfs/bin/$(p))
 
-$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) tools/mkromfs.py
+$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) tools/mkromfs.py
 	$(PYTHON) tools/mkromfs.py $@ \
 	    $(foreach p,$(PROGS),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
 	    $(foreach l,$(ROMFS_LIBRARY_FILES),lib/$(notdir $(l))=$(l)) \
 	    $(foreach a,$(ASSET_FILES),res/$(notdir $(a))=$(a)) \
 	    $(foreach w,$(WEB_FILES),web/$(notdir $(w))=$(w)) \
 	    $(foreach c,$(SSL_FILES),ssl/$(notdir $(c))=$(c)) \
+	    $(foreach s,$(SOUND_FILES),sounds/$(notdir $(s))=$(s)) \
 	    $(if $(INPUT_SCRIPT),test/input.txt=$(INPUT_SCRIPT))
 
 # ---- kernel -----------------------------------------------------------------

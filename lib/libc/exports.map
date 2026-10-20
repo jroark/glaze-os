@@ -8,7 +8,7 @@
     __divdi3; __moddi3; __udivdi3; __umoddi3;
     __popcountsi2; __ctzsi2; __clzsi2; __bswapsi2;
     gz_thread_create; gz_thread_id; gz_mutex_init; gz_mutex_lock; gz_mutex_unlock; gz_mutex_destroy;
-    fs_*; pref_get; pref_put; pref_delete; passcode_*; net_*; socket; connect; bind; listen; accept; send; recv; sendto; recvfrom;
+    fs_*; pref_get; pref_put; pref_delete; passcode_*; tz_*; ntp_*; net_*; socket; connect; bind; listen; accept; send; recv; sendto; recvfrom;
     shutdown; getsockname; getpeername; getsockopt; setsockopt; close; read; write;
     poll; fcntl; getaddrinfo; freeaddrinfo; gai_strerror; gethostbyname;
     inet_addr; inet_aton; inet_ntoa; inet_ntop; inet_pton; htons; ntohs; htonl; ntohl;

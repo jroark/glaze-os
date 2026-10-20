@@ -61,6 +61,7 @@ enum {
     SYS_CF_READ,
     SYS_CF_WRITE,
     SYS_SPAWN_IMAGE,        /* an installed app's ELF from a buffer, unprivileged */
+    SYS_AUDIO_MIX,          /* effects mixed over the ring at DMA refill */
     SYS_COUNT
 };
 
@@ -183,6 +184,13 @@ struct gz_netif_info {
  * little-endian, interleaved when stereo. The hardware plays 8000, 11025,
  * 16000, 22050, 32000 and 44100 Hz. */
 #define GZ_AUDIO_RING   65536   /* bytes of PCM the kernel buffers */
+/* A second, smaller ring of effects (UI sounds, alerts) in the same format,
+ * added with saturation as each DMA buffer is refilled, so they play within
+ * a buffer or two however full the main ring is. */
+#define GZ_AUDIO_MIX_RING   16384
+/* Or'd into SYS_AUDIO_START's channels: output only for the mix ring, so
+ * silence from the empty main ring is expected and not an underrun. */
+#define GZ_AUDIO_START_IDLE 0x100u
 
 struct gz_audio_status {
     uint32_t running;
@@ -191,6 +199,7 @@ struct gz_audio_status {
     uint32_t queued;            /* bytes waiting in the ring */
     uint32_t frames_played;     /* ring frames played since boot */
     uint32_t underruns;         /* buffers padded with silence while running */
+    uint32_t mix_queued;        /* bytes waiting in the mix ring */
 };
 
 /* SYS_CF_*: a CompactFlash ATA card's 512-byte sectors, for the file

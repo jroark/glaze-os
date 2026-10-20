@@ -134,6 +134,37 @@ void ui_draw_switch(gfx_surface *s, int x, int y, bool on)
     gfx_round_rect_vgradient(s, gfx_r(k.x + 1, k.y + 1, k.w - 2, k.h - 2), 4, 0xFFFFFF, 0xD0D0D0, 255);
 }
 
+void ui_draw_slider(gfx_surface *s, gfx_rect r, int value, int max)
+{
+    const int t = UI_SLIDER_THUMB, th = 8;
+    int cx = r.x + t / 2 + (max > 0 ? value * (r.w - t) / max : 0);
+    gfx_rect track = gfx_r(r.x + t / 2 - 4, r.y + (r.h - th) / 2, r.w - t + 8, th);
+    gfx_rect saved = s->clip, c;
+
+    gfx_round_rect(s, track, th / 2, 0x7D7D7D, 255);
+    gfx_rect inner = gfx_r(track.x + 1, track.y + 1, track.w - 2, track.h - 2);
+    if (gfx_rect_intersect(inner, saved, &c)) {
+        s->clip = c;
+        gfx_round_rect_vgradient(s, inner, th / 2 - 1, 0xD5D5D5, 0xFDFDFD, 255);
+        if (gfx_rect_intersect(gfx_r(inner.x, inner.y, cx - inner.x, inner.h), saved, &c)) {
+            s->clip = c;
+            gfx_round_rect_vgradient(s, inner, th / 2 - 1, 0x1F5FD4, 0x5A9BF4, 255);
+        }
+        s->clip = saved;
+    }
+    gfx_rect k = gfx_r(cx - t / 2, r.y + (r.h - t) / 2, t, t);
+    gfx_round_rect(s, k, t / 2, 0x8A8A8A, 255);
+    gfx_round_rect_vgradient(s, gfx_r(k.x + 1, k.y + 1, t - 2, t - 2), t / 2 - 1, 0xFFFFFF, 0xD0D0D0, 255);
+}
+
+int ui_slider_value(gfx_rect r, int max, int x)
+{
+    int span = r.w - UI_SLIDER_THUMB;
+    int v = span > 0 ? ((x - r.x - UI_SLIDER_THUMB / 2) * max + span / 2) / span : 0;
+
+    return v < 0 ? 0 : v > max ? max : v;
+}
+
 void ui_draw_group_cell(gfx_surface *s, gfx_rect r, int position, bool selected)
 {
     const int rad = 8;

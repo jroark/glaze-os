@@ -1,12 +1,15 @@
 /*
  * Clock: World Clock, Stopwatch and Timer tabs.
  *
- * The RTC holds local time only, so world clocks are derived from the UTC
- * offset chosen in Settings > Date & Time ("set.tz", whole hours, no DST).
+ * The RTC holds local time only, so world clocks go through UTC in the
+ * zone chosen in Settings > Date & Time (glaze/tz.h, with daylight saving).
  */
 
+#include <glaze/audio.h>
+#include <glaze/notify.h>
 #include <glaze/prefs.h>
 #include <glaze/sys.h>
+#include <glaze/tz.h>
 #include <glaze/ui.h>
 #include <stdio.h>
 #include <string.h>
@@ -25,17 +28,11 @@ static int pressed = -1;        /* button id under the finger */
 
 /* ---- world clock -------------------------------------------------------- */
 
-struct city {
-    const char *name;
-    int utc_offset;             /* hours */
-};
-
-static const struct city cities[] = {
-    { "Cupertino", -8 }, { "New York", -5 }, { "London", 0 }, { "Tokyo", 9 },
-};
+static const char *const cities[] = { "Los Angeles", "New York", "London", "Tokyo" };
 #define NCITIES ((int)(sizeof(cities) / sizeof(cities[0])))
 
-static int32_t tz_offset;
+static int city_zone[NCITIES];  /* glaze/tz.h zone indices */
+static int home_zone;
 
 static void analog_clock(gfx_surface *s, int cx, int cy, int r, int h, int m, int sec)
 {
@@ -86,19 +83,12 @@ static void draw_world(gfx_surface *s)
         int y = y0 + i * row_h;
         gfx_vgradient(s, gfx_r(0, y, UI_W, row_h - 1), 0x3B3B3B, 0x1E1E1E, 255);
         gfx_fill(s, gfx_r(0, y + row_h - 1, UI_W, 1), 0x000000);
-        int mins = now.hour * 60 + now.minute + (cities[i].utc_offset - tz_offset) * 60;
-        int day = 0;
-        while (mins < 0) {
-            mins += 1440;
-            day--;
-        }
-        while (mins >= 1440) {
-            mins -= 1440;
-            day++;
-        }
-        int h = mins / 60, m = mins % 60;
+        uint32_t local = gz_dt_to_secs(&now);
+        uint32_t there = tz_utc_to_local(city_zone[i], tz_local_to_utc(home_zone, local));
+        int day = (int)(there / 86400u) - (int)(local / 86400u);
+        int h = (int)(there % 86400u / 3600), m = (int)(there % 3600 / 60);
         analog_clock(s, 28, y + row_h / 2, 21, h, m, now.second);
-        gfx_text(s, 56, y + 12, nf, cities[i].name, 0xFFFFFF, 255);
+        gfx_text(s, 56, y + 12, nf, cities[i], 0xFFFFFF, 255);
         gfx_text(s, 56, y + 34, df, day < 0 ? "Yesterday" : day > 0 ? "Tomorrow" : "Today", 0xA0A0A0, 255);
         char t[12];
         snprintf(t, sizeof(t), "%d:%02d", h % 12 ? h % 12 : 12, m);
@@ -281,7 +271,10 @@ static void timer_press(int b)
     case B_H_UP: tm_hours = (tm_hours + 1) % 24; break;
     case B_M_DOWN: tm_minutes = (tm_minutes + 59) % 60; break;
     case B_M_UP: tm_minutes = (tm_minutes + 1) % 60; break;
-    case B_ALERT: tm_done = false; break;
+    case B_ALERT:
+        tm_done = false;
+        audio_sound_stop();
+        break;
     }
 }
 
@@ -322,7 +315,13 @@ static int hit(int x, int y)
 int main(void)
 {
     ui_init(SB_STATUS_BLACK);
-    pref_get("set.tz", &tz_offset, sizeof(tz_offset));
+    home_zone = tz_current();
+    for (int i = 0; i < NCITIES; i++) {
+        for (int z = 0; z < tz_count(); z++) {
+            if (!strcmp(tz_get(z)->name, cities[i]))
+                city_zone[i] = z;
+        }
+    }
     ui_set_badge(0);
     if ((tm_end = ui_notify_pending(TIMER_NOTE)) != 0) {
         tm_running = true;
@@ -330,6 +329,7 @@ int main(void)
     }
     draw();
 
+    bool rung = false;
     for (;;) {
         int timeout = 1000;
         if ((tab == TAB_STOPWATCH && sw_running) || (tab == TAB_TIMER && tm_running))
@@ -355,6 +355,7 @@ int main(void)
                 pressed = -1;
             } else if (ev.type == GZ_EV_APP_NOTIFY && ev.code == TIMER_NOTE && tm_running) {
                 tm_end = ui_now_secs();         /* SpringBoard's clock got there first */
+                rung = true;                    /* and it rang the timer */
             } else {
                 continue;
             }
@@ -364,6 +365,9 @@ int main(void)
             tm_done = true;
             tab = TAB_TIMER;
             ui_notify_cancel(TIMER_NOTE);       /* in front: no banner or badge */
+            if (!rung)
+                audio_sound(AUDIO_SND_TIMER);   /* rings until OK */
+            rung = false;
         }
         draw();
     }

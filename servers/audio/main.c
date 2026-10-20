@@ -12,7 +12,14 @@
  * Positions come from the kernel's count of frames played (at the hardware
  * rate) since the track started or was sought, so they follow what is
  * heard rather than what was decoded.
+ *
+ * System sounds (sound.c) are mixed over either mode. When neither holds
+ * the output, it is started at SOUND_RATE for them alone and stopped once
+ * they have played; a paused track is then resumed by seeking back, as
+ * after a stream.
  */
+
+#include "sound.h"
 
 #include <glaze/audio.h>
 #include <glaze/fs.h>
@@ -46,6 +53,8 @@ static struct session sessions[MAX_SESSIONS];
 /* Output: what the hardware was started with. */
 static uint32_t hw_rate, hw_ch;
 static bool hw_running;
+static bool fx_owned;                  /* started for system sounds alone */
+static uint64_t fx_drain_until;
 static int16_t pend[PEND_FRAMES * 2];
 static uint32_t pend_off, pend_len;     /* in samples */
 static struct media_resampler rs;
@@ -98,6 +107,7 @@ static void out_stop(bool flush)
 {
     gz_audio_stop(flush);
     hw_running = false;
+    fx_owned = false;
     if (flush)
         pend_off = pend_len = 0;
 }
@@ -109,6 +119,7 @@ static void out_config(uint32_t rate, uint32_t ch)
     hw_rate = media_hw_rate(rate);
     hw_ch = ch;
     media_rs_init(&rs, rate, (int)ch, hw_rate, (int)ch);
+    sound_reconfig(hw_rate, hw_ch);
 }
 
 static void out_start(void)
@@ -410,7 +421,7 @@ static int play_at(const char *p, uint32_t ms)
 
 static uint32_t position(void)
 {
-    if (src == SRC_NONE)
+    if (src == SRC_NONE || state == AUDIO_STOPPED)
         return 0;
     if (reseek)
         return reseek_ms;
@@ -421,7 +432,7 @@ static int op_seek(uint32_t ms)
 {
     if (src == SRC_NONE)
         return GZ_EINVAL;
-    if (stream_session >= 0) {
+    if (stream_session >= 0 || reseek) {
         reseek_ms = MIN(ms, duration_ms);
         return 0;
     }
@@ -592,6 +603,57 @@ static int stream_clock(struct gz_msg *r)
     return 0;
 }
 
+/* ---- system sounds ------------------------------------------------------------- */
+
+/* Starts the output for sounds when nothing else holds it, keeps the mix
+ * ring topped up, and stops an output of their own once they have played.
+ * Returns the longest the main loop may block, -1 for no limit. */
+static int sound_service(void)
+{
+    bool busy = sound_busy();
+
+    if (!hw_running) {
+        if (!busy)
+            return -1;
+        if (stream_session >= 0)
+            return 50;          /* mixed in once the stream starts */
+        if (src != SRC_NONE && state == AUDIO_PAUSED && !reseek) {
+            /* Its queued PCM goes with the change of format. */
+            reseek_ms = position();
+            reseek = true;
+        }
+        out_config(SOUND_RATE, 1);
+        sound_pump();
+        if (gz_audio_start(hw_rate, hw_ch | GZ_AUDIO_START_IDLE) < 0)
+            return 1000;
+        hw_running = true;
+        fx_owned = true;
+        fx_drain_until = 0;
+        return 20;
+    }
+    if (sound_pump())
+        return 100;             /* the kernel notifies as the mix ring drains */
+    if (!fx_owned)
+        return -1;
+    struct gz_audio_status st;
+    status(&st);
+    if (st.mix_queued)
+        return 20;
+    /* Let the two DMA buffers play out, as at the end of a track. */
+    uint64_t now = gz_time_us();
+    if (!fx_drain_until)
+        fx_drain_until = now + 2ull * PAGE_BYTES / (2 * hw_ch) * 1000000 / hw_rate + 20000;
+    if (now < fx_drain_until)
+        return 20;
+    out_stop(true);
+    return -1;
+}
+
+static int min_timeout(int a, int b)
+{
+    return a < 0 ? b : b < 0 ? a : MIN(a, b);
+}
+
 /* ---- sessions and dispatch ------------------------------------------------------- */
 
 static int op_hello(int pid, struct gz_msg *r)
@@ -650,6 +712,8 @@ static int dispatch(struct gz_msg *m, struct gz_msg *r)
 
     if (op == AUD_HELLO)
         return op_hello((int)m->w[1], r);
+    if (op == AUD_SOUND_BUSY)
+        return sound_busy();
     if (sess >= MAX_SESSIONS || !sessions[sess].pid)
         return GZ_EINVAL;
     struct session *s = &sessions[sess];
@@ -686,6 +750,7 @@ int main(void)
 {
     struct gz_msg m, r;
     uint64_t last_reap = 0;
+    int sound_timeout = -1;
 
     port = gz_port_create();
     if (gz_audio_bind(port) < 0) {
@@ -697,13 +762,16 @@ int main(void)
         int timeout = 1000;
         if (state == AUDIO_PLAYING && stream_session < 0 && src != SRC_NONE)
             timeout = (!src_eof || pend_len) ? (ring_wants_data() ? 0 : -1) : 50;
-        int t = gz_recv(port, &m, timeout);
+        int t = gz_recv(port, &m, min_timeout(timeout, sound_timeout));
         if (t > 0) {
             memset(&r, 0, sizeof(r));
             r.w[0] = (uint32_t)dispatch(&m, &r);
             gz_reply(t, &r);
+        } else if (t == GZ_RECV_NOTIFY) {
+            sound_notify(m.w[0]);
         }
         player_service();
+        sound_timeout = sound_service();
         uint64_t now = gz_time_us();
         if (now - last_reap > 1000000) {
             last_reap = now;

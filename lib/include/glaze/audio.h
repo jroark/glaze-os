@@ -12,6 +12,14 @@
  *
  * Sessions work like the file server's: AUD_HELLO returns a session and a
  * shared-memory buffer for paths, state and PCM.
+ *
+ * System sounds need no session: they are asked for with notification
+ * bits on the server's port (AUDIO_NOTIFY_*), so the compositor and apps
+ * never wait for the server. They play over either mode through the
+ * kernel's mix ring, at the "Ringer and Alerts" volume, and only when their
+ * setting (the snd.* preferences) allows. There are two voices: a click
+ * (taps, keys, swipes, lock) and an alert (a tone, which for the timer
+ * repeats until stopped or a minute passes).
  */
 #ifndef GLAZE_AUDIO_H
 #define GLAZE_AUDIO_H
@@ -38,7 +46,64 @@ enum {
                                0 bytes: no more for now, start playing */
     AUD_STREAM_CLOCK,       /* -> w1 = ms played, w2 = ms queued */
     AUD_STREAM_CLOSE,
+    AUD_SOUND_BUSY = 0x40,  /* no session -> 1 while a sound plays */
 };
+
+/* System sounds. AUDIO_SND_TONE + n previews tone n once, whatever the
+ * switches say. Each is notification bit 1 << AUDIO_SND_*. */
+enum {
+    AUDIO_SND_TAP, AUDIO_SND_KEY, AUDIO_SND_SWIPE, AUDIO_SND_LOCK, AUDIO_SND_UNLOCK,
+    AUDIO_SND_NOTIFY, AUDIO_SND_CALENDAR, AUDIO_SND_TIMER,
+    AUDIO_SND_TONE = 8,     /* to 8 + AUDIO_TONES - 1 */
+};
+#define AUDIO_NOTIFY_SOUNDS     0x0000FFFFu
+#define AUDIO_NOTIFY_STOP       0x00010000u     /* silences the alert voice */
+#define AUDIO_NOTIFY_RELOAD     0x00020000u     /* re-reads the snd.* preferences */
+
+/* Preferences (int32 each). Tones are an index below AUDIO_TONES, or
+ * AUDIO_TONE_NONE. */
+#define AUDIO_PREF_VOLUME       "snd.volume"        /* 0-10, default 7 */
+#define AUDIO_PREF_TOUCH        "snd.touch"         /* default off */
+#define AUDIO_PREF_KEYS         "snd.keys"          /* default on */
+#define AUDIO_PREF_SWIPE        "snd.swipe"         /* default on */
+#define AUDIO_PREF_LOCK         "snd.lock"          /* default on */
+#define AUDIO_PREF_TONE_TIMER   "snd.tone.timer"
+#define AUDIO_PREF_TONE_CAL     "snd.tone.calendar"
+#define AUDIO_PREF_TONE_NOTIFY  "snd.tone.notify"
+#define AUDIO_VOLUME_MAX        10
+#define AUDIO_VOLUME_DEFAULT    7
+#define AUDIO_TONES             5
+#define AUDIO_TONE_NONE         (-1)
+
+/* Tone n's name, and its clip in romfs "sounds/". */
+static inline const char *audio_tone_name(int n)
+{
+    switch (n) {
+    case 0: return "Tri-tone";
+    case 1: return "Chime";
+    case 2: return "Bell";
+    case 3: return "Marimba";
+    case 4: return "Alarm";
+    }
+    return "None";
+}
+
+static inline const char *audio_tone_file(int n)
+{
+    switch (n) {
+    case 0: return "tritone.wav";
+    case 1: return "chime.wav";
+    case 2: return "bell.wav";
+    case 3: return "marimba.wav";
+    case 4: return "alarm.wav";
+    }
+    return NULL;
+}
+
+/* Default tones for the timer, calendar alerts and other notifications. */
+#define AUDIO_TONE_TIMER_DEFAULT    4
+#define AUDIO_TONE_CAL_DEFAULT      1
+#define AUDIO_TONE_NOTIFY_DEFAULT   0
 
 enum { AUDIO_STOPPED, AUDIO_PLAYING, AUDIO_PAUSED };
 
@@ -72,6 +137,14 @@ int audio_stream_open(uint32_t rate, int channels);
 int audio_stream_write(const void *pcm, uint32_t len);
 int audio_stream_clock(uint32_t *played_ms, uint32_t *queued_ms);
 int audio_stream_close(void);
+
+/* System sounds; these never open a session or wait for the server.
+ * audio_sound_reload is for Settings, after it changes a snd.* preference.
+ * audio_sound_busy (which does wait) is 1 while a sound plays. */
+int audio_sound(int snd);
+int audio_sound_stop(void);
+int audio_sound_reload(void);
+int audio_sound_busy(void);
 
 /* Audio file extensions the player handles (.mp3, .wav). */
 bool audio_is_playable(const char *name);

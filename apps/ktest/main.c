@@ -8,10 +8,13 @@
 #include <glaze/audio.h>
 #include <glaze/fs.h>
 #include <glaze/net.h>
+#include <glaze/notify.h>
+#include <glaze/ntp.h>
 #include <glaze/pkg.h>
 #include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/thread.h>
+#include <glaze/tz.h>
 #include <netdb.h>
 #include <poll.h>
 #include <stdio.h>
@@ -590,6 +593,7 @@ static void test_audio(void)
         if (t0 < 0 && played > 200) {
             t0 = (int64_t)gz_time_us();
             p0 = played;
+            audio_sound(AUDIO_SND_TONE);    /* mixed over the stream */
         }
         gz_sleep_ms(20);
     }
@@ -624,6 +628,17 @@ static void test_audio(void)
     gz_sleep_ms(300);
     audio_get_state(&st);
     CHECK(st.state == AUDIO_PAUSED && st.position_ms == paused_at, "audio pause");
+    /* A sound takes the output from the paused track, which then resumes
+     * where it was. */
+    audio_sound(AUDIO_SND_TONE);
+    gz_sleep_ms(1500);
+    audio_get_state(&st);
+    CHECK(st.state == AUDIO_PAUSED && st.position_ms == paused_at, "audio pause kept over a sound");
+    audio_resume();
+    gz_sleep_ms(700);
+    audio_get_state(&st);
+    CHECK(st.state == AUDIO_PLAYING && st.position_ms > paused_at && st.position_ms < paused_at + 1500,
+          "audio resume after a sound");
     CHECK(audio_play("/Music/Chime.wav") == 0, "audio play adpcm wav");
     gz_sleep_ms(1000);
     audio_get_state(&st);
@@ -631,6 +646,47 @@ static void test_audio(void)
     audio_stop();
     audio_get_state(&st);
     CHECK(st.state == AUDIO_STOPPED, "audio stop");
+}
+
+/* System sounds: notifications to the audio server, observed through
+ * audio_sound_busy. The output is idle here (test_audio stopped it). */
+static void test_sounds(void)
+{
+    struct audio_state st;
+    int32_t old_tone, tone = 4;     /* Alarm */
+    bool had_tone = pref_get(AUDIO_PREF_TONE_TIMER, &old_tone, 4) == 4;
+
+    audio_get_state(&st);
+    uint32_t under0 = st.underruns;
+    CHECK(audio_sound(-1) == GZ_EINVAL && audio_sound(AUDIO_SND_TONE + AUDIO_TONES) == GZ_EINVAL,
+          "sound ids checked");
+    CHECK(audio_sound(AUDIO_SND_TONE + 1) == 0, "sound request");
+    gz_sleep_ms(100);
+    CHECK(audio_sound_busy() == 1, "sound playing");
+    uint64_t start = gz_time_us();
+    while (audio_sound_busy() == 1 && gz_time_us() - start < 5000000)
+        gz_sleep_ms(50);
+    uint32_t ms = (uint32_t)((gz_time_us() - start) / 1000);
+    printf("ktest: sound played out %u ms after 100 ms\n", ms);
+    CHECK(ms > 1000 && ms < 3000, "sound plays out");
+    gz_sleep_ms(300);
+    audio_get_state(&st);
+    CHECK(st.underruns == under0 && st.state == AUDIO_STOPPED, "sound output idle without underruns");
+
+    /* The timer repeats until it is stopped. */
+    pref_put(AUDIO_PREF_TONE_TIMER, &tone, 4);
+    audio_sound_reload();
+    audio_sound(AUDIO_SND_TIMER);
+    gz_sleep_ms(3000);
+    CHECK(audio_sound_busy() == 1, "timer sound repeats");
+    audio_sound_stop();
+    gz_sleep_ms(100);
+    CHECK(audio_sound_busy() == 0, "timer sound stops");
+    if (had_tone)
+        pref_put(AUDIO_PREF_TONE_TIMER, &old_tone, 4);
+    else
+        pref_delete(AUDIO_PREF_TONE_TIMER);
+    audio_sound_reload();
 }
 
 static void test_net(void)
@@ -722,6 +778,63 @@ static void test_net(void)
     } else {
         printf("ktest: INFO no internet DNS\n");
     }
+
+    uint32_t utc;
+    rv = ntp_query(NTP_SERVER, 6000, &utc);
+    if (rv == 0) {
+        struct gz_datetime dt;
+        gz_secs_to_dt(utc, &dt);
+        printf("ktest: INFO ntp %04d-%02d-%02d %02d:%02d:%02d UTC\n", dt.year, dt.month, dt.day, dt.hour,
+               dt.minute, dt.second);
+    } else {
+        printf("ktest: INFO ntp %s: %s\n", NTP_SERVER, net_strerror(rv));
+    }
+}
+
+/* ---- time zones --------------------------------------------------------- */
+
+static uint32_t utc_at(int y, int mo, int d, int h, int mi)
+{
+    return (uint32_t)gz_days_from_civil(y, mo, d) * 86400u + (uint32_t)(h * 3600 + mi * 60);
+}
+
+static int zone_named(const char *name)
+{
+    for (int i = 0; i < tz_count(); i++) {
+        if (!strcmp(tz_get(i)->name, name))
+            return i;
+    }
+    return -1;
+}
+
+static void test_time(void)
+{
+    int la = zone_named("Los Angeles"), ldn = zone_named("London"), par = zone_named("Paris");
+    int phx = zone_named("Phoenix"), syd = zone_named("Sydney");
+
+    CHECK(la == TZ_LOS_ANGELES && ldn >= 0 && par >= 0 && phx >= 0 && syd >= 0 && !tz_get(tz_count()),
+          "tz table");
+    CHECK(tz_offset_min(la, utc_at(2026, 7, 1, 0, 0)) == -420 && tz_offset_min(la, utc_at(2026, 12, 1, 0, 0)) == -480,
+          "tz Los Angeles summer and winter");
+    /* 2026: DST from March 8 10:00 UTC to November 1 09:00 UTC. */
+    CHECK(tz_offset_min(la, utc_at(2026, 3, 8, 9, 59)) == -480 && tz_offset_min(la, utc_at(2026, 3, 8, 10, 0)) == -420 &&
+          tz_offset_min(la, utc_at(2026, 11, 1, 8, 59)) == -420 && tz_offset_min(la, utc_at(2026, 11, 1, 9, 0)) == -480,
+          "tz US transitions");
+    /* EU: last Sundays, March 29 and October 25, at 01:00 UTC. */
+    CHECK(tz_offset_min(ldn, utc_at(2026, 3, 29, 0, 59)) == 0 && tz_offset_min(ldn, utc_at(2026, 3, 29, 1, 0)) == 60 &&
+          tz_offset_min(par, utc_at(2026, 10, 25, 0, 59)) == 120 && tz_offset_min(par, utc_at(2026, 10, 25, 1, 0)) == 60,
+          "tz EU transitions");
+    CHECK(tz_offset_min(phx, utc_at(2026, 7, 1, 0, 0)) == -420 && tz_offset_min(phx, utc_at(2026, 1, 1, 0, 0)) == -420,
+          "tz no DST");
+    /* Sydney: DST ends April 5 03:00 local (April 4 16:00 UTC), starts October 4 02:00 local. */
+    CHECK(tz_offset_min(syd, utc_at(2026, 1, 15, 0, 0)) == 660 && tz_offset_min(syd, utc_at(2026, 4, 4, 16, 0)) == 600 &&
+          tz_offset_min(syd, utc_at(2026, 10, 3, 15, 59)) == 600 && tz_offset_min(syd, utc_at(2026, 10, 3, 16, 0)) == 660,
+          "tz southern hemisphere");
+    /* Local to UTC: a repeated time is the later instant, a skipped one an hour earlier. */
+    CHECK(tz_local_to_utc(la, utc_at(2026, 7, 1, 12, 0)) == utc_at(2026, 7, 1, 19, 0) &&
+          tz_local_to_utc(la, utc_at(2026, 11, 1, 1, 30)) == utc_at(2026, 11, 1, 9, 30) &&
+          tz_local_to_utc(la, utc_at(2026, 3, 8, 2, 30)) == utc_at(2026, 3, 8, 9, 30) &&
+          tz_utc_to_local(la, utc_at(2026, 7, 1, 19, 0)) == utc_at(2026, 7, 1, 12, 0), "tz local and UTC");
 }
 
 int main(void)
@@ -808,7 +921,9 @@ int main(void)
     test_card();
     test_packages();
     test_prefs();
+    test_time();
     test_audio();
+    test_sounds();
     test_net();
 
     struct gz_sysinfo si;
