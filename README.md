@@ -163,6 +163,15 @@ resources in their folder through the usual `res_image`.
 to install from Files. A package needs `Info`, `main.c` and a 44x44
 `icon.gzi` (`tools/mkgzi.py icon.png icon.gzi`).
 
+## App Store
+
+The native **App Store** offers Search and Updates in the early iPhone OS style.
+It installs free, curated packages over HTTPS and preserves saved data on update.
+The catalog includes Hello, Fifteen, Sketch, Minesweeper and Solitaire.
+Build it with `./build.sh store`; publish `out/store/` at `appstore.glaze-os.com`.
+See [App Store hosting and development](docs/APP_STORE.md) for setup and tests,
+and [AWS deployment](docs/APP_STORE_AWS.md) for S3, CloudFront and release publishing.
+
 ## Networking
 
 With an NE2000 PCMCIA card (`--ne2000` on the emulator), Glaze gets an

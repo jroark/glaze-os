@@ -11,7 +11,8 @@
  * icon). Installing unpacks them into a bundle folder,
  * <root>/Applications/<id>.app, on the flash (root "") or the card
  * ("/Card"). The bundle path is the app's identity for SpringBoard; an app
- * keeps its own data under <bundle>/data, so uninstalling removes it too.
+ * keeps its own data under <bundle>/data, which updates preserve and
+ * uninstalling removes. Packages cannot supply entries in data/.
  */
 #ifndef GLAZE_PKG_H
 #define GLAZE_PKG_H
@@ -34,7 +35,8 @@ int pkg_bundle_info(const char *bundle, struct pkg_info *info);
 /* One entry of a package file (such as "res/icon.gzi"): its size, or an
  * error (GZ_EFULL if it is larger than max). */
 int pkg_read_entry(const char *gzp, const char *name, void *buf, uint32_t max);
-/* Installs a package under root ("" or "/Card"), replacing an installed app
+/* Installs a package under root ("" or "/Card"), preserving saved data
+ * and recovering interrupted replacements. Replaces an installed app
  * with the same id on either volume. Writes the bundle path to `bundle`. */
 int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX]);
 int pkg_uninstall(const char *bundle);

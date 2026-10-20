@@ -99,6 +99,8 @@ static int read_table(int fd, struct entry *ents, uint32_t *count, uint32_t *fil
     for (uint32_t i = 0; i < *count; i++) {
         struct entry *e = &ents[i];
         if (memchr(e->name, 0, sizeof(e->name)) == NULL || !entry_name_ok(e->name) ||
+            !strcmp(e->name, "data") || !strncmp(e->name, "data/", 5) ||
+            !strcmp(e->name, ".pkg-ready") || !strncmp(e->name, ".pkg-ready/", 11) ||
             e->offset < 8 + len || e->offset > *file_size || e->size > *file_size - e->offset)
             return GZ_EINVAL;
         for (uint32_t j = 0; j < i; j++) {
@@ -184,13 +186,61 @@ static void bundle_path(char *out, size_t n, const char *root, const char *id, c
     snprintf(out, n, "%s/Applications/%s.app%s", root, id, suffix);
 }
 
+/* The ready marker moves with the staged bundle. A backup is retained until
+ * the replacement and its data are visible. Renames are within one volume.
+ * Recovery rolls back an interrupted pre-commit swap, or finishes cleanup
+ * after commit. Cross-volume moves keep the source until destination commit. */
+static int recover_one(const char *root, const char *id)
+{
+    char live[FS_PATH_MAX], bak[FS_PATH_MAX], tmp[FS_PATH_MAX], marker[FS_PATH_MAX];
+    char source[PKG_BUNDLE_MAX] = {0}, flash[PKG_BUNDLE_MAX], card[PKG_BUNDLE_MAX];
+    struct fs_stat st;
+    struct pkg_info info;
+    bundle_path(live, sizeof(live), root, id, "");
+    bundle_path(bak, sizeof(bak), root, id, ".bak");
+    bundle_path(tmp, sizeof(tmp), root, id, ".tmp");
+    if (fs_stat(live, &st) == GZ_ENOENT && fs_stat(bak, &st) == 0) {
+        int rv = fs_rename(bak, live);
+        if (rv)
+            return rv;
+    }
+    if (pkg_bundle_info(live, &info) == 0 && !strcmp(info.id, id)) {
+        snprintf(marker, sizeof(marker), "%s/.pkg-ready", live);
+        int n = fs_read_file(marker, source, sizeof(source) - 1);
+        if (n >= 0) {
+            source[n] = 0;
+            bundle_path(flash, sizeof(flash), "", id, "");
+            bundle_path(card, sizeof(card), "/Card", id, "");
+            if (*source && strcmp(source, live) && (!strcmp(source, flash) || !strcmp(source, card))) {
+                /* Defer source cleanup until its removable volume returns. */
+                if (!strncmp(source, "/Card/", 6) && fs_stat("/Card", &st))
+                    return GZ_ENOENT;
+                int rv = fs_remove_all(source);
+                if (rv && rv != GZ_ENOENT)
+                    return rv;
+            }
+            int rv = fs_remove_all(bak);
+            if (rv && rv != GZ_ENOENT)
+                return rv;
+            rv = fs_remove(marker);
+            if (rv && rv != GZ_ENOENT)
+                return rv;
+        } else if (n != GZ_ENOENT)
+            return n;
+    }
+    int rv = fs_remove_all(tmp);
+    return rv == GZ_ENOENT ? 0 : rv;
+}
+
 int pkg_find(const char *id, char bundle[PKG_BUNDLE_MAX])
 {
-    static const char *const roots[] = { "", "/Card" };
+    static const char *const roots[] = {"", "/Card"};
     struct fs_stat st;
 
     if (!id_ok(id))
         return GZ_EINVAL;
+    for (unsigned i = 0; i < 2; i++)
+        recover_one(roots[i], id);
     for (unsigned i = 0; i < 2; i++) {
         bundle_path(bundle, PKG_BUNDLE_MAX, roots[i], id, "");
         if (fs_stat(bundle, &st) == 0 && st.type == FS_DIR)
@@ -219,19 +269,80 @@ static int extract(int fd, const struct entry *e, const char *path, uint8_t *buf
     return rv ? rv : crv;
 }
 
+/* Copy saved data into staging; never move it out of the working app.
+ * Bounded recursion/path lengths also protect against malformed app data. */
+static int copy_data(const char *src, const char *dst, uint8_t *buf, unsigned depth)
+{
+    struct fs_stat st;
+    int rv = fs_stat(src, &st);
+    if (rv)
+        return rv;
+    if (depth > 12)
+        return GZ_EINVAL;
+    if (st.type == FS_DIR) {
+        rv = fs_mkdirs(dst);
+        if (rv)
+            return rv;
+        struct fs_dirent ents[4];
+        uint32_t skip = 0;
+        int n;
+        while ((n = fs_list(src, skip, ents, 4)) > 0) {
+            skip += n;
+            for (int i = 0; i < n; i++) {
+                char a[FS_PATH_MAX], b[FS_PATH_MAX];
+                if (snprintf(a, sizeof(a), "%s/%s", src, ents[i].name) >= (int)sizeof(a) ||
+                    snprintf(b, sizeof(b), "%s/%s", dst, ents[i].name) >= (int)sizeof(b))
+                    return GZ_EINVAL;
+                rv = copy_data(a, b, buf, depth + 1);
+                if (rv)
+                    return rv;
+            }
+        }
+        return n < 0 ? n : 0;
+    }
+    int in = fs_open(src, FS_O_READ);
+    if (in < 0)
+        return in;
+    int out = fs_open(dst, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (out < 0) {
+        fs_close(in);
+        return out;
+    }
+    uint32_t done = 0;
+    while (done < st.size) {
+        uint32_t n = MIN(st.size - done, FS_IO_MAX);
+        int got = fs_read(in, buf, n);
+        if (got != (int)n) {
+            rv = GZ_EIO;
+            break;
+        }
+        if (fs_write(out, buf, n) != (int)n) {
+            rv = GZ_ENOSPC;
+            break;
+        }
+        done += n;
+    }
+    fs_close(in);
+    int crv = fs_close(out);
+    return rv ? rv : crv;
+}
+
 int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX])
 {
     static struct entry ents[MAX_ENTRIES];
     struct pkg_info info;
     struct fs_info vol;
     struct fs_stat st;
-    char tmp[FS_PATH_MAX], path[FS_PATH_MAX], old[PKG_BUNDLE_MAX];
+    char tmp[FS_PATH_MAX], path[FS_PATH_MAX], old[PKG_BUNDLE_MAX] = {0};
+    char bak[FS_PATH_MAX], source[FS_PATH_MAX];
     uint32_t count, size, need = 0;
     uint8_t *buf = NULL;
     int fd, rv;
 
+    if (strcmp(root, "") && strcmp(root, "/Card"))
+        return GZ_EINVAL;
     if (*root && (fs_stat(root, &st) || st.type != FS_DIR))
-        return GZ_ENOENT;                   /* no card in */
+        return GZ_ENOENT; /* no card in */
     fd = fs_open(gzp, FS_O_READ);
     if (fd < 0)
         return fd;
@@ -240,8 +351,18 @@ int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX])
         rv = read_entry_info(fd, ents, count, &info);
     if (rv)
         goto out;
-    for (uint32_t i = 0; i < count; i++)
-        need += ents[i].size + 1024;       /* data plus per-file overhead */
+    rv = recover_one(root, info.id);
+    if (rv)
+        goto out;
+    if (pkg_find(info.id, old) < 0)
+        old[0] = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        if (ents[i].size > 0x7fffffffu - need - 1024) {
+            rv = GZ_EFULL;
+            goto out;
+        }
+        need += ents[i].size + 1024; /* data plus per-file overhead */
+    }
     rv = fs_statvfs(*root ? root : "/", &vol);
     if (rv)
         goto out;
@@ -268,13 +389,39 @@ int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX])
         if (!rv)
             rv = extract(fd, &ents[i], path, buf, FS_IO_MAX);
     }
-    if (!rv && pkg_find(info.id, old) == 0)
-        rv = fs_remove_all(old);
+    if (!rv && *old) {
+        snprintf(source, sizeof(source), "%s/data", old);
+        snprintf(path, sizeof(path), "%s/data", tmp);
+        int sr = fs_stat(source, &st);
+        struct pkg_info previous;
+        if (sr == GZ_ENOENT && pkg_bundle_info(old, &previous) == 0)
+            rv = 0;
+        else
+            rv = copy_data(source, path, buf, 0);
+    }
+    if (!rv) {
+        snprintf(path, sizeof(path), "%s/.pkg-ready", tmp);
+        int n = (int)strlen(old) + 1;
+        rv = fs_write_file(path, old, (uint32_t)n);
+        rv = rv == n ? 0 : rv < 0 ? rv : GZ_EIO;
+    }
     bundle_path(bundle, PKG_BUNDLE_MAX, root, info.id, "");
+    bundle_path(bak, sizeof(bak), root, info.id, ".bak");
+    bool backed = false;
+    if (!rv && fs_stat(bundle, &st) == 0) {
+        rv = fs_rename(bundle, bak);
+        backed = !rv;
+    }
     if (!rv)
-        rv = fs_rename(tmp, bundle);
-    if (rv)
+        rv = fs_rename(tmp, bundle); /* commit point */
+    if (rv) {
+        if (backed)
+            fs_rename(bak, bundle);
         fs_remove_all(tmp);
+    } else {
+        /* Cleanup can be retried by recovery; the new app is committed. */
+        recover_one(root, info.id);
+    }
 out:
     free(buf);
     fs_close(fd);
@@ -305,6 +452,41 @@ int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_i
     int n, napps = 0;
 
     snprintf(dir, sizeof(dir), "%s/Applications", root);
+    /* First recover every interrupted transaction. Do not change directory
+     * enumeration offsets while scanning: restart after each recovered id. */
+    bool restart = true;
+    for (int pass = 0; restart && pass < 128; pass++) {
+        restart = false;
+        skip = 0;
+        while (!restart && (n = fs_list(dir, skip, ents, 8)) > 0) {
+            skip += (uint32_t)n;
+            for (int i = 0; i < n; i++) {
+                size_t len = strlen(ents[i].name);
+                bool txn = len > 8 && (!strcmp(ents[i].name + len - 8, ".app.tmp") ||
+                                       !strcmp(ents[i].name + len - 8, ".app.bak"));
+                bool app = len > 4 && !strcmp(ents[i].name + len - 4, ".app");
+                if (ents[i].type != FS_DIR || (!txn && !app))
+                    continue;
+                char id[PKG_ID_MAX + 1], marker[FS_PATH_MAX];
+                size_t idlen = len - (txn ? 8 : 4);
+                if (idlen > PKG_ID_MAX)
+                    continue;
+                memcpy(id, ents[i].name, idlen);
+                id[idlen] = 0;
+                if (!id_ok(id))
+                    continue;
+                snprintf(marker, sizeof(marker), "%s/%s/.pkg-ready", dir, ents[i].name);
+                struct fs_stat st;
+                if (txn || fs_stat(marker, &st) == 0) {
+                    if (recover_one(root, id) == 0)
+                        restart = true;
+                    if (restart)
+                        break;
+                }
+            }
+        }
+    }
+    skip = 0;
     while ((n = fs_list(dir, skip, ents, 8)) > 0) {
         skip += (uint32_t)n;
         for (int i = 0; i < n; i++) {
@@ -312,11 +494,6 @@ int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_i
             if (ents[i].type != FS_DIR)
                 continue;
             snprintf(path, sizeof(path), "%s/%s", dir, ents[i].name);
-            if (len > 8 && !strcmp(ents[i].name + len - 8, ".app.tmp")) {
-                fs_remove_all(path);
-                skip--;
-                continue;
-            }
             if (len <= 4 || strcmp(ents[i].name + len - 4, ".app") || napps == MAX_LISTED ||
                 strlen(path) >= PKG_BUNDLE_MAX)
                 continue;

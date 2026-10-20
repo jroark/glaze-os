@@ -1,0 +1,32 @@
+[
+  {
+    "id": "hello",
+    "developer": "Glaze",
+    "summary": "A friendly first app for Glaze.",
+    "description": "Say hello to your Glaze. Tap the button and watch your count grow. Hello remembers every tap, even after you return Home."
+  },
+  {
+    "id": "fifteen",
+    "developer": "Glaze",
+    "summary": "Fifteen tiles. One little challenge.",
+    "description": "Slide the numbered tiles into order, leaving the empty space at the bottom right. Every shuffled board can be solved. Your puzzle is saved after every move."
+  },
+  {
+    "id": "sketch",
+    "developer": "Glaze",
+    "summary": "A pocket canvas for bright ideas.",
+    "description": "Draw with your stylus in six colors. Choose the eraser to tidy up, or Clear to start again. Your canvas is saved as you draw, ready whenever inspiration returns."
+  },
+  {
+    "id": "minesweeper",
+    "developer": "Glaze",
+    "summary": "A classic minefield, made pocket-sized.",
+    "description": "Clear the board without uncovering a mine. Tap to dig, hold to flag, and tap a satisfied number to clear its neighbors. Choose Beginner or Intermediate and beat your best time. Your game is saved after every move."
+  },
+  {
+    "id": "solitaire",
+    "developer": "Glaze",
+    "summary": "Klondike on the go. Deal yourself in.",
+    "description": "Build four foundations from ace to king in classic Klondike Solitaire. Choose draw one or draw three, drag cards or tap to move them, and undo a move when you need to. Your deal is saved after every move."
+  }
+]

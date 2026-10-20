@@ -46,6 +46,8 @@ struct http {
     int chunk_line_len;
     uint8_t *body;
     int body_len, body_cap, max_body;
+    int (*sink)(const uint8_t *, int, void *);
+    void *sink_arg;
     uint32_t last;              /* ms of the last progress */
 };
 
@@ -85,8 +87,14 @@ static void dns_remember(const char *host, uint32_t addr)
 
 static int buf_append(struct http *h, const uint8_t *d, int n)
 {
-    if (h->body_len + n > h->max_body)
+    if (n < 0 || n > h->max_body - h->body_len)
         return WE_TOO_BIG;
+    if (h->sink) {
+        int rv = h->sink(d, n, h->sink_arg);
+        if (rv) return rv;
+        h->body_len += n;
+        return 0;
+    }
     if (h->body_len + n > h->body_cap) {
         int cap = h->body_cap ? h->body_cap : 16 * 1024;
         while (cap < h->body_len + n)
@@ -164,6 +172,20 @@ struct http *http_start(const char *url, const char *post, int post_len, const c
     return h;
 }
 
+struct http *http_start_stream(const char *url, int max_body,
+                               int (*sink)(const uint8_t *, int, void *), void *arg)
+{
+    if (!sink) return NULL;
+    struct http *h = http_start(url, NULL, 0, NULL, NULL, max_body);
+    if (!h) return NULL;
+    /* Same-length substitution keeps request offsets unchanged. */
+    char *encoding = strstr(h->req, "gzip, deflate");
+    if (encoding) memcpy(encoding, "identity     ", 13);
+    h->sink = sink;
+    h->sink_arg = arg;
+    return h;
+}
+
 /* Header block parsed: status line and fields. */
 static int parse_head(struct http *h)
 {
@@ -189,7 +211,21 @@ static int parse_head(struct http *h)
         return WE_PROTOCOL;
     h->status = atoi(sp + 1);
     const char *v = http_header(h, "content-length", 0);
-    h->content_length = v ? atoi(v) : -1;
+    h->content_length = -1;
+    if (v) {
+        if (!*v) return WE_PROTOCOL;
+        unsigned len = 0;
+        for (const char *p = v; *p; p++) {
+            if (*p < '0' || *p > '9' || len > (0x7fffffffu - (*p - '0')) / 10)
+                return WE_PROTOCOL;
+            len = len * 10 + (*p - '0');
+        }
+        h->content_length = (int)len;
+    }
+    if (h->sink) {
+        v = http_header(h, "content-encoding", 0);
+        if (v && strcasecmp(v, "identity")) return WE_DECODE;
+    }
     v = http_header(h, "transfer-encoding", 0);
     h->chunked = v && strstr(v, "chunked");
     if (h->content_length > h->max_body)
@@ -205,7 +241,7 @@ const char *http_header(const struct http *h, const char *name, int n)
     if (!h->head)
         return NULL;
     for (int i = 0; i < h->nlines; i++, line += strlen(line) + 1) {
-        if (i == 0 || strncasecmp(line, name, nl) || line[nl] != ':')
+        if (i == 0 || strlen(line) <= nl || strncasecmp(line, name, nl) || line[nl] != ':')
             continue;
         if (n-- > 0)
             continue;
@@ -226,6 +262,8 @@ int http_status(const struct http *h)
 static int body_bytes(struct http *h, const uint8_t *d, int n)
 {
     if (!h->chunked) {
+        if (h->content_length >= 0 && n > h->content_length - h->body_len)
+            return WE_PROTOCOL;
         int rv = buf_append(h, d, n);
         if (rv)
             return rv;
@@ -243,13 +281,16 @@ static int body_bytes(struct http *h, const uint8_t *d, int n)
                     if (h->chunk_line_len == 0)
                         h->state = H_DONE;      /* blank line after trailers */
                 } else {
-                    h->chunk_left = (int)strtol(h->chunk_line, NULL, 16);
-                    if (h->chunk_left < 0)
+                    char *end;
+                    unsigned long chunk = strtoul(h->chunk_line, &end, 16);
+                    if (end == h->chunk_line || (*end && *end != ';') || chunk > 0x7fffffffUL)
                         return WE_PROTOCOL;
+                    h->chunk_left = (int)chunk;
                     h->chunk_state = h->chunk_left ? CH_DATA : CH_TRAILER;
                 }
                 h->chunk_line_len = 0;
-            } else if (d[i] != '\r' && h->chunk_line_len < (int)sizeof(h->chunk_line) - 1) {
+            } else if (d[i] != '\r') {
+                if (h->chunk_line_len >= (int)sizeof(h->chunk_line) - 1) return WE_PROTOCOL;
                 h->chunk_line[h->chunk_line_len++] = (char)d[i];
             }
             i++;
@@ -278,6 +319,7 @@ static int body_bytes(struct http *h, const uint8_t *d, int n)
 /* Content coding, once the body is complete. */
 static int decode_body(struct http *h)
 {
+    if (h->sink) return 0;
     const char *ce = http_header(h, "content-encoding", 0);
 
     if (!ce || !h->body_len || (!strstr(ce, "gzip") && !strstr(ce, "deflate")))

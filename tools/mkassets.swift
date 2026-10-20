@@ -699,10 +699,65 @@ func makeUI() {
     }
 }
 
+// Store artwork uses the same original vector drawing helpers as the OS.
+func makeStoreAssets() {
+    icon("appstore") { ctx in
+        gradient(ctx, [(0x5CC5F7, 1, 0), (0x1245B5, 1, 1)], from: .zero, to: CGPoint(x: 0, y: 44))
+        ctx.setStrokeColor(col(0xFFFFFF)); ctx.setLineWidth(4); ctx.setLineCap(.round)
+        ctx.move(to: CGPoint(x: 12, y: 32)); ctx.addLine(to: CGPoint(x: 24, y: 10))
+        ctx.move(to: CGPoint(x: 22, y: 15)); ctx.addLine(to: CGPoint(x: 33, y: 33))
+        ctx.move(to: CGPoint(x: 10, y: 26)); ctx.addLine(to: CGPoint(x: 34, y: 26)); ctx.strokePath()
+    }
+    for (name, update) in [("tab_search.gzi", false), ("tab_updates.gzi", true)] {
+        image(name, 24, 24) { ctx in
+            ctx.setStrokeColor(col(0xFFFFFF)); ctx.setFillColor(col(0xFFFFFF)); ctx.setLineWidth(2.8); ctx.setLineCap(.round)
+            if update {
+                ctx.move(to: CGPoint(x: 19, y: 8)); ctx.addLine(to: CGPoint(x: 19, y: 3)); ctx.addLine(to: CGPoint(x: 14, y: 3)); ctx.strokePath()
+                ctx.addArc(center: CGPoint(x: 12, y: 12), radius: 8, startAngle: -.pi/3, endAngle: 1.4 * .pi, clockwise: false); ctx.strokePath()
+            } else {
+                ctx.strokeEllipse(in: CGRect(x: 3, y: 2, width: 13, height: 13))
+                ctx.move(to: CGPoint(x: 15, y: 15)); ctx.addLine(to: CGPoint(x: 21, y: 21)); ctx.strokePath()
+            }
+        }
+    }
+    let original = saveDir
+    let root = URL(fileURLWithPath: outDir).deletingLastPathComponent().deletingLastPathComponent()
+    for name in ["fifteen", "sketch"] {
+        saveDir = root.appendingPathComponent("packages/\(name)").path
+        icon(name) { ctx in
+            if name == "fifteen" {
+                gradient(ctx, [(0xAD7C45, 1, 0), (0x51331F, 1, 1)], from: .zero, to: CGPoint(x: 0, y: 44))
+                for i in 0..<4 {
+                    if i == 3 { continue }
+                    let x = CGFloat(5 + (i % 2) * 18), y = CGFloat(5 + (i / 2) * 18)
+                    ctx.setFillColor(col(0xF9E7BD)); ctx.addPath(rr(CGRect(x: x, y: y, width: 16, height: 16), 2)); ctx.fillPath()
+                    ctx.setStrokeColor(col(0x735330)); ctx.setLineWidth(2)
+                    ctx.move(to: CGPoint(x: x+6, y: y+5)); ctx.addLine(to: CGPoint(x: x+10, y: y+5)); ctx.addLine(to: CGPoint(x: x+10, y: y+12)); ctx.strokePath()
+                }
+            } else {
+                gradient(ctx, [(0xFFF8DF, 1, 0), (0xD6C195, 1, 1)], from: .zero, to: CGPoint(x: 0, y: 44))
+                ctx.setStrokeColor(col(0xB9C4C6)); ctx.setLineWidth(1)
+                for y in stride(from: 11, to: 44, by: 7) { ctx.move(to: CGPoint(x: 0,y: y)); ctx.addLine(to: CGPoint(x: 44,y: y)); ctx.strokePath() }
+                ctx.setStrokeColor(col(0xDB7F32)); ctx.setLineWidth(7); ctx.setLineCap(.square)
+                ctx.move(to: CGPoint(x: 13, y: 32)); ctx.addLine(to: CGPoint(x: 31, y: 10)); ctx.strokePath()
+                ctx.setStrokeColor(col(0x393F48)); ctx.setLineWidth(3)
+                ctx.move(to: CGPoint(x: 11,y: 35)); ctx.addLine(to: CGPoint(x: 14,y: 31)); ctx.strokePath()
+            }
+        }
+        try? FileManager.default.removeItem(atPath: "\(saveDir)/icon.gzi")
+        try! FileManager.default.moveItem(atPath: "\(saveDir)/icon_\(name).gzi", toPath: "\(saveDir)/icon.gzi")
+    }
+    saveDir = original
+}
+
 // MARK: - Main
 
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 try? FileManager.default.createDirectory(atPath: photoDir, withIntermediateDirectories: true)
+if CommandLine.arguments.contains("--store-only") {
+    makeStoreAssets()
+    exit(0)
+}
 for size in [9, 10, 11, 12, 13, 14, 17, 24, 44] {
     makeFont("Vera.ttf", CGFloat(size), "sans_r\(size).gzf")
 }
@@ -720,3 +775,5 @@ makeWallpapers()
 makePhotos()
 makeUI()
 print("assets written to \(outDir)")
+
+makeStoreAssets()
