@@ -1,11 +1,12 @@
 # Used by tests/run_wince.py with original Notepad preinstalled.
 3000 drag 40 280 235 280 500
 4500 tap 90 192
-7000 tap 60 60
-7500 text Hello from Glaze
+# Leave time for PE loading and the initial window to become interactive.
+10500 tap 60 60
+11000 text Hello from Glaze
 # Save through the original File > Save command and compatibility file dialog.
-10000 tap 16 12
-11000 tap 35 82
-11500 tap 40 54
-11700 text compatibility.txt
-13200 tap 180 150
+13500 tap 16 12
+14500 tap 35 82
+15000 tap 40 54
+15200 text compatibility.txt
+16700 tap 180 150

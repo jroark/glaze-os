@@ -167,8 +167,11 @@ to install from Files. A package needs `Info`, `main.c` and a 44x44
 
 ## Original BE-300 apps
 
-Original BE-300 Calculator and PocketNotepad can also be imported from a local
-BeShell NAND image and run through the initial WinCE compatibility runtime.
+Original BE-300 Calculator, PocketNotepad, and Owner/OwnerInfo can be imported
+from a local BeShell NAND image and run through the WinCE compatibility runtime.
+An opt-in Clock package supports its initial time-display view.
+RegEdit is also available as an opt-in package for editing its own private registry.
+An opt-in PalmTweak package supports its General and Power Off pages with private settings.
 See [Original BE-300 applications](docs/WINCE.md) for importing, supported
 functions and tests.
 

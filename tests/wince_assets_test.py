@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 from wince_assets import AssetError, CpkDecoder, Fat16, lzss, span
-from import_wince import package, validate_runner
+from import_wince import package, pe_icon, validate_runner, pe_report
 
 
 def put32(data, off, value):
@@ -15,6 +15,28 @@ def put32(data, off, value):
 
 
 class Assets(unittest.TestCase):
+    def test_library_qualified_ordinal_imports(self):
+        data = bytearray(1024)
+        data[:2] = b"MZ"; put32(data, 60, 128); data[128:132] = b"PE\0\0"
+        struct.pack_into("<HH", data, 132, 0x166, 1)
+        struct.pack_into("<H", data, 148, 224)
+        struct.pack_into("<H", data, 152, 0x10b)
+        struct.pack_into("<H", data, 220, 9)
+        put32(data, 256, 4096); put32(data, 260, 40)
+        struct.pack_into("<IIII", data, 384, 512, 4096, 512, 512)
+        put32(data, 512, 4160); put32(data, 524, 4200); put32(data, 528, 4180)
+        put32(data, 576, 0x80000001)
+        data[616:629] = b"commctrl.dll\0"
+        before = bytes(data)
+        report = pe_report(data, {1: "CoreOnly"}, {"commctrl.dll": {1: "InitCommonControls"}})
+        self.assertEqual(report["imports"][0]["symbols"], [{"ordinal": 1, "name": "InitCommonControls"}])
+        self.assertEqual(data, before)
+        with self.assertRaises(AssetError):
+            pe_report(data, {1: "CoreOnly"})
+        data[616:629] = b"COREDLL.dll\0\0"
+        report = pe_report(data, {1: "CoreOnly"})
+        self.assertEqual(report["imports"][0]["symbols"][0]["name"], "CoreOnly")
+
     def setUp(self):
         driver = bytearray(1024)
         table = 4
@@ -112,6 +134,50 @@ class Assets(unittest.TestCase):
         elf[89] = ord("x")
         with self.assertRaises(AssetError):
             validate_runner(elf)
+
+    def test_pe_icon_extraction(self):
+        pe = bytearray(2048)
+        pe[:2] = b"MZ"
+        put32(pe, 60, 128)
+        pe[128:132] = b"PE\0\0"
+        struct.pack_into("<HH", pe, 132, 0x166, 1)
+        struct.pack_into("<HH", pe, 148, 224, 2)
+        struct.pack_into("<H", pe, 152, 0x10b)
+        struct.pack_into("<H", pe, 220, 9)
+        put32(pe, 264, 0x1000); put32(pe, 268, 512)
+        pe[376:382] = b".rsrc\0"
+        put32(pe, 384, 512); put32(pe, 388, 0x1000)
+        put32(pe, 392, 512); put32(pe, 396, 512)
+        rsrc = 512
+        # Root dir: 2 entries (type 3 @ +0x20, type 14 @ +0x58)
+        struct.pack_into("<H", pe, rsrc + 14, 2)
+        put32(pe, rsrc + 16, 3); put32(pe, rsrc + 20, 0x80000020)
+        put32(pe, rsrc + 24, 14); put32(pe, rsrc + 28, 0x80000058)
+        # Type 3 -> ID 1 -> Lang -> DataEntry @ +0x90
+        struct.pack_into("<H", pe, rsrc + 0x20 + 14, 1)
+        put32(pe, rsrc + 0x20 + 16, 1); put32(pe, rsrc + 0x20 + 20, 0x80000038)
+        struct.pack_into("<H", pe, rsrc + 0x38 + 14, 1)
+        put32(pe, rsrc + 0x38 + 16, 1033); put32(pe, rsrc + 0x38 + 20, 0x90)
+        # Type 14 -> ID 101 -> Lang -> DataEntry @ +0xa0
+        struct.pack_into("<H", pe, rsrc + 0x58 + 14, 1)
+        put32(pe, rsrc + 0x58 + 16, 101); put32(pe, rsrc + 0x58 + 20, 0x80000070)
+        struct.pack_into("<H", pe, rsrc + 0x70 + 14, 1)
+        put32(pe, rsrc + 0x70 + 16, 1033); put32(pe, rsrc + 0x70 + 20, 0xa0)
+        # 2x2 32bpp DIB icon at +0xb0 (40 + 16 + 8 = 64 bytes)
+        put32(pe, rsrc + 0x90, 0x10b0); put32(pe, rsrc + 0x94, 64)
+        struct.pack_into("<IiiHHI", pe, rsrc + 0xb0, 40, 2, 4, 1, 32, 0)
+        pe[rsrc + 0xb0 + 40:rsrc + 0xb0 + 56] = b"\x00\x00\xff\xff" * 4
+        # GRPICONDIR at +0xf0 (6 + 14 = 20 bytes)
+        put32(pe, rsrc + 0xa0, 0x10f0); put32(pe, rsrc + 0xa4, 20)
+        struct.pack_into("<HHHBBBBHHIH", pe, rsrc + 0xf0, 0, 1, 1, 2, 2, 0, 0, 1, 32, 64, 1)
+        gzi = pe_icon(bytes(pe))
+        self.assertEqual(gzi[:12], b"GZI1" + struct.pack("<HHHH", 44, 44, 1, 0))
+        self.assertEqual(len(gzi), 12 + 44 * 44 * 3)
+        center = struct.unpack_from("<H", gzi, 12 + (22 * 44 + 22) * 2)[0]
+        self.assertEqual(center, 0xf800)
+        put32(pe, 268, 0)
+        with self.assertRaises(AssetError):
+            pe_icon(bytes(pe))
 
 
 if __name__ == "__main__":

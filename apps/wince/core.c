@@ -1,7 +1,25 @@
 /* WinCE core services used by the original BE-300 applications. */
+#include "registry.h"
 #include "runtime.h"
 
 CW ce_error;
+
+/* Microsoft CE and GCC O32 use low/high register pairs for these integer
+ * helpers. Keep the 64-bit return type so v1 is preserved by the bridge. */
+static uint64_t ce_ll_mul(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
+{
+    return ((uint64_t)ahi << 32 | alo) * ((uint64_t)bhi << 32 | blo);
+}
+static int64_t ce_ll_div(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
+{
+    int64_t numerator = (int64_t)((uint64_t)ahi << 32 | alo);
+    int64_t denominator = (int64_t)((uint64_t)bhi << 32 | blo);
+    if (!denominator)
+        ce_fatal("WinCE integer division by zero");
+    if (numerator == INT64_MIN && denominator == -1)
+        return INT64_MIN;
+    return numerator / denominator;
+}
 
 unsigned ce_wlen(const WCHAR *text)
 {
@@ -124,6 +142,193 @@ CE_API(LocalReAlloc)
 {
     return WORD(realloc(PTR(void, a0), a1));
 }
+CE_API(malloc)
+{
+    return WORD(malloc(a0));
+}
+CE_API(free)
+{
+    free(PTR(void, a0));
+    return 0;
+}
+/* Heap ownership matters: freeing an unrelated pointer must not reach libc. */
+struct ce_heap_block {
+    struct ce_heap_block *next;
+    void *data;
+};
+static struct {
+    CW handle;
+    struct ce_heap_block *blocks;
+} heaps[16];
+static CW heap_serial;
+CE_API(HeapCreate)
+{
+    if (a0 & ~1u || a2) {
+        ce_error = 50;
+        return 0;
+    }
+    for (unsigned i = 0; i < ARRAY_SIZE(heaps); i++)
+        if (!heaps[i].handle)
+            return heaps[i].handle = 0x79000000u | ++heap_serial;
+    ce_error = 8;
+    return 0;
+}
+CE_API(HeapAlloc)
+{
+    if (a1 & ~9u) {
+        ce_error = 50;
+        return 0;
+    }
+    for (unsigned i = 0; i < ARRAY_SIZE(heaps); i++) {
+        if (!a0 || heaps[i].handle != a0)
+            continue;
+        struct ce_heap_block *b = malloc(sizeof(*b));
+        if (!b)
+            break;
+        b->data = (a1 & 8) ? calloc(1, a2 ? a2 : 1) : malloc(a2 ? a2 : 1);
+        if (!b->data) {
+            free(b);
+            break;
+        }
+        b->next = heaps[i].blocks;
+        heaps[i].blocks = b;
+        return WORD(b->data);
+    }
+    ce_error = 8;
+    return 0;
+}
+CE_API(HeapFree)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(heaps); i++) {
+        if (!a0 || heaps[i].handle != a0)
+            continue;
+        if (!a2)
+            return 1;
+        struct ce_heap_block **link = &heaps[i].blocks;
+        while (*link) {
+            struct ce_heap_block *b = *link;
+            if (WORD(b->data) == a2) {
+                *link = b->next;
+                free(b->data);
+                free(b);
+                return 1;
+            }
+            link = &b->next;
+        }
+    }
+    ce_error = 87;
+    return 0;
+}
+CE_API(HeapDestroy)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(heaps); i++) {
+        if (!a0 || heaps[i].handle != a0)
+            continue;
+        while (heaps[i].blocks) {
+            struct ce_heap_block *b = heaps[i].blocks;
+            heaps[i].blocks = b->next;
+            free(b->data);
+            free(b);
+        }
+        heaps[i].handle = 0;
+        return 1;
+    }
+    ce_error = 6;
+    return 0;
+}
+CE_API(strlen)
+{
+    return strlen(PTR(char, a0));
+}
+CE_API(mbstowcs)
+{
+    const uint8_t *s = PTR(uint8_t, a1);
+    unsigned n = 0;
+    while (s[n] && (!a0 || n < a2)) {
+        if (s[n] >= 128)
+            return 0xffffffffu;
+        if (a0)
+            PTR(WCHAR, a0)[n] = s[n];
+        n++;
+    }
+    if (a0 && n < a2)
+        PTR(WCHAR, a0)[n] = 0;
+    return n;
+}
+CE_API(wcstombs)
+{
+    const WCHAR *s = PTR(WCHAR, a1);
+    unsigned n = 0;
+    while (s[n] && (!a0 || n < a2)) {
+        if (s[n] >= 128)
+            return 0xffffffffu;
+        if (a0)
+            PTR(char, a0)[n] = (char)s[n];
+        n++;
+    }
+    if (a0 && n < a2)
+        PTR(char, a0)[n] = 0;
+    return n;
+}
+CE_API(wcsrchr)
+{
+    WCHAR *p = PTR(WCHAR, a0), *found = NULL;
+    do {
+        if (*p == a1)
+            found = p;
+    } while (*p++);
+    return WORD(found);
+}
+CE_API(wcsstr)
+{
+    WCHAR *p = PTR(WCHAR, a0), *q = PTR(WCHAR, a1);
+    unsigned n = ce_wlen(q);
+    for (; *p; p++) {
+        unsigned i = 0;
+        while (i < n && p[i] && p[i] == q[i])
+            i++;
+        if (i == n)
+            return WORD(p);
+    }
+    return n ? 0 : WORD(p);
+}
+static CW wcasecmp(CW left, CW right, unsigned n)
+{
+    const WCHAR *a = PTR(WCHAR, left), *b = PTR(WCHAR, right);
+    for (unsigned i = 0; i < n; i++) {
+        unsigned x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z')
+            x += 32;
+        if (y >= 'A' && y <= 'Z')
+            y += 32;
+        if (x != y)
+            return x - y;
+        if (!x)
+            break;
+    }
+    return 0;
+}
+CE_API(_wcsicmp)
+{
+    return wcasecmp(a0, a1, 0xffffffffu);
+}
+CE_API(_wcsnicmp)
+{
+    return wcasecmp(a0, a1, a2);
+}
+CE_API(_wtol)
+{
+    const WCHAR *p = PTR(WCHAR, a0);
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    bool negative = *p == '-';
+    if (*p == '-' || *p == '+')
+        p++;
+    uint32_t value = 0;
+    while (*p >= '0' && *p <= '9')
+        value = value * 10u + *p++ - '0';
+    return negative ? 0u - value : value;
+}
 CE_API(memcpy)
 {
     return WORD(memcpy(PTR(void, a0), PTR(void, a1), a2));
@@ -197,6 +402,17 @@ CE_API(ExitProcess)
     gz_exit((int)a0);
     return 0;
 }
+CE_API(TerminateProcess)
+{
+    /* WinCE's current-process pseudo handle, used by its CRT exit thunk. */
+    if (a0 != 0x42) {
+        ce_error = 5;
+        return 0;
+    }
+    ce_shutdown();
+    gz_exit((int)a1);
+    return 1;
+}
 CE_API(Sleep)
 {
     gz_sleep_ms(a0);
@@ -205,6 +421,49 @@ CE_API(Sleep)
 CE_API(GetTickCount)
 {
     return gz_time_ms();
+}
+CE_API(GetLocalTime)
+{
+    struct gz_datetime dt;
+    if (!a0 || gz_rtc_get(&dt))
+        return 0;
+    uint16_t *out = PTR(uint16_t, a0);
+    out[0] = dt.year;
+    out[1] = dt.month;
+    out[2] = dt.weekday;
+    out[3] = dt.day;
+    out[4] = dt.hour;
+    out[5] = dt.minute;
+    out[6] = dt.second;
+    out[7] = 0;
+    return 0;
+}
+CE_API(GetModuleFileNameW)
+{
+    if ((a0 && a0 != ce_main.base) || !a1 || !a2) {
+        ce_error = 87;
+        return 0;
+    }
+    uint32_t length;
+    const char *source = res_map("source.txt", &length);
+    const char *fallback = "\\Program Files\\program.exe";
+    if (!source) {
+        source = fallback;
+        length = strlen(fallback);
+    }
+    if (length > 255 || memchr(source, 0, length)) {
+        ce_error = 87;
+        return 0;
+    }
+    if (a2 <= length) {
+        ce_error = 122;
+        return 0;
+    }
+    char name[256];
+    memcpy(name, source, length);
+    name[length] = 0;
+    ce_widen(PTR(WCHAR, a1), a2, name);
+    return length;
 }
 
 /* CE's wide printf uses 16-bit strings. Formatting is bounded internally;
@@ -343,23 +602,15 @@ CE_API(CompareStringW)
     return n == m ? 2 : n < m ? 1 : 3;
 }
 
-/* Persistent per-app registry. Values are typed bytes, and missing values
- * remain missing. The on-disk stream is validated before it is loaded. */
-#define REG_KEYS 64
-#define REG_VALUES 128
-struct reg_key {
+/* Registry handles are separate from persistent keys and can be closed/reused.
+ */
+static struct ce_registry registry;
+static struct {
+    CW handle;
     char path[256];
-};
-struct reg_value {
-    char key[256], name[128];
-    CW type, size;
-    uint8_t *bytes;
-};
-static struct reg_key reg_keys[REG_KEYS];
-static struct reg_value reg_values[REG_VALUES];
-static unsigned key_count, value_count;
+} reg_handles[64];
+static CW reg_serial;
 static bool registry_loaded;
-
 static void registry_file(char path[FS_PATH_MAX])
 {
     snprintf(path, FS_PATH_MAX, "%s/data/registry", res_bundle());
@@ -370,8 +621,10 @@ static const char *reg_root(CW handle)
         static const char *const roots[] = {"HKCR", "HKCU", "HKLM", "HKU"};
         return roots[handle - 0x80000000u];
     }
-    return handle >= 0x71000000u && handle - 0x71000000u < key_count ? reg_keys[handle - 0x71000000u].path
-                                                                     : NULL;
+    for (unsigned i = 0; i < ARRAY_SIZE(reg_handles); i++)
+        if (handle && reg_handles[i].handle == handle)
+            return reg_handles[i].path;
+    return NULL;
 }
 static void reg_load(void)
 {
@@ -383,38 +636,13 @@ static void reg_load(void)
     struct fs_stat st;
     if (fs_stat(path, &st))
         return;
-    if (st.size > 256 * 1024 || st.size < 8)
+    if (st.size > CE_REG_FILE_MAX || st.size < 8)
         ce_fatal("Invalid WinCE registry file");
     uint8_t *data = malloc(st.size);
     if (!data || fs_read_file(path, data, st.size) != (int)st.size)
         ce_fatal("Cannot read WinCE registry");
-    if (memcmp(data, "GZCE", 4))
-        ce_fatal("Unknown WinCE registry format");
-    uint32_t count = ce_u32(data + 4), pos = 8;
-    if (count > REG_VALUES)
-        ce_fatal("WinCE registry has too many values");
-    for (unsigned i = 0; i < count; i++) {
-        if (!ce_range(pos, 16, st.size))
-            ce_fatal("Truncated WinCE registry");
-        uint32_t k = ce_u32(data + pos), n = ce_u32(data + pos + 4), size = ce_u32(data + pos + 12);
-        if (!k || k >= 256 || !n || n >= 128 || size > 65536 || !ce_range(pos + 16, k + n + size, st.size))
-            ce_fatal("Invalid WinCE registry entry");
-        struct reg_value *v = &reg_values[value_count++];
-        v->type = ce_u32(data + pos + 8);
-        v->size = size;
-        pos += 16;
-        memcpy(v->key, data + pos, k);
-        memcpy(v->name, data + pos + k, n);
-        if (v->key[k - 1] || v->name[n - 1])
-            ce_fatal("Unterminated WinCE registry name");
-        v->bytes = malloc(size ? size : 1);
-        if (!v->bytes)
-            ce_fatal("Out of memory loading WinCE registry");
-        memcpy(v->bytes, data + pos + k + n, size);
-        pos += k + n + size;
-    }
-    if (pos != st.size)
-        ce_fatal("Trailing bytes in WinCE registry");
+    if (!ce_reg_decode(&registry, data, st.size))
+        ce_fatal("Invalid WinCE registry stream");
     free(data);
 }
 static bool reg_save(void)
@@ -425,26 +653,45 @@ static bool reg_save(void)
     snprintf(temporary, sizeof(temporary), "%s.tmp", path);
     if (fs_mkdirs(folder))
         return false;
-    int fd = fs_open(temporary, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
-    if (fd < 0)
+    uint32_t size;
+    uint8_t *data = ce_reg_encode(&registry, &size);
+    if (!data)
         return false;
-    uint8_t header[16];
-    memcpy(header, "GZCE", 4);
-    ce_put32(header + 4, value_count);
-    bool ok = fs_write(fd, header, 8) == 8;
-    for (unsigned i = 0; ok && i < value_count; i++) {
-        struct reg_value *v = &reg_values[i];
-        unsigned k = strlen(v->key) + 1, n = strlen(v->name) + 1;
-        ce_put32(header, k);
-        ce_put32(header + 4, n);
-        ce_put32(header + 8, v->type);
-        ce_put32(header + 12, v->size);
-        ok = fs_write(fd, header, 16) == 16 && fs_write(fd, v->key, k) == (int)k &&
-             fs_write(fd, v->name, n) == (int)n && fs_write(fd, v->bytes, v->size) == (int)v->size;
+    int fd = fs_open(temporary, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    bool ok = fd >= 0;
+    if (ok) {
+        ok = fs_write(fd, data, size) == (int)size;
+        if (fs_close(fd))
+            ok = false;
     }
-    if (fs_close(fd))
-        ok = false;
+    free(data);
     return ok && !fs_rename(temporary, path);
+}
+uint32_t ce_registry_dword(const char *key, const char *name, uint32_t fallback)
+{
+    reg_load();
+    struct ce_reg_value *v = ce_reg_find(&registry, key, name);
+    return v && v->type == 4 && v->size == 4 ? ce_u32(v->bytes) : fallback;
+}
+bool ce_registry_set_dword(const char *key, const char *name, uint32_t value)
+{
+    reg_load();
+    uint8_t bytes[4];
+    ce_put32(bytes, value);
+    return !ce_reg_create(&registry, key) && !ce_reg_set(&registry, key, name, 4, bytes, 4) && reg_save();
+}
+static bool reg_utf8(char *out, unsigned capacity, const WCHAR *in)
+{
+    unsigned bytes = 0;
+    if (in)
+        for (unsigned i = 0; in[i]; i++) {
+            unsigned ch = in[i];
+            bytes += ch < 128 ? 1 : ch < 2048 ? 2 : 3;
+            if (bytes >= capacity)
+                return false;
+        }
+    ce_narrow(out, capacity, in);
+    return true;
 }
 static CW reg_open(CW root, CW subkey, CW result, CW disposition, bool create)
 {
@@ -453,33 +700,36 @@ static CW reg_open(CW root, CW subkey, CW result, CW disposition, bool create)
     if (!parent || !result)
         return 6;
     char sub[256], path[256];
-    ce_narrow(sub, sizeof(sub), PTR(WCHAR, subkey));
+    if (!reg_utf8(sub, sizeof(sub), PTR(WCHAR, subkey)))
+        return 87;
     if (snprintf(path, sizeof(path), "%s%s%s", parent, *sub ? "\\" : "", sub) >= (int)sizeof(path))
         return 87;
+    bool existed = ce_reg_exists(&registry, path);
+    if (!create && !existed)
+        return 2;
     unsigned i;
-    for (i = 0; i < key_count; i++)
-        if (!strcasecmp(reg_keys[i].path, path))
-            break;
-    bool existed = i < key_count;
-    if (!existed) {
-        for (unsigned j = 0; j < value_count; j++)
-            if (!strcasecmp(reg_values[j].key, path)) {
-                existed = true;
-                break;
-            }
-        if (!create && !existed)
-            return 2;
-        if (key_count == REG_KEYS)
-            return 8;
-        strlcpy(reg_keys[key_count++].path, path, sizeof(reg_keys[0].path));
+    for (i = 0; i < ARRAY_SIZE(reg_handles) && reg_handles[i].handle; i++)
+        ;
+    if (i == ARRAY_SIZE(reg_handles))
+        return 8;
+    if (create && !existed) {
+        CW error = ce_reg_create(&registry, path);
+        if (error)
+            return error;
+        if (!reg_save())
+            return 5;
     }
-    *PTR(CW, result) = 0x71000000u + i;
+    reg_handles[i].handle = 0x71000000u | (++reg_serial & 0xfffffu);
+    strlcpy(reg_handles[i].path, path, sizeof(reg_handles[i].path));
+    *PTR(CW, result) = reg_handles[i].handle;
     if (disposition)
         *PTR(CW, disposition) = existed ? 2 : 1;
     return 0;
 }
 CE_API(RegCreateKeyExW)
 {
+    /* Legacy apps supply a descriptive class even when they never query it.
+     * Retain key creation; this subset returns an empty class on queries. */
     return reg_open(a0, a1, a7, a8, true);
 }
 CE_API(RegOpenKeyExW)
@@ -488,32 +738,44 @@ CE_API(RegOpenKeyExW)
 }
 CE_API(RegCloseKey)
 {
-    return reg_root(a0) ? 0 : 6;
+    if (a0 >= 0x80000000u && a0 <= 0x80000003u)
+        return 0;
+    for (unsigned i = 0; i < ARRAY_SIZE(reg_handles); i++)
+        if (a0 && reg_handles[i].handle == a0) {
+            reg_handles[i].handle = 0;
+            return 0;
+        }
+    return 6;
+}
+static CW reg_data(struct ce_reg_value *v, CW type, CW data, CW length)
+{
+    if (!v)
+        return 2;
+    if (!length && data)
+        return 87;
+    if (type)
+        *PTR(CW, type) = v->type;
+    CW capacity = length ? *PTR(CW, length) : 0;
+    if (length)
+        *PTR(CW, length) = v->size;
+    if (!data)
+        return 0;
+    if (capacity < v->size)
+        return 234;
+    if (v->size)
+        memcpy(PTR(void, data), v->bytes, v->size);
+    return 0;
 }
 CE_API(RegQueryValueExW)
 {
     reg_load();
     const char *key = reg_root(a0);
-    if (!key || !a5)
+    if (!key)
         return 6;
     char name[128];
-    ce_narrow(name, sizeof(name), PTR(WCHAR, a1));
-    for (unsigned i = 0; i < value_count; i++) {
-        struct reg_value *v = &reg_values[i];
-        if (strcasecmp(key, v->key) || strcasecmp(name, v->name))
-            continue;
-        if (a3)
-            *PTR(CW, a3) = v->type;
-        CW capacity = *PTR(CW, a5);
-        *PTR(CW, a5) = v->size;
-        if (!a4)
-            return 0;
-        if (capacity < v->size)
-            return 234;
-        memcpy(PTR(void, a4), v->bytes, v->size);
-        return 0;
-    }
-    return 2;
+    if (!reg_utf8(name, sizeof(name), PTR(WCHAR, a1)))
+        return 87;
+    return reg_data(ce_reg_find(&registry, key, name), a3, a4, a5);
 }
 CE_API(RegSetValueExW)
 {
@@ -521,30 +783,11 @@ CE_API(RegSetValueExW)
     const char *key = reg_root(a0);
     if (!key)
         return 6;
-    if (a5 > 65536 || (a5 && !a4))
-        return 87;
     char name[128];
-    ce_narrow(name, sizeof(name), PTR(WCHAR, a1));
-    unsigned i;
-    for (i = 0; i < value_count; i++)
-        if (!strcasecmp(key, reg_values[i].key) && !strcasecmp(name, reg_values[i].name))
-            break;
-    if (i == REG_VALUES)
-        return 8;
-    uint8_t *copy = malloc(a5 ? a5 : 1);
-    if (!copy)
-        return 8;
-    memcpy(copy, PTR(void, a4), a5);
-    if (i == value_count)
-        value_count++;
-    struct reg_value *v = &reg_values[i];
-    free(v->bytes);
-    v->bytes = copy;
-    v->size = a5;
-    v->type = a3;
-    strlcpy(v->key, key, sizeof(v->key));
-    strlcpy(v->name, name, sizeof(v->name));
-    return reg_save() ? 0 : 5;
+    if (!reg_utf8(name, sizeof(name), PTR(WCHAR, a1)))
+        return 87;
+    CW error = ce_reg_set(&registry, key, name, a3, PTR(void, a4), a5);
+    return error ? error : reg_save() ? 0 : 5;
 }
 CE_API(RegDeleteValueW)
 {
@@ -553,15 +796,120 @@ CE_API(RegDeleteValueW)
     if (!key)
         return 6;
     char name[128];
-    ce_narrow(name, sizeof(name), PTR(WCHAR, a1));
-    for (unsigned i = 0; i < value_count; i++)
-        if (!strcasecmp(key, reg_values[i].key) && !strcasecmp(name, reg_values[i].name)) {
-            free(reg_values[i].bytes);
-            reg_values[i] = reg_values[--value_count];
-            memset(&reg_values[value_count], 0, sizeof(reg_values[0]));
-            return reg_save() ? 0 : 5;
-        }
-    return 2;
+    if (!reg_utf8(name, sizeof(name), PTR(WCHAR, a1)))
+        return 87;
+    CW error = ce_reg_remove_value(&registry, key, name);
+    return error ? error : reg_save() ? 0 : 5;
+}
+static CW reg_name(const char *name, CW buffer, CW length)
+{
+    if (!length)
+        return 87;
+    WCHAR text[256];
+    ce_widen(text, ARRAY_SIZE(text), name);
+    unsigned n = ce_wlen(text), capacity = *PTR(CW, length);
+    *PTR(CW, length) = n;
+    if (!buffer || capacity <= n)
+        return 234;
+    memcpy(PTR(void, buffer), text, (n + 1) * 2);
+    return 0;
+}
+CE_API(RegEnumKeyExW)
+{
+    reg_load();
+    const char *key = reg_root(a0);
+    if (!key)
+        return 6;
+    const char *name = ce_reg_child(&registry, key, a1);
+    if (!name)
+        return 259;
+    CW error = reg_name(name, a2, a3);
+    if (a7)
+        memset(PTR(void, a7), 0, 8);
+    if (a5 && (!a6 || !*PTR(CW, a6)))
+        return 234;
+    if (a5)
+        *PTR(WCHAR, a5) = 0;
+    if (a6)
+        *PTR(CW, a6) = 0;
+    return error;
+}
+CE_API(RegEnumValueW)
+{
+    reg_load();
+    const char *key = reg_root(a0);
+    if (!key)
+        return 6;
+    struct ce_reg_value *v = ce_reg_value_at(&registry, key, a1);
+    if (!v)
+        return 259;
+    CW error = reg_name(v->name, a2, a3);
+    CW data_error = reg_data(v, a5, error ? 0 : a6, a7);
+    return error ? error : data_error;
+}
+CE_API(RegQueryInfoKeyW)
+{
+    reg_load();
+    const char *key = reg_root(a0);
+    if (!key)
+        return 6;
+    if (a1 && (!a2 || !*PTR(CW, a2)))
+        return 234;
+    if (a1)
+        *PTR(WCHAR, a1) = 0;
+    if (a2)
+        *PTR(CW, a2) = 0;
+    CW children = 0, max_key = 0, values = 0, max_name = 0, max_data = 0;
+    const char *name;
+    WCHAR text[256];
+    while ((name = ce_reg_child(&registry, key, children))) {
+        ce_widen(text, ARRAY_SIZE(text), name);
+        max_key = MAX(max_key, ce_wlen(text));
+        children++;
+    }
+    struct ce_reg_value *v;
+    while ((v = ce_reg_value_at(&registry, key, values))) {
+        ce_widen(text, ARRAY_SIZE(text), v->name);
+        max_name = MAX(max_name, ce_wlen(text));
+        max_data = MAX(max_data, v->size);
+        values++;
+    }
+    if (a4)
+        *PTR(CW, a4) = children;
+    if (a5)
+        *PTR(CW, a5) = max_key;
+    if (a6)
+        *PTR(CW, a6) = 0;
+    if (a7)
+        *PTR(CW, a7) = values;
+    if (a8)
+        *PTR(CW, a8) = max_name;
+    if (a9)
+        *PTR(CW, a9) = max_data;
+    if (a10)
+        *PTR(CW, a10) = 0;
+    if (a11)
+        memset(PTR(void, a11), 0, 8);
+    return 0;
+}
+CE_API(RegDeleteKeyW)
+{
+    reg_load();
+    const char *key = reg_root(a0);
+    if (!key)
+        return 6;
+    if (!a1 || !*PTR(WCHAR, a1))
+        return 87;
+    char name[256], path[256];
+    if (!reg_utf8(name, sizeof(name), PTR(WCHAR, a1)))
+        return 87;
+    if (snprintf(path, sizeof(path), "%s\\%s", key, name) >= (int)sizeof(path))
+        return 87;
+    for (unsigned i = 0; i < ARRAY_SIZE(reg_handles); i++)
+        if (reg_handles[i].handle && !strcasecmp(reg_handles[i].path, path))
+            return 5;
+    CW error = ce_reg_delete(&registry, path);
+    return error ? error : reg_save() ? 0 : 5;
 }
 
 struct file_handle {
@@ -580,6 +928,107 @@ static CW file_error(int error)
 {
     ce_error = error == GZ_ENOENT ? 2 : error == GZ_ENOSPC ? 112 : error == GZ_EEXIST ? 80 : 5;
     return 0;
+}
+struct find_handle {
+    bool active;
+    uint32_t index;
+    char path[FS_PATH_MAX], pattern[FS_NAME_MAX];
+};
+static struct find_handle searches[8];
+static bool match_name(const char *pattern, const char *name)
+{
+    const char *star = NULL, *retry = NULL;
+    if (!strcmp(pattern, "*.*"))
+        pattern = "*";
+    while (*name) {
+        if (*pattern == '*') {
+            star = ++pattern;
+            retry = name;
+        } else if (*pattern == '?' || ((*pattern >= 'A' && *pattern <= 'Z' ? *pattern + 32 : *pattern) ==
+                                       (*name >= 'A' && *name <= 'Z' ? *name + 32 : *name))) {
+            pattern++;
+            name++;
+        } else if (star) {
+            pattern = star;
+            name = ++retry;
+        } else
+            return false;
+    }
+    while (*pattern == '*')
+        pattern++;
+    return !*pattern;
+}
+static CW find_next(struct find_handle *search, CW out)
+{
+    if (!out) {
+        ce_error = 87;
+        return 0;
+    }
+    struct fs_dirent entry;
+    for (;;) {
+        int count = fs_list(search->path, search->index++, &entry, 1);
+        if (count <= 0) {
+            ce_error = count < 0 ? 3 : 18;
+            return 0;
+        }
+        if (!match_name(search->pattern, entry.name))
+            continue;
+        /* CE WIN32_FIND_DATA is 560 bytes: dwOID precedes the UTF-16 name
+         * at offset 40. The backing FS supplies no timestamps or OIDs. */
+        memset(PTR(void, out), 0, 560);
+        ce_put32(PTR(void, out), entry.type == FS_DIR ? 16 : 128);
+        ce_put32(PTR(uint8_t, out) + 32, entry.size);
+        ce_widen(PTR(WCHAR, out + 40), 260, entry.name);
+        return 1;
+    }
+}
+CE_API(FindFirstFileW)
+{
+    char path[FS_PATH_MAX];
+    if (!a0 || !a1) {
+        ce_error = 87;
+        return 0xffffffffu;
+    }
+    if (!ce_path(path, PTR(WCHAR, a0)))
+        return 0xffffffffu;
+    char *last = strrchr(path, '/');
+    if (!last || strlen(last + 1) >= FS_NAME_MAX) {
+        ce_error = 123;
+        return 0xffffffffu;
+    }
+    for (unsigned i = 0; i < ARRAY_SIZE(searches); i++)
+        if (!searches[i].active) {
+            struct find_handle *search = &searches[i];
+            strlcpy(search->pattern, last + 1, sizeof(search->pattern));
+            *last = 0;
+            strlcpy(search->path, path, sizeof(search->path));
+            search->index = 0;
+            if (!find_next(search, a1))
+                return 0xffffffffu;
+            search->active = true;
+            return 0x78000000u + i;
+        }
+    ce_error = 4;
+    return 0xffffffffu;
+}
+CE_API(FindNextFileW)
+{
+    unsigned i = a0 - 0x78000000u;
+    if (i >= ARRAY_SIZE(searches) || !searches[i].active) {
+        ce_error = 6;
+        return 0;
+    }
+    return find_next(&searches[i], a1);
+}
+CE_API(FindClose)
+{
+    unsigned i = a0 - 0x78000000u;
+    if (i >= ARRAY_SIZE(searches) || !searches[i].active) {
+        ce_error = 6;
+        return 0;
+    }
+    searches[i].active = false;
+    return 1;
 }
 CE_API(CreateFileW)
 {
@@ -757,11 +1206,30 @@ CE_API(GlobalMemoryStatus)
 }
 
 static const struct ce_export exports[] = {
+    {"__ll_mul", (void *)ce_ll_mul},
+    {"__ll_div", (void *)ce_ll_div},
     CE_EXPORT(GetLastError),
     CE_EXPORT(SetLastError),
     CE_EXPORT(LocalAlloc),
     CE_EXPORT(LocalFree),
     CE_EXPORT(LocalReAlloc),
+    CE_EXPORT(malloc),
+    CE_EXPORT(HeapCreate),
+    CE_EXPORT(HeapAlloc),
+    CE_EXPORT(HeapFree),
+    CE_EXPORT(HeapDestroy),
+    CE_EXPORT(strlen),
+    CE_EXPORT(mbstowcs),
+    CE_EXPORT(wcstombs),
+    CE_EXPORT(wcsrchr),
+    CE_EXPORT(wcsstr),
+    CE_EXPORT(_wcsicmp),
+    CE_EXPORT(_wcsnicmp),
+    CE_EXPORT(_wtol),
+
+    CE_EXPORT(free),
+    {"??2@YAPAXI@Z", (void *)ce_malloc},
+    {"??3@YAXPAX@Z", (void *)ce_free},
     CE_EXPORT(memcpy),
     CE_EXPORT(memmove),
     CE_EXPORT(memset),
@@ -786,7 +1254,14 @@ static const struct ce_export exports[] = {
     CE_EXPORT(RegQueryValueExW),
     CE_EXPORT(RegSetValueExW),
     CE_EXPORT(RegDeleteValueW),
+    CE_EXPORT(RegEnumKeyExW),
+    CE_EXPORT(RegEnumValueW),
+    CE_EXPORT(RegQueryInfoKeyW),
+    CE_EXPORT(RegDeleteKeyW),
     CE_EXPORT(CreateFileW),
+    CE_EXPORT(FindFirstFileW),
+    CE_EXPORT(FindNextFileW),
+    CE_EXPORT(FindClose),
     CE_EXPORT(CloseHandle),
     CE_EXPORT(ReadFile),
     CE_EXPORT(WriteFile),
@@ -797,8 +1272,11 @@ static const struct ce_export exports[] = {
     CE_EXPORT(SetEndOfFile),
     CE_EXPORT(ExitThread),
     CE_EXPORT(ExitProcess),
+    CE_EXPORT(TerminateProcess),
     CE_EXPORT(Sleep),
     CE_EXPORT(GetTickCount),
+    CE_EXPORT(GetLocalTime),
+    CE_EXPORT(GetModuleFileNameW),
     CE_EXPORT(LoadLibraryW),
     CE_EXPORT(GetProcAddressW),
     CE_EXPORT(FreeLibrary),

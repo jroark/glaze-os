@@ -244,6 +244,46 @@ const char *ce_pe_imports(const struct ce_pe *pe, void *image, ce_resolver resol
     return "unterminated PE import directory";
 }
 
+/* The CE 3 MIPS CRT embeds an implicit TerminateProcess call instead of an
+ * import: li r,-3078; [li a0,0x42]; jalr r. The matching local COREDLL export
+ * uses that same -3078 trap address. Translate only these complete sequences
+ * in executable sections of the private loaded image, before publication.
+ * JAL preserves the original return address and delay slot. No source bytes
+ * are changed; other implicit calls remain unsupported. */
+const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, ce_resolver resolve, void *arg)
+{
+    uint32_t target = 0;
+    for (unsigned s = 0; s < pe->count; s++) {
+        const struct ce_section *section = &pe->section[s];
+        if (!(section->flags & 0x20000000u))
+            continue;
+        uint32_t length = MIN(section->size, section->bytes);
+        for (uint32_t off = 0; ce_range(off, 12, length); off += 4) {
+            uint8_t *p = ce_pe_at(pe, image, section->rva + off, 12);
+            if (!p)
+                return "invalid direct-call section";
+            uint32_t load = ce_u32(p), reg = (load >> 16) & 31;
+            if (!reg || reg == 31 || (load & 0xffe0ffffu) != 0x2400f3fau)
+                continue;
+            uint32_t call = 4;
+            if (ce_u32(p + 4) == 0x24040042u && reg != 4) {
+                if (!ce_range(off, 16, length))
+                    continue;
+                call = 8;
+            }
+            if (ce_u32(p + call) != ((reg << 21) | 0x0000f809u))
+                continue;
+            if (!target)
+                target = resolve("coredll.dll", "TerminateProcess", 0, arg);
+            uint32_t pc = pe->base + section->rva + off + call;
+            if (!target || (target & 3) || ((pc + 4) >> 28) != (target >> 28))
+                return "cannot bridge direct WinCE termination call";
+            ce_put32(p + call, 0x0c000000u | ((target >> 2) & 0x03ffffffu));
+        }
+    }
+    return NULL;
+}
+
 const void *ce_pe_resource(const struct ce_pe *pe, void *image, uint16_t type, uint16_t id, uint32_t *bytes)
 {
     uint32_t root = pe->directory[2].rva, limit = pe->directory[2].size, off = 0;
