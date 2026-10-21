@@ -11,6 +11,12 @@ uint32_t ce_u32(const void *p)
     const uint8_t *b = p;
     return b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
 }
+void ce_put16(void *p, uint16_t value)
+{
+    uint8_t *b = p;
+    b[0] = (uint8_t)value;
+    b[1] = (uint8_t)(value >> 8);
+}
 void ce_put32(void *p, uint32_t value)
 {
     uint8_t *b = p;
@@ -58,7 +64,7 @@ const char *ce_pe_parse(struct ce_pe *pe, const void *file, uint32_t size)
     pe->count = count;
     if (!power2(alignment) || alignment < 4096 || !power2(file_alignment) || file_alignment > alignment ||
         pe->base < 0x10000 || (pe->base & 4095) || !pe->size || pe->size > CE_PE_MAX_SIZE ||
-        (pe->size & (alignment - 1)) || !ce_range(pe->base, pe->size, 0x0f000000) || !pe->headers ||
+        (pe->size & (alignment - 1)) || !ce_range(pe->base, pe->size, 0x80000000u) || !pe->headers ||
         pe->headers > size || pe->headers > pe->size || pe->entry >= pe->size)
         return "invalid PE memory layout";
     uint32_t dirs = ce_u32(o + 92);
@@ -72,6 +78,8 @@ const char *ce_pe_parse(struct ce_pe *pe, const void *file, uint32_t size)
              !ce_range(pe->directory[i].rva, pe->directory[i].size, i == 4 ? size : pe->size)))
             return "PE directory outside image";
     }
+    if (!ce_range(pe->base, pe->size, (pe->dll && pe->directory[5].size) ? 0x80000000u : 0x0f000000u))
+        return "invalid PE memory layout";
     if (pe->directory[9].size || pe->directory[13].size || pe->directory[14].size)
         return "PE TLS, delay imports, or managed code are unsupported";
     uint32_t sections = off + 24 + optional;
@@ -165,15 +173,34 @@ const char *ce_pe_relocate(const struct ce_pe *pe, void *image, uint32_t base)
         if (bytes < 8 || bytes > left || (bytes & 1) || (page & 4095))
             return "invalid PE relocation size";
         for (uint32_t i = 8; i < bytes; i += 2) {
-            uint32_t value = ce_u16(block + i), type = value >> 12;
+            uint32_t value = ce_u16(block + i), type = value >> 12, off = value & 4095;
             if (!type)
                 continue;
+            if (page > UINT32_MAX - off)
+                return "PE relocation address overflow";
+            if (type == 1 || type == 2 || type == 4) {
+                uint8_t *target = ce_pe_at(pe, image, page + off, 2);
+                if (!target || (off & 1))
+                    return "PE relocation outside section";
+                if (type == 4) {
+                    if (i + 2 >= bytes)
+                        return "invalid PE relocation size";
+                    int16_t lo = (int16_t)ce_u16(block + i + 2);
+                    i += 2;
+                    uint32_t addr = ((uint32_t)ce_u16(target) << 16) + (uint32_t)(int32_t)lo + delta;
+                    ce_put16(target, (uint16_t)((addr + 0x8000u) >> 16));
+                } else if (type == 1) {
+                    uint32_t addr = ((uint32_t)ce_u16(target) << 16) + delta;
+                    ce_put16(target, (uint16_t)(addr >> 16));
+                } else {
+                    ce_put16(target, (uint16_t)(ce_u16(target) + delta));
+                }
+                continue;
+            }
             if (type != 3 && type != 5)
                 return "unsupported PE relocation type";
-            if (page > UINT32_MAX - (value & 4095))
-                return "PE relocation address overflow";
-            uint8_t *target = ce_pe_at(pe, image, page + (value & 4095), 4);
-            if (!target || (value & 3))
+            uint8_t *target = ce_pe_at(pe, image, page + off, 4);
+            if (!target || (off & 3))
                 return "PE relocation outside section";
             uint32_t word = ce_u32(target);
             if (type == 3)
@@ -181,8 +208,9 @@ const char *ce_pe_relocate(const struct ce_pe *pe, void *image, uint32_t base)
             else {
                 if ((word >> 26) != 2 && (word >> 26) != 3)
                     return "invalid MIPS jump relocation";
-                uint32_t address = ((word & 0x03ffffffu) << 2) + delta;
-                if ((base + page + (value & 4095) + 4) >> 28 != address >> 28)
+                uint32_t orig_pc = pe->base + page + off + 4;
+                uint32_t address = ((orig_pc & 0xf0000000u) | ((word & 0x03ffffffu) << 2)) + delta;
+                if ((base + page + off + 4) >> 28 != address >> 28)
                     return "MIPS jump relocation crosses region";
                 ce_put32(target, (word & 0xfc000000u) | ((address >> 2) & 0x03ffffffu));
             }

@@ -25,6 +25,7 @@ struct ce_pe {
 
 uint16_t ce_u16(const void *);
 uint32_t ce_u32(const void *);
+void ce_put16(void *, uint16_t);
 void ce_put32(void *, uint32_t);
 bool ce_range(uint32_t, uint32_t, uint32_t);
 const char *ce_pe_parse(struct ce_pe *, const void *, uint32_t);
