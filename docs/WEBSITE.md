@@ -52,6 +52,13 @@ selected original WinCE apps, shared list behavior, graphics/text/flash
 performance improvements, demand-paged romfs and developer benchmarks. The
 hardware overview also documents the existing Stowaway keyboard support.
 
+The emulator button uses
+`https://linux4be.com/?image=glaze&boot=1&card=none&keyboard=0` to start Glaze
+directly, without requiring the network bridge or a physical keyboard.
+URL configuration and validation are documented in the be300 repository's
+`web/README.md`. Deploy emulator URL support before publishing a page that
+links to it. Browser sound starts after the first user interaction.
+
 ## Infrastructure
 
 `infra/site/stack.json` defines the `glaze-os-site` CloudFormation stack, in
