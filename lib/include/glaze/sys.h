@@ -125,6 +125,7 @@ static inline int gz_task_snapshot(struct gz_task_snapshot *s)
 { return GZ_SC2(SYS_TASK_SNAPSHOT, s, sizeof(*s)); }
 /* Cannot stop the caller or system services. PIDs include a generation. */
 static inline int gz_task_stop(int pid) { return GZ_SC1(SYS_TASK_STOP, pid); }
+static inline int gz_proc_set_bg(int pid, int bg) { return GZ_SC2(SYS_PROC_BG, pid, bg); }
 
 static inline const void *gz_romfs_map(const char *name, uint32_t *size)
 {

@@ -113,7 +113,7 @@ static void task_row(gfx_surface *s, int row, gfx_rect r, bool selected, void *c
     else strcpy(buf, "--");
     text_right(s, 222, r.y + 4, ui_font(FONT_B12), buf, color, 255);
     snprintf(buf, sizeof(buf), "PID %u  %s", t->pid, (t->flags & GZ_TASK_SELF) ? "This App" :
-             (t->flags & GZ_TASK_APP) ? "App" : "System");
+             (t->flags & GZ_TASK_BG) ? "Background App" : (t->flags & GZ_TASK_APP) ? "App" : "System");
     gfx_text(s, 10, r.y + 24, ui_font(FONT_R10), buf, color, 255);
     snprintf(buf, sizeof(buf), "%u KB", t->mapped_pages * (mon.now.page_size / 1024u));
     text_right(s, 222, r.y + 24, ui_font(FONT_R10), buf, color, 255);

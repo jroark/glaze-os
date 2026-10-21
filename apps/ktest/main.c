@@ -116,8 +116,22 @@ static void test_tasks(int peer_port)
     for (unsigned i = 0; i < after.count; i++)
         if (after.tasks[i].pid == (uint32_t)pid) app = after.tasks[i].flags == GZ_TASK_APP;
     CHECK(pid > 0 && app, "installed app is a managed task");
+    bool bg_set = gz_proc_set_bg(pid, 1) == 0;
+    bool bg_flag = false;
+    gz_task_snapshot(&after);
+    for (unsigned i = 0; i < after.count; i++)
+        if (after.tasks[i].pid == (uint32_t)pid) bg_flag = after.tasks[i].flags == (GZ_TASK_APP | GZ_TASK_BG);
+    bool fg_set = gz_proc_set_bg(pid, 0) == 0;
+    bool fg_flag = false;
+    gz_task_snapshot(&after);
+    for (unsigned i = 0; i < after.count; i++)
+        if (after.tasks[i].pid == (uint32_t)pid) fg_flag = after.tasks[i].flags == GZ_TASK_APP;
+    CHECK(bg_set && bg_flag && fg_set && fg_flag && gz_proc_set_bg(-1, 1) == GZ_ENOENT,
+          "proc_set_bg toggles GZ_TASK_BG and priority");
+    /* Put it back in background to verify unprivileged task_stop still works on background apps. */
+    gz_proc_set_bg(pid, 1);
     struct gz_msg m = {{0xFFFFFFFB, (uint32_t)pid, (uint32_t)gz_getpid()}}, r;
-    CHECK(gz_send(peer_port, &m, &r) == 0 && r.w[0] == 31 && !gz_proc_alive(pid),
+    CHECK(gz_send(peer_port, &m, &r) == 0 && r.w[0] == 63 && !gz_proc_alive(pid),
           "unprivileged monitor can end apps, protects services/self, cannot grant privileges");
     if (pid > 0 && gz_proc_alive(pid)) gz_kill(pid);
 }

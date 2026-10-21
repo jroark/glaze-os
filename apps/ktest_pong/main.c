@@ -46,6 +46,7 @@ int main(void)
             if (gz_task_stop(gz_getpid()) == GZ_EPERM) checks |= 2;
             if (gz_task_stop((int)m.w[2]) == GZ_EPERM) checks |= 4;
             if (gz_spawn("bin/ktest_pong", GZ_SPAWN_APP) == GZ_EPERM) checks |= 8;
+            if (gz_proc_set_bg((int)m.w[1], 0) == GZ_EPERM) checks |= 32;
             if (gz_task_stop((int)m.w[1]) == 0 && gz_task_stop((int)m.w[1]) == GZ_ENOENT) checks |= 16;
             m.w[0] = checks;
         } else if (m.w[0] == 0xFFFFFFFD) {

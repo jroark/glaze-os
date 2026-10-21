@@ -1,0 +1,27 @@
+# Multitasking & background processes:
+# 1. Unlock, launch Calculator, compute 7 + 5 = 12, press Home (background).
+# 2. Launch Clock, press Home (background).
+# 3. Launch Calendar, press Home (background).
+# 4. Double-press Home to open the multitasking switcher bar.
+# 5. Long-press slot 0 (Calendar) to enter quit mode, tap its '-' badge to end it.
+# 6. Press Home to leave quit mode, then tap Calculator in the switcher to
+#    warm-resume it with "12" still on screen.
+# Boot for ~23 s (tests/run.sh tests/t_multitasking.txt 23).
+3000 drag 40 280 235 280 500
+4500 tap 210 48
+6000 tap 30 190
+6500 tap 207 227
+7000 tap 89 227
+7500 tap 207 282
+8500 key home
+9500 tap 150 48
+11000 key home
+12000 tap 30 48
+13500 key home
+14500 key home
+14700 key home
+16000 down 30 278
+17200 up 30 278
+18500 tap 15 258
+19800 key home
+21000 tap 90 278

@@ -25,6 +25,7 @@ extern struct ui_app ui;
 
 /* Connects to SpringBoard and maps the app surface; exits on failure. */
 void ui_init(int status_style);
+bool ui_in_background(void);
 bool ui_has_hardware_keyboard(void);
 /* Height reserved for the on-screen keyboard (zero with a dock). */
 int ui_keyboard_height(void);

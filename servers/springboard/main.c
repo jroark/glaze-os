@@ -42,9 +42,11 @@ enum state {
 #define MAX_CLIENTS     4
 #define HOLD_MS         1000    /* press on an icon to edit the home screen */
 #define JIGGLE_MS       100
+#define DOUBLE_HOME_MS  400     /* double-press Home opens the multitasking bar */
 #define CARD_POLL_MS    2000    /* look for apps on a card coming or going */
 #define SURFACE_BYTES   (SB_APP_W * GZ_FB_HEIGHT * 2)
 #define SHM_HEADER      4096
+#define LOW_MEM_PAGES   512     /* keep >= 2 MiB free when backgrounding/spawning */
 
 _Static_assert(sizeof(struct sb_shared) <= SHM_HEADER, "sb_shared must fit before the surface");
 
@@ -55,17 +57,30 @@ static struct sb_view view;
 static enum state state;
 static int sb_port;
 
-/* The single app slot and its shared surface (reused for every app). */
-static int shm_id;
-static uint8_t *shm_base;
-static struct sb_shared *shared;
-static gfx_surface app_surf;
-static int app_pid, app_index = -1, app_port;
-static bool app_ready, lock_over_app;
-static bool app_fullscreen;
+/* Running app slots (one foreground + background apps, each with its own shm). */
+struct sb_running {
+    int pid;                    /* > 0 when occupied */
+    int app_index;              /* index in sb_apps[], or -1 */
+    int port;                   /* event port from SB_HELLO */
+    int shm_id;
+    uint8_t *shm_base;
+    struct sb_shared *shared;
+    gfx_surface surf;
+    bool ready;
+    bool fullscreen;
+    uint32_t last_active_ms;
+};
+static struct sb_running running[SB_MAX_RUNNING];
+static int front_slot = -1;
+static bool lock_over_app;
+static uint32_t last_home_ms;
+static bool open_switcher_after_zoom;
 
-static int app_top(void) { return app_fullscreen ? 0 : SB_STATUS_H; }
-static int app_height(void) { return app_fullscreen ? GZ_FB_HEIGHT : SB_APP_H; }
+static struct sb_running *front(void) { return front_slot >= 0 ? &running[front_slot] : NULL; }
+static int front_app(void) { return front_slot >= 0 ? running[front_slot].app_index : -1; }
+static bool front_fullscreen(void) { return front_slot >= 0 && running[front_slot].fullscreen; }
+static int app_top(void) { return front_fullscreen() ? 0 : SB_STATUS_H; }
+static int app_height(void) { return front_fullscreen() ? GZ_FB_HEIGHT : SB_APP_H; }
 
 struct anim {
     bool active;
@@ -252,7 +267,7 @@ static void render_grid(void)
 {
     gfx_rect r = gfx_r(0, SB_STATUS_H, SCREEN_W, DOCK_Y - SB_STATUS_H);
 
-    if (alert.open || view.jiggle) {        /* those cover the dock too */
+    if (alert.open || view.jiggle || view.switcher_open) {  /* those cover the dock too */
         render_home();
         return;
     }
@@ -265,19 +280,22 @@ static void render_grid(void)
 
 static void render_app_status(void)
 {
-    if (app_index < 0 || app_fullscreen)
+    int app = front_app();
+
+    if (app < 0 || front_fullscreen())
         return;
-    sb_draw_status(&bb, &view.clk, sb_apps[app_index].status_style, false);
+    sb_draw_status(&bb, &view.clk, sb_apps[app].status_style, false);
     flush(gfx_r(0, 0, SCREEN_W, SB_STATUS_H));
 }
 
 static void present_app_rect(gfx_rect r)
 {
+    struct sb_running *s = front();
     gfx_rect c;
 
-    if (!gfx_rect_intersect(r, gfx_r(0, 0, SB_APP_W, app_height()), &c))
+    if (!s || !gfx_rect_intersect(r, gfx_r(0, 0, SB_APP_W, app_height()), &c))
         return;
-    gfx_blit(&fb, c.x, c.y + app_top(), &app_surf, c);
+    gfx_blit(&fb, c.x, c.y + app_top(), &s->surf, c);
     if (c.y + app_top() < SB_STATUS_H + BANNER_H)
         overlay_banner();
 }
@@ -296,8 +314,8 @@ static void overlay_banner(void)
 
     if (!banner_visible)
         return;
-    if (state == ST_APP) {
-        gfx_blit(&bb, 0, SB_STATUS_H, &app_surf,
+    if (state == ST_APP && front()) {
+        gfx_blit(&bb, 0, SB_STATUS_H, &front()->surf,
                  gfx_r(0, SB_STATUS_H - app_top(), SB_APP_W, BANNER_H));
     } else {
         gfx_set_clip(&bb, r);
@@ -339,46 +357,192 @@ static void render_app(void)
 
 /* ---- app management ----------------------------------------------------- */
 
-static void app_cleanup(void)
+static bool slot_ensure_shm(struct sb_running *s)
 {
-    if (app_pid > 0 && gz_proc_alive(app_pid))
-        gz_kill(app_pid);
-    app_pid = 0;
-    app_index = -1;
-    app_port = 0;
-    app_ready = false;
-    app_fullscreen = false;
-    app_surf.h = SB_APP_H;
-    gfx_reset_clip(&app_surf);
+    if (s->shm_base)
+        return true;
+    int id = gz_shm_create(SHM_HEADER + SURFACE_BYTES);
+    if (id < 0)
+        return false;
+    uint8_t *base = gz_shm_map(id);
+    if (!base)
+        return false;
+    s->shm_id = id;
+    s->shm_base = base;
+    s->shared = (struct sb_shared *)base;
+    memset(s->shared, 0, sizeof(*s->shared));
+    s->shared->surface_offset = SHM_HEADER;
+    s->shared->stride = SB_APP_W;
+    gfx_surface_init(&s->surf, (uint16_t *)(base + SHM_HEADER), SB_APP_W, SB_APP_H, SB_APP_W);
+    return true;
 }
 
-static void launch(int index)
+static void slot_reset(int i)
 {
-    char msg[64];
+    struct sb_running *s = &running[i];
 
-    app_cleanup();
-    shared->head = shared->tail = 0;
-    memset(app_surf.px, 0xFF, SURFACE_BYTES);
-    if (sb_apps[index].installed) {
-        strlcpy(shared->bundle, sb_apps[index].path, sizeof(shared->bundle));
-        app_pid = apps_launch(index);
-    } else {
-        shared->bundle[0] = 0;
-        app_pid = gz_spawn(sb_apps[index].path, GZ_SPAWN_APP);
+    s->pid = 0;
+    s->app_index = -1;
+    s->port = 0;
+    s->ready = false;
+    s->fullscreen = false;
+    s->last_active_ms = 0;
+    if (s->shm_base) {
+        s->surf.h = SB_APP_H;
+        gfx_reset_clip(&s->surf);
     }
-    if (app_pid < 0) {
-        snprintf(msg, sizeof(msg), "springboard: cannot launch %s (%d)\n", sb_apps[index].path, app_pid);
-        gz_log(msg, (uint32_t)strlen(msg));
-        app_pid = 0;
-        if (sb_apps[index].installed) {
-            snprintf(msg, sizeof(msg), "\"%s\" could not be opened.", sb_apps[index].label);
-            show_alert(-1, "Cannot Open App", msg);
+    if (front_slot == i)
+        front_slot = -1;
+}
+
+static void slot_kill(int i)
+{
+    if (i < 0 || i >= SB_MAX_RUNNING)
+        return;
+    if (running[i].pid > 0 && gz_proc_alive(running[i].pid))
+        gz_kill(running[i].pid);
+    slot_reset(i);
+}
+
+static int find_slot_by_pid(int pid)
+{
+    if (pid <= 0)
+        return -1;
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        if (running[i].pid == pid)
+            return i;
+    }
+    return -1;
+}
+
+static int find_slot_by_app(int app_index)
+{
+    if (app_index < 0)
+        return -1;
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        if (running[i].pid > 0 && running[i].app_index == app_index)
+            return i;
+    }
+    return -1;
+}
+
+static bool any_app_running(void)
+{
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        if (running[i].pid > 0)
+            return true;
+    }
+    return false;
+}
+
+static void send_slot_event(struct sb_running *s, const struct gz_input_event *ev)
+{
+    if (!s || !s->ready || !s->shared || s->shared->head - s->shared->tail >= SB_RING)
+        return;
+    struct gz_input_event e = *ev;
+    if (e.type == GZ_EV_TOUCH_DOWN || e.type == GZ_EV_TOUCH_MOVE || e.type == GZ_EV_TOUCH_UP)
+        e.y -= s->fullscreen ? 0 : SB_STATUS_H;
+    s->shared->ev[s->shared->head % SB_RING] = e;
+    s->shared->head++;
+    gz_notify(s->port, SB_NOTIFY_EVENTS);
+}
+
+static void send_event(const struct gz_input_event *ev)
+{
+    send_slot_event(front(), ev);
+}
+
+static bool evict_lru_background(int exclude_slot)
+{
+    int victim = -1;
+
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        if (i == front_slot || i == exclude_slot || running[i].pid <= 0)
+            continue;
+        if (victim < 0 || (int32_t)(running[i].last_active_ms - running[victim].last_active_ms) < 0)
+            victim = i;
+    }
+    if (victim < 0)
+        return false;
+    slot_kill(victim);
+    return true;
+}
+
+static void reclaim_background_memory(int exclude_slot)
+{
+    for (;;) {
+        struct gz_sysinfo si;
+        if (gz_sysinfo(&si) || si.free_pages >= LOW_MEM_PAGES)
+            break;
+        if (!evict_lru_background(exclude_slot))
+            break;
+    }
+}
+
+static void sync_switcher(void)
+{
+    int slots[SB_MAX_RUNNING];
+    int n = 0;
+
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        if (running[i].pid > 0 && gz_proc_alive(running[i].pid) &&
+            running[i].app_index >= 0 && sb_app_shown(running[i].app_index))
+            slots[n++] = i;
+    }
+    /* Sort most-recently-active first. */
+    for (int i = 1; i < n; i++) {
+        int v = slots[i], j = i;
+        while (j > 0 && (int32_t)(running[v].last_active_ms - running[slots[j - 1]].last_active_ms) > 0) {
+            slots[j] = slots[j - 1];
+            j--;
         }
+        slots[j] = v;
+    }
+    view.num_switcher_apps = n;
+    for (int i = 0; i < n; i++)
+        view.switcher_apps[i] = running[slots[i]].app_index;
+    if (n == 0)
+        view.switcher_edit = false;
+}
+
+static void open_switcher(void)
+{
+    alert.open = false;
+    view.jiggle = false;
+    view.pressed = -1;
+    view.switcher_open = true;
+    view.switcher_edit = false;
+    view.switcher_pressed = -1;
+    view.switcher_minus_pressed = -1;
+    sync_switcher();
+}
+
+static void close_switcher(void)
+{
+    view.switcher_open = false;
+    view.switcher_edit = false;
+    view.switcher_pressed = -1;
+    view.switcher_minus_pressed = -1;
+}
+
+/* Move the foreground app into the background pool instead of killing it. */
+static void app_background(void)
+{
+    if (front_slot < 0)
+        return;
+    int slot = front_slot;
+    struct sb_running *s = &running[slot];
+    if (s->pid <= 0 || !gz_proc_alive(s->pid)) {
+        slot_kill(slot);
         return;
     }
-    app_index = index;
-    state = ST_LAUNCH_WAIT;
-    launch_t0 = now_ms();
+    s->shared->background = 1;
+    s->last_active_ms = now_ms();
+    struct gz_input_event e = { .type = GZ_EV_APP_DEACTIVATE, .time_ms = s->last_active_ms };
+    send_slot_event(s, &e);
+    gz_proc_set_bg(s->pid, 1);
+    front_slot = -1;
+    reclaim_background_memory(-1);
 }
 
 /* Benchmark lines (tests/bench.sh): an event, its time in ms, and memory. */
@@ -394,6 +558,7 @@ static void bench_log(const char *what, const char *app, uint32_t ms)
 static void begin_zoom_in(void)
 {
     banner_visible = banner_touch = false;
+    close_switcher();
     view.pressed = -1;
     sb_draw_home(&snap, &view);
     state = ST_ZOOM_IN;
@@ -403,6 +568,7 @@ static void begin_zoom_in(void)
 static void begin_zoom_out(void)
 {
     banner_visible = banner_touch = false;
+    close_switcher();
     load_settings();
     view.pressed = -1;
     sb_draw_home(&snap, &view);
@@ -410,16 +576,89 @@ static void begin_zoom_out(void)
     anim_start(0, 1024, ZOOM_MS);
 }
 
-static void send_event(const struct gz_input_event *ev)
+static void launch(int index)
 {
-    if (!app_ready || shared->head - shared->tail >= SB_RING)
+    char msg[64];
+
+    close_switcher();
+    if (front_slot >= 0 && running[front_slot].app_index != index)
+        app_background();
+
+    /* Warm resume if the app is already alive in a background slot. */
+    int existing = find_slot_by_app(index);
+    if (existing >= 0) {
+        if (gz_proc_alive(running[existing].pid)) {
+            struct sb_running *s = &running[existing];
+            front_slot = existing;
+            s->shared->background = 0;
+            s->last_active_ms = now_ms();
+            gz_proc_set_bg(s->pid, 0);
+            struct gz_input_event e = { .type = GZ_EV_APP_ACTIVATE, .time_ms = s->last_active_ms };
+            send_slot_event(s, &e);
+            bench_log("launch", sb_apps[index].path, 0);
+            begin_zoom_in();
+            return;
+        }
+        slot_kill(existing);
+    }
+
+    reclaim_background_memory(-1);
+    int slot = -1;
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        if (running[i].pid <= 0) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        evict_lru_background(-1);
+        for (int i = 0; i < SB_MAX_RUNNING; i++) {
+            if (running[i].pid <= 0) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    if (slot < 0)
         return;
-    struct gz_input_event e = *ev;
-    if (e.type == GZ_EV_TOUCH_DOWN || e.type == GZ_EV_TOUCH_MOVE || e.type == GZ_EV_TOUCH_UP)
-        e.y -= app_top();
-    shared->ev[shared->head % SB_RING] = e;
-    shared->head++;
-    gz_notify(app_port, SB_NOTIFY_EVENTS);
+
+    struct sb_running *s = &running[slot];
+    while (!slot_ensure_shm(s)) {
+        if (!evict_lru_background(slot)) {
+            show_alert(-1, "Out of Memory", "Close an app and try again.");
+            return;
+        }
+    }
+
+    s->shared->head = s->shared->tail = 0;
+    s->shared->background = 0;
+    s->ready = false;
+    s->fullscreen = false;
+    s->surf.h = SB_APP_H;
+    gfx_reset_clip(&s->surf);
+    memset(s->surf.px, 0xFF, SURFACE_BYTES);
+    if (sb_apps[index].installed) {
+        strlcpy(s->shared->bundle, sb_apps[index].path, sizeof(s->shared->bundle));
+        s->pid = apps_launch(index);
+    } else {
+        s->shared->bundle[0] = 0;
+        s->pid = gz_spawn(sb_apps[index].path, GZ_SPAWN_APP);
+    }
+    if (s->pid < 0) {
+        snprintf(msg, sizeof(msg), "springboard: cannot launch %s (%d)\n", sb_apps[index].path, s->pid);
+        gz_log(msg, (uint32_t)strlen(msg));
+        slot_reset(slot);
+        if (sb_apps[index].installed) {
+            snprintf(msg, sizeof(msg), "\"%s\" could not be opened.", sb_apps[index].label);
+            show_alert(-1, "Cannot Open App", msg);
+        }
+        return;
+    }
+    s->app_index = index;
+    s->last_active_ms = now_ms();
+    front_slot = slot;
+    state = ST_LAUNCH_WAIT;
+    launch_t0 = s->last_active_ms;
 }
 
 /* ---- lock and power ----------------------------------------------------- */
@@ -429,6 +668,7 @@ static void lock_device(void)
     lock_over_app = (state == ST_APP);
     banner_visible = banner_touch = false;
     view.jiggle = alert.open = false;
+    close_switcher();
     state = ST_LOCK;
     anim.active = false;
     view.knob_x = 0;
@@ -445,10 +685,10 @@ static void begin_unlock(void)
     audio_sound(AUDIO_SND_UNLOCK);
     notify_clear_delivered();
     view.num_lock_notes = 0;
-    if (lock_over_app && app_index >= 0) {
-        gfx_blit(&snap, 0, app_top(), &app_surf, gfx_r(0, 0, SB_APP_W, app_height()));
-        if (!app_fullscreen)
-            sb_draw_status(&snap, &view.clk, sb_apps[app_index].status_style, false);
+    if (lock_over_app && front()) {
+        gfx_blit(&snap, 0, app_top(), &front()->surf, gfx_r(0, 0, SB_APP_W, app_height()));
+        if (!front_fullscreen())
+            sb_draw_status(&snap, &view.clk, sb_apps[front_app()].status_style, false);
     } else {
         view.scroll_x = 0;
         view.pressed = -1;
@@ -649,13 +889,25 @@ static int page_count(void)
 static bool rescan(bool card_only)
 {
     apps_scan(card_only);
+    uint32_t reinstalled = apps_reinstalled_mask();
+    if (reinstalled) {
+        for (int i = 0; i < SB_MAX_RUNNING; i++) {
+            int app = running[i].app_index;
+            if (running[i].pid > 0 && app >= 0 && (reinstalled & (1u << app)) && i != front_slot)
+                slot_kill(i);
+        }
+    }
     if (!apps_changed())
         return false;
     int max = (page_count() - 1) * SCREEN_W;
     if (view.scroll_x > max)
         view.scroll_x = max;
-    if (app_index >= 0 && !sb_app_shown(app_index))
-        app_index = -1;
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        if (running[i].pid > 0 && running[i].app_index >= 0 && !sb_app_shown(running[i].app_index))
+            slot_kill(i);
+    }
+    if (view.switcher_open)
+        sync_switcher();
     return true;
 }
 
@@ -672,7 +924,10 @@ static void end_jiggle(void)
 static void delete_app(int app)
 {
     char msg[64];
+    int slot = find_slot_by_app(app);
 
+    if (slot >= 0)
+        slot_kill(slot);
     sb_apps[app].present = false;
     render_home();
     int rv = apps_uninstall(app);
@@ -722,12 +977,90 @@ static int delete_hit(int x, int y)
 
 static int delete_pressed = -1;
 
+static void switcher_touch(const struct gz_input_event *e)
+{
+    int top = SCREEN_H - SWITCHER_H;
+
+    switch (e->type) {
+    case GZ_EV_TOUCH_DOWN:
+        anim.active = false;
+        touching = true;
+        swiping = false;
+        down_x = e->x;
+        down_y = e->y;
+        down_ms = now_ms();
+        if (view.switcher_edit) {
+            view.switcher_minus_pressed = sb_hit_switcher_minus(e->x, e->y, view.num_switcher_apps);
+            view.switcher_pressed = -1;
+        } else {
+            view.switcher_pressed = sb_hit_switcher_icon(e->x, e->y, view.num_switcher_apps);
+            view.switcher_minus_pressed = -1;
+        }
+        render_home();
+        break;
+    case GZ_EV_TOUCH_MOVE:
+        if (!touching)
+            break;
+        if (view.switcher_minus_pressed >= 0 &&
+            sb_hit_switcher_minus(e->x, e->y, view.num_switcher_apps) != view.switcher_minus_pressed) {
+            view.switcher_minus_pressed = -1;
+            render_home();
+        }
+        if (view.switcher_pressed >= 0 &&
+            sb_hit_switcher_icon(e->x, e->y, view.num_switcher_apps) != view.switcher_pressed) {
+            view.switcher_pressed = -1;
+            render_home();
+        }
+        break;
+    case GZ_EV_TOUCH_UP: {
+        if (!touching)
+            break;
+        touching = false;
+        audio_sound(AUDIO_SND_TAP);
+        if (view.switcher_edit) {
+            int m = view.switcher_minus_pressed;
+            view.switcher_minus_pressed = -1;
+            if (m >= 0 && sb_hit_switcher_minus(e->x, e->y, view.num_switcher_apps) == m) {
+                int s = find_slot_by_app(view.switcher_apps[m]);
+                if (s >= 0)
+                    slot_kill(s);
+                sync_switcher();
+                render_home();
+            } else if (e->y < top || sb_hit_switcher_icon(e->x, e->y, view.num_switcher_apps) < 0) {
+                view.switcher_edit = false;
+                render_home();
+            } else {
+                render_home();
+            }
+            break;
+        }
+        int p = view.switcher_pressed;
+        view.switcher_pressed = -1;
+        if (p >= 0 && sb_hit_switcher_icon(e->x, e->y, view.num_switcher_apps) == p) {
+            int app = view.switcher_apps[p];
+            close_switcher();
+            launch(app);
+        } else if (e->y < top) {
+            close_switcher();
+            render_home();
+        } else {
+            render_home();
+        }
+        break;
+    }
+    }
+}
+
 static void home_touch(const struct gz_input_event *e)
 {
     int page = (view.scroll_x + SCREEN_W / 2) / SCREEN_W;
 
     if (alert_touch(e))
         return;
+    if (view.switcher_open) {
+        switcher_touch(e);
+        return;
+    }
     switch (e->type) {
     case GZ_EV_TOUCH_DOWN:
         anim.active = false;
@@ -833,16 +1166,55 @@ static void handle_key(const struct gz_input_event *e)
         if (state == ST_HOME || state == ST_APP)
             lock_device();
         break;
-    case GZ_KEY_HOME:
+    case GZ_KEY_HOME: {
+        uint32_t t = now_ms();
+        bool double_press = last_home_ms && (t - last_home_ms) <= DOUBLE_HOME_MS;
         audio_sound_stop();
-        if (state == ST_APP)
+        if (state == ST_APP) {
+            last_home_ms = t;
+            open_switcher_after_zoom = false;
             begin_zoom_out();
-        else if (state == ST_HOME && (view.jiggle || alert.open)) {
-            alert.open = false;
-            view.jiggle = false;
+        } else if (state == ST_ZOOM_OUT) {
+            if (double_press) {
+                open_switcher_after_zoom = true;
+                last_home_ms = 0;
+            }
+        } else if (state == ST_HOME) {
+            if (view.switcher_open) {
+                if (view.switcher_edit)
+                    view.switcher_edit = false;
+                else
+                    close_switcher();
+                last_home_ms = 0;
+                render_home();
+            } else if (double_press) {
+                last_home_ms = 0;
+                open_switcher();
+                render_home();
+            } else {
+                last_home_ms = t;
+                if (view.jiggle || alert.open) {
+                    alert.open = false;
+                    view.jiggle = false;
+                    render_home();
+                } else if (view.scroll_x != 0) {
+                    anim_start(view.scroll_x, 0, PAGE_MS);
+                }
+            }
+        }
+        break;
+    }
+    case GZ_KEY_ESC:
+        if (state == ST_HOME && view.switcher_open) {
+            if (view.switcher_edit)
+                view.switcher_edit = false;
+            else
+                close_switcher();
             render_home();
-        } else if (state == ST_HOME && view.scroll_x != 0)
-            anim_start(view.scroll_x, 0, PAGE_MS);
+            break;
+        }
+        if (state == ST_APP)
+            send_event(e);
         break;
     default:
         if (state == ST_APP)
@@ -869,7 +1241,7 @@ static bool banner_touch_event(const struct gz_input_event *e)
             if (state == ST_HOME) {
                 banner_visible = false;
                 launch(target);
-            } else if (state == ST_APP && app_index != target) {
+            } else if (state == ST_APP && front_app() != target) {
                 launch_after_home = target;
                 begin_zoom_out();
             } else {
@@ -926,7 +1298,9 @@ static void handle_input(void)
 
 static bool app_in_front(int app)
 {
-    return app_ready && app_index == app && (state == ST_APP || state == ST_ZOOM_IN);
+    struct sb_running *s = front();
+
+    return s && s->ready && s->app_index == app && (state == ST_APP || state == ST_ZOOM_IN);
 }
 
 /* Clock's notes are its timer, which rings until it is dismissed. */
@@ -1032,10 +1406,11 @@ static int handle_note_msg(const struct gz_msg *m, struct gz_msg *r)
         if ((app = notify_app_for_path(q.path)) < 0)
             return GZ_ENOENT;
     } else {
-        if (app_pid <= 0 || pid != app_pid || app_index < 0)
+        int slot = find_slot_by_pid(pid);
+        if (slot < 0 || running[slot].app_index < 0 || !running[slot].shared)
             return GZ_EPERM;
-        app = app_index;
-        memcpy(&q, &shared->req, sizeof(q));
+        app = running[slot].app_index;
+        memcpy(&q, &running[slot].shared->req, sizeof(q));
     }
     q.title[sizeof(q.title) - 1] = 0;
     q.body[sizeof(q.body) - 1] = 0;
@@ -1047,8 +1422,11 @@ static int handle_note_msg(const struct gz_msg *m, struct gz_msg *r)
             render_home();
         return 0;
     case SB_NOTE_POST: {
-        uint32_t when = m->w[1] ? m->w[1] : now_secs();
-        return notify_post(app, m->w[2], when, m->w[4], q.title, q.body);
+        uint32_t when = m->w[1];
+        int rv = notify_post(app, m->w[2], when ? when : now_secs(), m->w[4], q.title, q.body);
+        if (!rv && !when)
+            fire_due();
+        return rv;
     }
     case SB_NOTE_CANCEL:
         return notify_cancel(app, m->w[1]);
@@ -1067,27 +1445,35 @@ static void handle_msg(int token, struct gz_msg *m)
 
     memset(&r, 0, sizeof(r));
     switch (m->w[0]) {
-    case SB_HELLO:
-        if ((int)m->w[3] != app_pid || app_pid <= 0) {
+    case SB_HELLO: {
+        int slot = find_slot_by_pid((int)m->w[3]);
+        if (slot < 0) {
             r.w[0] = (uint32_t)GZ_EPERM;
             break;
         }
-        app_port = (int)m->w[1];
-        app_ready = true;
-        app_fullscreen = m->w[2] == SB_STATUS_FULLSCREEN;
-        app_surf.h = app_height();
-        gfx_reset_clip(&app_surf);
-        r.w[1] = (uint32_t)shm_id;
+        struct sb_running *s = &running[slot];
+        s->port = (int)m->w[1];
+        s->ready = true;
+        s->fullscreen = m->w[2] == SB_STATUS_FULLSCREEN;
+        s->surf.h = s->fullscreen ? GZ_FB_HEIGHT : SB_APP_H;
+        gfx_reset_clip(&s->surf);
+        r.w[1] = (uint32_t)s->shm_id;
         r.w[2] = SB_APP_W;
-        r.w[3] = app_height();
+        r.w[3] = (uint32_t)s->surf.h;
         r.w[4] = (uint32_t)gz_input_status();
         break;
+    }
     case SB_PRESENT: {
+        int sender_pid = (int)m->w[5];
+        int slot = sender_pid > 0 ? find_slot_by_pid(sender_pid) : front_slot;
+        if (slot < 0 || slot != front_slot)
+            break;
         gfx_rect d = gfx_r((int)m->w[1], (int)m->w[2], (int)m->w[3], (int)m->w[4]);
         if (state == ST_APP)
             present_app_rect(d);
         else if (state == ST_LAUNCH_WAIT) {
-            bench_log("launch", app_index >= 0 ? sb_apps[app_index].path : "?", now_ms() - launch_t0);
+            int app = front_app();
+            bench_log("launch", app >= 0 ? sb_apps[app].path : "?", now_ms() - launch_t0);
             begin_zoom_in();
         }
         break;
@@ -1130,7 +1516,7 @@ static void frame(void)
         flush_all();
         if (done) {
             view.knob_x = 0;
-            if (lock_over_app && app_index >= 0) {
+            if (lock_over_app && front()) {
                 state = ST_APP;
                 render_app();
             } else {
@@ -1145,22 +1531,28 @@ static void frame(void)
         break;
     case ST_ZOOM_IN:
     case ST_ZOOM_OUT: {
-        gfx_rect icon = sb_icon_rect(app_index, view.scroll_x);
+        int app = front_app();
+        gfx_rect icon = app >= 0 ? sb_icon_rect(app, view.scroll_x) : gfx_r(SCREEN_W / 2, SCREEN_H / 2, 1, 1);
         gfx_rect full = gfx_r(0, app_top(), SB_APP_W, app_height());
         int q = state == ST_ZOOM_IN ? p : 1024 - p;
         gfx_rect r = lerp_rect(icon, full, q);
         gfx_blit(&bb, 0, 0, &snap, gfx_r(0, 0, SCREEN_W, SCREEN_H));
         int alpha = q > 512 ? 255 : 80 + q * 175 / 512;
-        gfx_blit_scaled(&bb, r, &app_surf, gfx_r(0, 0, SB_APP_W, app_height()), alpha);
+        if (front())
+            gfx_blit_scaled(&bb, r, &front()->surf, gfx_r(0, 0, SB_APP_W, app_height()), alpha);
         flush_all();
         if (done) {
             if (state == ST_ZOOM_IN) {
                 state = ST_APP;
                 render_app();
             } else {
-                app_cleanup();
+                app_background();
                 rescan(false);          /* the app may have been Files installing one */
                 state = ST_HOME;
+                if (open_switcher_after_zoom) {
+                    open_switcher_after_zoom = false;
+                    open_switcher();
+                }
                 render_home();
                 bench_log("home", NULL, 0);
                 if (launch_after_home >= 0)
@@ -1190,17 +1582,12 @@ static void init_surfaces(void)
     gfx_surface_init(&bb, malloc(SCREEN_W * SCREEN_H * 2), SCREEN_W, SCREEN_H, SCREEN_W);
     gfx_surface_init(&snap, malloc(SCREEN_W * SCREEN_H * 2), SCREEN_W, SCREEN_H, SCREEN_W);
 
-    shm_id = gz_shm_create(SHM_HEADER + SURFACE_BYTES);
-    shm_base = gz_shm_map(shm_id);
-    if (!bb.px || !snap.px || !shm_base) {
+    for (int i = 0; i < SB_MAX_RUNNING; i++)
+        slot_reset(i);
+    if (!bb.px || !snap.px || !slot_ensure_shm(&running[0])) {
         puts("springboard: out of memory");
         gz_exit(1);
     }
-    shared = (struct sb_shared *)shm_base;
-    memset(shared, 0, sizeof(*shared));
-    shared->surface_offset = SHM_HEADER;
-    shared->stride = SB_APP_W;
-    gfx_surface_init(&app_surf, (uint16_t *)(shm_base + SHM_HEADER), SB_APP_W, SB_APP_H, SB_APP_W);
 }
 
 /* Settings may change while an app runs; re-read them on the way home. */
@@ -1248,15 +1635,15 @@ int main(void)
         } else if (state == ST_LOCK && !dragging_knob && view.knob_x == 0) {
             int wait = (int)(shimmer_next - t);
             timeout = MIN(timeout, wait < 0 ? 0 : wait);
-        } else if (state == ST_LAUNCH_WAIT || app_index >= 0) {
-            timeout = MIN(timeout, 250);    /* watch the app process */
+        } else if (state == ST_LAUNCH_WAIT || any_app_running()) {
+            timeout = MIN(timeout, 250);    /* watch the app processes */
         }
         if (pin_wait)
             timeout = MIN(timeout, 1000);   /* count down "Try again" */
         if (state == ST_HOME && !anim.active) {
-            if (view.jiggle)
+            if (view.jiggle || view.switcher_edit)
                 timeout = MIN(timeout, MAX((int)(jiggle_next - t), 0));
-            else if (touching && !swiping && view.pressed >= 0)
+            else if (touching && !swiping && (view.pressed >= 0 || view.switcher_pressed >= 0))
                 timeout = MIN(timeout, MAX((int)(down_ms + HOLD_MS - t), 0));
             if (!touching)
                 timeout = MIN(timeout, MAX((int)(card_poll_next - t), 0));
@@ -1298,15 +1685,28 @@ int main(void)
         }
 
         if (state == ST_HOME && !anim.active) {
-            if (!view.jiggle && touching && !swiping && view.pressed >= 0 && t - down_ms >= HOLD_MS) {
-                view.jiggle = true;     /* held: edit the home screen */
-                view.pressed = -1;
-                jiggle_next = t;
-            }
-            if (view.jiggle && (int)(t - jiggle_next) >= 0) {
-                view.jiggle_phase++;
-                render_home();
-                jiggle_next = t + JIGGLE_MS;
+            if (view.switcher_open) {
+                if (!view.switcher_edit && touching && view.switcher_pressed >= 0 && t - down_ms >= HOLD_MS) {
+                    view.switcher_edit = true;
+                    view.switcher_pressed = -1;
+                    jiggle_next = t;
+                }
+                if (view.switcher_edit && (int)(t - jiggle_next) >= 0) {
+                    view.jiggle_phase++;
+                    render_home();
+                    jiggle_next = t + JIGGLE_MS;
+                }
+            } else {
+                if (!view.jiggle && touching && !swiping && view.pressed >= 0 && t - down_ms >= HOLD_MS) {
+                    view.jiggle = true;     /* held: edit the home screen */
+                    view.pressed = -1;
+                    jiggle_next = t;
+                }
+                if (view.jiggle && (int)(t - jiggle_next) >= 0) {
+                    view.jiggle_phase++;
+                    render_home();
+                    jiggle_next = t + JIGGLE_MS;
+                }
             }
             if (!touching && !alert.open && (int)(t - card_poll_next) >= 0) {
                 if (rescan(true))
@@ -1318,15 +1718,19 @@ int main(void)
         if (state == ST_LAUNCH_WAIT && t - launch_t0 > LAUNCH_TIMEOUT)
             begin_zoom_in();                    /* show whatever it has */
 
-        if (app_pid > 0 && !gz_proc_alive(app_pid)) {
-            bool was_front = (state == ST_APP || state == ST_ZOOM_IN || state == ST_LAUNCH_WAIT);
-            app_pid = 0;
-            app_cleanup();
+        for (int i = 0; i < SB_MAX_RUNNING; i++) {
+            if (running[i].pid <= 0 || gz_proc_alive(running[i].pid))
+                continue;
+            bool was_front = (i == front_slot) && (state == ST_APP || state == ST_ZOOM_IN || state == ST_LAUNCH_WAIT);
+            slot_reset(i);
             if (was_front) {
                 load_settings();
                 rescan(false);
                 anim.active = false;
                 state = ST_HOME;
+                render_home();
+            } else if (state == ST_HOME && view.switcher_open) {
+                sync_switcher();
                 render_home();
             }
         }

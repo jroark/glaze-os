@@ -9,7 +9,7 @@ int main(void)
     static uint16_t px[240 * 320];
     gfx_surface s;
     struct gz_datetime dt = { 2009, 1, 1, 9, 41, 0, 4 };
-    struct sb_view v = { .pressed = -1, .shimmer_x = 120 };
+    struct sb_view v = { .pressed = -1, .switcher_pressed = -1, .switcher_minus_pressed = -1, .shimmer_x = 120 };
 
     gfx_surface_init(&s, px, 240, 320, 240);
     sb_draw_init();
@@ -67,5 +67,19 @@ int main(void)
     v.pin.msg = "Wrong Passcode";
     sb_draw_passcode(&s, &v);
     host_write_bmp("passcode_wrong.bmp", &s);
+
+    v.switcher_open = true;
+    v.num_switcher_apps = 4;
+    v.switcher_apps[0] = 2;
+    v.switcher_apps[1] = 3;
+    v.switcher_apps[2] = 4;
+    v.switcher_apps[3] = 0;
+    sb_draw_home(&s, &v);
+    host_write_bmp("home_switcher.bmp", &s);
+
+    v.switcher_edit = true;
+    v.jiggle_phase = 1;
+    sb_draw_home(&s, &v);
+    host_write_bmp("home_switcher_jiggle.bmp", &s);
     return 0;
 }

@@ -368,6 +368,56 @@ gfx_rect sb_delete_rect(int app, int scroll_x)
     return gfx_r(r.x - 12, r.y - 12, 26, 26);
 }
 
+gfx_rect sb_switcher_icon_rect(int slot)
+{
+    int x = slot * CELL_W + (CELL_W - ICON_SIZE) / 2;
+    int y = SCREEN_H - SWITCHER_H + 10;
+
+    return gfx_r(x, y, ICON_SIZE, ICON_SIZE);
+}
+
+gfx_rect sb_switcher_minus_rect(int slot)
+{
+    gfx_rect r = sb_switcher_icon_rect(slot);
+
+    return gfx_r(r.x - 12, r.y - 12, 26, 26);
+}
+
+int sb_hit_switcher_icon(int x, int y, int count)
+{
+    int n = MIN(count, SWITCHER_SLOTS);
+
+    for (int i = 0; i < n; i++) {
+        gfx_rect r = sb_switcher_icon_rect(i);
+        r = gfx_r(r.x - 6, r.y - 4, r.w + 12, r.h + 18);
+        if (gfx_rect_contains(r, x, y))
+            return i;
+    }
+    return -1;
+}
+
+int sb_hit_switcher_minus(int x, int y, int count)
+{
+    int n = MIN(count, SWITCHER_SLOTS);
+
+    for (int i = 0; i < n; i++) {
+        if (gfx_rect_contains(sb_switcher_minus_rect(i), x, y))
+            return i;
+    }
+    return -1;
+}
+
+/* Red circled '-' at the icon's top-left corner, for quitting a background app. */
+static void draw_minus_button(gfx_surface *s, gfx_rect icon, bool pressed)
+{
+    int cx = icon.x + 1, cy = icon.y + 1;
+
+    gfx_circle(s, cx, cy + 1, 10, 0x000000, 90);
+    gfx_circle(s, cx, cy, 10, 0xFFFFFF, 255);
+    gfx_circle(s, cx, cy, 8, pressed ? 0x8C100A : 0xD8261C, 255);
+    gfx_fill(s, gfx_r(cx - 4, cy - 1, 9, 2), 0xFFFFFF);
+}
+
 /* Black circled X at the icon's top-left corner, for deleting it. */
 static void draw_delete_button(gfx_surface *s, gfx_rect icon)
 {
@@ -463,6 +513,53 @@ static void draw_page_dots(gfx_surface *s, const struct sb_view *v)
         gfx_circle(s, x0 + p * 10, PAGE_DOTS_Y, 3, 0xFFFFFF, p == cur ? 255 : 90);
 }
 
+static void draw_switcher(gfx_surface *s, const struct sb_view *v)
+{
+    int top = SCREEN_H - SWITCHER_H;
+    const gfx_font *lab = ui_font(FONT_B9);
+
+    /* Dim the shifted home screen above the multitasking tray. */
+    gfx_fill_alpha(s, gfx_r(0, SB_STATUS_H, SCREEN_W, top - SB_STATUS_H), 0x000000, 130);
+
+    /* Dark recessed tray with a bevelled top edge. */
+    gfx_vgradient(s, gfx_r(0, top, SCREEN_W, SWITCHER_H), 0x2F3640, 0x15191F, 255);
+    gfx_fill(s, gfx_r(0, top, SCREEN_W, 1), 0x0A0C0F);
+    gfx_fill_alpha(s, gfx_r(0, top + 1, SCREEN_W, 1), 0xFFFFFF, 85);
+
+    int n = MIN(v->num_switcher_apps, SWITCHER_SLOTS);
+    if (n <= 0) {
+        gfx_text_center(s, 0, top + (SWITCHER_H - ui_font(FONT_R12)->line_height) / 2, SCREEN_W,
+                        ui_font(FONT_R12), "No Recent Apps", 0x9AA4B2, 255);
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        int app = v->switcher_apps[i];
+        if (app < 0 || app >= sb_num_apps || !sb_app_shown(app))
+            continue;
+        gfx_rect r = sb_switcher_icon_rect(i);
+        if (v->switcher_edit)
+            r.x += ((i + v->jiggle_phase) & 1) ? 1 : -1, r.y += ((i + v->jiggle_phase) & 2) ? 1 : 0;
+        if (icon_ok[app])
+            gfx_draw_image(s, r.x, r.y, &icons[app], 255);
+        else
+            draw_generic_icon(s, r, sb_apps[app].label);
+        if (!strcmp(sb_apps[app].icon, "icon_calendar.gzi")) {
+            char day[4];
+            snprintf(day, sizeof(day), "%d", v->clk.day);
+            gfx_text_center(s, r.x, r.y + 1, r.w, ui_font(FONT_B8), v->clk.weekday, 0xFFFFFF, 255);
+            gfx_text_center(s, r.x, r.y + 14, r.w, ui_font(FONT_B20), day, 0x1A1A1A, 255);
+        }
+        if (v->switcher_pressed == i)
+            gfx_round_rect(s, r, 8, 0x000000, 110);
+        if (v->badges && v->badges[app])
+            draw_badge(s, r, v->badges[app]);
+        int tw = gfx_text_width(lab, sb_apps[app].label);
+        gfx_text_shadow(s, r.x + (r.w - tw) / 2, r.y + r.h + 2, lab, sb_apps[app].label, 0xFFFFFF, 0x000000, 1, 255);
+        if (v->switcher_edit)
+            draw_minus_button(s, r, v->switcher_minus_pressed == i);
+    }
+}
+
 void sb_draw_home(gfx_surface *s, const struct sb_view *v)
 {
     gfx_rect saved = s->clip, grid;
@@ -474,12 +571,18 @@ void sb_draw_home(gfx_surface *s, const struct sb_view *v)
         for (int i = 0; i < sb_num_apps; i++) {
             if (sb_app_shown(i) && !sb_apps[i].dock) {
                 gfx_rect r = sb_icon_rect(i, v->scroll_x);
+                if (v->switcher_open)
+                    r.y -= 4;
                 if (r.x + r.w + 20 > 0 && r.x - 20 < SCREEN_W)
                     draw_icon(s, v, i, r);
             }
         }
-        draw_page_dots(s, v);
+        if (!v->switcher_open)
+            draw_page_dots(s, v);
         s->clip = saved;
     }
-    draw_dock(s, v);
+    if (v->switcher_open)
+        draw_switcher(s, v);
+    else
+        draw_dock(s, v);
 }

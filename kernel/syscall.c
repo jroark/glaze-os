@@ -214,6 +214,7 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_SYSINFO:       rv = sys_sysinfo(a0); break;
     case SYS_TASK_SNAPSHOT: rv = proc_snapshot(AS, a0, a1); break;
     case SYS_TASK_STOP:     rv = proc_task_stop((int)a0); break;
+    case SYS_PROC_BG:       rv = PRIV() ? proc_set_bg((int)a0, a1 != 0) : GZ_EPERM; break;
     case SYS_GETPID:        rv = cur->proc->pid; break;
     case SYS_ROMFS_MAP:     rv = sys_romfs_map(a0, a1); break;
     case SYS_PROC_ALIVE:    rv = sys_proc_alive(a0); break;

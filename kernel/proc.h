@@ -16,7 +16,7 @@
 #define MAX_SEMS        256
 #define MAX_STACK_SLOTS 32          /* threads besides main, per process */
 #define MAX_PORTS       64
-#define MAX_SHM         32
+#define MAX_SHM         48
 
 #define USER_TEXT_BASE  0x00400000u
 #define USER_MMAP_BASE  0x10000000u
@@ -161,7 +161,8 @@ struct proc {
 #define PROC_FLASH          0x2     /* raw NAND (kernel-granted, file server) */
 #define PROC_NET            0x4     /* Ethernet frames (kernel-granted, net server) */
 #define PROC_AUDIO          0x8     /* wave output (kernel-granted, audio server) */
-#define PROC_APP            0x10    /* managed foreground app, may be ended */
+#define PROC_APP            0x10    /* managed foreground/background app, may be ended */
+#define PROC_BACKGROUND     0x20    /* app is currently in the background (PRIO_LOW) */
 
 extern struct thread *cur;
 extern uint32_t cur_kstack_top;
@@ -187,6 +188,7 @@ struct proc *proc_by_pid(int pid);
 void proc_exit(struct proc *p, int code);
 void proc_reap(void);
 void sched_kill_proc_threads(struct proc *p);
+void sched_set_proc_prio(struct proc *p, int prio);
 int sched_reap_threads(struct proc *p);
 int sched_live_threads(struct proc *p);
 uint64_t sched_account(uint64_t now);
@@ -194,6 +196,7 @@ void sched_task_info(struct proc *p, struct gz_task_info *info);
 int proc_count(void);
 int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size);
 int proc_task_stop(int pid);
+int proc_set_bg(int pid, bool bg);
 int thread_spawn(uint32_t entry, uint32_t arg);
 int thread_exit(void);
 

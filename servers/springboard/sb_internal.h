@@ -39,6 +39,7 @@ struct sb_app_info {
     char path[48];              /* romfs binary, or an installed app's bundle */
     char exec[16];              /* installed: the executable in the bundle */
     char id[28];                /* installed: package id (process name) */
+    char version[16];           /* installed: package version */
     int status_style;
     bool dock;
     bool installed;
@@ -46,6 +47,9 @@ struct sb_app_info {
 };
 
 #define SB_MAX_APPS     32
+#define SB_MAX_RUNNING  5           /* concurrent running apps (front + background) */
+#define SWITCHER_SLOTS  4           /* icons shown in the multitasking bar */
+#define SWITCHER_H      74          /* height of the bottom multitasking tray */
 #define SB_MAX_NOTES    16          /* scheduled, all apps together */
 #define SB_LOCK_NOTES   4           /* shown on the lock screen */
 #define LOCK_NOTE_H     32
@@ -87,6 +91,12 @@ struct sb_view {
     struct ui_passcode pin;     /* passcode entry after the slide */
     bool jiggle;                /* editing the home screen: icons wobble */
     int jiggle_phase;
+    bool switcher_open;         /* double-Home multitasking bar open */
+    bool switcher_edit;         /* holding switcher icon: '-' badges shown */
+    int switcher_apps[SB_MAX_RUNNING]; /* app indices in MRU order */
+    int num_switcher_apps;
+    int switcher_pressed;       /* switcher slot under finger, or -1 */
+    int switcher_minus_pressed; /* switcher '-' badge under finger, or -1 */
 };
 
 extern bool sb_24h;
@@ -111,6 +121,11 @@ gfx_rect sb_icon_rect(int app, int scroll_x);
 int sb_hit_icon(int x, int y, int scroll_x);
 /* Jiggle mode: the delete button of an installed app's icon. */
 gfx_rect sb_delete_rect(int app, int scroll_x);
+/* Multitasking switcher bar at the bottom of the home screen. */
+gfx_rect sb_switcher_icon_rect(int slot);
+gfx_rect sb_switcher_minus_rect(int slot);
+int sb_hit_switcher_icon(int x, int y, int count);
+int sb_hit_switcher_minus(int x, int y, int count);
 /* Notification banner over the top of the screen, below the status bar. */
 void sb_draw_banner(gfx_surface *s, const struct sb_note *n);
 
@@ -128,6 +143,7 @@ void notify_attach(int app);
 /* apps.c: installed apps. */
 void apps_scan(bool card_only);     /* updates sb_apps[] */
 bool apps_changed(void);            /* since the last call: redraw */
+uint32_t apps_reinstalled_mask(void); /* bitmask of slots updated/removed */
 int apps_launch(int app);           /* pid, or an error */
 int apps_uninstall(int app);
 int notify_app_for_path(const char *path);

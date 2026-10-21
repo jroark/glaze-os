@@ -2,7 +2,7 @@
  * AIM: an AOL Instant Messenger client, as an installable package. AOL's
  * own servers are gone, so it signs on to a server the user names (a
  * revival, or a self-hosted Open OSCAR Server) and speaks OSCAR to it
- * (oscar.c). The session lasts while the app is in front: Home ends it.
+ * (oscar.c). The session stays signed on in the background after Home.
  *
  * Views: Sign On (and its Server settings), the Buddy List, a
  * conversation, a buddy's info, My Status (away messages, profile,
@@ -172,6 +172,14 @@ static struct conv *conv_find(const char *name, bool create)
     memset(&convs[at], 0, sizeof(convs[at]));
     strlcpy(convs[at].name, name, sizeof(convs[at].name));
     return &convs[at];
+}
+
+static void sync_badge(void)
+{
+    int total = 0;
+    for (int i = 0; i < nconvs; i++)
+        total += convs[i].unread;
+    ui_set_badge(total);
 }
 
 static void log_add(struct conv *c, int kind, const char *text)
@@ -1117,6 +1125,7 @@ static void sign_off(void)
     nconvs = 0;
     cur = NULL;
     editing = false;
+    sync_badge();
     set_focus(NULL);
     go(V_SIGNON, false);
 }
@@ -1219,6 +1228,7 @@ static void open_chat(struct conv *c)
 {
     cur = c;
     c->unread = 0;
+    sync_badge();
     f_draft.buf = c->draft;
     ui_scroll_reset(&chat_sc, 0, 0);
     set_focus(ui_has_hardware_keyboard() ? &f_draft : NULL);
@@ -1404,10 +1414,17 @@ static void on_event(void *ctx, const struct oscar_event *ev)
         strlcpy(c->name, ev->name, sizeof(c->name));
         log_add(c, ev->flag ? K_THEM_AUTO : K_THEM, ev->text);
         c->typing = 0;
-        if (view == V_CHAT && c == cur)
+        if (!ui_in_background() && view == V_CHAT && c == cur)
             chat_relayout(false);
-        else if (!(view == V_INFO && c == cur))
+        else if (ui_in_background() || !(view == V_INFO && c == cur)) {
             c->unread++;
+            sync_badge();
+        }
+        if (ui_in_background()) {
+            ui_notify_post((uint32_t)(c - convs) + 1u, 0, c->name, ev->text, 0);
+            if (view == V_CHAT && c == cur)
+                chat_relayout(false);
+        }
         if (view == V_BUDDIES)
             build_rows();
         play(SND_IM_IN);
@@ -1514,6 +1531,7 @@ static void net_service(void)
             nconvs = 0;
             cur = NULL;
             editing = false;
+            sync_badge();
             go(V_SIGNON, false);
             show_alert("Signed Off", offline_msg);
         } else {
@@ -1849,7 +1867,16 @@ int main(void)
         if ((sc && sc->animating) || (view == V_BUDDIES && blist.sc.animating))
             timeout = 30;
         if (ui_next_event(&ev, timeout)) {
-            if (ev.type == GZ_EV_TEXT || ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
+            if (ev.type == GZ_EV_APP_ACTIVATE) {
+                if (view == V_CHAT && cur && cur->unread) {
+                    cur->unread = 0;
+                    sync_badge();
+                }
+                dirty = true;
+            } else if (ev.type == GZ_EV_APP_DEACTIVATE) {
+                pressed.id = H_NONE;
+                in_keyboard = false;
+            } else if (ev.type == GZ_EV_TEXT || ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
                 physical(&ev);
             else
                 touch(&ev);

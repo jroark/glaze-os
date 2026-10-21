@@ -67,6 +67,7 @@ enum {
     SYS_VM_MAP,             /* private fixed-address pages for userspace loaders */
     SYS_VM_PUBLISH,         /* publish code; a2 = writable after publication */
     SYS_VM_RELEASE,         /* release a complete SYS_VM_MAP allocation */
+    SYS_PROC_BG,            /* toggle background state & priority for a managed app */
     SYS_COUNT
 };
 
@@ -177,6 +178,7 @@ struct gz_sysinfo {
 #define GZ_TASK_MAX 32
 #define GZ_TASK_APP  1u
 #define GZ_TASK_SELF 2u
+#define GZ_TASK_BG   4u
 struct gz_task_info {
     uint32_t pid, parent, flags;
     uint32_t threads, runnable, mapped_pages;

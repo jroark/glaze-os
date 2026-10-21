@@ -20,6 +20,7 @@
 static void *icon_data[SB_MAX_APPS];
 static bool seen[SB_MAX_APPS];
 static bool changed;
+static uint32_t reinstalled_mask;
 
 static bool on_card(int app)
 {
@@ -58,11 +59,13 @@ static void found(const char *bundle, const struct pkg_info *info, void *arg)
     if (slot >= 0) {
         seen[slot] = true;
         if (!sb_apps[slot].present || strcmp(sb_apps[slot].label, info->name) ||
-            strcmp(sb_apps[slot].exec, info->exec)) {
+            strcmp(sb_apps[slot].exec, info->exec) || strcmp(sb_apps[slot].version, info->version)) {
             strlcpy(sb_apps[slot].label, info->name, sizeof(sb_apps[slot].label));
             strlcpy(sb_apps[slot].exec, info->exec, sizeof(sb_apps[slot].exec));
+            strlcpy(sb_apps[slot].version, info->version, sizeof(sb_apps[slot].version));
             sb_apps[slot].present = true;
             load_icon(slot);                    /* reinstalled or the card is back */
+            reinstalled_mask |= 1u << slot;
             changed = true;
         }
         return;
@@ -78,6 +81,7 @@ static void found(const char *bundle, const struct pkg_info *info, void *arg)
     strlcpy(a->path, bundle, sizeof(a->path));
     strlcpy(a->exec, info->exec, sizeof(a->exec));
     strlcpy(a->id, info->id, sizeof(a->id));
+    strlcpy(a->version, info->version, sizeof(a->version));
     a->status_style = SB_STATUS_GRAY;
     a->installed = a->present = true;
     seen[free_slot] = true;
@@ -100,12 +104,14 @@ void apps_scan(bool card_only)
         if (on_card(i)) {
             if (a->present) {
                 a->present = false;             /* the card is out */
+                reinstalled_mask |= 1u << i;
                 changed = true;
             }
         } else {
             notify_forget(i);                   /* deleted behind our back */
             a->path[0] = 0;
             a->present = false;
+            reinstalled_mask |= 1u << i;
             changed = true;
         }
     }
@@ -117,6 +123,14 @@ bool apps_changed(void)
 
     changed = false;
     return c;
+}
+
+uint32_t apps_reinstalled_mask(void)
+{
+    uint32_t m = reinstalled_mask;
+
+    reinstalled_mask = 0;
+    return m;
 }
 
 int apps_launch(int app)
@@ -158,6 +172,7 @@ int apps_uninstall(int app)
     sb_set_icon(app, NULL);
     a->path[0] = 0;
     a->present = false;
+    reinstalled_mask |= 1u << app;
     changed = true;
     return 0;
 }

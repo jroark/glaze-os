@@ -39,6 +39,11 @@ void ui_init(int status_style)
     ui.dirty = gfx_r(0, 0, 0, 0);
 }
 
+bool ui_in_background(void)
+{
+    return ui.shared && ui.shared->background != 0;
+}
+
 int ui_next_event(struct gz_input_event *ev, int timeout_ms)
 {
     uint32_t start = gz_time_ms();
@@ -55,7 +60,10 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
                 *ev = sh->ev[sh->tail % SB_RING];
                 sh->tail++;
             }
-            uisnd_event(ev);
+            if (ev->type == GZ_EV_APP_ACTIVATE)
+                ui_invalidate_all();
+            if (!ui_in_background() && ev->type < GZ_EV_APP_ACTIVATE)
+                uisnd_event(ev);
             return 1;
         }
         int wait = timeout_ms;
@@ -96,6 +104,7 @@ void ui_present(void)
     m.w[2] = (uint32_t)ui.dirty.y;
     m.w[3] = (uint32_t)ui.dirty.w;
     m.w[4] = (uint32_t)ui.dirty.h;
+    m.w[5] = (uint32_t)gz_getpid();
     gz_send(ui.sb_port, &m, &r);
     ui.dirty = gfx_r(0, 0, 0, 0);
 }
