@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-int main(void)
+int main(int argc, char **argv)
 {
     struct ce_registry *r = calloc(1, sizeof(*r)), *copy = calloc(1, sizeof(*copy));
     assert(r && copy);
@@ -75,6 +75,21 @@ int main(void)
     assert(!ce_reg_set(copy, "HKCU", "A", 4, binary, 4));
     free(large);
     ce_reg_clear(r);
+    for (int i = 1; i < argc; i++) {
+        FILE *f = fopen(argv[i], "rb");
+        assert(f);
+        assert(!fseek(f, 0, SEEK_END));
+        long sz = ftell(f);
+        assert(sz > 0 && sz <= CE_REG_FILE_MAX);
+        rewind(f);
+        uint8_t *buf = malloc((size_t)sz);
+        assert(buf);
+        assert(fread(buf, 1, (size_t)sz, f) == (size_t)sz);
+        fclose(f);
+        assert(ce_reg_decode(r, buf, (uint32_t)sz));
+        free(buf);
+        ce_reg_clear(r);
+    }
     ce_reg_clear(copy);
     free(r);
     free(copy);

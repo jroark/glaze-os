@@ -186,8 +186,39 @@ The PE structures follow Microsoft's
 [PE/COFF specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format).
 CPK decoding was derived from the local CCFS driver's block dispatch and reads
 its Huffman word dictionary from the supplied image. `cbeaExplorer/CbeaFile.cpp`
-was consulted for the distinct installer archive format; `.cbea` installation
-is outside this milestone.
+and `dumpcbea` were consulted for the `.cbea` installer archive format.
+
+## Converting `.cbea` installer archives (`tools/cbea2gzp.py`)
+
+`tools/cbea2gzp.py` converts Casio BE-300 `.cbea` application installer archives
+into installable Glaze `.gzp` packages:
+
+```sh
+./build.sh
+python3 tools/cbea2gzp.py --list ../be300/tools/dumpcbea/*.cbea
+python3 tools/cbea2gzp.py ../be300/tools/dumpcbea/*.cbea -o out/cbea
+```
+
+The converter parses the 256-byte `.cbea` header and entry records, interprets
+`Install.inf` (`[App Information]`, `[Make Dirs]`, `[Copy Files]`, and
+`[Add Registry]`), automatically decompresses any `.cpk` payloads using the
+CCFS dictionary from `--image` (defaulting to `../be300/nand/beshell.bin` when
+present), extracts 44×44 `GZI1` icons from PE `.rsrc` sections (falling back to
+a default WinCE icon when an executable has no icon resource), and writes:
+
+- `res/program.exe`: the target WinCE MIPS executable.
+- `res/registry`: initial `GZCE`/`GZCK` registry state encoded from `[Add Registry]`
+  and `HKLM\SOFTWARE\MENU\<Program>`, seeded into `<bundle>/data/registry` on
+  first launch.
+- `res/files.txt`: manifest mapping sanitized package resource names (`res/<name>`)
+  to canonical WinCE paths (`/Program Files/...`, `/Windows/...`) so bundled
+  DLLs, bitmaps, sounds, and databases (such as `KjvBible.pdb`) can be opened
+  directly from the bundle or copied on write into `<bundle>/data/drive/`.
+- Multi-executable `.cbea` suites (such as `casiopims.cbea`) emit one `.gzp`
+  package per executable by default; use repeatable `--exe <name>` flags to
+  select specific executables, or `--id` / `--name` / `--version` to override
+  package metadata. Use `--extract [DIR]` to unpack all resolved files onto the
+  host filesystem.
 
 ## Validation
 

@@ -240,7 +240,7 @@ static void verify(void)
     assert(fs_read_file(path, buf, 32) == 4 && !memcmp(buf, info.version[0] == '1' ? "APP1" : "APP2", 4));
 }
 static void teardown(void) { assert(!fs_remove_all("")); }
-int main(void)
+int main(int argc, char **argv)
 {
     for (int mode = 0; mode < 3; mode++) {
         bool source_card = mode == 2;
@@ -306,5 +306,26 @@ int main(void)
     assert(pkg_find("demo", bundle) == 0 && pkg_bundle_info(bundle, &info) == 0);
     assert(!strcmp(info.version, "1.0"));
     teardown();
+    for (int i = 1; i < argc; i++) {
+        FILE *f = fopen(argv[i], "rb");
+        assert(f);
+        assert(!fseek(f, 0, SEEK_END));
+        long sz = ftell(f);
+        assert(sz > 0);
+        rewind(f);
+        uint8_t *buf = malloc((size_t)sz);
+        assert(buf);
+        assert(fread(buf, 1, (size_t)sz, f) == (size_t)sz);
+        fclose(f);
+        setup(false);
+        assert(fs_write_file("/pkg.gzp", buf, (uint32_t)sz) == (int)sz);
+        free(buf);
+        assert(pkg_read_info("/pkg.gzp", &info) == 0);
+        assert(pkg_install("/pkg.gzp", "", bundle) == 0);
+        struct pkg_info installed;
+        assert(pkg_bundle_info(bundle, &installed) == 0);
+        assert(!strcmp(info.id, installed.id) && !strcmp(info.name, installed.name));
+        teardown();
+    }
     puts("store packages: PASS (including card removal and deferred cleanup)");
 }

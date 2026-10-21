@@ -6,8 +6,19 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-from wince_assets import AssetError, CpkDecoder, Fat16, lzss, span
+from wince_assets import (
+    AssetError,
+    CbeaArchive,
+    CpkDecoder,
+    Fat16,
+    canonicalize_ce_path,
+    encode_gzce_registry,
+    lzss,
+    parse_cbea_inf,
+    span,
+)
 from import_wince import package, pe_icon, validate_runner, pe_report
+from cbea2gzp import convert_cbea
 
 
 def put32(data, off, value):
@@ -178,6 +189,141 @@ class Assets(unittest.TestCase):
         put32(pe, 268, 0)
         with self.assertRaises(AssetError):
             pe_icon(bytes(pe))
+
+    @staticmethod
+    def _build_cbea(entries, target="Nand Disk\\Program Files\\TestApp"):
+        header = bytearray(0x100)
+        struct.pack_into("<H", header, 0, 1)
+        struct.pack_into("<I", header, 2, len(entries))
+        encoded_target = target.encode("utf-16le") + b"\x00\x00"
+        header[8:8 + len(encoded_target)] = encoded_target
+        body = bytearray()
+        for kind, name, payload in entries:
+            raw_name = name.encode("cp1252")
+            next_off = 4 + len(raw_name) + 1 + 4 + len(payload)
+            body.extend(struct.pack("<I3sB", next_off, kind.encode("ascii"), len(raw_name)))
+            body.extend(raw_name + b"\x00")
+            body.extend(struct.pack("<I", len(payload)))
+            body.extend(payload)
+        return bytes(header + body)
+
+    @staticmethod
+    def _synthetic_pe(dll=False, base=0x00010000, export_name=None):
+        pe = bytearray(1024)
+        pe[:2] = b"MZ"
+        put32(pe, 60, 128)
+        pe[128:132] = b"PE\0\0"
+        struct.pack_into("<HH", pe, 132, 0x166, 1)
+        struct.pack_into("<HH", pe, 148, 224, 0x2002 if dll else 0x0002)
+        struct.pack_into("<H", pe, 152, 0x10b)
+        put32(pe, 168, 0x1000)
+        put32(pe, 180, base)
+        struct.pack_into("<H", pe, 220, 9)
+        put32(pe, 224, 0x2000)
+        pe[376:382] = b".text\0"
+        struct.pack_into("<IIII", pe, 384, 512, 0x1000, 512, 512)
+        put32(pe, 412, 0x60000020)
+        if export_name:
+            put32(pe, 248, 0x1100)
+            put32(pe, 252, 128)
+            exp = 512 + 0x100
+            put32(pe, exp + 16, 1)  # ordinal base = 1
+            put32(pe, exp + 20, 1)  # func count = 1
+            put32(pe, exp + 24, 1)  # name count = 1
+            put32(pe, exp + 28, 0x1140)  # functions RVA
+            put32(pe, exp + 32, 0x1144)  # names RVA
+            put32(pe, exp + 36, 0x1148)  # ordinals RVA
+            put32(pe, 512 + 0x140, 0x1000)
+            put32(pe, 512 + 0x144, 0x1150)
+            struct.pack_into("<H", pe, 512 + 0x148, 0)
+            raw = export_name.encode("ascii") + b"\x00"
+            pe[512 + 0x150:512 + 0x150 + len(raw)] = raw
+        return bytes(pe)
+
+    def test_cbea_archive_inf_and_conversion(self):
+        self.assertEqual(
+            canonicalize_ce_path(r"?Drive?\Program Files\AIM\aim.exe", r"\Nand Disk\Program Files\AIM"),
+            "/Program Files/AIM/aim.exe",
+        )
+        self.assertEqual(
+            canonicalize_ce_path(r"%INSTALL_DIR%\data\book.pdb", r"\Nand Disk\Program Files\Reader"),
+            "/Program Files/Reader/data/book.pdb",
+        )
+        inf_text = (
+            "[App Information]\r\n"
+            "Maker=Test Corp.\r\n"
+            "Program=Sample Suite\r\n"
+            "Caption=Sample Suite\r\n"
+            "Version=01.02.03\r\n"
+            "InstallDir=\\Nand Disk\\Program Files\\Suite\r\n"
+            "ExeFile=%INSTALL_DIR%\\Alpha.exe\r\n"
+            "[Make Dirs]\r\n"
+            "\"%INSTALL_DIR%\\Data\"\r\n"
+            "[Copy Files]\r\n"
+            "\"%INSTALL_DIR%\\Alpha.exe\",\"Alpha.exe\",\r\n"
+            "\"%INSTALL_DIR%\\Beta.exe\",\"Beta.exe\",\r\n"
+            "\"\\Windows\\helper.dll.cpk\",\"helper.dll.cpk\",\r\n"
+            "\"%INSTALL_DIR%\\Data\\readme.txt\",\"readme.txt\",\r\n"
+            "[Add Registry]\r\n"
+            "HKEY_LOCAL_MACHINE,\"Software\\Suite\",\"InstallDir\",REG_SZ,0,\"\\Nand Disk\\Program Files\\Suite\\\\\"\r\n"
+            "HKEY_CURRENT_USER,\"Software\\Suite\",\"Mode\",REG_DWORD,0,1a\r\n"
+        )
+        parsed = parse_cbea_inf(inf_text)
+        self.assertEqual(parsed["program"], "Sample Suite")
+        self.assertEqual(parsed["registry"][0]["data"], (r"\Nand Disk\Program Files\Suite" + "\\\0").encode("utf-16le"))
+        self.assertEqual(parsed["registry"][1]["data"], struct.pack("<I", 0x1A))
+        reg_blob = encode_gzce_registry(parsed["registry"])
+        self.assertEqual(reg_blob[:4], b"GZCE")
+        self.assertIn(b"GZCK", reg_blob)
+
+        exe_a = self._synthetic_pe(dll=False)
+        exe_b = self._synthetic_pe(dll=False)
+        dll_raw = self._synthetic_pe(dll=True, base=0x40000000, export_name="HelperInit")
+        # Build a full uncompressed CPK with 2 blocks (1024 bytes) for dll_raw
+        cpk_dll = bytearray(60 + 1024)
+        cpk_dll[:12] = b"CASIO.$&%-Z\x01"
+        put32(cpk_dll, 44, 1024)
+        put32(cpk_dll, 48, 0x01000002)
+        put32(cpk_dll, 56, 512)
+        cpk_dll[60:] = dll_raw
+
+        archive_bytes = self._build_cbea([
+            ("INF", "Install.inf", inf_text.encode("cp1252")),
+            ("CAB", "Alpha.exe", exe_a),
+            ("CAB", "Beta.exe", exe_b),
+            ("CAB", "helper.dll.cpk", bytes(cpk_dll)),
+            ("CAB", "readme.txt", b"hello world\n"),
+        ])
+        archive = CbeaArchive(archive_bytes)
+        self.assertEqual(len(archive.entries), 5)
+
+        runner = bytearray(128)
+        runner[:7] = b"\x7fELF\x01\x01\x01"
+        struct.pack_into("<HH", runner, 16, 3, 8)
+        put32(runner, 28, 52)
+        struct.pack_into("<HH", runner, 42, 32, 1)
+        put32(runner, 52, 3); put32(runner, 56, 84); put32(runner, 68, 19)
+        runner[84:103] = b"/lib/ld-glaze.so.1\0"
+
+        packages, report, resolved_files = convert_cbea(
+            archive_bytes,
+            cbea_name="suite.cbea",
+            runner=bytes(runner),
+            rom={
+                "decoder": self.decoder,
+                "ordinals": {},
+                "dll_ordinals": {},
+                "ordinal_text": b"coredll.dll 0 none\n",
+            },
+        )
+        self.assertEqual(len(resolved_files), 4)
+        self.assertEqual(sorted(packages.keys()), ["cbea.alpha.gzp", "cbea.beta.gzp"])
+        self.assertEqual([p["id"] for p in report["packages"]], ["cbea.alpha", "cbea.beta"])
+        for gzp in packages.values():
+            self.assertEqual(gzp[:4], b"GZPK")
+            self.assertIn(b"helper.dll /Windows/helper.dll\n", gzp)
+            self.assertIn(b"readme.txt /Program Files/Suite/Data/readme.txt\n", gzp)
+            self.assertIn(b"GZCE", gzp)
 
 
 if __name__ == "__main__":

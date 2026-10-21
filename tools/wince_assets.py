@@ -344,3 +344,308 @@ def exports(image, module_name):
             result[base + ordinal] = cstr(image, u32(image, nt + i * 4))
         return result
     raise AssetError(f"no valid export directory for {module_name}")
+
+
+class CbeaArchive:
+    """Casio BE-300 application installer archive (.cbea)."""
+
+    def __init__(self, data):
+        if len(data) < 256:
+            raise AssetError("CBEA archive is smaller than 256-byte header")
+        self.version = u16(data, 0)
+        count = u32(data, 2)
+        if not self.version or not 1 <= count <= 4096:
+            raise AssetError(f"invalid CBEA header: version={self.version:#x}, count={count}")
+        try:
+            self.target = bytes(span(data, 8, 72)).decode("utf-16le").split("\0", 1)[0]
+        except UnicodeDecodeError as exc:
+            raise AssetError("invalid CBEA target string") from exc
+        self.entries = []
+        pos = 256
+        for _ in range(count):
+            hdr = span(data, pos, 8)
+            next_off = u32(hdr, 0)
+            kind = bytes(hdr[4:7])
+            name_len = hdr[7]
+            pos += 8
+            if not name_len:
+                raise AssetError("empty CBEA entry name")
+            raw_name = bytes(span(data, pos, name_len + 1))
+            if raw_name[-1] != 0 or b"\0" in raw_name[:-1]:
+                raise AssetError("malformed CBEA entry name")
+            name = raw_name[:-1].decode("latin1")
+            if any(ord(c) < 0x20 or c in "/\\" for c in name) or name in (".", ".."):
+                raise AssetError(f"unsafe CBEA entry name: {name}")
+            pos += name_len + 1
+            size = u32(data, pos)
+            pos += 4
+            payload = bytes(span(data, pos, size))
+            if next_off != 4 + name_len + 1 + 4 + size:
+                raise AssetError(f"CBEA entry offset mismatch for {name}")
+            pos += size
+            self.entries.append({"name": name, "kind": kind, "size": size, "data": payload})
+
+    def find(self, name):
+        key = name.casefold()
+        for entry in self.entries:
+            if entry["name"].casefold() == key:
+                return entry
+        return None
+
+
+def _replace_icase(text, token, replacement):
+    out = []
+    pos = 0
+    low = text.casefold()
+    tlow = token.casefold()
+    tlen = len(token)
+    while pos < len(text):
+        idx = low.find(tlow, pos)
+        if idx < 0:
+            out.append(text[pos:])
+            break
+        out.append(text[pos:idx])
+        out.append(replacement)
+        pos = idx + tlen
+    return "".join(out)
+
+
+def canonicalize_ce_path(raw_path, install_dir=None):
+    """Map a WinCE / CBEA destination path to a canonical '/' path."""
+    s = raw_path.strip()
+    if install_dir:
+        s = _replace_icase(s, "%INSTALL_DIR%", install_dir)
+    s = _replace_icase(s, "?Drive?", "\\Nand Disk")
+    s = s.replace("\\", "/")
+    parts = []
+    for part in s.split("/"):
+        if not part:
+            continue
+        if part in (".", "..") or ":" in part or any(ord(c) < 0x20 for c in part):
+            raise AssetError(f"unsafe WinCE path: {raw_path}")
+        parts.append(part)
+    if not parts:
+        raise AssetError(f"empty WinCE path: {raw_path}")
+    first = parts[0].casefold()
+    if first in ("nand disk", "storage card"):
+        parts = parts[1:]
+    elif first == "program disk":
+        parts = ["Program Files"] + parts[1:]
+    if not parts:
+        raise AssetError(f"empty WinCE target path: {raw_path}")
+    if parts[0].casefold() == "my documents":
+        parts = ["Documents"] + parts[1:]
+    return "/" + "/".join(parts)
+
+
+def _split_inf_fields(line):
+    fields = []
+    pos = 0
+    n = len(line)
+    while pos < n:
+        while pos < n and line[pos] in " \t":
+            pos += 1
+        if pos >= n:
+            fields.append("")
+            break
+        if line[pos] == '"':
+            pos += 1
+            start = pos
+            while pos < n and line[pos] != '"':
+                pos += 1
+            val = line[start:pos]
+            if pos < n and line[pos] == '"':
+                pos += 1
+            while pos < n and line[pos] != ",":
+                pos += 1
+        else:
+            start = pos
+            while pos < n and line[pos] != ",":
+                pos += 1
+            val = line[start:pos].rstrip(" \t")
+        fields.append(val)
+        if pos < n and line[pos] == ",":
+            pos += 1
+            if pos == n:
+                fields.append("")
+                break
+    return fields
+
+
+def _unquote(s):
+    s = s.strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return s[1:-1]
+    return s
+
+
+def parse_cbea_inf(text):
+    """Parse a CBEA Install.inf into structured app info, file copies, and registry entries."""
+    app = {}
+    make_dirs = []
+    copy_raw = []
+    reg_raw = []
+    section = ""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(";"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().casefold()
+            continue
+        if section == "app information":
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            app[k.strip().casefold()] = _unquote(v)
+        elif section == "make dirs":
+            make_dirs.append(_unquote(line))
+        elif section == "copy files":
+            fields = _split_inf_fields(line)
+            if len(fields) < 2 or not fields[0] or not fields[1]:
+                raise AssetError(f"invalid [Copy Files] line: {raw_line}")
+            copy_raw.append((fields[0], fields[1], fields[2] if len(fields) > 2 else ""))
+        elif section == "add registry":
+            fields = _split_inf_fields(line)
+            if len(fields) < 5:
+                raise AssetError(f"invalid [Add Registry] line: {raw_line}")
+            reg_raw.append(fields)
+
+    install_dir_raw = app.get("installdir", "")
+    install_dir = canonicalize_ce_path(install_dir_raw) if install_dir_raw else "/Program Files"
+    exe_raw = app.get("exefile", "")
+    exe_path = canonicalize_ce_path(exe_raw, install_dir_raw or install_dir) if exe_raw else ""
+
+    dirs = [canonicalize_ce_path(d, install_dir_raw or install_dir) for d in make_dirs]
+    copies = []
+    for dst_raw, src_name, flags in copy_raw:
+        canonical = canonicalize_ce_path(dst_raw, install_dir_raw or install_dir)
+        copies.append({"dest": dst_raw, "canonical": canonical, "src": src_name, "flags": flags})
+
+    root_map = {
+        "hkey_local_machine": "HKLM", "hklm": "HKLM",
+        "hkey_current_user": "HKCU", "hkcu": "HKCU",
+        "hkey_classes_root": "HKCR", "hkcr": "HKCR",
+        "hkey_users": "HKU", "hku": "HKU",
+    }
+    registry = []
+    for fields in reg_raw:
+        root = root_map.get(fields[0].strip().casefold())
+        if not root:
+            raise AssetError(f"unsupported registry root: {fields[0]}")
+        subkey = fields[1].strip().strip("\\")
+        if not subkey or "\\\\" in subkey:
+            raise AssetError(f"invalid registry key: {fields[1]}")
+        full_key = f"{root}\\{subkey}"
+        val_name = fields[2]
+        vtype = fields[3].strip().casefold()
+        if vtype in ("reg_sz", "reg_expand_sz"):
+            if len(fields) < 6:
+                raise AssetError(f"missing string value for {full_key}")
+            sval = fields[5]
+            if sval.endswith("\\\\"):
+                sval = sval[:-1]
+            data = (sval + "\0").encode("utf-16le")
+            kind = 1 if vtype == "reg_sz" else 2
+        elif vtype == "reg_dword":
+            if len(fields) < 6 or not fields[5].strip():
+                raise AssetError(f"missing DWORD value for {full_key}")
+            try:
+                dword = int(fields[5].strip(), 16)
+            except ValueError as exc:
+                raise AssetError(f"invalid DWORD value for {full_key}: {fields[5]}") from exc
+            if not 0 <= dword <= 0xffffffff:
+                raise AssetError(f"DWORD out of range for {full_key}")
+            data = struct.pack("<I", dword)
+            kind = 4
+        elif vtype == "reg_binary":
+            try:
+                raw_bytes = bytes(int(b.strip(), 16) for b in fields[5:] if b.strip())
+            except ValueError as exc:
+                raise AssetError(f"invalid REG_BINARY data for {full_key}") from exc
+            data = raw_bytes
+            kind = 3
+        elif vtype == "reg_multi_sz":
+            parts = [p.encode("utf-16le") + b"\0\0" for p in fields[5:]]
+            data = b"".join(parts) + b"\0\0"
+            kind = 7
+        else:
+            raise AssetError(f"unsupported registry value type: {fields[3]}")
+        registry.append({"key": full_key, "name": val_name, "type": kind, "data": data})
+
+    return {
+        "program": app.get("program", ""),
+        "caption": app.get("caption", ""),
+        "maker": app.get("maker", ""),
+        "version": app.get("version", ""),
+        "destination": app.get("destination", ""),
+        "unload": app.get("unload", ""),
+        "uninstall": app.get("uninstall", ""),
+        "install_dir": install_dir,
+        "exe_file": exe_path,
+        "make_dirs": dirs,
+        "copy_files": copies,
+        "registry": registry,
+    }
+
+
+def encode_gzce_registry(items, extra_keys=()):
+    """Encode registry items and keys into a Glaze GZCE/GZCK binary stream."""
+    valid_roots = {"hkcr", "hkcu", "hklm", "hku"}
+    keys = []
+    seen_keys = set()
+
+    def add_key(k):
+        k = k.strip("\\")
+        parts = k.split("\\")
+        if not parts or parts[0].casefold() not in valid_roots or any(not p for p in parts):
+            raise AssetError(f"invalid registry key path: {k}")
+        if len(k.encode("utf-8")) >= 256:
+            raise AssetError(f"registry key too long: {k}")
+        for idx in range(2, len(parts) + 1):
+            prefix = "\\".join(parts[:idx])
+            folded = prefix.casefold()
+            if folded not in seen_keys:
+                seen_keys.add(folded)
+                keys.append(prefix)
+
+    values = []
+    value_index = {}
+    for item in items:
+        key = item["key"]
+        name = item.get("name", "")
+        kind = int(item["type"])
+        data = bytes(item["data"])
+        if "\\".join(key.split("\\")[:1]).casefold() not in valid_roots:
+            raise AssetError(f"invalid registry key root: {key}")
+        if "\\" in key:
+            add_key(key)
+        if len(name.encode("utf-8")) >= 128 or len(data) > 65536:
+            raise AssetError(f"registry value exceeds limits: {key}\\{name}")
+        vkey = (key.casefold(), name.casefold())
+        if vkey in value_index:
+            values[value_index[vkey]] = (key, name, kind, data)
+        else:
+            value_index[vkey] = len(values)
+            values.append((key, name, kind, data))
+
+    for k in extra_keys:
+        if "\\" in k:
+            add_key(k)
+
+    if len(keys) > 128 or len(values) > 128:
+        raise AssetError("registry exceeds Glaze capacity (128 keys / 128 values)")
+
+    out = bytearray(b"GZCE" + struct.pack("<I", len(values)))
+    for key, name, kind, data in values:
+        kb = key.encode("utf-8") + b"\0"
+        nb = name.encode("utf-8") + b"\0"
+        out += struct.pack("<IIII", len(kb), len(nb), kind, len(data))
+        out += kb + nb + data
+    out += b"GZCK" + struct.pack("<I", len(keys))
+    for key in keys:
+        kb = key.encode("utf-8") + b"\0"
+        out += struct.pack("<I", len(kb)) + kb
+    if len(out) > 256 * 1024:
+        raise AssetError("encoded registry exceeds 256 KiB")
+    return bytes(out)

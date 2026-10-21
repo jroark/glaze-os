@@ -172,19 +172,42 @@ int main(int argc, char **argv)
     /* A relocation must update only a validated target within a section. */
     fixture();
     put32(288, 8448);
-    put32(292, 12);
+    put32(292, 24);
     put32(1280, 4096);
-    put32(1284, 12);
-    put16(1288, 0x3000);
+    put32(1284, 24);
+    put16(1288, 0x3000); /* HIGHLOW @ 4096 */
+    put16(1290, 0x4004); /* HIGHADJ @ 4100 (consumes next slot for signed low16) */
+    put16(1292, 0x9000); /* low16 = -0x7000 (carry into high16) */
+    put16(1294, 0x2008); /* LOW @ 4104 */
+    put16(1296, 0x500c); /* MIPS_JMPADDR @ 4108 */
+    put16(1298, 0x1010); /* HIGH @ 4112 */
     put32(512, 0x10000);
+    put32(516, 0x3c080002); /* lui t0, 2 (orig = (2<<16) - 0x7000 = 0x19000) */
+    put32(520, 0x25089000); /* addiu t0, t0, -0x7000 */
+    put32(524, 0x0c004400); /* jal 0x11000 */
+    put32(528, 0x3c090001); /* lui t1, 1 */
     assert(!ce_pe_parse(&p, file, sizeof(file)));
     image = malloc(p.size);
     assert(image);
     ce_pe_copy(&p, image);
-    assert(!ce_pe_relocate(&p, image, p.base + 4096));
-    assert(ce_u32((uint8_t *)image + 4096) == 0x11000);
+    assert(!ce_pe_relocate(&p, image, p.base + 0x8000));
+    assert(ce_u32((uint8_t *)image + 4096) == 0x18000);
+    /* HIGHADJ: 0x19000 + 0x8000 = 0x21000 (low16 = +0x1000, so high16 stays 2) */
+    assert(ce_u32((uint8_t *)image + 4100) == 0x3c080002);
+    /* LOW: -0x7000 + 0x8000 = +0x1000 */
+    assert(ce_u32((uint8_t *)image + 4104) == 0x25081000);
+    /* MIPS_JMPADDR: 0x11000 + 0x8000 = 0x19000 -> (0x19000 >> 2) = 0x6400 */
+    assert(ce_u32((uint8_t *)image + 4108) == 0x0c006400);
+    /* HIGH: 0x10000 + 0x8000 = 0x18000 -> high16 remains 1 */
+    assert(ce_u32((uint8_t *)image + 4112) == 0x3c090001);
+    /* Relocatable DLL with 0x40000000 preferred base is accepted when .reloc is present. */
+    put16(150, 0x2002);
+    put32(180, 0x40000000);
+    assert(!ce_pe_parse(&p, file, sizeof(file)) && p.dll && p.base == 0x40000000);
+    put32(292, 0); /* Without relocations, high-base DLL is rejected. */
+    assert(ce_pe_parse(&p, file, sizeof(file)));
     ce_put32((uint8_t *)image + 8448, 0xfffff000);
-    assert(ce_pe_relocate(&p, image, p.base + 4096));
+    assert(ce_pe_relocate(&p, image, 0x18000));
     free(image);
     /* Parse real local assets when supplied, without committing their bytes. */
     for (int i = 1; i < argc; i++) {
