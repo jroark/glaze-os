@@ -5,6 +5,15 @@ before a query is entered and matches names, developers, summaries and descripti
 Apps are free and curated in `store/apps.json`; there are no accounts or payments.
 The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manager and AIM.
 
+In the web emulator, use network bridge helper version `20261021a` or later
+(printed when it starts). Older helpers can stall icon and package downloads
+or corrupt TLS connections under retransmission. Replace and restart the
+helper, then reboot Glaze; this fix does not require a new NAND image.
+
+Glaze's TLS configuration also supports cross-signed certificate chains that
+terminate at a bundled trusted root, even when the server includes an extra
+legacy issuer that Glaze does not trust.
+
 ## Build and publish
 
 ```

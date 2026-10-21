@@ -206,8 +206,12 @@ Apps use `lib/include/glaze/net.h`: `net_resolve`, `net_socket`,
 - **Settings > Network** shows the card, the address, router and DNS server,
   and pings the router.
 - **Browser** (`apps/browser`) loads web pages over HTTP/1.1 and renders
-  their HTML, CSS and images. There is no TLS, so https:// pages show a "not
-  supported" page.
+  their HTML, CSS and images. HTTPS uses TLS 1.2/1.3 with bundled trusted
+  roots and certificate checks for the host name and device date.
+
+For the web emulator, use network bridge helper version `20261021a` or
+later. Older helpers can stall HTTPS and App Store downloads because they
+do not preserve TCP delivery when the guest's receive buffers fill.
 
 The emulator's NAT resolves names and opens TCP connections on the host, so
 the guest reaches whatever the host can. Without a card, the network server
