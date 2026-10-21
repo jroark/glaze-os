@@ -139,6 +139,8 @@ h2 {
   color: var(--ink-soft);
   text-shadow: 0 1px 0 var(--emboss);
 }
+.section-followup { margin-top: 16px; }
+.compatibility-details { margin-top: 24px; }
 
 /* ---- hero -------------------------------------------------------------- */
 

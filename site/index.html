@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Glaze, an operating system for the Casio BE-300</title>
-  <meta name="description" content="Glaze is a microkernel operating system for the Casio Cassiopeia BE-300 PDA, with a touch interface in the style of early iPhone OS. Run it in your browser or build it from source.">
+  <meta name="description" content="Glaze is a microkernel OS for the Casio BE-300, with an early iPhone-style interface, an App Store, AIM, Task Manager and support for selected original Windows CE apps.">
   <meta property="og:title" content="Glaze, an operating system for the Casio BE-300">
-  <meta property="og:description" content="A microkernel OS for Casio's MIPS PDA, with a touch interface in the style of early iPhone OS.">
+  <meta property="og:description" content="An early iPhone-style interface for Casio's MIPS PDA. Explore native apps, AIM, Task Manager and selected original Windows CE apps.">
   <meta property="og:image" content="https://glaze-os.com/img/og.png">
   <meta property="og:url" content="https://glaze-os.com/">
   <meta name="theme-color" content="#6d84a2">
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="preload" href="fonts/VeraBd.ttf" as="font" type="font/ttf" crossorigin>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20261021">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -51,6 +51,19 @@
       </div>
     </div>
 
+    <section aria-labelledby="latest">
+      <h2 id="latest">New in Glaze</h2>
+      <p class="section-note">Updated <time datetime="2026-10-21">October 21, 2026</time>. More apps, original BE-300 software, and improvements throughout the system.</p>
+      <dl class="group">
+        <div class="row"><dt>Original apps</dt><dd>Run selected original Windows CE apps alongside native Glaze apps: Calculator, PocketNotepad, Owner and OwnerInfo, plus opt-in Clock, RegEdit and PalmTweak packages. <a href="#compatibility">See what works.</a></dd></div>
+        <div class="row"><dt>Task Manager</dt><dd>Watch live CPU and memory history, inspect running tasks and threads, pause the display, and end other managed apps with confirmation. System services stay protected. Available in the App Store; CPU and task monitoring need a current OS build.</dd></div>
+        <div class="row"><dt>AIM</dt><dd>Instant messages, buddy lists, online and away status, typing notices, profiles, automatic away replies and familiar door and message sounds. Connect to an AIM revival server or your own OSCAR server over Ethernet; AOL's original service is closed. The session ends when you leave the app.</dd></div>
+        <div class="row"><dt>Smoother interaction</dt><dd>Faster buttons, gradients, text fitting and flash verification, with smaller Settings redraws. Lists across Music, Videos, Notes, Files, Browser and App Store now share consistent scrolling and tap behavior. Browser bookmarks ask you to confirm deletion, and App Store rows highlight as you press.</dd></div>
+        <div class="row"><dt>More room in RAM</dt><dd>Built-in apps, shared libraries and assets load from flash as their pages are needed. Read-only pages are shared, and unused cached pages can be reclaimed. The whole system archive no longer needs to sit in memory at boot.</dd></div>
+      </dl>
+      <p class="section-note section-followup">For developers: <a href="https://github.com/jroark/glaze-os/blob/main/docs/PERFORMANCE.md">rendering and flash benchmarks</a>, <a href="https://github.com/jroark/glaze-os/blob/main/docs/TASK_MANAGER.md">task monitoring</a>, and <a href="https://github.com/jroark/glaze-os/blob/main/tests/bench.py">boot, launch and memory measurements with tests/bench.py</a>.</p>
+    </section>
+
     <section aria-labelledby="screens">
       <h2 id="screens">On the screen</h2>
       <p class="section-note">Every picture here is a screenshot of Glaze running in the BE-300 emulator, shown pixel for pixel at the device's 240 by 320.</p>
@@ -61,10 +74,30 @@
         <li><figure><img src="img/browser.png" width="240" height="320" alt="Browser, showing its start page" loading="lazy"><figcaption><strong>Browser</strong>Its own HTML and CSS engine, with HTTPS.</figcaption></figure></li>
         <li><figure><img src="img/calendar.png" width="240" height="320" alt="Calendar, showing October 2026" loading="lazy"><figcaption><strong>Calendar</strong>Month view with reminders.</figcaption></figure></li>
         <li><figure><img src="img/appstore.png" width="240" height="320" alt="App Store, listing Hello, Fifteen and Sketch" loading="lazy"><figcaption><strong>App Store</strong>Free apps that install over the network.</figcaption></figure></li>
+        <li><figure><img src="img/taskmanager.png" width="240" height="320" alt="Task Manager, showing CPU and memory history with uptime" loading="lazy"><figcaption><strong>Task Manager</strong>Live CPU, memory and running tasks.</figcaption></figure></li>
+        <li><figure><img src="img/aim.png" width="240" height="320" alt="AIM, showing a test conversation with sent and received messages" loading="lazy"><figcaption><strong>AIM</strong>A real conversation with a test OSCAR server.</figcaption></figure></li>
         <li><figure><img src="img/minesweeper.png" width="240" height="320" alt="Minesweeper, a game in progress" loading="lazy"><figcaption><strong>Minesweeper</strong>From the App Store. Hold a square to flag it.</figcaption></figure></li>
         <li><figure><img src="img/solitaire.png" width="240" height="320" alt="Solitaire, a game of Klondike in progress" loading="lazy"><figcaption><strong>Solitaire</strong>From the App Store. Drag cards or tap to move them.</figcaption></figure></li>
         <li><figure><img src="img/clock.png" width="240" height="320" alt="Clock, showing the time in Los Angeles, New York, London and Tokyo" loading="lazy"><figcaption><strong>Clock</strong>World clock, stopwatch and timer.</figcaption></figure></li>
       </ul>
+    </section>
+
+    <section aria-labelledby="compatibility">
+      <h2 id="compatibility">Original BE-300 apps, in Glaze</h2>
+      <p class="section-note">The original MIPS application code runs in an ordinary Glaze process through a userspace WinCE compatibility runtime. Import the apps from your own local BeShell NAND image; vendor software is not bundled or offered in the App Store.</p>
+      <ul class="gallery">
+        <li><figure><img src="img/ce-calculator.png" width="240" height="320" alt="Original Casio Calculator, displaying the result 5" loading="lazy"><figcaption><strong>Casio Calculator</strong>The original keypad and arithmetic engine.</figcaption></figure></li>
+        <li><figure><img src="img/ce-notepad.png" width="240" height="320" alt="Original PocketNotepad with a document containing Hello from Glaze" loading="lazy"><figcaption><strong>PocketNotepad</strong>Edit and save documents with Glaze's keyboard.</figcaption></figure></li>
+        <li><figure><img src="img/ce-palmtweak.png" width="240" height="320" alt="Original PalmTweak Power Off page, with a six-minute battery timeout stored in its private settings" loading="lazy"><figcaption><strong>PalmTweak</strong>Original property pages, controls and saved preferences.</figcaption></figure></li>
+      </ul>
+      <dl class="group compatibility-details">
+        <div class="row"><dt>Calculator &amp; Notepad</dt><dd>Calculator uses its original LC.dll engine. PocketNotepad supports basic editing, opening and saving documents. Search, Font and About dialogs remain unvalidated.</dd></div>
+        <div class="row"><dt>Owner &amp; OwnerInfo</dt><dd>Identification and Notes tabs, text fields and checkboxes save through the original toolbar and restore on the next boot. Startup-display settings stay private to each app.</dd></div>
+        <div class="row"><dt>Clock · opt-in</dt><dd>The initial Home and Visiting digital displays run with UTC defaults. City selection, alarms and system clock or time-zone changes are not supported.</dd></div>
+        <div class="row"><dt>RegEdit · opt-in</dt><dd>Browse, create and edit keys and string values through the original dialogs, with saved settings across boots. It edits its own private registry. File import and export remain unvalidated.</dd></div>
+        <div class="row"><dt>PalmTweak · opt-in</dt><dd>General and Power Off pages support checkboxes, numeric spinners, validation, Apply, OK and Cancel. Saved animation and timeout preferences stay in its private registry; they do not change Glaze's animation or power policy. Other pages remain unvalidated.</dd></div>
+      </dl>
+      <p class="section-note section-followup">This is support for selected apps, with limited controls and APIs. Networking, multimedia and arbitrary vendor DLLs are not supported. <a href="https://github.com/jroark/glaze-os/blob/main/docs/WINCE.md">Import instructions, supported features and compatibility limits.</a></p>
     </section>
 
     <section aria-labelledby="inside">
@@ -73,8 +106,9 @@
           <h2 id="inside">What's inside</h2>
           <dl class="group">
             <div class="row"><dt>Kernel</dt><dd>A small microkernel with synchronous message passing, shared memory, threads and paged virtual memory.</dd></div>
-            <div class="row"><dt>Apps</dt><dd>Share their libraries through a dynamic linker. More install as packages from the App Store, onto flash or a memory card.</dd></div>
-            <div class="row"><dt>Storage</dt><dd>littlefs on a NAND flash translation layer with error correction and bad-block handling. CompactFlash cards appear as /Card.</dd></div>
+            <div class="row"><dt>Apps</dt><dd>Share their libraries through a dynamic linker. More install as packages from the App Store, onto flash or a memory card: Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manager and AIM.</dd></div>
+            <div class="row"><dt>Storage</dt><dd>littlefs on a NAND flash translation layer with error correction and bad-block handling. Built-in system files are demand-paged from NAND. CompactFlash cards appear as /Card.</dd></div>
+            <div class="row"><dt>Keyboard</dt><dd>A Stowaway folding keyboard detected at boot supplies physical text input in Notes, Files and Browser, hiding the on-screen keyboard to make more room. The initial layout is US ASCII; live attachment is not supported.</dd></div>
             <div class="row"><dt>Network</dt><dd>lwIP over an NE2000 PCMCIA Ethernet card: DHCP, DNS, TCP and UDP. The clock sets itself by NTP.</dd></div>
             <div class="row"><dt>Web</dt><dd>A browser engine of its own, with HTTPS through wolfSSL.</dd></div>
             <div class="row"><dt>Sound</dt><dd>MP3 and WAV playback and system sounds through the device's audio DMA.</dd></div>
