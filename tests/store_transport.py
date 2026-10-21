@@ -77,4 +77,69 @@ class Transfer(unittest.TestCase):
             self.assertNotEqual(self.fetch('/ok',base=base).returncode,0)
             self.assertNotEqual(self.fetch('/ok',base=base.replace('localhost','127.0.0.1'),env=env).returncode,0)
         finally: server.shutdown(); server.server_close()
+
+    def test_tls_cross_signed_root(self):
+        # The server sends a trusted root cross-signed by an absent legacy CA.
+        # Verification must terminate at our trusted copy of that root rather
+        # than require the legacy CA, while still checking keys and host names.
+        directory = self.directory
+
+        def openssl(*args):
+            subprocess.run(['openssl', *map(str, args)], check=True, capture_output=True)
+
+        ca_extensions = directory / 'ca.ext'
+        ca_extensions.write_text('basicConstraints=critical,CA:TRUE\n'
+                                 'keyUsage=critical,keyCertSign,cRLSign\n'
+                                 'subjectKeyIdentifier=hash\n'
+                                 'authorityKeyIdentifier=keyid,issuer\n')
+        leaf_extensions = directory / 'leaf.ext'
+        leaf_extensions.write_text('basicConstraints=critical,CA:FALSE\n'
+                                   'keyUsage=critical,digitalSignature,keyEncipherment\n'
+                                   'extendedKeyUsage=serverAuth\n'
+                                   'subjectAltName=DNS:localhost\n')
+        for name, subject in [('trusted', 'Trusted Root'), ('legacy', 'Legacy Root'),
+                              ('wrong', 'Trusted Root')]:
+            openssl('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256',
+                    '-keyout', directory / f'{name}.key', '-out', directory / f'{name}.pem',
+                    '-days', '2', '-subj', f'/CN={subject}',
+                    '-addext', 'basicConstraints=critical,CA:TRUE',
+                    '-addext', 'keyUsage=critical,keyCertSign,cRLSign')
+            openssl('x509', '-in', directory / f'{name}.pem', '-outform', 'DER',
+                    '-out', directory / f'{name}.der')
+        openssl('req', '-new', '-key', directory / 'trusted.key',
+                '-out', directory / 'trusted.csr', '-subj', '/CN=Trusted Root')
+        openssl('x509', '-req', '-in', directory / 'trusted.csr',
+                '-CA', directory / 'legacy.pem', '-CAkey', directory / 'legacy.key',
+                '-set_serial', '2', '-days', '2', '-sha256', '-extfile', ca_extensions,
+                '-out', directory / 'cross.pem')
+        openssl('req', '-new', '-newkey', 'rsa:2048', '-nodes',
+                '-keyout', directory / 'leaf.key', '-out', directory / 'leaf.csr',
+                '-subj', '/CN=localhost')
+        openssl('x509', '-req', '-in', directory / 'leaf.csr',
+                '-CA', directory / 'trusted.pem', '-CAkey', directory / 'trusted.key',
+                '-set_serial', '3', '-days', '2', '-sha256', '-extfile', leaf_extensions,
+                '-out', directory / 'leaf.pem')
+        chain = directory / 'chain.pem'
+        chain.write_bytes((directory / 'leaf.pem').read_bytes() +
+                          (directory / 'cross.pem').read_bytes())
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Fixture)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(chain, directory / 'leaf.key')
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            base = f'https://localhost:{server.server_port}'
+            for buffered in (False, True):
+                env = dict(os.environ, STORE_TEST_ROOTS=str(directory / 'trusted.der'))
+                result = self.fetch('/ok', base=base, env=env, buffered=buffered)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.output.read_bytes(), b'hello')
+            wrong = dict(os.environ, STORE_TEST_ROOTS=str(directory / 'wrong.der'))
+            self.assertNotEqual(self.fetch('/ok', base=base, env=wrong).returncode, 0)
+            self.assertNotEqual(self.fetch('/ok', base=base.replace('localhost', '127.0.0.1'),
+                                           env=env).returncode, 0)
+        finally:
+            server.shutdown()
+            server.server_close()
+
 if __name__=='__main__': unittest.main()

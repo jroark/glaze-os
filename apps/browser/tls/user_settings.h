@@ -77,6 +77,10 @@ int glaze_tls_seed(unsigned char *out, unsigned int n);
 #define NO_PSK
 #define WOLFSSL_NO_TLS12_RENEGOTIATION
 #define HAVE_SERVER_RENEGOTIATION_INFO
+/* A server may include a cross-signed root whose issuer isn't in our store.
+ * Accept a chain ending at our trusted copy of that root; the peer still
+ * has to verify to a trusted CA, including its name and validity dates. */
+#define WOLFSSL_ALT_CERT_CHAINS
 
 /* ---- algorithms -------------------------------------------------------- */
 
