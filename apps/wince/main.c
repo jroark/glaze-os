@@ -2,6 +2,7 @@
  * bridge: Microsoft's caller may use any register for jalr, whereas GCC's
  * O32 PIC prologue requires the destination in t9 to establish gp. */
 #include "runtime.h"
+#include "ordinals.h"
 #include <glaze/vm.h>
 
 struct ce_module ce_main;
@@ -77,43 +78,13 @@ static CW bridge(void *address, const char *missing)
     return WORD(p);
 }
 
-static const char *ordinal_name(uint16_t ordinal)
-{
-    for (uint32_t p = 0; p < ordinal_size;) {
-        char *start = ordinals + p;
-        uint32_t number = 0;
-        while (p < ordinal_size && ordinals[p] >= '0' && ordinals[p] <= '9')
-            number = number * 10u + (uint32_t)(ordinals[p++] - '0');
-        if (p >= ordinal_size || ordinals[p++] != ' ')
-            return NULL;
-        char *name = ordinals + p;
-        while (p < ordinal_size && ordinals[p] != '\n')
-            p++;
-        if (p >= ordinal_size)
-            return NULL;
-        if (number == ordinal) {
-            /* Names are copied since another import may resolve this ordinal. */
-            unsigned n = (unsigned)(ordinals + p - name);
-            char *copy = malloc(n + 1);
-            if (!copy)
-                return NULL;
-            memcpy(copy, name, n);
-            copy[n] = 0;
-            return copy;
-        }
-        p++;
-        if (ordinals + p <= start)
-            break;
-    }
-    return NULL;
-}
-
 static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, void *arg)
 {
     (void)arg;
-    bool allocated = !name;
-    if (!name && !strcasecmp(dll, "coredll.dll"))
-        name = ordinal_name(ordinal);
+    char ordinal_symbol[256];
+    if (!name && ce_ordinal_find(ordinals, ordinal_size, dll, ordinal,
+            ordinal_symbol, sizeof(ordinal_symbol)))
+        name = ordinal_symbol;
     if (!name) {
         printf("wince: cannot identify %s ordinal %u\n", dll, ordinal);
         return 0;
@@ -121,6 +92,8 @@ static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, vo
     void *fn = NULL;
     if (!strcasecmp(dll, "coredll.dll")) {
         fn = ce_resolve_core(name);
+        if (!fn)
+            fn = ce_resolve_time(name);
         if (!fn)
             fn = ce_resolve_window(name);
         if (!fn)
@@ -131,25 +104,21 @@ static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, vo
             fn = ce_resolve_gdi(name);
     }
     if (!fn)
+        fn = ce_resolve_property(name);
+    if (!fn)
         fn = ce_resolve_shell(dll, name);
     if (fn) {
         CW result = bridge(fn, NULL);
-        if (allocated)
-            free((void *)name);
         return result;
     }
     if (!strcasecmp(dll, "LC.dll")) {
         CW module = ce_load_library(dll), address = ce_find_symbol(module, name);
-        if (allocated)
-            free((void *)name);
         return address;
     }
     char label[128];
     snprintf(label, sizeof(label), "%s!%s", dll, name);
     printf("wince: unresolved import %s\n", label);
     char *copy = strdup(label);
-    if (allocated)
-        free((void *)name);
     if (!copy)
         return 0;
     return bridge((void *)ce_missing, copy);
@@ -178,6 +147,9 @@ static void load(struct ce_module *m, const char *resource)
     m->image = PTR(void, m->base);
     ce_pe_copy(&m->pe, m->image);
     error = ce_pe_imports(&m->pe, m->image, resolve_import, m);
+    if (error)
+        ce_fatal(error);
+    error = ce_pe_direct_calls(&m->pe, m->image, resolve_import, m);
     if (error)
         ce_fatal(error);
     if (gz_vm_publish(m->base, ALIGN_UP(m->pe.headers, 4096u), 0))

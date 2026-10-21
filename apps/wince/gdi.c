@@ -2,7 +2,7 @@
 #include "runtime.h"
 
 static struct ce_object objects[192];
-static CW text_color, background_color = 0xffffff, selected_font, selected_brush;
+static CW text_color, background_color = 0xffffff, selected_font, selected_brush, selected_pen;
 static int background_mode = 2;
 
 struct ce_object *ce_object(CW handle, int kind)
@@ -165,14 +165,34 @@ CE_API(GetSysColor)
         return 0;
     }
 }
+CE_API(GetSysColorBrush)
+{
+    static CW brushes[32];
+    if (a0 >= ARRAY_SIZE(brushes))
+        return 0;
+    if (!ce_object(brushes[a0], CE_OBJ_BRUSH))
+        brushes[a0] = ce_new_object(CE_OBJ_BRUSH,
+            ce_color(ce_GetSysColor(a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)), NULL, 0);
+    return brushes[a0];
+}
 CE_API(GetStockObject)
 {
     if (a0 <= 5) {
         static CW brushes[6];
         static const CW colors[] = {0xffffff, 0xc0c0c0, 0x808080, 0x404040, 0, 0xffffffffu};
-        if (!brushes[a0])
+        if (!ce_object(brushes[a0], CE_OBJ_BRUSH))
             brushes[a0] = ce_new_object(CE_OBJ_BRUSH, colors[a0], NULL, 0);
         return brushes[a0];
+    }
+    if (a0 <= 8) {
+        static CW pens[3];
+        unsigned index = a0 - 6;
+        if (!ce_object(pens[index], CE_OBJ_PEN)) {
+            pens[index] = ce_new_object(CE_OBJ_PEN, index ? 0 : 0xffffff, NULL, 0);
+            struct ce_object *pen = ce_object(pens[index], CE_OBJ_PEN);
+            if (pen) { pen->width = 1; pen->height = index == 2 ? 5 : 0; }
+        }
+        return pens[index];
     }
     static CW font;
     if (!font)
@@ -182,6 +202,20 @@ CE_API(GetStockObject)
 CE_API(CreateSolidBrush)
 {
     return ce_new_object(CE_OBJ_BRUSH, ce_color(a0), NULL, 0);
+}
+CE_API(CreatePen)
+{
+    if ((a0 != 0 && a0 != 5) || a1 > 16) {
+        ce_error = 50;
+        return 0;
+    }
+    CW handle = ce_new_object(CE_OBJ_PEN, ce_color(a2), NULL, 0);
+    struct ce_object *pen = ce_object(handle, CE_OBJ_PEN);
+    if (pen) {
+        pen->width = MAX(1u, a1);
+        pen->height = (int)a0;
+    }
+    return handle;
 }
 CE_API(CreateFontIndirectW)
 {
@@ -210,6 +244,10 @@ CE_API(SelectObject)
         old = selected_brush;
         selected_brush = a1;
     }
+    if (o->kind == CE_OBJ_PEN) {
+        old = selected_pen;
+        selected_pen = a1;
+    }
     return old;
 }
 CE_API(FillRect)
@@ -225,10 +263,20 @@ CE_API(Polyline)
     if (a2 > 4096)
         return 0;
     gfx_rect r = ce_window_rect(a0);
+    struct ce_object *pen = ce_object(selected_pen, CE_OBJ_PEN);
+    if (pen && pen->height == 5)
+        return 1;
     int32_t *p = PTR(int32_t, a1);
-    for (unsigned i = 1; i < a2; i++)
-        gfx_line(&ui.surf, r.x + p[(i - 1) * 2], r.y + p[(i - 1) * 2 + 1], r.x + p[i * 2], r.y + p[i * 2 + 1],
-                 0, 255);
+    for (unsigned i = 1; i < a2; i++) {
+        int width = pen ? pen->width : 1;
+        bool horizontal = abs(p[i * 2] - p[(i - 1) * 2]) >= abs(p[i * 2 + 1] - p[(i - 1) * 2 + 1]);
+        for (int stroke = 0; stroke < width; stroke++) {
+            int offset = stroke - width / 2;
+            int dx = horizontal ? 0 : offset, dy = horizontal ? offset : 0;
+            gfx_line(&ui.surf, r.x + p[(i - 1) * 2] + dx, r.y + p[(i - 1) * 2 + 1] + dy,
+                r.x + p[i * 2] + dx, r.y + p[i * 2 + 1] + dy, pen ? pen->value : 0, 255);
+        }
+    }
     return 1;
 }
 CE_API(DrawFrameControl)
@@ -275,6 +323,102 @@ CE_API(TextOutW)
     gfx_text(&ui.surf, r.x + (int)a1, r.y + (int)a2, ui_font(FONT_R12), text, text_color, 255);
     free(text);
     free(copy);
+    return 1;
+}
+CW ce_draw_text(CW a0, CW a1, CW a2, CW a3, CW a4)
+{
+    if (!a1 || !a3)
+        return 0;
+    unsigned length = a2 == 0xffffffffu ? ce_wlen(PTR(WCHAR, a1)) : a2;
+    if (!length || length > 65535)
+        return 0;
+    WCHAR *source = PTR(WCHAR, a1);
+    struct ce_rect *rect = PTR(struct ce_rect, a3);
+    const gfx_font *font = ui_font(FONT_R12);
+    int width = MAX(1, rect->right - rect->left), y = rect->top, widest = 0, lines = 0;
+    if ((a4 & 0x24) == 0x24)
+        y += (rect->bottom - rect->top - 14) / 2;
+    gfx_rect origin = ce_window_rect(a0), old_clip = ui.surf.clip;
+    if (!(a4 & (0x100 | 0x400)))
+        gfx_set_clip(&ui.surf, rectangle(a0, rect));
+    for (unsigned pos = 0; pos < length && source[pos];) {
+        char line[512];
+        unsigned count = 0, word = 0, word_pos = pos;
+        int advance = 0, word_width = 0;
+        while (pos < length && source[pos] && count + 1 < sizeof(line)) {
+            WCHAR ch = source[pos];
+            if (!(a4 & 0x20) && (ch == '\r' || ch == '\n')) {
+                pos++;
+                if (ch == '\r' && pos < length && source[pos] == '\n')
+                    pos++;
+                break;
+            }
+            if (ch == '\r' || ch == '\n' || ch == '\t')
+                ch = ' ';
+            char glyph[2] = {(char)(ch < 256 ? ch : '?'), 0};
+            int next = gfx_text_width(font, glyph);
+            if ((a4 & 0x10) && !(a4 & 0x20) && advance + next > width && count) {
+                if (word) {
+                    count = word;
+                    pos = word_pos;
+                    advance = word_width;
+                }
+                break;
+            }
+            if (ch == '&' && !(a4 & 0x800)) {
+                pos++;
+                if (pos >= length || source[pos] != '&')
+                    continue;
+            }
+            line[count++] = glyph[0];
+            advance += next;
+            pos++;
+            if (ch == ' ') {
+                word = count;
+                word_pos = pos;
+                word_width = advance;
+            }
+        }
+        line[count] = 0;
+        widest = MAX(widest, advance);
+        if (!(a4 & 0x400)) {
+            int x = rect->left;
+            if (a4 & 1)
+                x += (width - advance) / 2;
+            else if (a4 & 2)
+                x += width - advance;
+            gfx_text(&ui.surf, origin.x + x, origin.y + y, font, line, text_color, 255);
+        }
+        y += 14;
+        lines++;
+    }
+    if (a4 & 0x400) {
+        rect->right = rect->left + widest;
+        rect->bottom = rect->top + lines * 14;
+    }
+    ui.surf.clip = old_clip;
+    return (CW)(lines * 14);
+}
+CE_API(DrawTextW)
+{
+    return ce_draw_text(a0, a1, a2, a3, a4);
+}
+CE_API(GetTextExtentExPointW)
+{
+    if (!a1 || !a6 || a2 > 65535)
+        return 0;
+    int width = 0;
+    unsigned fit = 0;
+    const WCHAR *source = PTR(WCHAR, a1);
+    for (unsigned i = 0; i < a2; i++) {
+        char s[2] = {(char)(source[i] < 256 ? source[i] : '?'), 0};
+        width += gfx_text_width(ui_font(FONT_R12), s);
+        if (a5) PTR(int32_t, a5)[i] = width;
+        if (width <= (int32_t)a3) fit = i + 1;
+    }
+    if (a4) *PTR(CW, a4) = fit;
+    PTR(int32_t, a6)[0] = width;
+    PTR(int32_t, a6)[1] = 14;
     return 1;
 }
 CE_API(LoadStringW)
@@ -343,6 +487,10 @@ CE_API(LoadImageW)
     }
     return ce_new_object(CE_OBJ_BITMAP, a2, (void *)data, size);
 }
+CE_API(LoadBitmapW)
+{
+    return ce_LoadImageW(a0, a1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
 CE_API(ImageList_LoadImage)
 {
     uint32_t size;
@@ -383,8 +531,10 @@ static const struct ce_export exports[] = {
     CE_EXPORT(ReleaseDC),
     CE_EXPORT(GetDeviceCaps),
     CE_EXPORT(GetSysColor),
+    CE_EXPORT(GetSysColorBrush),
     CE_EXPORT(GetStockObject),
     CE_EXPORT(CreateSolidBrush),
+    CE_EXPORT(CreatePen),
     CE_EXPORT(CreateFontIndirectW),
     CE_EXPORT(DeleteObject),
     CE_EXPORT(SelectObject),
@@ -395,6 +545,8 @@ static const struct ce_export exports[] = {
     CE_EXPORT(SetBkColor),
     CE_EXPORT(SetBkMode),
     CE_EXPORT(TextOutW),
+    CE_EXPORT(DrawTextW),
+    CE_EXPORT(GetTextExtentExPointW),
     CE_EXPORT(LoadStringW),
     CE_EXPORT(FindResourceW),
     CE_EXPORT(LoadResource),
@@ -402,6 +554,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(LoadCursorW),
     CE_EXPORT(SetCursor),
     CE_EXPORT(LoadIconW), CE_EXPORT(LoadImageW),
+    CE_EXPORT(LoadBitmapW),
     CE_EXPORT(ImageList_LoadImage),
     CE_EXPORT(ImageList_Draw),
     CE_EXPORT(ImageList_Destroy),

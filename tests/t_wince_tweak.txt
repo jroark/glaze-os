@@ -1,0 +1,19 @@
+# Original PalmTweak: edit General and Power Off pages, Apply, then close.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+9000 tap 30 134
+10000 tap 100 36
+11000 tap 100 93
+# Enable the battery timeout, replace its number, and increment using the spinner.
+12000 tap 28 120
+13000 tap 175 124
+13500 key backspace
+13600 key backspace
+13700 key backspace
+14500 text 5
+15500 tap 200 116
+# Return to General; the hidden numeric page must retain its edit.
+16500 tap 100 36
+17500 tap 100 57
+18500 tap 136 12
+20500 tap 178 12

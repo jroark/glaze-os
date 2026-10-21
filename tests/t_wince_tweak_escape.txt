@@ -1,0 +1,4 @@
+# A modal sheet must accept Escape before any touch establishes focus.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+9000 key esc

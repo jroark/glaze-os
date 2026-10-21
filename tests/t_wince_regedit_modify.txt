@@ -1,0 +1,33 @@
+# Select the same root and open the saved key after a cold boot.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+8500 tap 100 38
+9500 tap 100 70
+11000 tap 60 100
+11200 tap 60 100
+
+# Reopen the original SZ Editor and replace the saved data.
+12500 tap 60 192
+12700 tap 60 192
+14500 tap 60 134
+15000 key backspace
+15070 key backspace
+15140 key backspace
+15210 key backspace
+15280 key backspace
+15350 key backspace
+15420 key backspace
+15490 key backspace
+15560 key backspace
+15630 key backspace
+15700 key backspace
+15770 key backspace
+15840 key backspace
+15910 key backspace
+15980 key backspace
+16050 key backspace
+16120 key backspace
+16190 key backspace
+17500 text Updated by RegEdit
+19000 tap 145 165
+22000 tap 224 12

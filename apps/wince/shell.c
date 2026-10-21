@@ -97,10 +97,10 @@ static CW load_menu(CW instance, CW id)
 
 void ce_shell_draw(void)
 {
-    for (unsigned i = 0; i < 48; i++) {
+    for (unsigned i = 0; i < CE_WINDOWS; i++) {
         CW handle = 0x70000000u + i;
         struct ce_window *w = ce_window(handle);
-        if (!w || !w->visible || strcmp(w->klass, "_ce_commandbar"))
+        if (!w || !ce_window_visible(handle) || strcmp(w->klass, "_ce_commandbar"))
             continue;
         gfx_rect r = ce_window_rect(handle);
         gfx_fill(&ui.surf, r, 0xc0c0c0);
@@ -115,6 +115,11 @@ void ce_shell_draw(void)
             }
         if (w->style & 1)
             gfx_text(&ui.surf, r.x + r.w - 20, r.y + 4, ui_font(FONT_B14), "x", 0, 255);
+        for (unsigned j = 0; j < CE_WINDOWS; j++) {
+            struct ce_window *child = ce_window(0x70000000u + j);
+            if (child && ce_window_visible(child->handle) && child->parent == handle)
+                ce_send(child->handle, 0xf, 0, 0);
+        }
     }
     struct menu *m = menu(popup);
     if (!m)
@@ -161,12 +166,13 @@ bool ce_shell_input(const struct gz_input_event *e)
                 printf("wince: menu command %u\n", command);
                 if (!popup_return)
                     ce_post(owner, 0x111, command, 0);
+                ce_redraw_all();
                 ce_render();
                 return true;
             }
         }
         popup = 0;
-        for (unsigned i = 0; i < 48; i++) {
+        for (unsigned i = 0; i < CE_WINDOWS; i++) {
             struct ce_window *w = ce_window(0x70000000u + i);
             if (w)
                 w->dirty = true;
@@ -174,15 +180,23 @@ bool ce_shell_input(const struct gz_input_event *e)
         ce_render();
         return true;
     }
-    for (unsigned i = 0; i < 48; i++) {
+    for (unsigned i = 0; i < CE_WINDOWS; i++) {
         struct ce_window *w = ce_window(0x70000000u + i);
-        if (!w || !w->visible || strcmp(w->klass, "_ce_commandbar"))
+        if (!w || !ce_window_visible(w->handle) || strcmp(w->klass, "_ce_commandbar"))
             continue;
         gfx_rect r = ce_window_rect(w->handle);
         if (!gfx_rect_contains(r, e->x, e->y))
             continue;
         if (e->type != GZ_EV_TOUCH_UP)
             return true;
+        for (unsigned j = 0; j < CE_WINDOWS; j++) {
+            struct ce_window *child = ce_window(0x70000000u + j);
+            if (child && ce_window_visible(child->handle) && child->enabled && child->parent == w->handle &&
+                gfx_rect_contains(ce_window_rect(child->handle), e->x, e->y)) {
+                ce_post(w->parent, 0x111, child->id, child->handle);
+                return true;
+            }
+        }
         if ((w->style & 1) && e->x >= r.x + r.w - 24) {
             ce_post(w->parent, 0x10, 0, 0);
             return true;
@@ -196,8 +210,8 @@ bool ce_shell_input(const struct gz_input_event *e)
                 int width = gfx_text_width(ui_font(FONT_R12), s) + 16;
                 if (e->x >= x && e->x < x + width) {
                     if (m->item[j].submenu) {
-                    ce_send(w->parent, 0x116, w->user, 0);
-                    ce_send(w->parent, 0x117, m->item[j].submenu, j);
+                        ce_send(w->parent, 0x116, w->user, 0);
+                        ce_send(w->parent, 0x117, m->item[j].submenu, j);
                         popup = m->item[j].submenu;
                         popup_owner = w->parent;
                         popup_x = MIN(x, 60);
@@ -280,6 +294,61 @@ CE_API(CSOBar_Create)
         w->user = load_menu(a0, a2);
     return w ? w->handle : 0;
 }
+CE_API(InitCSOButton)
+{
+    /* The CSOButton class is provided by the compatibility command bar. */
+    return 1;
+}
+CE_API(CSOBar_AddButtons)
+{
+    struct ce_window *bar = ce_window(a0);
+    if (!bar || !a3 || a2 > 16)
+        return 0;
+    /* Observed BE-300 CSOBUTTON layout: 76-byte entries; command at 0,
+     * geometry at 36..48. The original parent handles WM_COMMAND. */
+    static const WCHAR klass[] = {'B', 'u', 't', 't', 'o', 'n', 0};
+    static const WCHAR ok[] = {'O', 'K', 0};
+    int next_x = 6;
+    for (CW i = 0; i < a2; i++) {
+        const uint8_t *p = PTR(uint8_t, a3) + i * 76;
+        CW label = ce_u32(p + 20);
+        const WCHAR *caption = label >= 65536 && label < 0x80000000u ? PTR(WCHAR, label) : ok;
+        char text[192];
+        ce_narrow(text, sizeof(text), caption);
+        int x = (int)ce_u32(p + 36), y = (int)ce_u32(p + 40);
+        int width = (int)ce_u32(p + 44), height = (int)ce_u32(p + 48);
+        if (width <= 0)
+            width = MAX(26, gfx_text_width(ui_font(FONT_R12), text) + 14);
+        if (height <= 0)
+            height = 22;
+        if (x < 0)
+            x = next_x;
+        if (y < 0)
+            y = 2;
+        next_x = x + width + 4;
+        struct ce_window *button =
+            ce_new_window(klass, caption, 0x50000000u, x, y, width, height, bar->handle, ce_u32(p), 0, 0);
+        if (!button)
+            return 0;
+    }
+    return 1;
+}
+CE_API(CSOBar_DeleteAllButtons)
+{
+    struct ce_window *bar = ce_window(a0);
+    if (!bar)
+        return 0;
+    for (unsigned i = 0; i < CE_WINDOWS; i++) {
+        struct ce_window *child = ce_window(0x70000000u + i);
+        if (child && child->parent == bar->handle) {
+            free(child->text);
+            free(child->tabs);
+            memset(child, 0, sizeof(*child));
+        }
+    }
+    bar->dirty = true;
+    return 1;
+}
 CE_API(CommandBar_Height)
 {
     return ce_window(a0) ? 26 : 0;
@@ -343,6 +412,26 @@ CE_API(CoshGetCommandLine)
 CE_API(CGDFlushRegistry)
 { /* RegSetValueExW already synchronizes each update. */
     return 1;
+}
+CE_API(CSGetUserDiskName)
+{
+    /* Matching CS.DLL: suffix, output, capacity in WCHARs, disk selector;
+     * returns the combined length, excluding its terminator. */
+    static const WCHAR disk[] = {'\\', 'N', 'a', 'n', 'd', ' ', 'D', 'i', 's', 'k', 0};
+    unsigned suffix = ce_wlen(PTR(WCHAR, a0));
+    unsigned length = ARRAY_SIZE(disk) - 1 + suffix;
+    if (suffix > 259 || a2 <= length) {
+        ce_error = 122;
+        return 0;
+    }
+    if (a1) {
+        WCHAR *out = PTR(WCHAR, a1);
+        if (suffix)
+            memmove(out + ARRAY_SIZE(disk) - 1, PTR(void, a0), suffix * 2);
+        memcpy(out, disk, sizeof(disk) - 2);
+        out[length] = 0;
+    }
+    return length;
 }
 CE_API(OpenClipboard)
 {
@@ -443,7 +532,7 @@ CE_API(TrackPopupMenuEx)
 
 static void repaint(void)
 {
-    for (unsigned i = 0; i < 48; i++) {
+    for (unsigned i = 0; i < CE_WINDOWS; i++) {
         struct ce_window *w = ce_window(0x70000000u + i);
         if (w)
             w->dirty = true;
@@ -679,10 +768,15 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CommandBar_GetMenu),
     CE_EXPORT(CommandBar_AddAdornments),
     CE_EXPORT(CSOBar_Create),
+    CE_EXPORT(InitCSOButton),
+    CE_EXPORT(CSOBar_AddButtons),
+    CE_EXPORT(CSOBar_DeleteAllButtons),
+    {"CSOBar_Height", (void *)ce_CommandBar_Height},
     CE_EXPORT(CSOBar_AddAdornments),
     CE_EXPORT(CSOBar_Destroy),
     CE_EXPORT(CoshGetCommandLine),
     CE_EXPORT(CGDFlushRegistry),
+    CE_EXPORT(CSGetUserDiskName),
     CE_EXPORT(OpenClipboard),
     CE_EXPORT(EmptyClipboard),
     CE_EXPORT(CloseClipboard),
@@ -700,7 +794,7 @@ static const struct ce_export exports[] = {
 void *ce_resolve_shell(const char *dll, const char *name)
 {
     if (strcasecmp(dll, "coredll.dll") && strcasecmp(dll, "commctrl.dll") && strcasecmp(dll, "CSO.dll") &&
-        strcasecmp(dll, "COShellApi.dll") && strcasecmp(dll, "GetDisk.dll"))
+        strcasecmp(dll, "COShellApi.dll") && strcasecmp(dll, "GetDisk.dll") && strcasecmp(dll, "CS.dll"))
         return NULL;
     for (unsigned i = 0; i < ARRAY_SIZE(exports); i++)
         if (!strcmp(name, exports[i].name))

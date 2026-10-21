@@ -1,0 +1,20 @@
+# RegEdit: choose HKCU, create a key and a string using original dialogs.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+8500 tap 100 38
+9500 tap 100 70
+10500 tap 55 12
+11500 tap 85 170
+12500 tap 60 84
+13000 text GlazeCompat
+14500 tap 145 165
+# Open the new key with a double tap (row zero is the parent).
+16000 tap 60 100
+16200 tap 60 100
+17500 tap 55 12
+18500 tap 85 81
+20000 tap 60 84
+20500 text Greeting
+22000 tap 60 134
+22500 text Hello from RegEdit
+24000 tap 145 165

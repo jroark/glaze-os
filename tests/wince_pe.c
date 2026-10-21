@@ -59,6 +59,49 @@ static void fixture(void)
 }
 
 static unsigned resolved;
+static uint32_t direct_target;
+static uint32_t resolve_direct(const char *dll, const char *name, uint16_t ordinal, void *arg)
+{
+    assert(!strcmp(dll, "coredll.dll") && !strcmp(name, "TerminateProcess") && !ordinal && !arg);
+    return direct_target;
+}
+static void direct_calls(void)
+{
+    struct ce_pe p;
+    fixture();
+    put32(512, 0x2418f3fa); /* li t8, implicit TerminateProcess address */
+    put32(516, 0x24040042); /* current-process pseudo handle */
+    put32(520, 0x0300f809); /* jalr t8 */
+    put32(524, 0x8fa50020); /* delay slot must be retained */
+    put32(1024, 0x2418f3fa); put32(1028, 0x0300f809); /* data, never rewritten */
+    assert(!ce_pe_parse(&p, file, sizeof(file)));
+    uint8_t *image = malloc(p.size);
+    assert(image);
+    ce_pe_copy(&p, image);
+    direct_target = 0x0e000020;
+    assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL));
+    assert(ce_u32(image + 4104) == (0x0c000000u | (direct_target >> 2)));
+    assert(ce_u32(image + 4108) == 0x8fa50020);
+    assert(ce_u32(image + 8196) == 0x0300f809);
+    assert(ce_u32(file + 520) == 0x0300f809); /* unchanged source executable */
+    ce_pe_copy(&p, image);
+    direct_target = 0x1e000020;
+    assert(ce_pe_direct_calls(&p, image, resolve_direct, NULL)); /* JAL region mismatch */
+    direct_target = 0x0e000021;
+    assert(ce_pe_direct_calls(&p, image, resolve_direct, NULL)); /* unaligned bridge */
+    ce_put32(image + 4096, 0x2418f3f8);
+    assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL)); /* unknown trap untouched */
+    assert(ce_u32(image + 4104) == 0x0300f809);
+    ce_put32(image + 4096, 0x2418f3fa);
+    ce_put32(image + 4104, 0x0320f809);
+    assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL)); /* different target register */
+    assert(ce_u32(image + 4104) == 0x0320f809);
+    p.section[0].size = 12; /* incomplete delay slot */
+    ce_put32(image + 4104, 0x0300f809);
+    assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL));
+    assert(ce_u32(image + 4104) == 0x0300f809);
+    free(image);
+}
 static uint32_t resolve(const char *dll, const char *name, uint16_t ordinal, void *arg)
 {
     assert(!strcmp(dll, "COREDLL.dll"));
@@ -72,6 +115,7 @@ static uint32_t resolve(const char *dll, const char *name, uint16_t ordinal, voi
 
 int main(int argc, char **argv)
 {
+    direct_calls();
     struct ce_pe p;
     fixture();
     assert(!ce_pe_parse(&p, file, sizeof(file)));

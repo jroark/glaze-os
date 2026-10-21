@@ -168,11 +168,28 @@ ftl-verify-bench: ../tests/ftl_verify.c $(FS)
 	../out/host/ftl-verify-bench
 .PHONY: ftl-verify-bench
 
-wince-test: ../tests/wince_pe.c ../apps/wince/pe.c ../apps/wince/pe.h
+wince-test: ../tests/wince_pe.c ../apps/wince/pe.c ../apps/wince/pe.h ../tests/wince_datetime.c ../apps/wince/datetime.c ../apps/wince/datetime.h ../tests/wince_ordinals.c ../apps/wince/ordinals.c ../apps/wince/ordinals.h
+wince-test: ../tests/wince_registry.c ../apps/wince/registry.c ../apps/wince/registry.h ../tests/wince_dialog.c ../apps/wince/dialog_template.c ../apps/wince/dialog_template.h
+wince-test: ../tests/wince_property.c ../apps/wince/property_state.c ../apps/wince/property_state.h ../apps/wince/number.c ../apps/wince/number.h
 	@mkdir -p ../out/host
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
 	    -o ../out/host/wince-pe-test ../tests/wince_pe.c ../apps/wince/pe.c
 	../out/host/wince-pe-test
+	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
+	    -o ../out/host/wince-datetime-test ../tests/wince_datetime.c ../apps/wince/datetime.c
+	../out/host/wince-datetime-test
+	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
+	    -o ../out/host/wince-ordinals-test ../tests/wince_ordinals.c ../apps/wince/ordinals.c
+	../out/host/wince-ordinals-test
+	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
+	    -o ../out/host/wince-registry-test ../tests/wince_registry.c ../apps/wince/registry.c ../apps/wince/pe.c
+	../out/host/wince-registry-test
+	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
+	    -o ../out/host/wince-dialog-test ../tests/wince_dialog.c ../apps/wince/dialog_template.c ../apps/wince/pe.c
+	../out/host/wince-dialog-test
+	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
+	    -o ../out/host/wince-property-test ../tests/wince_property.c ../apps/wince/property_state.c ../apps/wince/number.c
+	../out/host/wince-property-test
 	python3 ../tests/wince_assets_test.py
 .PHONY: wince-test
 
