@@ -1,0 +1,415 @@
+/* RGB565 GDI adapter; bitmap payloads are the original PE resources. */
+#include "runtime.h"
+
+static struct ce_object objects[192];
+static CW text_color, background_color = 0xffffff, selected_font, selected_brush;
+static int background_mode = 2;
+
+struct ce_object *ce_object(CW handle, int kind)
+{
+    unsigned i = handle - 0x76000000u;
+    return i < ARRAY_SIZE(objects) && objects[i].kind && (!kind || objects[i].kind == kind) ? &objects[i]
+                                                                                            : NULL;
+}
+CW ce_new_object(int kind, CW value, void *data, uint32_t bytes)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(objects); i++)
+        if (!objects[i].kind) {
+            objects[i] = (struct ce_object){kind, value, data, bytes, 0, 0};
+            return 0x76000000u + i;
+        }
+    ce_error = 8;
+    return 0;
+}
+uint32_t ce_color(CW color)
+{
+    return (color & 255) << 16 | (color & 0xff00) | (color >> 16 & 255);
+}
+
+static gfx_rect rectangle(CW dc, const struct ce_rect *rect)
+{
+    gfx_rect r = ce_window_rect(dc);
+    return gfx_r(r.x + rect->left, r.y + rect->top, rect->right - rect->left, rect->bottom - rect->top);
+}
+
+static void border(gfx_rect r, uint32_t top, uint32_t bottom)
+{
+    gfx_line(&ui.surf, r.x, r.y, r.x + r.w - 1, r.y, top, 255);
+    gfx_line(&ui.surf, r.x, r.y, r.x, r.y + r.h - 1, top, 255);
+    gfx_line(&ui.surf, r.x, r.y + r.h - 1, r.x + r.w - 1, r.y + r.h - 1, bottom, 255);
+    gfx_line(&ui.surf, r.x + r.w - 1, r.y, r.x + r.w - 1, r.y + r.h - 1, bottom, 255);
+}
+
+void ce_draw_bitmap(const struct ce_object *object, int x, int y, int source_x, int width, CW mask)
+{
+    const uint8_t *b = object->data;
+    if (!b || object->bytes < 40)
+        return;
+    uint32_t header = ce_u32(b), planes = ce_u16(b + 12), bits = ce_u16(b + 14), compression = ce_u32(b + 16);
+    int32_t w = (int32_t)ce_u32(b + 4), h = (int32_t)ce_u32(b + 8);
+    if (header < 40 || header > object->bytes || planes != 1 || w <= 0 || w > 8192 || h == 0 ||
+        h == INT32_MIN || h > 8192 || h < -8192 || compression > 3)
+        ce_missing("unsupported bitmap resource layout");
+    uint32_t colors = bits <= 8 ? (ce_u32(b + 32) ? ce_u32(b + 32) : 1u << bits) : 0;
+    if (bits != 1 && bits != 4 && bits != 8 && bits != 16 && bits != 24 && bits != 32)
+        ce_missing("unsupported bitmap depth");
+    if (colors > 256 || (compression && !(bits == 16 && compression == 3)))
+        ce_missing("compressed bitmap resource");
+    uint32_t offset = header + colors * 4 + (compression == 3 && header == 40 ? 12 : 0),
+             stride = ALIGN_UP((uint32_t)w * bits, 32u) / 8u;
+    uint32_t height = h < 0 ? (uint32_t)-h : (uint32_t)h;
+    if (!ce_range(offset, stride * height, object->bytes))
+        ce_fatal("Bitmap pixels exceed resource");
+    for (uint32_t row = 0; row < height; row++) {
+        int dy = y + (int)row;
+        if (dy < ui.surf.clip.y || dy >= ui.surf.clip.y + ui.surf.clip.h)
+            continue;
+        const uint8_t *pixels = b + offset + (h > 0 ? height - row - 1 : row) * stride;
+        for (int col = 0; col < width; col++) {
+            int sx = source_x + col, dx = x + col;
+            if (sx < 0 || sx >= w || dx < ui.surf.clip.x || dx >= ui.surf.clip.x + ui.surf.clip.w)
+                continue;
+            uint32_t rgb;
+            if (bits <= 8) {
+                unsigned index = bits == 8   ? pixels[sx]
+                                 : bits == 4 ? (pixels[sx / 2] >> (sx % 2 ? 0 : 4) & 15)
+                                             : (pixels[sx / 8] >> (7 - sx % 8) & 1);
+                if (index >= colors)
+                    continue;
+                const uint8_t *p = b + header + index * 4;
+                rgb = (uint32_t)p[2] << 16 | p[1] << 8 | p[0];
+            } else if (bits == 16) {
+                uint16_t v = ce_u16(pixels + sx * 2);
+                if (compression == 3) {
+                    rgb =
+                        ((v >> 11) * 255 / 31) << 16 | ((v >> 5 & 63) * 255 / 63) << 8 | (v & 31) * 255 / 31;
+                } else
+                    rgb = ((v >> 10 & 31) * 255 / 31) << 16 | ((v >> 5 & 31) * 255 / 31) << 8 |
+                          (v & 31) * 255 / 31;
+            } else {
+                const uint8_t *p = pixels + sx * (bits / 8);
+                rgb = (uint32_t)p[2] << 16 | p[1] << 8 | p[0];
+            }
+            if (mask != 0xffffffffu && rgb == ce_color(mask))
+                continue;
+            ui.surf.px[dy * ui.surf.stride + dx] = RGB565(rgb);
+        }
+    }
+}
+
+CE_API(BeginPaint)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w || !a1)
+        return 0;
+    memset(PTR(void, a1), 0, 64);
+    CW *p = PTR(CW, a1);
+    p[0] = a0;
+    p[1] = 1;
+    *PTR(struct ce_rect, a1 + 8) =
+        (struct ce_rect){0, 0, w->rect.right - w->rect.left, w->rect.bottom - w->rect.top};
+    gfx_set_clip(&ui.surf, ce_window_rect(a0));
+    w->dirty = false;
+    return a0;
+}
+CE_API(EndPaint)
+{
+    gfx_reset_clip(&ui.surf);
+    return ce_window(a0) != NULL;
+}
+CE_API(GetDC)
+{
+    gfx_reset_clip(&ui.surf);
+    return a0 ? a0 : 0x74000000u;
+}
+CE_API(ReleaseDC)
+{
+    gfx_reset_clip(&ui.surf);
+    return 1;
+}
+CE_API(GetDeviceCaps)
+{
+    switch (a1) {
+    case 8:
+        return 240;
+    case 10:
+        return 320;
+    case 12:
+        return 16;
+    case 14:
+        return 1;
+    case 88:
+    case 90:
+        return 96;
+    default:
+        return 0;
+    }
+}
+CE_API(GetSysColor)
+{
+    switch (a0) {
+    case 0:
+    case 1:
+    case 15:
+        return 0xc0c0c0;
+    case 5:
+    case 14:
+    case 20:
+        return 0xffffff;
+    case 2:
+    case 13:
+        return 0x800000;
+    case 16:
+        return 0x808080;
+    default:
+        return 0;
+    }
+}
+CE_API(GetStockObject)
+{
+    if (a0 <= 5) {
+        static CW brushes[6];
+        static const CW colors[] = {0xffffff, 0xc0c0c0, 0x808080, 0x404040, 0, 0xffffffffu};
+        if (!brushes[a0])
+            brushes[a0] = ce_new_object(CE_OBJ_BRUSH, colors[a0], NULL, 0);
+        return brushes[a0];
+    }
+    static CW font;
+    if (!font)
+        font = ce_new_object(CE_OBJ_FONT, 12, NULL, 0);
+    return font;
+}
+CE_API(CreateSolidBrush)
+{
+    return ce_new_object(CE_OBJ_BRUSH, ce_color(a0), NULL, 0);
+}
+CE_API(CreateFontIndirectW)
+{
+    int32_t height = (int32_t)ce_u32(PTR(void, a0));
+    return ce_new_object(CE_OBJ_FONT, (CW)abs(height), NULL, 0);
+}
+CE_API(DeleteObject)
+{
+    struct ce_object *o = ce_object(a0, 0);
+    if (!o)
+        return 0;
+    memset(o, 0, sizeof(*o));
+    return 1;
+}
+CE_API(SelectObject)
+{
+    struct ce_object *o = ce_object(a1, 0);
+    if (!o)
+        return 0;
+    CW old = 0;
+    if (o->kind == CE_OBJ_FONT) {
+        old = selected_font;
+        selected_font = a1;
+    }
+    if (o->kind == CE_OBJ_BRUSH) {
+        old = selected_brush;
+        selected_brush = a1;
+    }
+    return old;
+}
+CE_API(FillRect)
+{
+    struct ce_object *brush = ce_object(a2, CE_OBJ_BRUSH);
+    CW rgb = brush ? brush->value : 0xc0c0c0;
+    if (rgb != 0xffffffffu)
+        gfx_fill(&ui.surf, rectangle(a0, PTR(struct ce_rect, a1)), rgb);
+    return 1;
+}
+CE_API(Polyline)
+{
+    if (a2 > 4096)
+        return 0;
+    gfx_rect r = ce_window_rect(a0);
+    int32_t *p = PTR(int32_t, a1);
+    for (unsigned i = 1; i < a2; i++)
+        gfx_line(&ui.surf, r.x + p[(i - 1) * 2], r.y + p[(i - 1) * 2 + 1], r.x + p[i * 2], r.y + p[i * 2 + 1],
+                 0, 255);
+    return 1;
+}
+CE_API(DrawFrameControl)
+{
+    gfx_rect r = rectangle(a0, PTR(struct ce_rect, a1));
+    gfx_fill(&ui.surf, r, 0xc0c0c0);
+    border(r, (a3 & 0x200) ? 0x404040 : 0xffffff, (a3 & 0x200) ? 0xffffff : 0x404040);
+    return 1;
+}
+CE_API(SetTextColor)
+{
+    CW old = text_color;
+    text_color = ce_color(a1);
+    return ce_color(old);
+}
+CE_API(SetBkColor)
+{
+    CW old = background_color;
+    background_color = ce_color(a1);
+    return ce_color(old);
+}
+CE_API(SetBkMode)
+{
+    int old = background_mode;
+    background_mode = (int)a1;
+    return (CW)old;
+}
+CE_API(TextOutW)
+{
+    if (a4 > 65535)
+        return 0;
+    WCHAR *copy = malloc((a4 + 1) * 2);
+    if (!copy)
+        return 0;
+    memcpy(copy, PTR(void, a3), a4 * 2);
+    copy[a4] = 0;
+    char *text = malloc(a4 * 3 + 1);
+    if (!text) {
+        free(copy);
+        return 0;
+    }
+    ce_narrow(text, a4 * 3 + 1, copy);
+    gfx_rect r = ce_window_rect(a0);
+    gfx_text(&ui.surf, r.x + (int)a1, r.y + (int)a2, ui_font(FONT_R12), text, text_color, 255);
+    free(text);
+    free(copy);
+    return 1;
+}
+CE_API(LoadStringW)
+{
+    uint32_t size;
+    const uint8_t *p = ce_resource(a0, 6, (uint16_t)((a1 >> 4) + 1), &size);
+    if (!p)
+        return 0;
+    uint32_t off = 0;
+    for (unsigned i = 0; i < (a1 & 15); i++) {
+        if (!ce_range(off, 2, size))
+            return 0;
+        uint32_t n = ce_u16(p + off);
+        off += 2 + n * 2;
+    }
+    if (!ce_range(off, 2, size))
+        return 0;
+    uint32_t n = ce_u16(p + off);
+    off += 2;
+    if (!ce_range(off, n * 2, size) || !a3)
+        return 0;
+    n = MIN(n, a3 - 1);
+    memcpy(PTR(void, a2), p + off, n * 2);
+    PTR(WCHAR, a2)[n] = 0;
+    return n;
+}
+CE_API(FindResourceW)
+{
+    uint32_t size;
+    return WORD(ce_resource(a0, (uint16_t)a2, (uint16_t)a1, &size));
+}
+CE_API(LoadResource)
+{
+    return a1;
+}
+CE_API(LockResource)
+{
+    return a0;
+}
+CE_API(LoadCursorW)
+{
+    return a1 ? a1 : 32512;
+}
+CE_API(SetCursor)
+{
+    static CW cursor;
+    CW old = cursor;
+    cursor = a0;
+    return old;
+}
+CE_API(LoadIconW)
+{
+    return a1 ? a1 : 1;
+}
+CE_API(LoadImageW)
+{
+    if (a1 > 65535 || a2 > 2) {
+        ce_error = 50;
+        return 0;
+    }
+    uint32_t size;
+    const void *data = ce_resource(a0, a2 == 0 ? 2 : a2 == 1 ? 14 : 12, (uint16_t)a1, &size);
+    if (!data) {
+        ce_error = 1813;
+        return 0;
+    }
+    return ce_new_object(CE_OBJ_BITMAP, a2, (void *)data, size);
+}
+CE_API(ImageList_LoadImage)
+{
+    uint32_t size;
+    const void *data = ce_resource(a0, 2, (uint16_t)a1, &size);
+    if (!data)
+        return 0;
+    CW id = ce_new_object(CE_OBJ_IMAGE_LIST, a4, (void *)data, size);
+    struct ce_object *o = ce_object(id, CE_OBJ_IMAGE_LIST);
+    if (o) {
+        o->width = (int)a2;
+        o->height = abs((int32_t)ce_u32((const uint8_t *)data + 8));
+    }
+    return id;
+}
+CE_API(ImageList_Draw)
+{
+    struct ce_object *o = ce_object(a0, CE_OBJ_IMAGE_LIST);
+    if (!o || a1 > 4096)
+        return 0;
+    gfx_rect r = ce_window_rect(a2);
+    ce_draw_bitmap(o, r.x + (int)a3, r.y + (int)a4, (int)a1 * o->width, o->width,
+                   (a5 & 1) ? o->value : 0xffffffffu);
+    return 1;
+}
+CE_API(ImageList_Destroy)
+{
+    struct ce_object *o = ce_object(a0, CE_OBJ_IMAGE_LIST);
+    if (!o)
+        return 0;
+    memset(o, 0, sizeof(*o));
+    return 1;
+}
+
+static const struct ce_export exports[] = {
+    CE_EXPORT(BeginPaint),
+    CE_EXPORT(EndPaint),
+    CE_EXPORT(GetDC),
+    CE_EXPORT(ReleaseDC),
+    CE_EXPORT(GetDeviceCaps),
+    CE_EXPORT(GetSysColor),
+    CE_EXPORT(GetStockObject),
+    CE_EXPORT(CreateSolidBrush),
+    CE_EXPORT(CreateFontIndirectW),
+    CE_EXPORT(DeleteObject),
+    CE_EXPORT(SelectObject),
+    CE_EXPORT(FillRect),
+    CE_EXPORT(Polyline),
+    CE_EXPORT(DrawFrameControl),
+    CE_EXPORT(SetTextColor),
+    CE_EXPORT(SetBkColor),
+    CE_EXPORT(SetBkMode),
+    CE_EXPORT(TextOutW),
+    CE_EXPORT(LoadStringW),
+    CE_EXPORT(FindResourceW),
+    CE_EXPORT(LoadResource),
+    CE_EXPORT(LockResource),
+    CE_EXPORT(LoadCursorW),
+    CE_EXPORT(SetCursor),
+    CE_EXPORT(LoadIconW), CE_EXPORT(LoadImageW),
+    CE_EXPORT(ImageList_LoadImage),
+    CE_EXPORT(ImageList_Draw),
+    CE_EXPORT(ImageList_Destroy),
+};
+void *ce_resolve_gdi(const char *name)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(exports); i++)
+        if (!strcmp(name, exports[i].name))
+            return exports[i].address;
+    return NULL;
+}

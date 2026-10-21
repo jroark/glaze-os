@@ -61,7 +61,9 @@ static int sys_spawn(uint32_t upath, uint32_t flags)
 /* Installed apps never get privileges: only romfs programs are trusted. */
 static int sys_spawn_image(uint32_t ubuf, uint32_t size, uint32_t uname)
 {
-    char name[16];
+    /* Package ids allow 24 characters. The process display name is shortened
+     * by spawn(), after the complete package id has passed this boundary. */
+    char name[32];
 
     if (copy_str_from_as(AS, name, uname, sizeof(name)) <= 0 || !gz_elf_range(ubuf, size, USER_TOP))
         return GZ_EINVAL;
@@ -177,6 +179,9 @@ void syscall_dispatch(struct trapframe *tf)
     (void)a3;
     tf->epc += 4;
     switch (tf->regs[R_V0]) {
+    case SYS_VM_MAP:        rv = as_loader_map(AS, a0, a1); break;
+    case SYS_VM_PUBLISH:    rv = as_loader_publish(AS, a0, a1, a2); break;
+    case SYS_VM_RELEASE:    rv = as_loader_release(AS, a0); break;
     case SYS_IMAGE_QUERY:   rv = image_query(AS, a0, a1); break;
     case SYS_IMAGE_MAP:     rv = image_map_user(AS, a0, a1, a2, a3); break;
     case SYS_IMAGE_RELEASE: rv = image_release(AS, a0); break;

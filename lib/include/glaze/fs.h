@@ -36,6 +36,7 @@ enum {
     FS_RENAME,              /* buf: old path, then new path at FS_PATH_MAX */
     FS_STATFS,              /* w2 = 1: buf: path of the volume -> buf: struct fs_info */
     FS_FORMAT,              /* erase everything */
+    FS_SET_END,             /* w2 = handle; truncate/extend at current position */
 };
 
 #define FS_O_READ       0x1
@@ -75,6 +76,8 @@ int fs_open(const char *path, int flags);
 int fs_read(int fd, void *buf, uint32_t len);
 int fs_write(int fd, const void *buf, uint32_t len);
 int fs_seek(int fd, int32_t offset, int whence);
+/* Set the file's length to its current position; requires a writable handle. */
+int fs_set_end(int fd);
 int fs_close(int fd);
 int fs_stat(const char *path, struct fs_stat *st);
 /* Up to `max` entries of a directory, after skipping `skip`; returns the

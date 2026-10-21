@@ -43,7 +43,7 @@ enum state {
 #define HOLD_MS         1000    /* press on an icon to edit the home screen */
 #define JIGGLE_MS       100
 #define CARD_POLL_MS    2000    /* look for apps on a card coming or going */
-#define SURFACE_BYTES   (SB_APP_W * SB_APP_H * 2)
+#define SURFACE_BYTES   (SB_APP_W * GZ_FB_HEIGHT * 2)
 #define SHM_HEADER      4096
 
 _Static_assert(sizeof(struct sb_shared) <= SHM_HEADER, "sb_shared must fit before the surface");
@@ -62,6 +62,10 @@ static struct sb_shared *shared;
 static gfx_surface app_surf;
 static int app_pid, app_index = -1, app_port;
 static bool app_ready, lock_over_app;
+static bool app_fullscreen;
+
+static int app_top(void) { return app_fullscreen ? 0 : SB_STATUS_H; }
+static int app_height(void) { return app_fullscreen ? GZ_FB_HEIGHT : SB_APP_H; }
 
 struct anim {
     bool active;
@@ -261,7 +265,7 @@ static void render_grid(void)
 
 static void render_app_status(void)
 {
-    if (app_index < 0)
+    if (app_index < 0 || app_fullscreen)
         return;
     sb_draw_status(&bb, &view.clk, sb_apps[app_index].status_style, false);
     flush(gfx_r(0, 0, SCREEN_W, SB_STATUS_H));
@@ -271,10 +275,10 @@ static void present_app_rect(gfx_rect r)
 {
     gfx_rect c;
 
-    if (!gfx_rect_intersect(r, gfx_r(0, 0, SB_APP_W, SB_APP_H), &c))
+    if (!gfx_rect_intersect(r, gfx_r(0, 0, SB_APP_W, app_height()), &c))
         return;
-    gfx_blit(&fb, c.x, c.y + SB_STATUS_H, &app_surf, c);
-    if (c.y < BANNER_H)
+    gfx_blit(&fb, c.x, c.y + app_top(), &app_surf, c);
+    if (c.y + app_top() < SB_STATUS_H + BANNER_H)
         overlay_banner();
 }
 
@@ -293,7 +297,8 @@ static void overlay_banner(void)
     if (!banner_visible)
         return;
     if (state == ST_APP) {
-        gfx_blit(&bb, 0, SB_STATUS_H, &app_surf, gfx_r(0, 0, SB_APP_W, BANNER_H));
+        gfx_blit(&bb, 0, SB_STATUS_H, &app_surf,
+                 gfx_r(0, SB_STATUS_H - app_top(), SB_APP_W, BANNER_H));
     } else {
         gfx_set_clip(&bb, r);
         sb_draw_home(&bb, &view);
@@ -310,7 +315,7 @@ static void hide_banner(void)
     banner_visible = false;
     banner_touch = false;
     if (state == ST_APP)
-        present_app_rect(gfx_r(0, 0, SB_APP_W, BANNER_H));
+        present_app_rect(gfx_r(0, SB_STATUS_H - app_top(), SB_APP_W, BANNER_H));
     else if (state == ST_HOME)
         render_home();
 }
@@ -329,7 +334,7 @@ static void show_queued_banner(void)
 static void render_app(void)
 {
     render_app_status();
-    present_app_rect(gfx_r(0, 0, SB_APP_W, SB_APP_H));
+    present_app_rect(gfx_r(0, 0, SB_APP_W, app_height()));
 }
 
 /* ---- app management ----------------------------------------------------- */
@@ -342,6 +347,9 @@ static void app_cleanup(void)
     app_index = -1;
     app_port = 0;
     app_ready = false;
+    app_fullscreen = false;
+    app_surf.h = SB_APP_H;
+    gfx_reset_clip(&app_surf);
 }
 
 static void launch(int index)
@@ -408,7 +416,7 @@ static void send_event(const struct gz_input_event *ev)
         return;
     struct gz_input_event e = *ev;
     if (e.type == GZ_EV_TOUCH_DOWN || e.type == GZ_EV_TOUCH_MOVE || e.type == GZ_EV_TOUCH_UP)
-        e.y -= SB_STATUS_H;
+        e.y -= app_top();
     shared->ev[shared->head % SB_RING] = e;
     shared->head++;
     gz_notify(app_port, SB_NOTIFY_EVENTS);
@@ -438,8 +446,9 @@ static void begin_unlock(void)
     notify_clear_delivered();
     view.num_lock_notes = 0;
     if (lock_over_app && app_index >= 0) {
-        gfx_blit(&snap, 0, SB_STATUS_H, &app_surf, gfx_r(0, 0, SB_APP_W, SB_APP_H));
-        sb_draw_status(&snap, &view.clk, sb_apps[app_index].status_style, false);
+        gfx_blit(&snap, 0, app_top(), &app_surf, gfx_r(0, 0, SB_APP_W, app_height()));
+        if (!app_fullscreen)
+            sb_draw_status(&snap, &view.clk, sb_apps[app_index].status_style, false);
     } else {
         view.scroll_x = 0;
         view.pressed = -1;
@@ -903,7 +912,7 @@ static void handle_input(void)
                 home_touch(e);
                 break;
             case ST_APP:
-                if (e->y >= SB_STATUS_H || e->type == GZ_EV_TOUCH_UP)
+                if (e->y >= app_top() || e->type == GZ_EV_TOUCH_UP)
                     send_event(e);
                 break;
             default:
@@ -1065,9 +1074,12 @@ static void handle_msg(int token, struct gz_msg *m)
         }
         app_port = (int)m->w[1];
         app_ready = true;
+        app_fullscreen = m->w[2] == SB_STATUS_FULLSCREEN;
+        app_surf.h = app_height();
+        gfx_reset_clip(&app_surf);
         r.w[1] = (uint32_t)shm_id;
         r.w[2] = SB_APP_W;
-        r.w[3] = SB_APP_H;
+        r.w[3] = app_height();
         r.w[4] = (uint32_t)gz_input_status();
         break;
     case SB_PRESENT: {
@@ -1134,12 +1146,12 @@ static void frame(void)
     case ST_ZOOM_IN:
     case ST_ZOOM_OUT: {
         gfx_rect icon = sb_icon_rect(app_index, view.scroll_x);
-        gfx_rect full = gfx_r(0, SB_STATUS_H, SB_APP_W, SB_APP_H);
+        gfx_rect full = gfx_r(0, app_top(), SB_APP_W, app_height());
         int q = state == ST_ZOOM_IN ? p : 1024 - p;
         gfx_rect r = lerp_rect(icon, full, q);
         gfx_blit(&bb, 0, 0, &snap, gfx_r(0, 0, SCREEN_W, SCREEN_H));
         int alpha = q > 512 ? 255 : 80 + q * 175 / 512;
-        gfx_blit_scaled(&bb, r, &app_surf, gfx_r(0, 0, SB_APP_W, SB_APP_H), alpha);
+        gfx_blit_scaled(&bb, r, &app_surf, gfx_r(0, 0, SB_APP_W, app_height()), alpha);
         flush_all();
         if (done) {
             if (state == ST_ZOOM_IN) {

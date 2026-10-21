@@ -165,6 +165,13 @@ resources in their folder through the usual `res_image`.
 to install from Files. A package needs `Info`, `main.c` and a 44x44
 `icon.gzi` (`tools/mkgzi.py icon.png icon.gzi`).
 
+## Original BE-300 apps
+
+Original BE-300 Calculator and PocketNotepad can also be imported from a local
+BeShell NAND image and run through the initial WinCE compatibility runtime.
+See [Original BE-300 applications](docs/WINCE.md) for importing, supported
+functions and tests.
+
 ## App Store
 
 The native **App Store** offers Search and Updates in the early iPhone OS style.

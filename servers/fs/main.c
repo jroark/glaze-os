@@ -397,6 +397,15 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
         rv = f->card ? card_close(&f->cf) : gz_err(lfs_file_close(&lfs, &f->f));
         f->used = false;
         return rv;
+    case FS_SET_END:
+        if (!f)
+            return GZ_EINVAL;
+        if (f->card)
+            return card_set_end(&f->cf);
+        if (!(f->f.flags & LFS_O_WRONLY))
+            return GZ_EPERM;
+        rv = lfs_file_tell(&lfs, &f->f);
+        return rv < 0 ? gz_err(rv) : gz_err(lfs_file_truncate(&lfs, &f->f, (lfs_size_t)rv));
     case FS_MKDIR:
     case FS_REMOVE:
         if (!path)

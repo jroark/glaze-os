@@ -53,6 +53,7 @@ enum {
 enum {
     SB_STATUS_GRAY = 0,     /* light gray gradient, dark text */
     SB_STATUS_BLACK,        /* opaque black, white text */
+    SB_STATUS_FULLSCREEN,   /* opt-in 240 x 320 surface; Home stays with SpringBoard */
 };
 
 #define SB_NOTIFY_EVENTS    0x1u

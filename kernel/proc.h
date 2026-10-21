@@ -38,7 +38,7 @@ uint32_t mm_free_pages(void);
 uint32_t mm_total_pages(void);
 
 /* REGION_ROMFS: a romfs file (shm_id is its entry index), faulted in. */
-enum region_kind { REGION_OWNED = 1, REGION_SHM, REGION_DEVICE, REGION_IMAGE, REGION_ROMFS };
+enum region_kind { REGION_OWNED = 1, REGION_SHM, REGION_DEVICE, REGION_IMAGE, REGION_ROMFS, REGION_LOADER };
 
 struct region {
     uint32_t va, npages;
@@ -83,6 +83,9 @@ int as_map_page(struct addrspace *as, uint32_t va, uint32_t pa, uint32_t flags);
 pte_t as_lookup(struct addrspace *as, uint32_t va);
 int as_alloc_region(struct addrspace *as, uint32_t va, uint32_t len, int kind);
 uint32_t as_mmap_anon(struct addrspace *as, uint32_t len);
+int as_loader_map(struct addrspace *, uint32_t, uint32_t);
+int as_loader_publish(struct addrspace *, uint32_t, uint32_t, uint32_t);
+int as_loader_release(struct addrspace *, uint32_t);
 uint32_t as_map_phys(struct addrspace *as, uint32_t pa, uint32_t len, uint32_t cache);
 void as_activate(struct addrspace *as);
 uint32_t as_map_frames(struct addrspace *as, const uint32_t *frames, uint32_t npages, int shm_id);
