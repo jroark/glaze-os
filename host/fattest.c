@@ -156,6 +156,12 @@ int main(int argc, char **argv)
     CHECK(card_open(&f, "/fattest/file 00.txt", FS_O_READ | FS_O_WRITE) == 0 &&
           card_seek(&f, 0, FS_SEEK_END) == 20 && card_seek(&f, -4, FS_SEEK_CUR) == 16 &&
           card_seek(&f, -100, FS_SEEK_SET) == GZ_EINVAL && card_close(&f) == 0, "seek");
+    CHECK(card_open(&f, "/fattest/file 00.txt", FS_O_READ | FS_O_WRITE) == 0 &&
+          card_seek(&f, 4, FS_SEEK_SET) == 4 && card_set_end(&f) == 0 && card_close(&f) == 0 &&
+          read_file("/fattest/file 00.txt", back, sizeof(back)) == 4 && !memcmp(back, "/fat", 4),
+          "set-end truncates at cursor and preserves prefix");
+    CHECK(card_open(&f, "/fattest/file 00.txt", FS_O_READ) == 0 && card_set_end(&f) < 0 &&
+          card_close(&f) == 0, "set-end rejects read-only card files");
     CHECK(card_rename("/fattest/file 01.txt", "/fattest/file 02.txt") == 0 &&
           read_file("/fattest/file 02.txt", back, sizeof(back)) == 20 && !memcmp(back, "/fattest/file 01.txt", 20) &&
           card_stat("/fattest/file 01.txt", &st) == GZ_ENOENT, "rename over existing");

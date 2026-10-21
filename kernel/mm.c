@@ -342,6 +342,49 @@ int as_fault(struct addrspace *as, uint32_t va, bool write)
     return GZ_EINVAL;
 }
 
+/* A separate allocation kind keeps publication/release from affecting a
+ * stack, ELF image, device, shared surface, or libc's anonymous heap. */
+int as_loader_map(struct addrspace *as, uint32_t va, uint32_t len)
+{
+    if (va < 0x10000u || va >= GZ_LD_BASE || !len || len > 4u * 1024u * 1024u ||
+        (va | len) & (PAGE_SIZE - 1) || len > GZ_LD_BASE - va) return GZ_EINVAL;
+    for (struct region_page *p = as->regions; p; p = p->next)
+        for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) {
+            struct region *r = &p->entry[i];
+            if (r->kind && va < r->va + r->npages * PAGE_SIZE && va + len > r->va) return GZ_EEXIST;
+        }
+    return as_alloc_region(as, va, len, REGION_LOADER);
+}
+
+int as_loader_publish(struct addrspace *as, uint32_t va, uint32_t len, uint32_t writable)
+{
+    if (!len || (va | len) & (PAGE_SIZE - 1) || writable > 1 || va >= USER_TOP || len > USER_TOP - va)
+        return GZ_EINVAL;
+    struct region *r = region_at(as, va);
+    if (!r || r->kind != REGION_LOADER || len > r->npages * PAGE_SIZE - (va - r->va)) return GZ_EINVAL;
+    if (writable) for (uint32_t a = va; a < va + len; a += PAGE_SIZE)
+        if (!(as_lookup(as, a) & PTE_D)) return GZ_EPERM;
+    for (uint32_t a = va; a < va + len; a += PAGE_SIZE) {
+        pte_t *slot = pte_slot(as, a, false);
+        KASSERT(slot && (*slot & PTE_V));
+        mm_sync_code((void *)KSEG0(PTE_PA(*slot)), PAGE_SIZE);
+        if (!writable) *slot &= ~PTE_D;
+        /* Read-only pages cannot be made writable again. */
+    }
+    tlb_flush_all();
+    return 0;
+}
+
+int as_loader_release(struct addrspace *as, uint32_t va)
+{
+    struct region *r = region_at(as, va);
+    if (!r || r->kind != REGION_LOADER || r->va != va) return GZ_EINVAL;
+    for (uint32_t i = 0; i < r->npages; i++) as_unmap_page(as, va + i * PAGE_SIZE, true);
+    as_region_drop(as, r);
+    as_prune_tables(as);
+    return 0;
+}
+
 uint32_t as_map_frames(struct addrspace *as, const uint32_t *frames, uint32_t npages, int shm_id)
 {
     uint32_t va = as->mmap_top;
@@ -365,7 +408,7 @@ void as_destroy(struct addrspace *as)
         for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) {
             struct region *r = &p->entry[i];
             if (r->kind == REGION_IMAGE) image_release_region(as, r);
-            else if (r->kind == REGION_OWNED) {
+            else if (r->kind == REGION_OWNED || r->kind == REGION_LOADER) {
                 for (uint32_t j = 0; j < r->npages; j++) as_unmap_page(as, r->va + j * PAGE_SIZE, true);
             } else if (r->kind == REGION_SHM) shm_unref(r->shm_id);
             else if (r->kind == REGION_ROMFS) {

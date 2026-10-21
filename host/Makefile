@@ -167,3 +167,15 @@ ftl-verify-bench: ../tests/ftl_verify.c $(FS)
 	$(CC) $(FS_CFLAGS) -DFTL_BENCH -o ../out/host/ftl-verify-bench $^
 	../out/host/ftl-verify-bench
 .PHONY: ftl-verify-bench
+
+wince-test: ../tests/wince_pe.c ../apps/wince/pe.c ../apps/wince/pe.h
+	@mkdir -p ../out/host
+	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
+	    -o ../out/host/wince-pe-test ../tests/wince_pe.c ../apps/wince/pe.c
+	../out/host/wince-pe-test
+	python3 ../tests/wince_assets_test.py
+.PHONY: wince-test
+
+../out/host/wince-fs-read: ../tests/wince_fs_read.c $(FS)
+	@mkdir -p ../out/host
+	$(CC) $(FS_CFLAGS) -o $@ $^

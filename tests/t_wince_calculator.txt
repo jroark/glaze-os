@@ -1,0 +1,8 @@
+# Used by tests/run_wince.py with the original Calculator preinstalled.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+# Original bitmap keys: 2 + 3 = 5.
+7500 tap 120 232
+8500 tap 207 265
+9500 tap 164 232
+10500 tap 164 265

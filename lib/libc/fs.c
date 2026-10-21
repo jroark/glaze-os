@@ -143,6 +143,13 @@ int fs_close(int fd)
     return rv ? rv : call(FS_CLOSE, (uint32_t)fd, 0, 0, NULL);
 }
 
+int fs_set_end(int fd)
+{
+    SESSION_LOCKED();
+    int rv = connect();
+    return rv ? rv : call(FS_SET_END, (uint32_t)fd, 0, 0, NULL);
+}
+
 int fs_stat(const char *path, struct fs_stat *st)
 {
     SESSION_LOCKED();

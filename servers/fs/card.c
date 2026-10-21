@@ -244,6 +244,11 @@ int card_write(struct card_file *cf, const void *buf, uint32_t len)
     return n || !len ? (int)n : GZ_ENOSPC;
 }
 
+int card_set_end(struct card_file *cf)
+{
+    return fat_err(f_truncate(&cf->f));
+}
+
 int card_seek(struct card_file *cf, int32_t off, uint32_t whence)
 {
     int64_t base = whence == FS_SEEK_CUR ? (int64_t)f_tell(&cf->f)

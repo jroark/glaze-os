@@ -35,6 +35,7 @@ int card_open(struct card_file *cf, const char *path, uint32_t flags);
 int card_read(struct card_file *cf, void *buf, uint32_t len);
 int card_write(struct card_file *cf, const void *buf, uint32_t len);
 int card_seek(struct card_file *cf, int32_t off, uint32_t whence);
+int card_set_end(struct card_file *cf);
 int card_close(struct card_file *cf);
 int card_stat(const char *path, struct fs_stat *st);
 int card_mkdir(const char *path);

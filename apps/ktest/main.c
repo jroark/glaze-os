@@ -15,6 +15,7 @@
 #include <glaze/sys.h>
 #include <glaze/thread.h>
 #include <glaze/tz.h>
+#include <glaze/vm.h>
 #include <netdb.h>
 #include <poll.h>
 #include <stdio.h>
@@ -24,6 +25,60 @@
 
 static int failures;
 
+#define CHECK(cond, what) do { \
+    if (cond) printf("ktest: PASS %s\n", what); \
+    else { printf("ktest: FAIL %s\n", what); failures++; } \
+} while (0)
+
+static void test_loader_vm(void)
+{
+    const uint32_t base = 0x0d000000u;
+    CHECK(gz_vm_map(0, 4096) == GZ_EINVAL && gz_vm_map(base + 1, 4096) == GZ_EINVAL &&
+          gz_vm_map(0x0efff000u, 8192) == GZ_EINVAL && gz_vm_map(base, 0) == GZ_EINVAL,
+          "loader VM rejects null, unaligned, empty, and interpreter-crossing regions");
+    CHECK(gz_vm_map(base, 8192) == 0, "loader VM allocates private pages");
+    uint32_t *code = (uint32_t *)(uintptr_t)base;
+    code[0] = 0x2402002au; /* addiu v0,zero,42 */
+    code[1] = 0x03e00008u; /* jr ra */
+    code[2] = 0;
+    CHECK(gz_vm_map(base + 4096, 4096) == GZ_EEXIST &&
+          gz_vm_publish(base, 12288, 0) == GZ_EINVAL &&
+          gz_vm_release(base + 4096) == GZ_EINVAL,
+          "loader VM rejects overlap, publication past allocation, and partial release");
+    CHECK(gz_vm_publish(base, 4096, 0) == 0 && ((int (*)(void))(uintptr_t)base)() == 42,
+          "loader VM publishes MIPS code with cache maintenance");
+    CHECK(gz_rtc_get((struct gz_datetime *)(uintptr_t)base) == GZ_EINVAL,
+          "loader VM publication removes write access");
+    CHECK(gz_vm_publish(base, 4096, 1) == GZ_EPERM,
+          "loader VM cannot restore writes to published read-only code");
+    CHECK(gz_vm_publish(base + 4096, 4096, 1) == 0, "loader VM keeps writable data writable");
+    code[1024] = 123;
+    CHECK(code[1024] == 123 && gz_vm_release(base) == 0 && gz_vm_release(base) == GZ_EINVAL,
+          "loader VM releases complete allocations once");
+    struct gz_sysinfo before, after;
+    gz_sysinfo(&before);
+    bool ok = true;
+    for (unsigned i = 0; i < 32; i++) if (gz_vm_map(base, 8192) || gz_vm_release(base)) ok = false;
+    gz_sysinfo(&after);
+    CHECK(ok && after.free_pages >= before.free_pages, "loader VM repeated release returns pages and tables");
+}
+
+static void test_set_end(const char *path)
+{
+    struct fs_stat st;
+    char bytes[24];
+    int fd = fs_open(path, FS_O_READ | FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    CHECK(fd >= 0 && fs_write(fd, "abcdefgh", 8) == 8 && fs_seek(fd, 3, FS_SEEK_SET) == 3 &&
+          fs_set_end(fd) == 0 && fs_close(fd) == 0 && fs_stat(path, &st) == 0 && st.size == 3,
+          "set-end shortens an open file at its cursor");
+    memset(bytes, 0xff, sizeof(bytes));
+    CHECK(fs_read_file(path, bytes, sizeof(bytes)) == 3 && !memcmp(bytes, "abc", 3),
+          "set-end preserves the existing prefix");
+    fd = fs_open(path, FS_O_READ);
+    CHECK(fd >= 0 && fs_set_end(fd) < 0 && fs_close(fd) == 0, "set-end rejects read-only handles");
+    fs_remove(path);
+}
+
 /* Apps don't get raw flash. */
 static bool fs_raw_denied(void)
 {
@@ -32,11 +87,6 @@ static bool fs_raw_denied(void)
     return gz_flash_read(0, page) == GZ_EPERM && gz_flash_erase(0) == GZ_EPERM &&
            gz_cf_read(0, 1, page) == GZ_EPERM;
 }
-
-#define CHECK(cond, what) do { \
-    if (cond) printf("ktest: PASS %s\n", what); \
-    else { printf("ktest: FAIL %s\n", what); failures++; } \
-} while (0)
 
 static void test_tasks(int peer_port)
 {
@@ -311,6 +361,10 @@ static void test_packages(void)
 
     int pid = elf ? gz_spawn_image(elf, size, "pong-image") : GZ_ENOENT;
     CHECK(pid > 0 && gz_proc_alive(pid), "spawn from an ELF in memory");
+    if (pid > 0)
+        gz_kill(pid);
+    pid = elf ? gz_spawn_image(elf, size, "package.id.with.24.chars") : GZ_ENOENT;
+    CHECK(pid > 0, "spawn accepts full package ids beyond display-name length");
     if (pid > 0)
         gz_kill(pid);
     memset(buf, 0x5A, sizeof(buf));
@@ -997,7 +1051,9 @@ int main(void)
            now.day, now.hour, now.minute, now.second, now.weekday);
 
     test_threads();
+    test_loader_vm();
     test_fs();
+    test_set_end("/Documents/loader-truncate-test");
     test_card();
     test_packages();
     test_prefs();

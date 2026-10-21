@@ -64,6 +64,9 @@ enum {
     SYS_AUDIO_MIX,          /* effects mixed over the ring at DMA refill */
     SYS_TASK_SNAPSHOT,      /* atomic, read-only process/performance snapshot */
     SYS_TASK_STOP,          /* end a managed app; system services are protected */
+    SYS_VM_MAP,             /* private fixed-address pages for userspace loaders */
+    SYS_VM_PUBLISH,         /* publish code; a2 = writable after publication */
+    SYS_VM_RELEASE,         /* release a complete SYS_VM_MAP allocation */
     SYS_COUNT
 };
 
