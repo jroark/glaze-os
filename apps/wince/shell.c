@@ -1,6 +1,7 @@
 /* WinCE command bars, menus, clipboard and modal dialogs. These are service
  * implementations: application commands still run the original window code. */
 #include "runtime.h"
+#include <glaze/audio.h>
 
 struct menu_item {
     WCHAR text[80];
@@ -353,6 +354,29 @@ CE_API(CommandBar_Height)
 {
     return ce_window(a0) ? 26 : 0;
 }
+CE_API(CommandBar_AddBitmap)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w)
+        return (CW)-1;
+    uint32_t size = 0;
+    unsigned count = a3;
+    if (a1 == 0xffffffffu) {
+        /* Standard small and view strips contain 15 and 12 images. */
+        if (a2 != 0 && a2 != 4)
+            return (CW)-1;
+        count = a2 == 0 ? 15 : 12;
+    } else {
+        const uint8_t *b = ce_resource(a1, 2, (uint16_t)a2, &size);
+        if (!b || size < 40 || !count || count > 256 || ce_u32(b + 4) / 16 < count)
+            return (CW)-1;
+    }
+    if (count > 256 - w->bar_images)
+        return (CW)-1;
+    unsigned first = w->bar_images;
+    w->bar_images += count;
+    return first;
+}
 CE_API(CommandBar_InsertMenubar)
 {
     struct ce_window *w = ce_window(a0);
@@ -408,6 +432,23 @@ CE_API(CoshGetCommandLine)
 {
     static WCHAR empty[1];
     return WORD(empty);
+}
+CE_API(CoshExecute)
+{
+    /* HWND, executable, arguments. The original service forwards the launch
+     * to COShell. There is no COShell process in a private Glaze app bundle. */
+    ce_error = 2;
+    return 0;
+}
+CE_API(MessageBuzzer)
+{
+    audio_sound(AUDIO_SND_NOTIFY);
+    return 1;
+}
+CE_API(StopBuzzer)
+{
+    audio_sound_stop();
+    return 1;
 }
 CE_API(CGDFlushRegistry)
 { /* RegSetValueExW already synchronizes each update. */
@@ -545,6 +586,7 @@ CE_API(MessageBoxW)
     char title[128], message[1024];
     ce_narrow(title, sizeof(title), PTR(WCHAR, a2));
     ce_narrow(message, sizeof(message), PTR(WCHAR, a1));
+    printf("wince: message box: %s: %s\n", title, message);
     unsigned style = a3 & 15;
     const char *left = "OK", *right = NULL;
     CW left_id = 1, right_id = 2;
@@ -763,6 +805,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CheckMenuItem),
     CE_EXPORT(CommandBar_Create),
     CE_EXPORT(CommandBar_Height),
+    CE_EXPORT(CommandBar_AddBitmap),
     CE_EXPORT(CommandBar_InsertMenubar),
     CE_EXPORT(CommandBar_Show),
     CE_EXPORT(CommandBar_GetMenu),
@@ -775,6 +818,9 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CSOBar_AddAdornments),
     CE_EXPORT(CSOBar_Destroy),
     CE_EXPORT(CoshGetCommandLine),
+    CE_EXPORT(CoshExecute),
+    CE_EXPORT(MessageBuzzer),
+    CE_EXPORT(StopBuzzer),
     CE_EXPORT(CGDFlushRegistry),
     CE_EXPORT(CSGetUserDiskName),
     CE_EXPORT(OpenClipboard),

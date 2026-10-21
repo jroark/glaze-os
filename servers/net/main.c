@@ -632,6 +632,13 @@ static int handle(const struct gz_msg *m, struct gz_msg *r, int token)
 
     if (op == NET_HELLO)
         return op_hello((int)m->w[1], r);
+    if (op == NET_STATUS && sess == -1) {
+        struct net_status st;
+        _Static_assert(sizeof(st) <= sizeof(r->w) - sizeof(r->w[0]), "status must fit in reply");
+        net_if_status(&st);
+        memcpy(&r->w[1], &st, sizeof(st));
+        return 0;
+    }
     if (sess < 0 || sess >= MAX_SESSIONS || !sessions[sess].pid)
         return GZ_EPERM;
     if (op == NET_STATUS) {

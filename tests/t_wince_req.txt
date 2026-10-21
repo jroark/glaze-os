@@ -1,0 +1,34 @@
+# REQ: create a test key beneath the package-seeded HKLM\SOFTWARE branch.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+8000 tap 6 89
+9500 tap 65 107
+11000 tap 54 12
+12500 tap 85 38
+14500 key backspace
+14600 key backspace
+14700 key backspace
+14800 key backspace
+14900 key backspace
+15000 key backspace
+15100 key backspace
+15200 key backspace
+15500 text GlazeCompat
+16500 tap 34 107
+18500 tap 54 12
+20000 tap 85 81
+21500 key backspace
+21600 key backspace
+21700 key backspace
+21800 key backspace
+21900 key backspace
+22000 key backspace
+22100 key backspace
+22200 key backspace
+22300 key backspace
+22400 key backspace
+23000 text Greeting
+24500 tap 70 85
+25000 text Hello from REQ
+27500 key enter
+30000 tap 224 12

@@ -67,5 +67,33 @@ int main(void)
     v.pin.msg = "Wrong Passcode";
     sb_draw_passcode(&s, &v);
     host_write_bmp("passcode_wrong.bmp", &s);
+
+    v.card_mounted = true;
+    sb_draw_home(&s, &v);
+    host_write_bmp("home_card.bmp", &s);
+    sb_draw_status(&s, &v, SB_STATUS_GRAY, false);
+    host_write_bmp("home_card_gray.bmp", &s);
+    sb_draw_status(&s, &v, SB_STATUS_BLACK, false);
+    host_write_bmp("home_card_black.bmp", &s);
+    sb_draw_lock(&s, &v, 0);
+    host_write_bmp("lock_card.bmp", &s);
+
+    struct sb_card_details card = {
+        .title = "Storage Card",
+        .lines = { "CompactFlash storage", "Mounted at /Card", "Capacity: 15.9 MB",
+                   "Used: 1.2 MB", "Free: 14.7 MB" },
+        .num_lines = 5,
+    };
+    sb_draw_card_details(&s, &card, false);
+    host_write_bmp("card_storage.bmp", &s);
+    card = (struct sb_card_details){
+        .title = "Network Card",
+        .lines = { "NE2000 Ethernet", "Connected (DHCP)", "MAC: 10:20:30:00:00:10",
+                   "IP: 10.0.0.1", "Mask: 255.0.0.0", "Router: 10.0.0.254", "DNS: 10.0.0.254" },
+        .num_lines = 7,
+    };
+    sb_draw_home(&s, &v);
+    sb_draw_card_details(&s, &card, false);
+    host_write_bmp("card_network.bmp", &s);
     return 0;
 }

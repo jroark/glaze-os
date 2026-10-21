@@ -1,0 +1,13 @@
+# CF details on the lock screen, home screen, and over Files.
+# Boot with CF=<image> or NET=1. With no card, the status-bar taps do nothing.
+# Stop at 4 seconds for lock details, 8 seconds for home details, or 14 for Files.
+# At 17 seconds Files is restored; at 20 seconds its card details are open again.
+3000 tap 203 8
+4500 tap 120 233
+5000 drag 40 280 235 280 500
+6500 tap 203 8
+8500 key esc
+9000 tap 30 120
+12000 tap 203 8
+16000 tap 120 233
+18000 tap 203 8

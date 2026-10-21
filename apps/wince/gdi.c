@@ -4,6 +4,11 @@
 static struct ce_object objects[192];
 static CW text_color, background_color = 0xffffff, selected_font, selected_brush, selected_pen;
 static int background_mode = 2;
+#define CE_IMAGES 256
+struct image_list {
+    unsigned count;
+    struct ce_object image[CE_IMAGES];
+};
 
 struct ce_object *ce_object(CW handle, int kind)
 {
@@ -58,6 +63,8 @@ void ce_draw_bitmap(const struct ce_object *object, int x, int y, int source_x, 
     uint32_t offset = header + colors * 4 + (compression == 3 && header == 40 ? 12 : 0),
              stride = ALIGN_UP((uint32_t)w * bits, 32u) / 8u;
     uint32_t height = h < 0 ? (uint32_t)-h : (uint32_t)h;
+    if (object->kind == CE_OBJ_ICON)
+        height /= 2;
     if (!ce_range(offset, stride * height, object->bytes))
         ce_fatal("Bitmap pixels exceed resource");
     for (uint32_t row = 0; row < height; row++) {
@@ -92,11 +99,141 @@ void ce_draw_bitmap(const struct ce_object *object, int x, int y, int source_x, 
             }
             if (mask != 0xffffffffu && rgb == ce_color(mask))
                 continue;
+            if (object->kind == CE_OBJ_ICON) {
+                uint32_t mask_stride = ALIGN_UP((uint32_t)w, 32u) / 8;
+                uint32_t mask_off = offset + stride * height;
+                if (ce_range(mask_off, mask_stride * height, object->bytes)) {
+                    const uint8_t *and = b + mask_off + (height - row - 1) * mask_stride;
+                    if (and[sx / 8] & (0x80u >> (sx & 7)))
+                        continue;
+                }
+            }
             ui.surf.px[dy * ui.surf.stride + dx] = RGB565(rgb);
         }
     }
 }
 
+struct memory_dc {
+    CW bitmap, font, brush, pen;
+};
+static struct memory_dc *memory_dc(CW handle)
+{
+    struct ce_object *o = ce_object(handle, CE_OBJ_DC);
+    return o ? o->data : NULL;
+}
+CE_API(CreateCompatibleDC)
+{
+    struct memory_dc *dc = calloc(1, sizeof(*dc));
+    if (!dc)
+        return 0;
+    CW handle = ce_new_object(CE_OBJ_DC, 0, dc, sizeof(*dc));
+    if (!handle)
+        free(dc);
+    return handle;
+}
+CE_API(DeleteDC)
+{
+    struct ce_object *o = ce_object(a0, CE_OBJ_DC);
+    if (!o) {
+        ce_error = 6;
+        return 0;
+    }
+    free(o->data);
+    memset(o, 0, sizeof(*o));
+    return 1;
+}
+CE_API(CreateCompatibleBitmap)
+{
+    if (!a1 || !a2 || a1 > 1024 || a2 > 1024) {
+        ce_error = 87;
+        return 0;
+    }
+    unsigned stride = ALIGN_UP(a1 * 2, 4u), bytes = 52 + stride * a2;
+    uint8_t *b = calloc(1, bytes);
+    if (!b)
+        return 0;
+    ce_put32(b, 40);
+    ce_put32(b + 4, a1);
+    ce_put32(b + 8, a2);
+    ce_put16(b + 12, 1);
+    ce_put16(b + 14, 16);
+    ce_put32(b + 16, 3);
+    ce_put32(b + 40, 0xf800);
+    ce_put32(b + 44, 0x7e0);
+    ce_put32(b + 48, 31);
+    CW handle = ce_new_object(CE_OBJ_BITMAP, 0x80000000u, b, bytes);
+    struct ce_object *o = ce_object(handle, CE_OBJ_BITMAP);
+    if (o) {
+        o->width = a1;
+        o->height = a2;
+    } else
+        free(b);
+    return handle;
+}
+CE_API(BitBlt)
+{
+    struct memory_dc *source = memory_dc(a5), *dest = memory_dc(a0);
+    struct ce_object *bitmap = source ? ce_object(source->bitmap, CE_OBJ_BITMAP) : NULL;
+    if (a8 != 0x00cc0020 || !bitmap || a3 > 1024 || a4 > 1024) {
+        ce_error = 50;
+        return 0;
+    }
+    gfx_surface saved = ui.surf;
+    gfx_rect r = ce_window_rect(a0);
+    if (dest) {
+        struct ce_object *b = ce_object(dest->bitmap, CE_OBJ_BITMAP);
+        if (!b || b->value != 0x80000000u) {
+            ce_error = 87;
+            return 0;
+        }
+        gfx_surface_init(&ui.surf, (uint16_t *)((uint8_t *)b->data + 52), b->width, b->height,
+                         ALIGN_UP(b->width, 2));
+        /* Writable compatible DIBs use top-down scan lines. */
+        ce_put32((uint8_t *)b->data + 8, (CW)-b->height);
+        r = gfx_r(0, 0, b->width, b->height);
+    }
+    gfx_set_clip(&ui.surf, gfx_r(r.x + (int)a1, r.y + (int)a2, a3, a4));
+    ce_draw_bitmap(bitmap, r.x + (int)a1, r.y + (int)a2 - (int)a7, a6, a3, 0xffffffffu);
+    ui.surf = saved;
+    return 1;
+}
+CE_API(DrawFocusRect)
+{
+    if (!a1)
+        return 0;
+    gfx_rect r = rectangle(a0, PTR(struct ce_rect, a1));
+    for (int y = 0; y < r.h; y++)
+        for (int x = 0; x < r.w; x++) {
+            int dx = r.x + x, dy = r.y + y;
+            if ((x == 0 || y == 0 || x == r.w - 1 || y == r.h - 1) && !((dx + dy) & 1) &&
+                gfx_rect_contains(ui.surf.clip, dx, dy))
+                ui.surf.px[dy * ui.surf.stride + dx] ^= 0xffff;
+        }
+    return 1;
+}
+CE_API(GetObjectW)
+{
+    struct ce_object *o = ce_object(a0, 0);
+    if (!o)
+        return 0;
+    if (o->kind == CE_OBJ_BITMAP) {
+        if (!a2)
+            return 24;
+        if (a1 < 24 || o->bytes < 40)
+            return 0;
+        const uint8_t *b = o->data;
+        CW out[6] = {0,
+                     ce_u32(b + 4),
+                     (CW)abs((int)ce_u32(b + 8)),
+                     ALIGN_UP(ce_u32(b + 4) * ce_u16(b + 14), 32u) / 8,
+                     (CW)ce_u16(b + 12) | ((CW)ce_u16(b + 14) << 16),
+                     0};
+        memcpy(PTR(void, a2), out, 24);
+        return 24;
+    }
+    ce_error = 50;
+    return 0;
+}
 CE_API(BeginPaint)
 {
     struct ce_window *w = ce_window(a0);
@@ -227,6 +364,13 @@ CE_API(DeleteObject)
     struct ce_object *o = ce_object(a0, 0);
     if (!o)
         return 0;
+    if (o->kind == CE_OBJ_IMAGE_LIST) {
+        struct image_list *l = o->data;
+        for(unsigned i=0;i<l->count;i++)free(l->image[i].data);
+    }
+    if (o->kind == CE_OBJ_IMAGE_LIST || o->kind == CE_OBJ_DC ||
+        (o->kind == CE_OBJ_BITMAP && o->value == 0x80000000u))
+        free(o->data);
     memset(o, 0, sizeof(*o));
     return 1;
 }
@@ -235,6 +379,13 @@ CE_API(SelectObject)
     struct ce_object *o = ce_object(a1, 0);
     if (!o)
         return 0;
+    struct memory_dc *dc = memory_dc(a0);
+    if (dc) {
+        CW *slot = o->kind == CE_OBJ_BITMAP ? &dc->bitmap : o->kind == CE_OBJ_FONT ? &dc->font :
+                   o->kind == CE_OBJ_BRUSH ? &dc->brush : o->kind == CE_OBJ_PEN ? &dc->pen : NULL;
+        if (!slot) return 0;
+        CW old = *slot; *slot = a1; return old;
+    }
     CW old = 0;
     if (o->kind == CE_OBJ_FONT) {
         old = selected_font;
@@ -469,9 +620,10 @@ CE_API(SetCursor)
     cursor = a0;
     return old;
 }
+CE_API(LoadImageW);
 CE_API(LoadIconW)
 {
-    return a1 ? a1 : 1;
+    return ce_LoadImageW(a0, a1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 CE_API(LoadImageW)
 {
@@ -485,46 +637,143 @@ CE_API(LoadImageW)
         ce_error = 1813;
         return 0;
     }
-    return ce_new_object(CE_OBJ_BITMAP, a2, (void *)data, size);
+    if (a2 == 1) {
+        if (size < 20 || ce_u16((const uint8_t *)data + 2) != 1 || !ce_u16((const uint8_t *)data + 4))
+            return 0;
+        data = ce_resource(a0, 3, ce_u16((const uint8_t *)data + 18), &size);
+        if (!data || size < 40)
+            return 0;
+    }
+    CW handle = ce_new_object(a2 == 1 ? CE_OBJ_ICON : CE_OBJ_BITMAP, a2, (void *)data, size);
+    struct ce_object *o = ce_object(handle, 0);
+    if (o && size >= 40) {
+        o->width = (int)ce_u32((const uint8_t *)data + 4);
+        o->height = abs((int)ce_u32((const uint8_t *)data + 8)) / (a2 == 1 ? 2 : 1);
+    }
+    return handle;
 }
 CE_API(LoadBitmapW)
 {
     return ce_LoadImageW(a0, a1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
+CE_API(ImageList_Create)
+{
+    if (!a0 || !a1 || a0 > 256 || a1 > 256 || a3 > CE_IMAGES) {
+        ce_error = 87;
+        return 0;
+    }
+    struct image_list *l = calloc(1, sizeof(*l));
+    if (!l)
+        return 0;
+    CW handle = ce_new_object(CE_OBJ_IMAGE_LIST, 0xffffffffu, l, sizeof(*l));
+    struct ce_object *o = ce_object(handle, CE_OBJ_IMAGE_LIST);
+    if (!o) {
+        free(l);
+        return 0;
+    }
+    o->width = a0;
+    o->height = a1;
+    return handle;
+}
+CE_API(ImageList_ReplaceIcon)
+{
+    struct ce_object *o = ce_object(a0, CE_OBJ_IMAGE_LIST), *icon = ce_object(a2, CE_OBJ_ICON);
+    if (!o || !icon)
+        return (CW)-1;
+    struct image_list *l = o->data;
+    unsigned index = a1 == 0xffffffffu ? l->count : a1;
+    if (index >= CE_IMAGES || (a1 != 0xffffffffu && index >= l->count))
+        return (CW)-1;
+    void *copy = malloc(icon->bytes);
+    if (!copy)
+        return (CW)-1;
+    memcpy(copy, icon->data, icon->bytes);
+    free(l->image[index].data);
+    l->image[index] = *icon;
+    l->image[index].data = copy;
+    if (index == l->count)
+        l->count++;
+    return index;
+}
+CE_API(ImageList_Add)
+{
+    struct ce_object *o = ce_object(a0, CE_OBJ_IMAGE_LIST), *bitmap = ce_object(a1, CE_OBJ_BITMAP);
+    if (!o || !bitmap || !bitmap->width || a2) {
+        ce_error = a2 ? 50 : 87;
+        return (CW)-1;
+    }
+    struct image_list *l = o->data;
+    unsigned count = bitmap->width / o->width, first = l->count;
+    if (!count || count > CE_IMAGES - first)
+        return (CW)-1;
+    for (unsigned i = 0; i < count; i++) {
+        void *copy = malloc(bitmap->bytes);
+        if (!copy) {
+            while (l->count > first) {
+                free(l->image[--l->count].data);
+                memset(&l->image[l->count], 0, sizeof(l->image[0]));
+            }
+            return (CW)-1;
+        }
+        memcpy(copy, bitmap->data, bitmap->bytes);
+        l->image[l->count] = *bitmap;
+        l->image[l->count].data = copy;
+        l->image[l->count++].value = i * o->width;
+    }
+    return first;
+}
+CE_API(ImageList_GetImageCount)
+{
+    struct ce_object *o = ce_object(a0, CE_OBJ_IMAGE_LIST);
+    return o ? ((struct image_list *)o->data)->count : 0;
+}
 CE_API(ImageList_LoadImage)
 {
-    uint32_t size;
-    const void *data = ce_resource(a0, 2, (uint16_t)a1, &size);
-    if (!data)
+    CW bitmap = ce_LoadImageW(a0, a1, a5, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    struct ce_object *b = ce_object(bitmap, 0);
+    if (!b)
         return 0;
-    CW id = ce_new_object(CE_OBJ_IMAGE_LIST, a4, (void *)data, size);
-    struct ce_object *o = ce_object(id, CE_OBJ_IMAGE_LIST);
-    if (o) {
-        o->width = (int)a2;
-        o->height = abs((int32_t)ce_u32((const uint8_t *)data + 8));
+    CW handle = ce_ImageList_Create(a2 ? a2 : (CW)b->width, b->height, 0, 0, a3, 0, 0, 0, 0, 0, 0, 0);
+    struct ce_object *o = ce_object(handle, CE_OBJ_IMAGE_LIST);
+    CW added = a5 == 1 ? ce_ImageList_ReplaceIcon(handle, (CW)-1, bitmap, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                       : ce_ImageList_Add(handle, bitmap, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    ce_DeleteObject(bitmap, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    if (o)
+        o->value = a4;
+    if (added == (CW)-1) {
+        ce_DeleteObject(handle, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        return 0;
     }
-    return id;
+    return handle;
 }
 CE_API(ImageList_Draw)
 {
     struct ce_object *o = ce_object(a0, CE_OBJ_IMAGE_LIST);
-    if (!o || a1 > 4096)
+    if (!o || a1 >= ((struct image_list *)o->data)->count)
         return 0;
+    struct ce_object *image = &((struct image_list *)o->data)->image[a1];
     gfx_rect r = ce_window_rect(a2);
-    ce_draw_bitmap(o, r.x + (int)a3, r.y + (int)a4, (int)a1 * o->width, o->width,
-                   (a5 & 1) ? o->value : 0xffffffffu);
+    ce_draw_bitmap(image, r.x + (int)a3, r.y + (int)a4, image->kind == CE_OBJ_ICON ? 0 : image->value,
+                   o->width, (a5 & 1) ? o->value : 0xffffffffu);
     return 1;
 }
 CE_API(ImageList_Destroy)
 {
-    struct ce_object *o = ce_object(a0, CE_OBJ_IMAGE_LIST);
-    if (!o)
+    if (!ce_object(a0, CE_OBJ_IMAGE_LIST))
         return 0;
-    memset(o, 0, sizeof(*o));
-    return 1;
+    return ce_DeleteObject(a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+CE_API(DestroyIcon)
+{
+    if (!ce_object(a0, CE_OBJ_ICON))
+        return 0;
+    return ce_DeleteObject(a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 static const struct ce_export exports[] = {
+    CE_EXPORT(CreateCompatibleDC), CE_EXPORT(DeleteDC), CE_EXPORT(CreateCompatibleBitmap),
+    CE_EXPORT(BitBlt), CE_EXPORT(DrawFocusRect), CE_EXPORT(GetObjectW),
+    {"GetWindowDC", (void *)ce_GetDC},
     CE_EXPORT(BeginPaint),
     CE_EXPORT(EndPaint),
     CE_EXPORT(GetDC),
@@ -555,6 +804,11 @@ static const struct ce_export exports[] = {
     CE_EXPORT(SetCursor),
     CE_EXPORT(LoadIconW), CE_EXPORT(LoadImageW),
     CE_EXPORT(LoadBitmapW),
+    CE_EXPORT(ImageList_Create),
+    CE_EXPORT(ImageList_Add),
+    CE_EXPORT(ImageList_ReplaceIcon),
+    CE_EXPORT(ImageList_GetImageCount),
+    CE_EXPORT(DestroyIcon),
     CE_EXPORT(ImageList_LoadImage),
     CE_EXPORT(ImageList_Draw),
     CE_EXPORT(ImageList_Destroy),

@@ -31,7 +31,13 @@ struct ce_module {
     CW base;
 };
 extern struct ce_module ce_main;
-extern CW ce_error;
+CW *ce_error_slot(void);
+#define ce_error (*ce_error_slot())
+void *ce_resolve_thread(const char *);
+void *ce_resolve_ole(const char *, const char *);
+void *ce_resolve_winsock(const char *, const char *);
+bool ce_sync_close(CW, bool *);
+void ce_thread_exit(CW) __attribute__((noreturn));
 extern struct ui_keyboard ce_keyboard;
 extern bool ce_keyboard_open;
 
@@ -52,10 +58,12 @@ struct ce_window {
     bool visible, dirty, modified, enabled;
     struct ce_tabs *tabs;
     struct ce_list *list;
+    struct ce_view *view;
     CW dialog_proc, dialog_result;
     CW dialog_message_result;
     bool property_page;
     CW spin_buddy;
+    unsigned bar_images;
     int32_t spin_low, spin_high;
     bool dialog_done;
 };
@@ -64,7 +72,7 @@ struct ce_tabs {
     int selected;
     WCHAR text[16][64];
 };
-enum { CE_OBJ_BRUSH = 1, CE_OBJ_FONT, CE_OBJ_BITMAP, CE_OBJ_MENU, CE_OBJ_IMAGE_LIST, CE_OBJ_PEN };
+enum { CE_OBJ_BRUSH = 1, CE_OBJ_FONT, CE_OBJ_BITMAP, CE_OBJ_MENU, CE_OBJ_IMAGE_LIST, CE_OBJ_PEN, CE_OBJ_ICON, CE_OBJ_DC };
 struct ce_object {
     int kind;
     CW value;
@@ -90,6 +98,8 @@ CW ce_import_address(const char *, const char *);
 bool ce_bundled_res_name(const char *leaf, char out[48]);
 void ce_shutdown(void);
 const void *ce_resource(CW module, uint16_t type, uint16_t id, uint32_t *size);
+uint32_t ce_image_remaining(CW address);
+const char *ce_module_name(CW handle);
 CW ce_call(CW proc, CW a0, CW a1, CW a2, CW a3);
 
 unsigned ce_wlen(const WCHAR *);
@@ -124,5 +134,9 @@ bool ce_list_message(struct ce_window *, CW, CW, CW, CW *);
 void ce_list_draw(struct ce_window *);
 void ce_list_popup_draw(void);
 bool ce_list_popup_input(const struct gz_input_event *);
+bool ce_view_init(struct ce_window *);
+void ce_view_free(struct ce_window *);
+bool ce_view_message(struct ce_window *, CW, CW, CW, CW *);
+void ce_view_draw(struct ce_window *);
 
 #endif

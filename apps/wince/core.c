@@ -1,8 +1,8 @@
 /* WinCE core services used by the original BE-300 applications. */
 #include "registry.h"
 #include "runtime.h"
+#include <glaze/thread.h>
 
-CW ce_error;
 
 /* Microsoft CE and GCC O32 use low/high register pairs for these integer
  * helpers. Keep the 64-bit return type so v1 is preserved by the bridge. */
@@ -151,18 +151,95 @@ CE_API(SetLastError)
     ce_error = a0;
     return 0;
 }
+struct local_block {
+    struct local_block *next;
+    CW size;
+};
+static struct local_block *locals;
+static struct gz_mutex local_lock = GZ_MUTEX_INIT;
+static struct local_block **local_find(CW p)
+{
+    struct local_block **link = &locals;
+    while (*link && WORD(*link + 1) != p)
+        link = &(*link)->next;
+    return link;
+}
 CE_API(LocalAlloc)
 {
-    return WORD((a0 & 0x40) ? calloc(1, a1) : malloc(a1));
+    if (a1 > 4u * 1024u * 1024u) {
+        ce_error = 8;
+        return 0;
+    }
+    struct local_block *b = malloc(sizeof(*b) + MAX(1u, a1));
+    if (!b) {
+        ce_error = 8;
+        return 0;
+    }
+    b->size = a1;
+    if (a0 & 0x40)
+        memset(b + 1, 0, a1);
+    gz_mutex_lock(&local_lock);
+    b->next = locals;
+    locals = b;
+    gz_mutex_unlock(&local_lock);
+    return WORD(b + 1);
 }
 CE_API(LocalFree)
 {
-    free(PTR(void, a0));
+    if (!a0)
+        return 0;
+    gz_mutex_lock(&local_lock);
+    struct local_block **link = local_find(a0), *b = *link;
+    if (b)
+        *link = b->next;
+    gz_mutex_unlock(&local_lock);
+    if (!b) {
+        ce_error = 6;
+        return a0;
+    }
+    free(b);
     return 0;
+}
+CE_API(LocalSize)
+{
+    gz_mutex_lock(&local_lock);
+    struct local_block *b = *local_find(a0);
+    CW size = b ? b->size : 0;
+    gz_mutex_unlock(&local_lock);
+    if (!b)
+        ce_error = 6;
+    return size;
 }
 CE_API(LocalReAlloc)
 {
-    return WORD(realloc(PTR(void, a0), a1));
+    if (a1 > 4u * 1024u * 1024u) {
+        ce_error = 8;
+        return 0;
+    }
+    gz_mutex_lock(&local_lock);
+    struct local_block **link = local_find(a0), *b = *link;
+    if (!b) {
+        gz_mutex_unlock(&local_lock);
+        ce_error = 6;
+        return 0;
+    }
+    if (a2 & 0x80) {
+        gz_mutex_unlock(&local_lock);
+        return a0;
+    }
+    CW old = b->size;
+    struct local_block *resized = realloc(b, sizeof(*b) + MAX(1u, a1));
+    if (!resized) {
+        gz_mutex_unlock(&local_lock);
+        ce_error = 8;
+        return 0;
+    }
+    *link = resized;
+    resized->size = a1;
+    if ((a2 & 0x40) && a1 > old)
+        memset((uint8_t *)(resized + 1) + old, 0, a1 - old);
+    gz_mutex_unlock(&local_lock);
+    return WORD(resized + 1);
 }
 CE_API(malloc)
 {
@@ -434,9 +511,7 @@ CE_API(lstrcpyW)
 }
 CE_API(ExitThread)
 {
-    ce_shutdown();
-    gz_exit((int)a0);
-    return 0;
+    ce_thread_exit(a0);
 }
 CE_API(ExitProcess)
 {
@@ -480,14 +555,26 @@ CE_API(GetLocalTime)
     out[7] = 0;
     return 0;
 }
+static bool bundled_module_path(const char *, char [FS_PATH_MAX]);
 CE_API(GetModuleFileNameW)
 {
-    if ((a0 && a0 != ce_main.base) || !a1 || !a2) {
+    if (!a1 || !a2) {
         ce_error = 87;
         return 0;
     }
     uint32_t length;
-    const char *source = res_map("source.txt", &length);
+    char module_path[FS_PATH_MAX];
+    const char *source;
+    if (a0 && a0 != ce_main.base) {
+        const char *module = ce_module_name(a0);
+        if (!module || !bundled_module_path(module, module_path)) {
+            ce_error = 126;
+            return 0;
+        }
+        source = module_path;
+        length = strlen(source);
+    } else
+        source = res_map("source.txt", &length);
     const char *fallback = "\\Program Files\\program.exe";
     if (!source) {
         source = fallback;
@@ -510,12 +597,10 @@ CE_API(GetModuleFileNameW)
 
 /* CE's wide printf uses 16-bit strings. Formatting is bounded internally;
  * unsupported conversions abort instead of pretending formatting succeeded. */
-CE_API(wsprintfW)
+static CW wide_format(WCHAR *out, const WCHAR *fmt, const CW *args, unsigned limit, unsigned nargs)
 {
-    CW args[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
-    WCHAR *out = PTR(WCHAR, a0), *fmt = PTR(WCHAR, a1);
     unsigned pos = 0, arg = 0;
-    while (*fmt && pos < 1023) {
+    while (*fmt && pos + 1 < limit) {
         if (*fmt != '%') {
             out[pos++] = *fmt++;
             continue;
@@ -531,13 +616,13 @@ CE_API(wsprintfW)
             width = MIN(64u, width * 10u + (uint32_t)(*fmt++ - '0'));
         if (*fmt == 'l')
             fmt++;
-        if (arg == ARRAY_SIZE(args))
+        if (arg == nargs)
             ce_missing("wsprintfW: too many arguments");
         CW value = args[arg++];
         WCHAR spec = *fmt++;
         if (spec == 's') {
             WCHAR *s = PTR(WCHAR, value);
-            while (s && *s && pos < 1023)
+            while (s && *s && pos + 1 < limit)
                 out[pos++] = *s++;
         } else if (spec == 'c')
             out[pos++] = (WCHAR)value;
@@ -547,14 +632,98 @@ CE_API(wsprintfW)
                 ce_missing("wsprintfW conversion");
             snprintf(format, sizeof(format), "%%%s%u%c", zero ? "0" : "", width, (char)spec);
             snprintf(buffer, sizeof(buffer), format, value);
-            for (char *s = buffer; *s && pos < 1023;)
+            for (char *s = buffer; *s && pos + 1 < limit;)
                 out[pos++] = (WCHAR)(uint8_t)*s++;
         }
     }
-    out[pos] = 0;
+    if (limit)
+        out[pos] = 0;
     return pos;
 }
 
+CE_API(wsprintfW)
+{
+    CW args[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
+    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), args, 1024, ARRAY_SIZE(args));
+}
+CE_API(vswprintf)
+{
+    if (!a0 || !a1 || !a2) {
+        ce_error = 87;
+        return (CW)-1;
+    }
+    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), PTR(CW, a2), 1024, 128);
+}
+CE_API(_snwprintf)
+{
+    CW args[] = {a3, a4, a5, a6, a7, a8, a9, a10, a11};
+    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a2), args, MIN(a1, 1024u), ARRAY_SIZE(args));
+}
+
+CE_API(iswctype)
+{
+    unsigned c = a0, mask = 0;
+    bool upper = (c >= 'A' && c <= 'Z') || (c >= 0xc0 && c <= 0xde && c != 0xd7);
+    bool lower = (c >= 'a' && c <= 'z') || (c >= 0xe0 && c <= 0xff && c != 0xf7);
+    if (upper)
+        mask |= 0x101;
+    if (lower)
+        mask |= 0x102;
+    if (c >= '0' && c <= '9')
+        mask |= 4 | 0x80;
+    if ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
+        mask |= 0x80;
+    if (c == ' ' || (c >= 9 && c <= 13))
+        mask |= 8;
+    if (c == ' ' || c == '\t')
+        mask |= 0x40;
+    if (c < 32 || c == 127)
+        mask |= 0x20;
+    if (c >= 33 && c <= 126 && !(mask & (0x100 | 4)))
+        mask |= 0x10;
+    return mask & a1;
+}
+CE_API(towupper)
+{
+    return (a0 >= 'a' && a0 <= 'z') || (a0 >= 0xe0 && a0 <= 0xfe && a0 != 0xf7) ? a0 - 32 : a0;
+}
+CE_API(_wcslwr)
+{
+    WCHAR *p = PTR(WCHAR, a0);
+    if (!p)
+        return 0;
+    for (unsigned i = 0; p[i]; i++)
+        if ((p[i] >= 'A' && p[i] <= 'Z') || (p[i] >= 0xc0 && p[i] <= 0xde && p[i] != 0xd7))
+            p[i] += 32;
+    return a0;
+}
+CE_API(_wcsupr)
+{
+    WCHAR *p = PTR(WCHAR, a0);
+    if (!p)
+        return 0;
+    for (unsigned i = 0; p[i]; i++)
+        p[i] = ce_towupper(p[i], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    return a0;
+}
+CE_API(_wcsrev)
+{
+    WCHAR *p = PTR(WCHAR, a0);
+    unsigned n = ce_wlen(p);
+    for (unsigned i = 0; i < n / 2; i++) {
+        WCHAR c = p[i];
+        p[i] = p[n - i - 1];
+        p[n - i - 1] = c;
+    }
+    return a0;
+}
+CE_API(OutputDebugStringW)
+{
+    char message[512];
+    ce_narrow(message, sizeof(message), PTR(WCHAR, a0));
+    printf("wince: debug: %s\n", message);
+    return 0;
+}
 CE_API(MultiByteToWideChar)
 {
     const char *input = PTR(char, a2);
@@ -1013,6 +1182,21 @@ bool ce_bundled_res_name(const char *leaf, char out[48])
     }
     return false;
 }
+static bool bundled_module_path(const char *leaf, char out[FS_PATH_MAX])
+{
+    load_bundled_files();
+    for (unsigned i = 0; i < bundled_count; i++) {
+        const char *base = strrchr(bundled_files[i].path, '/');
+        base = base ? base + 1 : bundled_files[i].path;
+        if (!strcasecmp(base, leaf)) {
+            strlcpy(out, bundled_files[i].path, FS_PATH_MAX);
+            for (char *p = out; *p; p++)
+                if (*p == '/') *p = '\\';
+            return true;
+        }
+    }
+    return false;
+}
 
 static bool ce_bundled_file(const char *canonical, char res_path[FS_PATH_MAX])
 {
@@ -1309,6 +1493,7 @@ CE_API(CreateFileW)
             }
             int fd = fs_open(open_path, flags);
             if (fd < 0) {
+                printf("wince: open failed %s: %d\n", canonical, fd);
                 file_error(fd);
                 return 0xffffffffu;
             }
@@ -1323,6 +1508,10 @@ CE_API(CreateFileW)
 }
 CE_API(CloseHandle)
 {
+    bool handled;
+    bool closed = ce_sync_close(a0, &handled);
+    if (handled)
+        return closed;
     struct file_handle *f = file_handle(a0);
     if (!f) {
         ce_error = 6;
@@ -1477,6 +1666,7 @@ CE_API(GetProcAddressW)
         return ce_find_ordinal(a0, (uint16_t)a1);
     char name[128];
     ce_narrow(name, sizeof(name), PTR(WCHAR, a1));
+    printf("wince: lookup %08x!%s\n", a0, name);
     return a0 == 0x73000000u ? ce_import_address("coredll.dll", name) : ce_find_symbol(a0, name);
 }
 CE_API(GetProcAddressA)
@@ -1484,6 +1674,7 @@ CE_API(GetProcAddressA)
     if (a1 < 65536)
         return ce_find_ordinal(a0, (uint16_t)a1);
     const char *name = PTR(char, a1);
+    printf("wince: lookup %08x!%s\n", a0, name);
     return a0 == 0x73000000u ? ce_import_address("coredll.dll", name) : ce_find_symbol(a0, name);
 }
 CE_API(FreeLibrary)
@@ -1523,7 +1714,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(SetLastError),
     CE_EXPORT(LocalAlloc),
     CE_EXPORT(LocalFree),
-    CE_EXPORT(LocalReAlloc),
+    CE_EXPORT(LocalReAlloc), CE_EXPORT(LocalSize),
     CE_EXPORT(malloc),
     CE_EXPORT(HeapCreate),
     CE_EXPORT(HeapAlloc),
@@ -1556,11 +1747,17 @@ static const struct ce_export exports[] = {
     CE_EXPORT(lstrcmpiW),
     CE_EXPORT(lstrlenW),
     CE_EXPORT(lstrcpyW),
-    CE_EXPORT(wsprintfW),
+    CE_EXPORT(wsprintfW), CE_EXPORT(vswprintf), CE_EXPORT(_snwprintf),
+    {"wvsprintfW", (void *)ce_vswprintf},
+    {"strcpy", (void *)strcpy}, {"strncpy", (void *)strncpy},
+    {"strcat", (void *)strcat}, {"strchr", (void *)strchr},
+    {"strstr", (void *)strstr}, {"strcmp", (void *)strcmp},
+    {"atoi", (void *)atoi}, {"qsort", (void *)qsort},
     {"swprintf", (void *)ce_wsprintfW},
     CE_EXPORT(MultiByteToWideChar),
     CE_EXPORT(WideCharToMultiByte),
-    CE_EXPORT(CompareStringW),
+    CE_EXPORT(CompareStringW), CE_EXPORT(iswctype), CE_EXPORT(towupper),
+    CE_EXPORT(_wcslwr), CE_EXPORT(_wcsupr), CE_EXPORT(_wcsrev), CE_EXPORT(OutputDebugStringW),
     CE_EXPORT(RegCreateKeyExW),
     CE_EXPORT(RegOpenKeyExW),
     CE_EXPORT(RegCloseKey),

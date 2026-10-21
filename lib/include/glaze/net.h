@@ -33,7 +33,7 @@
 /* Requests: w0 = op, w1 = session; replies: w0 = result (>= 0 or error). */
 enum {
     NET_HELLO = 1,      /* w1 = pid -> w1 = session, w2 = shm id */
-    NET_STATUS,         /* -> buf: struct net_status */
+    NET_STATUS,         /* -> buf: struct net_status; w1 = -1: -> reply w1... instead */
     NET_RESOLVE,        /* buf: host name, w2 = timeout -> w1 = address */
     NET_SOCKET,         /* w2 = NET_TCP or NET_UDP -> socket */
     NET_CONNECT,        /* w2 = socket, w3 = address, w4 = port, w5 = timeout (0: start) */

@@ -8,6 +8,7 @@
 
 #include <glaze/audio.h>
 #include <glaze/fs.h>
+#include <glaze/net.h>
 #include <glaze/notify.h>
 #include <glaze/passcode.h>
 #include <glaze/prefs.h>
@@ -100,6 +101,14 @@ static struct {
     int pressed;
 } alert = { .app = -1, .pressed = -1 };
 static uint32_t down_ms, jiggle_next, card_poll_next;
+static uint32_t card_status_next;
+static bool network_card;
+static struct {
+    bool open, touching, pressed;
+    gfx_rect button;
+    struct sb_card_details details;
+} card_dialog;
+static bool card_icon_touch;
 
 /* Passcode entry. Wrong tries are counted until the right one, in RAM. */
 static char pin[UI_PASSCODE_LEN + 1];
@@ -125,6 +134,9 @@ static uint32_t now_ms(void)
 
 static void flush(gfx_rect r)
 {
+    /* Keep the modal visible while clocks, notifications and apps update. */
+    if (card_dialog.open)
+        return;
     gfx_blit(&fb, r.x, r.y, &bb, r);
 }
 
@@ -179,6 +191,17 @@ static void update_clock(bool force)
         return;
     minute_shown = dt.minute;
     sb_clock_from(&view.clk, &dt);
+}
+
+static bool update_card_status(void)
+{
+    struct fs_stat st;
+    bool mounted = network_card || fs_stat("/Card", &st) == 0;
+    bool changed = mounted != view.card_mounted;
+
+    view.card_mounted = mounted;
+    card_status_next = now_ms() + CARD_POLL_MS;
+    return changed;
 }
 
 static uint32_t now_secs(void)
@@ -267,7 +290,7 @@ static void render_app_status(void)
 {
     if (app_index < 0 || app_fullscreen)
         return;
-    sb_draw_status(&bb, &view.clk, sb_apps[app_index].status_style, false);
+    sb_draw_status(&bb, &view, sb_apps[app_index].status_style, false);
     flush(gfx_r(0, 0, SCREEN_W, SB_STATUS_H));
 }
 
@@ -275,6 +298,8 @@ static void present_app_rect(gfx_rect r)
 {
     gfx_rect c;
 
+    if (card_dialog.open)
+        return;
     if (!gfx_rect_intersect(r, gfx_r(0, 0, SB_APP_W, app_height()), &c))
         return;
     gfx_blit(&fb, c.x, c.y + app_top(), &app_surf, c);
@@ -335,6 +360,139 @@ static void render_app(void)
 {
     render_app_status();
     present_app_rect(gfx_r(0, 0, SB_APP_W, app_height()));
+}
+
+/* ---- CF card details ---------------------------------------------------- */
+
+static void card_size(char *out, size_t cap, const char *label, uint32_t bytes)
+{
+    uint32_t unit = bytes >= 1024 * 1024 ? 1024 * 1024 : 1024;
+
+    snprintf(out, cap, "%s: %u.%u %s", label, bytes / unit,
+             bytes % unit * 10 / unit, unit == 1024 ? "KB" : "MB");
+}
+
+static void render_card_dialog(void)
+{
+    gfx_blit(&bb, 0, 0, &snap, gfx_r(0, 0, SCREEN_W, SCREEN_H));
+    card_dialog.button = sb_draw_card_details(&bb, &card_dialog.details, card_dialog.pressed);
+    /* This is the only compositor write allowed while the dialog is open. */
+    gfx_blit(&fb, 0, 0, &bb, gfx_r(0, 0, SCREEN_W, SCREEN_H));
+}
+
+static void close_card_dialog(void)
+{
+    card_dialog.open = card_dialog.touching = card_dialog.pressed = false;
+    if (state == ST_LOCK)
+        render_lock();
+    else if (state == ST_PASSCODE)
+        render_passcode();
+    else if (state == ST_HOME)
+        render_home();
+    else if (state == ST_APP)
+        render_app();
+}
+
+static void show_card_details(void)
+{
+    struct sb_card_details *d = &card_dialog.details;
+    char (*line)[48] = d->lines;
+
+    memset(d, 0, sizeof(*d));
+    if (network_card) {
+        struct net_status st;
+        strlcpy(d->title, "Network Card", sizeof(d->title));
+        if (net_status(&st) < 0) {
+            strlcpy(line[0], "Card details unavailable.", sizeof(line[0]));
+            d->num_lines = 1;
+        } else {
+            const char *status = st.state == NET_UP ? "Connected (DHCP)"
+                               : st.state == NET_UP_STATIC ? "Connected (static)"
+                               : st.state == NET_CONFIGURING ? "Configuring address..." : "Not connected";
+            strlcpy(line[0], "NE2000 Ethernet", sizeof(line[0]));
+            strlcpy(line[1], status, sizeof(line[1]));
+            snprintf(line[2], sizeof(line[2]), "MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                     st.mac[0], st.mac[1], st.mac[2], st.mac[3], st.mac[4], st.mac[5]);
+            d->num_lines = 3;
+            if (st.state == NET_UP || st.state == NET_UP_STATIC) {
+                char addr[16];
+                snprintf(line[3], sizeof(line[3]), "IP: %s", net_ntoa(st.addr, addr));
+                snprintf(line[4], sizeof(line[4]), "Mask: %s", net_ntoa(st.mask, addr));
+                snprintf(line[5], sizeof(line[5]), "Router: %s", net_ntoa(st.gateway, addr));
+                snprintf(line[6], sizeof(line[6]), "DNS: %s", net_ntoa(st.dns, addr));
+                d->num_lines = 7;
+            }
+        }
+    } else {
+        struct fs_info info;
+        strlcpy(d->title, "Storage Card", sizeof(d->title));
+        if (fs_statvfs("/Card", &info) < 0 || info.mounted) {
+            strlcpy(line[0], "Card is no longer mounted.", sizeof(line[0]));
+            d->num_lines = 1;
+        } else {
+            strlcpy(line[0], "CompactFlash storage", sizeof(line[0]));
+            strlcpy(line[1], "Mounted at /Card", sizeof(line[1]));
+            card_size(line[2], sizeof(line[2]), "Capacity", info.total);
+            card_size(line[3], sizeof(line[3]), "Used", info.used);
+            card_size(line[4], sizeof(line[4]), "Free", info.total > info.used ? info.total - info.used : 0);
+            d->num_lines = 5;
+        }
+    }
+    /* No transition runs while this modal uses the animation snapshot. */
+    gfx_blit(&snap, 0, 0, &fb, gfx_r(0, 0, SCREEN_W, SCREEN_H));
+    card_dialog.open = true;
+    card_dialog.touching = card_dialog.pressed = false;
+    render_card_dialog();
+}
+
+/* Swallow the entire icon gesture, so its release never reaches an app. */
+static bool card_details_event(const struct gz_input_event *e)
+{
+    if (card_dialog.open) {
+        if (e->type == GZ_EV_KEY_UP) {
+            if (e->code == GZ_KEY_ESC || e->code == GZ_KEY_ENTER ||
+                e->code == GZ_KEY_OK || e->code == GZ_KEY_HOME)
+                close_card_dialog();
+        } else if (e->type == GZ_EV_KEY_DOWN && e->code == GZ_KEY_POWER) {
+            close_card_dialog();
+            return false;
+        } else if (e->type == GZ_EV_TOUCH_DOWN || e->type == GZ_EV_TOUCH_MOVE || e->type == GZ_EV_TOUCH_UP) {
+            bool hit = gfx_rect_contains(card_dialog.button, e->x, e->y);
+            if (e->type == GZ_EV_TOUCH_DOWN)
+                card_dialog.touching = hit;
+            bool pressed = card_dialog.touching && hit;
+            if (e->type == GZ_EV_TOUCH_UP) {
+                card_dialog.touching = false;
+                if (pressed) {
+                    audio_sound(AUDIO_SND_TAP);
+                    close_card_dialog();
+                    return true;
+                }
+                pressed = false;
+            }
+            if (pressed != card_dialog.pressed) {
+                card_dialog.pressed = pressed;
+                render_card_dialog();
+            }
+        }
+        return true;
+    }
+    bool hit = gfx_rect_contains(sb_card_icon_rect(), e->x, e->y);
+    bool stable = !anim.active && !touching && !dragging_knob && !alert.open &&
+                  (state == ST_LOCK || state == ST_PASSCODE || state == ST_HOME ||
+                   (state == ST_APP && !app_fullscreen));
+    if (e->type == GZ_EV_TOUCH_DOWN && stable && view.card_mounted && hit)
+        card_icon_touch = true;
+    if (!card_icon_touch)
+        return false;
+    if (e->type == GZ_EV_TOUCH_UP) {
+        card_icon_touch = false;
+        if (stable && view.card_mounted && hit) {
+            audio_sound(AUDIO_SND_TAP);
+            show_card_details();
+        }
+    }
+    return e->type == GZ_EV_TOUCH_DOWN || e->type == GZ_EV_TOUCH_MOVE || e->type == GZ_EV_TOUCH_UP;
 }
 
 /* ---- app management ----------------------------------------------------- */
@@ -448,7 +606,7 @@ static void begin_unlock(void)
     if (lock_over_app && app_index >= 0) {
         gfx_blit(&snap, 0, app_top(), &app_surf, gfx_r(0, 0, SB_APP_W, app_height()));
         if (!app_fullscreen)
-            sb_draw_status(&snap, &view.clk, sb_apps[app_index].status_style, false);
+            sb_draw_status(&snap, &view, sb_apps[app_index].status_style, false);
     } else {
         view.scroll_x = 0;
         view.pressed = -1;
@@ -888,6 +1046,8 @@ static void handle_input(void)
     while ((n = gz_input_read(evs, 16)) > 0) {
         for (int i = 0; i < n; i++) {
             const struct gz_input_event *e = &evs[i];
+            if (card_details_event(e))
+                continue;
             if (e->type == GZ_EV_KEY_DOWN || e->type == GZ_EV_KEY_UP) {
                 handle_key(e);
                 continue;
@@ -1232,6 +1392,10 @@ int main(void)
     gz_input_bind(sb_port);
 
     update_clock(true);
+    /* The NE2000 owns the socket for the whole boot; storage can hot-plug. */
+    struct net_status net;
+    network_card = net_status(&net) == 0 && net.state != NET_NO_CARD;
+    update_card_status();
     state = ST_LOCK;
     render_lock();
     timesync_start(sb_port);
@@ -1253,6 +1417,8 @@ int main(void)
         }
         if (pin_wait)
             timeout = MIN(timeout, 1000);   /* count down "Try again" */
+        if (!anim.active)
+            timeout = MIN(timeout, MAX((int)(card_status_next - t), 0));
         if (state == ST_HOME && !anim.active) {
             if (view.jiggle)
                 timeout = MIN(timeout, MAX((int)(jiggle_next - t), 0));
@@ -1341,9 +1507,23 @@ int main(void)
 
         int old_minute = minute_shown;
         update_clock(false);
-        if (minute_shown != old_minute) {
+        bool card_changed = false;
+        if (!anim.active && (int)(now_ms() - card_status_next) >= 0)
+            card_changed = update_card_status();
+        if (card_changed && card_dialog.open && view.card_mounted)
+            close_card_dialog();
+        if (card_changed && card_dialog.open && !view.card_mounted) {
+            struct sb_card_details *d = &card_dialog.details;
+            strlcpy(d->lines[0], "Card is no longer mounted.", sizeof(d->lines[0]));
+            d->num_lines = 1;
+            card_dialog.touching = card_dialog.pressed = false;
+            render_card_dialog();
+        }
+        if (minute_shown != old_minute || card_changed) {
             if (state == ST_LOCK)
                 render_lock();
+            else if (state == ST_PASSCODE)
+                render_passcode();
             else if (state == ST_HOME)
                 render_home();
             else if (state == ST_APP)
