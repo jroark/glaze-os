@@ -809,7 +809,16 @@ int main(void)
         else if (view == V_LIST && (next_thumb() >= 0 || list.sc.animating))
             wait = list.sc.animating ? 30 : 0;
         if (ui_next_event(&ev, wait)) {
-            if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
+            if (ev.type == GZ_EV_APP_DEACTIVATE) {
+                if (view == V_PLAYER && playing)
+                    toggle_play();      /* Home: pause, which also frees the Music player */
+            } else if (ev.type == GZ_EV_TOUCH_CANCEL) {
+                /* Home mid-touch: drop the touch (and any scrub) without acting on it. */
+                bool changed;
+                pressed_done = pressed_play = scrubbing = false;
+                ui_list_event(&list, &ev, &changed);
+                redraw();
+            } else if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
                 key_event(&ev);
             else if (view == V_LIST)
                 list_event(&ev);

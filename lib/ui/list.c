@@ -74,6 +74,13 @@ int ui_list_event(struct ui_list *l, const struct gz_input_event *e, bool *dirty
             *dirty = true;
         }
         break;
+    case GZ_EV_TOUCH_CANCEL:
+        if (!l->sc.dragging)
+            return -1;
+        ui_scroll_event(&l->sc, e, y);
+        l->pressed = -1;
+        *dirty = true;
+        break;
     case GZ_EV_TOUCH_UP: {
         if (!l->sc.dragging)
             return -1;

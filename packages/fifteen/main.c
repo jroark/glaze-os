@@ -96,6 +96,8 @@ int main(void)
     for (;;) {
         if (!ui_next_event(&e, -1))
             continue;
+        if (e.type == GZ_EV_TOUCH_CANCEL)
+            down = -1;                  /* Home mid-touch: no move */
         if (e.type == GZ_EV_TOUCH_DOWN)
             down = (e.x >= 19 && e.x < 221 && e.y >= 77 && e.y < 279)
                        ? ((e.y - 77) / 51) * 4 + (e.x - 19) / 51

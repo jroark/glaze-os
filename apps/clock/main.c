@@ -353,6 +353,8 @@ int main(void)
                         timer_press(pressed);
                 }
                 pressed = -1;
+            } else if (ev.type == GZ_EV_TOUCH_CANCEL) {
+                pressed = -1;                   /* Home mid-touch: not a press */
             } else if (ev.type == GZ_EV_APP_NOTIFY && ev.code == TIMER_NOTE && tm_running) {
                 tm_end = ui_now_secs();         /* SpringBoard's clock got there first */
                 rung = true;                    /* and it rang the timer */

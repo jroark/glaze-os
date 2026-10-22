@@ -207,7 +207,10 @@ int main(void)
             draw();
             continue;
         }
-        if (ev.type == GZ_EV_APP_NOTIFY) {
+        if (ev.type == GZ_EV_TOUCH_CANCEL) {
+            pressed = 0;                /* Home mid-touch: not a press */
+            draw();
+        } else if (ev.type == GZ_EV_APP_NOTIFY) {
             /* A reminder came due while Calendar is open, so SpringBoard
              * leaves showing it to us. Reminders fire on their own day. */
             gz_rtc_get(&today);

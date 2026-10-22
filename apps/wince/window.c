@@ -690,6 +690,18 @@ static void input(const struct gz_input_event *e)
             ce_post(focus, e->type == GZ_EV_KEY_DOWN ? 0x100 : 0x101, vk, 0);
         return;
     }
+    if (e->type == GZ_EV_TOUCH_CANCEL) {
+        /* Home mid-touch: as on Windows CE, WM_CANCELMODE ends a capture
+         * without the button-up that would click. */
+        bool changed = false;
+        ui_keyboard_event(&ce_keyboard, e, 320 - UI_KB_H, &changed);
+        if (capture)
+            ce_post(capture, 0x1F, 0, 0);
+        capture = 0;
+        if (changed)
+            ce_render();
+        return;
+    }
     if (e->type != GZ_EV_TOUCH_DOWN && e->type != GZ_EV_TOUCH_MOVE && e->type != GZ_EV_TOUCH_UP)
         return;
     if (ce_keyboard_open && !ui.hardware_keyboard && e->y >= 320 - UI_KB_H) {

@@ -12,8 +12,8 @@
 #include "folders.h"
 #include "ftl.h"
 
-#define MAX_SESSIONS    8
-#define MAX_FILES       16
+#define MAX_SESSIONS    16
+#define MAX_FILES       32
 
 struct session {
     int pid;                /* 0 = free */

@@ -699,7 +699,13 @@ int main(void)
         struct gz_input_event ev;
         if (!ui_next_event(&ev, -1))
             continue;
-        if (alert != A_NONE) {
+        if (ev.type == GZ_EV_TOUCH_CANCEL) {
+            /* Home mid-touch: a dragged run goes back where it was. */
+            touch_kind = T_NONE;
+            dragging = false;
+            alert_pressed = -1;
+            draw();
+        } else if (alert != A_NONE) {
             alert_event(&ev);
             draw();
         } else {

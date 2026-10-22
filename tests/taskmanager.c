@@ -35,7 +35,7 @@ int main(void)
     fixture = (struct gz_task_snapshot){.time_us = 1000000, .busy_us = 100000,
         .total_pages = 4096, .free_pages = 2048, .page_size = 4096, .count = 3,
         .tasks = {{.pid = 33, .threads = 2, .mapped_pages = 123, .cpu_us = 20000, .name = "springboard"},
-                  {.pid = 65, .flags = GZ_TASK_APP, .threads = 1, .mapped_pages = 100, .cpu_us = 10000, .name = "hello"},
+                  {.pid = 65, .flags = GZ_TASK_APP | GZ_TASK_BG, .threads = 1, .mapped_pages = 100, .cpu_us = 10000, .name = "hello"},
                   {.pid = 97, .flags = GZ_TASK_APP | GZ_TASK_SELF, .threads = 1, .mapped_pages = 155, .cpu_us = 30000, .name = "taskmanager"}}};
     take_sample();
     assert(!mon.rate_valid);

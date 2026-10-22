@@ -21,6 +21,9 @@
 
 #define PKG_ID_MAX      24
 #define PKG_BUNDLE_MAX  48      /* "/Card/Applications/" + id + ".app" + NUL */
+/* In each installed bundle: one more than in the bundle it replaced, so a
+ * running copy can tell it was reinstalled, even at the same version. */
+#define PKG_INSTALL_ID  ".install-id"
 
 struct pkg_info {
     char id[PKG_ID_MAX + 1];    /* [a-z0-9.-] */
@@ -42,6 +45,8 @@ int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX]);
 int pkg_uninstall(const char *bundle);
 /* The installed bundle of an id on either volume, or GZ_ENOENT. */
 int pkg_find(const char *id, char bundle[PKG_BUNDLE_MAX]);
+/* A bundle's install number, or 0 (no bundle, or installed before them). */
+uint32_t pkg_install_id(const char *bundle);
 /* Calls fn for each app installed under root, in name order; returns the
  * count. Interrupted installs found on the way are removed. */
 int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_info *info, void *arg), void *arg);

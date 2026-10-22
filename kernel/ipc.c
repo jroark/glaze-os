@@ -186,6 +186,13 @@ int ipc_reply(int token, uint32_t umsg)
     return 0;
 }
 
+bool ipc_port_owned(int id, const struct proc *p)
+{
+    struct port *port = port_get(id);
+
+    return port && port->owner == p;
+}
+
 int ipc_notify(int id, uint32_t bits)
 {
     struct port *p = port_get(id);

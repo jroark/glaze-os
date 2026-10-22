@@ -1182,6 +1182,21 @@ int main(void)
                     key_event(&ev);
                 else if (ev.type == GZ_EV_APP_ACTIVATE)
                     ;
+                else if (ev.type == GZ_EV_TOUCH_CANCEL) {
+                    /* Home mid-touch: drop the touch without acting on it. */
+                    bool changed;
+                    pressed = P_NONE;
+                    press_link = NULL;
+                    press_ctl = NULL;
+                    in_keyboard = false;
+                    ui_scroll_event(&sc, &ev, 0);
+                    ui_list_event(&list, &ev, &changed);
+                    ui_keyboard_event(&kb, &ev, 0, &changed);
+                } else if (ev.type == GZ_EV_APP_DEACTIVATE) {
+                    if (scroll_changed)
+                        save_state();   /* it may be ended while suspended */
+                    scroll_changed = 0;
+                }
                 else if (view == V_PAGE)
                     browser_event(&ev);
                 else

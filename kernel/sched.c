@@ -88,6 +88,8 @@ struct thread *thread_by_tid(int tid)
 
 static void runq_push(struct thread *t)
 {
+    if (t->proc && t->proc->frozen)
+        return;                         /* runnable, but queued only when thawed */
     t->next = NULL;
     if (runq_tail[t->prio])
         runq_tail[t->prio]->next = t;
@@ -297,6 +299,45 @@ static void runq_remove(struct thread *t)
 }
 
 void ipc_fail_reply_waiters(struct proc *dead, struct thread *t);
+
+void sched_set_proc_prio(struct proc *p, int prio)
+{
+    for (int i = 0; i < MAX_THREADS; i++) {
+        struct thread *t = &threads[i];
+        if (t->state == T_UNUSED || t->state == T_ZOMBIE || t->proc != p)
+            continue;
+        if (t->prio == prio)
+            continue;
+        if (t->state == T_RUNNABLE) {
+            runq_remove(t);
+            t->prio = prio;
+            runq_push(t);
+        } else {
+            t->prio = prio;
+        }
+    }
+    need_resched = true;
+}
+
+/* A frozen process's runnable threads are off the run queue; wake-ups
+ * leave them runnable there, and thawing queues them all. */
+void sched_freeze_proc(struct proc *p, bool frozen)
+{
+    if (p->frozen == frozen)
+        return;
+    if (frozen) {
+        for (int i = 0; i < MAX_THREADS; i++)
+            if (threads[i].proc == p && threads[i].state == T_RUNNABLE)
+                runq_remove(&threads[i]);
+        p->frozen = true;
+    } else {
+        p->frozen = false;
+        for (int i = 0; i < MAX_THREADS; i++)
+            if (threads[i].proc == p && threads[i].state == T_RUNNABLE)
+                runq_push(&threads[i]);
+    }
+    need_resched = true;
+}
 
 /* Make every thread of `p` a zombie and fail anyone waiting on `p`. */
 void sched_kill_proc_threads(struct proc *p)
