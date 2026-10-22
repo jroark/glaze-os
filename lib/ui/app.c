@@ -9,6 +9,12 @@
 
 struct ui_app ui;
 
+static bool bg_running;         /* keep running in the background */
+static bool touching;           /* a touch is down */
+static int16_t touch_x, touch_y;
+static bool deactivate_held;    /* DEACTIVATE waits behind a cancelled touch */
+static bool suspend_next;       /* the next ui_next_event waits for ACTIVATE */
+
 void ui_init(int status_style)
 {
     struct gz_msg m, r;
@@ -44,10 +50,43 @@ bool ui_in_background(void)
     return ui.shared && ui.shared->background != 0;
 }
 
+void ui_set_background_running(bool on)
+{
+    bg_running = on;
+}
+
+/* Blocks until SpringBoard brings the app back, dropping what it sent meanwhile. */
+static void wait_activate(struct gz_input_event *ev)
+{
+    struct sb_shared *sh = ui.shared;
+
+    for (;;) {
+        while (sh->tail != sh->head) {
+            *ev = sh->ev[sh->tail % SB_RING];
+            sh->tail++;
+            if (ev->type == GZ_EV_APP_ACTIVATE)
+                return;
+        }
+        struct gz_msg m;
+        gz_recv(ui.port, &m, -1);
+    }
+}
+
 int ui_next_event(struct gz_input_event *ev, int timeout_ms)
 {
     uint32_t start = gz_time_ms();
 
+    if (deactivate_held) {
+        deactivate_held = false;
+        *ev = (struct gz_input_event){.type = GZ_EV_APP_DEACTIVATE, .time_ms = gz_time_ms()};
+        return 1;
+    }
+    if (suspend_next) {
+        suspend_next = false;
+        wait_activate(ev);
+        ui_invalidate_all();
+        return 1;
+    }
     for (;;) {
         struct sb_shared *sh = ui.shared;
         if (sh->tail != sh->head) {
@@ -60,8 +99,23 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
                 *ev = sh->ev[sh->tail % SB_RING];
                 sh->tail++;
             }
-            if (ev->type == GZ_EV_APP_ACTIVATE)
+            if (ev->type == GZ_EV_TOUCH_DOWN || ev->type == GZ_EV_TOUCH_MOVE) {
+                touching = true;
+                touch_x = ev->x;
+                touch_y = ev->y;
+            } else if (ev->type == GZ_EV_TOUCH_UP)
+                touching = false;
+            else if (ev->type == GZ_EV_APP_ACTIVATE)
                 ui_invalidate_all();
+            else if (ev->type == GZ_EV_APP_DEACTIVATE) {
+                suspend_next = !bg_running;
+                if (touching) {
+                    touching = false;
+                    deactivate_held = true;
+                    *ev = (struct gz_input_event){.type = GZ_EV_TOUCH_CANCEL, .x = touch_x, .y = touch_y,
+                                                  .time_ms = gz_time_ms()};
+                }
+            }
             if (!ui_in_background() && ev->type < GZ_EV_APP_ACTIVATE)
                 uisnd_event(ev);
             return 1;

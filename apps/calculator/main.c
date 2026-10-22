@@ -467,8 +467,8 @@ int main(void)
                 pressed = h;
                 redraw = true;
             }
-        } else if (ev.type == GZ_EV_TOUCH_UP) {
-            if (pressed >= 0)
+        } else if (ev.type == GZ_EV_TOUCH_UP || ev.type == GZ_EV_TOUCH_CANCEL) {
+            if (pressed >= 0 && ev.type == GZ_EV_TOUCH_UP)
                 activate(&keys[pressed]);
             pressed = -1;
             redraw = true;

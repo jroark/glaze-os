@@ -1427,7 +1427,8 @@ static void on_event(void *ctx, const struct oscar_event *ev)
         }
         if (view == V_BUDDIES)
             build_rows();
-        play(SND_IM_IN);
+        if (!ui_in_background())
+            play(SND_IM_IN);            /* in the background the note sounds */
         if (away_now[0] && !ev->flag && (!c->autoreply_ms || gz_time_ms() - c->autoreply_ms >= AUTOREPLY_MS)) {
             if (oscar_send_im(&o, c->name, away_now, true) == 0) {
                 log_add(c, K_ME_AUTO, away_now);
@@ -1847,6 +1848,7 @@ int main(void)
     uint32_t last_minute = 0;
 
     ui_init(SB_STATUS_GRAY);
+    ui_set_background_running(true);    /* stay signed on after Home */
     load_account();
     ui_list_init(&blist, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H - TOOLBAR_H), ROW_H);
     oscar_init(&o, &(struct oscar_ops){ NULL, net_send_hook, on_event });

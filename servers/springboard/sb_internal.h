@@ -40,6 +40,7 @@ struct sb_app_info {
     char exec[16];              /* installed: the executable in the bundle */
     char id[28];                /* installed: package id (process name) */
     char version[16];           /* installed: package version */
+    bool run_stamp;             /* installed: launch left a stamp in the bundle */
     int status_style;
     bool dock;
     bool installed;
@@ -47,8 +48,8 @@ struct sb_app_info {
 };
 
 #define SB_MAX_APPS     32
-#define SB_MAX_RUNNING  5           /* concurrent running apps (front + background) */
 #define SWITCHER_SLOTS  4           /* icons shown in the multitasking bar */
+#define SB_MAX_RUNNING  SWITCHER_SLOTS  /* running apps (front + background), all in the bar */
 #define SWITCHER_H      74          /* height of the bottom multitasking tray */
 #define SB_MAX_NOTES    16          /* scheduled, all apps together */
 #define SB_LOCK_NOTES   4           /* shown on the lock screen */
@@ -145,6 +146,7 @@ void apps_scan(bool card_only);     /* updates sb_apps[] */
 bool apps_changed(void);            /* since the last call: redraw */
 uint32_t apps_reinstalled_mask(void); /* bitmask of slots updated/removed */
 int apps_launch(int app);           /* pid, or an error */
+bool apps_replaced(int app);        /* reinstalled since apps_launch */
 int apps_uninstall(int app);
 int notify_app_for_path(const char *path);
 void notify_set_badge(int app, uint32_t count);

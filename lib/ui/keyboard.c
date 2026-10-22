@@ -171,6 +171,10 @@ int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
             uisnd_sounded();
         }
         return 0;
+    case GZ_EV_TOUCH_CANCEL:
+        kb->pressed = -1;
+        *changed = old != -1;
+        return 0;
     case GZ_EV_TOUCH_UP: {
         int k = kb->pressed;
         kb->pressed = -1;

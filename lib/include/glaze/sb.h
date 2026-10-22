@@ -85,5 +85,8 @@ struct sb_shared {
 #define GZ_EV_APP_ACTIVATE      0x100
 #define GZ_EV_APP_NOTIFY        0x101   /* code = low 16 bits of the note's id */
 #define GZ_EV_APP_DEACTIVATE    0x102
+/* From libui, before DEACTIVATE when a touch is down: the touch is over, but
+ * nothing was released, so nothing should act (x, y: its last position). */
+#define GZ_EV_TOUCH_CANCEL      0x103
 
 #endif

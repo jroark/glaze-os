@@ -47,6 +47,7 @@ enum state {
 #define SURFACE_BYTES   (SB_APP_W * GZ_FB_HEIGHT * 2)
 #define SHM_HEADER      4096
 #define LOW_MEM_PAGES   512     /* keep >= 2 MiB free when backgrounding/spawning */
+#define BG_POLL_MS      2000    /* look for background apps that have exited */
 
 _Static_assert(sizeof(struct sb_shared) <= SHM_HEADER, "sb_shared must fit before the surface");
 
@@ -468,13 +469,17 @@ static bool evict_lru_background(int exclude_slot)
     return true;
 }
 
+/* Ends background apps while memory is low, but stops once ending one gives
+ * nothing back: what is missing then is not theirs (surfaces are kept). */
 static void reclaim_background_memory(int exclude_slot)
 {
-    for (;;) {
-        struct gz_sysinfo si;
-        if (gz_sysinfo(&si) || si.free_pages >= LOW_MEM_PAGES)
-            break;
-        if (!evict_lru_background(exclude_slot))
+    struct gz_sysinfo si;
+
+    if (gz_sysinfo(&si))
+        return;
+    while (si.free_pages < LOW_MEM_PAGES && evict_lru_background(exclude_slot)) {
+        uint32_t before = si.free_pages;
+        if (gz_sysinfo(&si) || si.free_pages <= before)
             break;
     }
 }
@@ -603,32 +608,30 @@ static void launch(int index)
     }
 
     reclaim_background_memory(-1);
+    /* A free slot, preferring one with a surface already: surfaces are
+     * never freed, so making another can only fail once memory or shm ids
+     * run out, and then the least recently used app gives up its own. */
     int slot = -1;
     for (int i = 0; i < SB_MAX_RUNNING; i++) {
-        if (running[i].pid <= 0) {
+        if (running[i].pid <= 0 && (slot < 0 || (running[i].shm_base && !running[slot].shm_base)))
             slot = i;
-            break;
-        }
     }
-    if (slot < 0) {
-        evict_lru_background(-1);
+    if (slot < 0 || !slot_ensure_shm(&running[slot])) {
+        int victim = -1;
         for (int i = 0; i < SB_MAX_RUNNING; i++) {
-            if (running[i].pid <= 0) {
-                slot = i;
-                break;
-            }
+            if (i != front_slot && running[i].pid > 0 &&
+                (victim < 0 || (int32_t)(running[i].last_active_ms - running[victim].last_active_ms) < 0))
+                victim = i;
         }
-    }
-    if (slot < 0)
-        return;
-
-    struct sb_running *s = &running[slot];
-    while (!slot_ensure_shm(s)) {
-        if (!evict_lru_background(slot)) {
+        if (victim < 0) {
             show_alert(-1, "Out of Memory", "Close an app and try again.");
             return;
         }
+        slot_kill(victim);              /* it had a surface */
+        slot = victim;
     }
+
+    struct sb_running *s = &running[slot];
 
     s->shared->head = s->shared->tail = 0;
     s->shared->background = 0;
@@ -890,12 +893,11 @@ static bool rescan(bool card_only)
 {
     apps_scan(card_only);
     uint32_t reinstalled = apps_reinstalled_mask();
-    if (reinstalled) {
-        for (int i = 0; i < SB_MAX_RUNNING; i++) {
-            int app = running[i].app_index;
-            if (running[i].pid > 0 && app >= 0 && (reinstalled & (1u << app)) && i != front_slot)
-                slot_kill(i);
-        }
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        int app = running[i].app_index;
+        if (running[i].pid > 0 && app >= 0 && i != front_slot &&
+            ((reinstalled & (1u << app)) || (!card_only && apps_replaced(app))))
+            slot_kill(i);
     }
     if (!apps_changed())
         return false;
@@ -1422,11 +1424,8 @@ static int handle_note_msg(const struct gz_msg *m, struct gz_msg *r)
             render_home();
         return 0;
     case SB_NOTE_POST: {
-        uint32_t when = m->w[1];
-        int rv = notify_post(app, m->w[2], when ? when : now_secs(), m->w[4], q.title, q.body);
-        if (!rv && !when)
-            fire_due();
-        return rv;
+        uint32_t when = m->w[1] ? m->w[1] : now_secs();
+        return notify_post(app, m->w[2], when, m->w[4], q.title, q.body);
     }
     case SB_NOTE_CANCEL:
         return notify_cancel(app, m->w[1]);
@@ -1635,8 +1634,10 @@ int main(void)
         } else if (state == ST_LOCK && !dragging_knob && view.knob_x == 0) {
             int wait = (int)(shimmer_next - t);
             timeout = MIN(timeout, wait < 0 ? 0 : wait);
-        } else if (state == ST_LAUNCH_WAIT || any_app_running()) {
-            timeout = MIN(timeout, 250);    /* watch the app processes */
+        } else if (state == ST_LAUNCH_WAIT || front_slot >= 0) {
+            timeout = MIN(timeout, 250);    /* watch the front app */
+        } else if (any_app_running()) {
+            timeout = MIN(timeout, BG_POLL_MS);
         }
         if (pin_wait)
             timeout = MIN(timeout, 1000);   /* count down "Try again" */

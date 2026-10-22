@@ -26,6 +26,13 @@ int proc_count(void)
     return n;
 }
 
+/* A managed app and nothing more: a privileged app may not be ended or
+ * demoted by other apps, and goes back to PRIO_HIGH, not PRIO_NORMAL. */
+static bool proc_is_app(const struct proc *p)
+{
+    return (p->flags & ~PROC_BACKGROUND) == PROC_APP;
+}
+
 int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size)
 {
     struct gz_task_snapshot s;
@@ -42,7 +49,7 @@ int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size)
         struct gz_task_info *t = &s.tasks[s.count++];
         t->pid = (uint32_t)p->pid;
         t->parent = (uint32_t)p->parent;
-        t->flags = ((p->flags & PROC_APP) ? GZ_TASK_APP : 0) |
+        t->flags = (proc_is_app(p) ? GZ_TASK_APP : 0) |
                    ((p->flags & PROC_BACKGROUND) ? GZ_TASK_BG : 0) |
                    (p == cur->proc ? GZ_TASK_SELF : 0);
         t->cpu_us = p->cpu_us;
@@ -63,7 +70,7 @@ int proc_task_stop(int pid)
 {
     struct proc *p = proc_by_pid(pid);
     if (!p) return GZ_ENOENT;
-    if (p == cur->proc || !(p->flags & PROC_APP)) return GZ_EPERM;
+    if (p == cur->proc || !proc_is_app(p)) return GZ_EPERM;
     proc_exit(p, -9);
     return 0;
 }
@@ -72,7 +79,7 @@ int proc_set_bg(int pid, bool bg)
 {
     struct proc *p = proc_by_pid(pid);
     if (!p) return GZ_ENOENT;
-    if (!(p->flags & PROC_APP)) return GZ_EPERM;
+    if (!proc_is_app(p)) return GZ_EPERM;
     if (bg)
         p->flags |= PROC_BACKGROUND;
     else

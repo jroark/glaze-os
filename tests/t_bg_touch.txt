@@ -1,0 +1,12 @@
+# Home during a touch: the app is suspended with the touch cancelled, so on
+# resume the held key is neither stuck down nor acted on.
+# 1. Unlock, launch Calculator, press and hold 7.
+# 2. Press Home while still holding, release over the home screen.
+# 3. Resume Calculator: the display shows 0 and 7 is not highlighted.
+# Boot for ~12 s (tests/run.sh tests/t_bg_touch.txt 12).
+3000 drag 40 280 235 280 500
+4500 tap 210 48
+6000 down 30 190
+6400 key home
+7400 up 30 190
+8500 tap 210 48
