@@ -6,6 +6,7 @@ in the spirit of the classic ones rather than copies of them.
 
     tools/mksounds.py assets/sounds
     tools/mksounds.py --aim packages/aim/res
+    tools/mksounds.py --gmail packages/gmail/res
 
 The output is deterministic and checked in; rerun it after changing a sound.
 """
@@ -164,14 +165,38 @@ def aim_sounds():
     return {k: fade_out(v) for k, v in s.items()}
 
 
+def gmail_sounds():
+    rng = random.Random(2004)
+    s = {}
+
+    # New mail: a warm two-note ascending chime (F5 -> A5/C6).
+    bell = ((1, 1.0), (2, 0.35), (3, 0.12))
+    chime = place(tone(698.46, 0.32, bell, decay=9),
+                  mix(tone(880.0, 0.45, bell, decay=7), tone(1046.5, 0.45, ((1, 0.6), (2, 0.2)), decay=7.5)), 0.14)
+    s["newmail.wav"] = normalize(chime, 0.65)
+
+    # Sent mail: a crisp paper whoosh followed by a soft confirmation pop.
+    whoosh, y = [], 0.0
+    for i in range(secs(0.18)):
+        t = i / 0.18 / RATE
+        y += (0.08 + 0.30 * t) * (rng.uniform(-1, 1) - y)
+        whoosh.append(y * math.sin(math.pi * t) ** 2)
+    s["mailsend.wav"] = normalize(place(whoosh, tone(1046.5, 0.09, ((1, 1.0), (2, 0.2)), decay=35), 0.12), 0.55)
+
+    return {k: fade_out(v) for k, v in s.items()}
+
+
 def main():
     args = sys.argv[1:]
     make = sounds
     if args[:1] == ["--aim"]:
         make = aim_sounds
         args = args[1:]
+    elif args[:1] == ["--gmail"]:
+        make = gmail_sounds
+        args = args[1:]
     if len(args) != 1:
-        sys.exit("usage: mksounds.py [--aim] <out dir>")
+        sys.exit("usage: mksounds.py [--aim|--gmail] <out dir>")
     os.makedirs(args[0], exist_ok=True)
     for name, samples in sorted(make().items()):
         write(os.path.join(args[0], name), samples)

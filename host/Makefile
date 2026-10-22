@@ -152,6 +152,15 @@ aim-test: ../tests/aim.c ../packages/aim/oscar.c ../packages/aim/md5.c ../packag
 	../out/host/aim-test
 .PHONY: aim-test
 
+gmail-test: ../tests/gmail.c ../tests/settings_sys.h ../packages/gmail/main.c ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c ../packages/gmail/mail.h ../packages/gmail/gmail.h libwolfssl.a
+	@mkdir -p ../out/host
+	$(CC) $(WEB_CFLAGS) -include ../tests/settings_sys.h -o ../out/host/gmail-test ../tests/gmail.c \
+	    ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c \
+	    hostres.c $(GFX) ../lib/ui/widgets.c ../lib/ui/list.c ../lib/ui/keyboard.c \
+	    ../lib/ui/text.c ../lib/ui/input.c ../lib/ui/transition.c ../lib/libc/tz.c libwolfssl.a
+	../out/host/gmail-test
+.PHONY: gmail-test
+
 gfx-bench: ../tests/gfx_bench.c ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -o ../out/host/gfx-bench $^

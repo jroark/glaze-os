@@ -40,5 +40,11 @@
     "developer": "Glaze",
     "summary": "Instant messages, the classic way.",
     "description": "Sign on to an AIM revival server or your own OSCAR server and chat with your buddies. See who is online, away or idle, keep your Buddy List on the server, set an away message that answers for you, and hear doors open as friends sign on. Requires an Ethernet card."
+  },
+  {
+    "id": "gmail",
+    "developer": "Glaze",
+    "summary": "Email on the go with Gmail.",
+    "description": "Read, search and send Gmail over IMAPS and SMTPS with an App Password or your own mail server. Browse Inbox, Starred, Sent, Drafts, All Mail and Trash, star or archive messages, and keep recent mail cached for offline reading. Requires an Ethernet card."
   }
 ]
