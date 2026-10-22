@@ -10,7 +10,7 @@ struct ce_dialog_item {
 };
 struct ce_dialog_template {
     uint32_t style;
-    int16_t width, height;
+    int16_t x, y, width, height;
     uint16_t title[256];
     unsigned count;
     struct ce_dialog_item items[32];

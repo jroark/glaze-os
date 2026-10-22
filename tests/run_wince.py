@@ -50,6 +50,17 @@ def read_package(path):
     return app_id, executable, entries
 
 
+def runtime_failures(lines, app_id, expected_exit=None):
+    failures = []
+    exit_pattern = re.compile(rf"proc: {re.escape(app_id[:15])} pid \d+ exited \((-?\d+)\)")
+    for line in lines:
+        status = exit_pattern.search(line)
+        if (any(token in line for token in ("fault:", "PANIC", "Unsupported WinCE call:", "wince: error:"))
+                or status and int(status[1]) not in (0, expected_exit)):
+            failures.append(line)
+    return failures
+
+
 def read_registry(data):
     """Read the private registry for assertions independently of the guest."""
     if len(data) < 8 or data[:4] != b"GZCE":
@@ -104,6 +115,8 @@ def main():
     parser.add_argument("--check-key", action="append", default=[], help="assert a persisted private registry key")
     parser.add_argument("--check-string", nargs=3, action="append", default=[], metavar=("KEY", "NAME", "TEXT"),
                         help="assert a persisted REG_SZ value")
+    parser.add_argument("--check-file-utf16", nargs=2, action="append", default=[], metavar=("PATH", "TEXT"),
+                        help="assert UTF-16 text in a file relative to this app's private data directory")
     args = parser.parse_args()
     if args.package and (args.app or any((args.check_document, args.check_owner, args.check_regedit, args.check_tweak))):
         parser.error("--package cannot be combined with NAND app selection or app-specific checks")
@@ -170,13 +183,23 @@ def main():
         "entered": any("wince: entering original executable" in line for line in lines),
         "loaded": [line for line in lines if line.startswith("wince: loaded ")],
         "unresolved": [line for line in lines if "wince: unresolved import" in line],
-        "failures": [line for line in lines if any(token in line for token in ("fault:", "PANIC", "wince: error:"))],
+        "failures": runtime_failures(lines, app_id, args.expect_exit),
         "memory": [line for line in lines if line.startswith("sb: launch ")],
     }
     (work / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     for line in lines:
         if any(token in line for token in ("wince:", "fault:", "PANIC", "sb: launch")):
             print(line)
+    if args.check_file_utf16:
+        subprocess.run(["make", "-C", "host", "../out/host/wince-fs-read"], check=True)
+        for path, expected in args.check_file_utf16:
+            if any(p in ("", ".", "..") for p in path.split("/")) or "\\" in path:
+                raise ValueError("private file assertion requires a relative data path")
+            result = subprocess.run([str(root / "out/host/wince-fs-read"), str(work / "glaze.bin"),
+                f"/Applications/{app_id}.app/data/{path}"], capture_output=True, check=True)
+            if not expected.encode("utf-16le") + b"\0\0" in result.stdout:
+                raise RuntimeError(f"missing persisted UTF-16 text in {path}")
+        print("wince: persisted private file assertions verified")
     if args.check_key or args.check_string:
         subprocess.run(["make", "-C", "host", "../out/host/wince-fs-read"], check=True)
         result = subprocess.run([str(root / "out/host/wince-fs-read"), str(work / "glaze.bin"),
@@ -259,7 +282,7 @@ def main():
         print("wince: persisted PalmTweak animation and six-minute battery timeout verified")
     if not any("wince: entering original executable" in line for line in lines):
         raise RuntimeError("original executable did not start; inspect test logs")
-    if any(any(token in line for token in ("fault:", "PANIC", "Unsupported WinCE call:", "wince: error:")) for line in lines):
+    if report["failures"]:
         raise RuntimeError("compatibility runtime failed; inspect test logs")
     if args.expect_exit is not None:
         name = re.escape(app_id[:15])

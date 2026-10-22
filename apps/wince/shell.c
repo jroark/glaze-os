@@ -17,6 +17,13 @@ static CW clipboard;
 static bool clipboard_open;
 static bool popup_return;
 static CW popup_result;
+CE_API(Shell_NotifyIcon)
+{
+    /* Glaze has no CE notification area. Report the optional service as
+     * unavailable, allowing callers to keep their ordinary main window. */
+    ce_error = 50;
+    return 0;
+}
 static struct {
     CW handle;
     const void *data;
@@ -194,7 +201,16 @@ bool ce_shell_input(const struct gz_input_event *e)
             struct ce_window *child = ce_window(0x70000000u + j);
             if (child && ce_window_visible(child->handle) && child->enabled && child->parent == w->handle &&
                 gfx_rect_contains(ce_window_rect(child->handle), e->x, e->y)) {
-                ce_post(w->parent, 0x111, child->id, child->handle);
+                if (menu(child->user)) {
+                    ce_send(w->parent, 0x116, child->user, 0);
+                    ce_send(w->parent, 0x117, child->user, 0);
+                    popup = child->user;
+                    popup_owner = w->parent;
+                    popup_x = MIN(e->x, 60);
+                    popup_y = r.y + r.h;
+                    ce_redraw_all();
+                } else
+                    ce_post(w->parent, 0x111, child->id, child->handle);
                 return true;
             }
         }
@@ -232,6 +248,39 @@ bool ce_shell_input(const struct gz_input_event *e)
 CE_API(LoadMenuW)
 {
     return load_menu(a0, a1);
+}
+CE_API(CreatePopupMenu)
+{
+    struct menu *m = calloc(1, sizeof(*m));
+    if (!m)
+        return 0;
+    CW h = ce_new_object(CE_OBJ_MENU, 0, m, sizeof(*m));
+    if (!h)
+        free(m);
+    return h;
+}
+CE_API(AppendMenuW)
+{
+    struct menu *m = menu(a0);
+    if (!m || m->count == ARRAY_SIZE(m->item) || (a1 & (4 | 0x100))) {
+        ce_error = !m ? 1401 : (a1 & (4 | 0x100)) ? 50 : 8;
+        return 0;
+    }
+    if ((a1 & 16) && !menu(a2)) {
+        ce_error = 1401;
+        return 0;
+    }
+    struct menu_item *it = &m->item[m->count++];
+    it->flags = a1;
+    if (a1 & 16)
+        it->submenu = a2;
+    else
+        it->command = a2;
+    if (!(a1 & 0x800) && a3) {
+        unsigned n = MIN(ce_wlen(PTR(WCHAR, a3)), ARRAY_SIZE(it->text) - 1);
+        memcpy(it->text, PTR(void, a3), n * 2);
+    }
+    return 1;
 }
 CE_API(GetSubMenu)
 {
@@ -287,12 +336,20 @@ CE_API(CommandBar_Create)
     struct ce_window *w = ce_new_window(klass, NULL, 0x10000000, 0, 0, 240, 26, a1, a2, 0, 0);
     return w ? w->handle : 0;
 }
-CE_API(CSOBar_Create)
+/* CSOBARINFO is passed by value after the three leading arguments: this
+ * OEM entry point has thirteen words, one more than the common CE adapters. */
+CW ce_CSOBar_Create(CW instance, CW parent, CW id, CW x, CW y, CW width, CW height, CW rows,
+                    CW flags, CW button_flags, CW extra, CW reserved, CW reserved2)
 {
     static const WCHAR klass[] = {'_', 'c', 'e', '_', 'c', 'o', 'm', 'm', 'a', 'n', 'd', 'b', 'a', 'r', 0};
-    struct ce_window *w = ce_new_window(klass, NULL, 0x10000000, 0, 0, 240, 26, a1, 0, 0, 0);
-    if (w)
-        w->user = load_menu(a0, a2);
+    (void)instance; (void)flags; (void)button_flags; (void)extra; (void)reserved; (void)reserved2;
+    if (!rows || rows > 12)
+        return 0;
+    struct ce_window *p = ce_window(parent);
+    int wpx = width == 0xffffffffu ? (p ? p->rect.right - p->rect.left : 240) : (int)width;
+    int hpx = width == 0xffffffffu ? (int)rows * 26 : (int)height;
+    struct ce_window *w = ce_new_window(klass, NULL, 0x52000000u, x == 0xffffffffu ? 0 : (int)x,
+        y == 0xffffffffu ? 0 : (int)y, wpx, hpx, parent, id, 0, 0);
     return w ? w->handle : 0;
 }
 CE_API(InitCSOButton)
@@ -308,12 +365,17 @@ CE_API(CSOBar_AddButtons)
     /* Observed BE-300 CSOBUTTON layout: 76-byte entries; command at 0,
      * geometry at 36..48. The original parent handles WM_COMMAND. */
     static const WCHAR klass[] = {'B', 'u', 't', 't', 'o', 'n', 0};
+    static const WCHAR spacer[] = {'S', 't', 'a', 't', 'i', 'c', 0};
+    static const WCHAR empty[] = {0};
     static const WCHAR ok[] = {'O', 'K', 0};
+    static const WCHAR cancel[] = {'C', 'a', 'n', 'c', 'e', 'l', 0};
     int next_x = 6;
     for (CW i = 0; i < a2; i++) {
         const uint8_t *p = PTR(uint8_t, a3) + i * 76;
         CW label = ce_u32(p + 20);
-        const WCHAR *caption = label >= 65536 && label < 0x80000000u ? PTR(WCHAR, label) : ok;
+        CW id = ce_u32(p), kind = ce_u32(p + 4);
+        const WCHAR *caption = label >= 65536 && label < 0x80000000u ? PTR(WCHAR, label) :
+            id == 1 ? ok : id == 2 ? cancel : empty;
         char text[192];
         ce_narrow(text, sizeof(text), caption);
         int x = (int)ce_u32(p + 36), y = (int)ce_u32(p + 40);
@@ -328,9 +390,14 @@ CE_API(CSOBar_AddButtons)
             y = 2;
         next_x = x + width + 4;
         struct ce_window *button =
-            ce_new_window(klass, caption, 0x50000000u, x, y, width, height, bar->handle, ce_u32(p), 0, 0);
+            ce_new_window(kind ? klass : spacer, caption, 0x50000000u, x, y, width, height,
+                           bar->handle, id, 0, 0);
         if (!button)
             return 0;
+        button->enabled = kind && ce_u32(p + 8) == 1;
+        CW item = ce_u32(p + 24);
+        if (menu(item) || ce_window(item))
+            button->user = item; /* borrowed popup menu or embedded control */
     }
     return 1;
 }
@@ -342,17 +409,93 @@ CE_API(CSOBar_DeleteAllButtons)
     for (unsigned i = 0; i < CE_WINDOWS; i++) {
         struct ce_window *child = ce_window(0x70000000u + i);
         if (child && child->parent == bar->handle) {
-            free(child->text);
-            free(child->tabs);
-            memset(child, 0, sizeof(*child));
+            ce_destroy_window(child->handle);
         }
     }
     bar->dirty = true;
     return 1;
 }
+CE_API(CSOBar_ChangeAllButtons)
+{
+    if (!ce_CSOBar_DeleteAllButtons(a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        return 0;
+    return ce_CSOBar_AddButtons(a0, a1, a2, a3, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+CE_API(CSOBar_SetButtonState)
+{
+    unsigned position = 0;
+    for (unsigned i = 0; i < CE_WINDOWS; i++) {
+        struct ce_window *child = ce_window(0x70000000u + i);
+        if (!child || child->parent != a0)
+            continue;
+        bool match = a1 ? child->id == a2 : position == a2;
+        position++;
+        if (!match)
+            continue;
+        if (a3 != 1 || (a4 != 1 && a4 != 2)) {
+            ce_error = 50;
+            return 0;
+        }
+        child->enabled = a4 == 1;
+        child->dirty = true;
+        return 1;
+    }
+    ce_error = 87;
+    return 0;
+}
+CE_API(CSOBar_ChangeMenu)
+{
+    if (!ce_window(a0))
+        return 0;
+    struct menu_item *it = find_item(a1, a2, false, 0);
+    if (!it)
+        return 0;
+    it->flags = (it->flags & ~3u) | (a3 ? 0 : 3);
+    return 1;
+}
 CE_API(CommandBar_Height)
 {
-    return ce_window(a0) ? 26 : 0;
+    struct ce_window *w = ce_window(a0);
+    return w ? w->rect.bottom - w->rect.top : 0;
+}
+CE_API(CSOBar_GetButtonArea)
+{
+    struct ce_window *bar = ce_window(a0);
+    if (!bar || !a1)
+        return 0;
+    struct ce_rect *r = PTR(struct ce_rect, a1);
+    *r = (struct ce_rect){0, 0, bar->rect.right - bar->rect.left - (bar->style & 1 ? 24 : 0), 26};
+    return 1;
+}
+CE_API(CSOBar_GetAdornmentsWidth)
+{
+    struct ce_window *bar = ce_window(a0);
+    return bar && (bar->style & 1) ? 24 : 0;
+}
+CE_API(CSOBar_GetButtonItem)
+{
+    unsigned position = 0;
+    for (unsigned i = 0; i < CE_WINDOWS; i++) {
+        struct ce_window *child = ce_window(0x70000000u + i);
+        if (!child || child->parent != a0)
+            continue;
+        bool match = a1 ? child->id == a2 : position == a2;
+        position++;
+        if (match)
+            return a3 == 1 ? child->handle : a3 == 2 ? child->user : 0;
+    }
+    return 0;
+}
+CE_API(CSOBar_InsertComboBox)
+{
+    struct ce_window *bar = ce_window(a0);
+    if (!bar || !a7 || a7 > 240)
+        return 0;
+    static const WCHAR combo[] = {'C', 'o', 'm', 'b', 'o', 'B', 'o', 'x', 0};
+    int y = bar->rect.bottom - bar->rect.top > 26 ? 28 : 2;
+    struct ce_window *w = ce_new_window(combo, NULL, a2 | 0x50000000u, (int)a6, y, (int)a7,
+                                       22, a0, a5, 0, 0);
+    return w ? w->handle : 0;
 }
 CE_API(CommandBar_AddBitmap)
 {
@@ -430,8 +573,11 @@ CE_API(CSOBar_Destroy)
 }
 CE_API(CoshGetCommandLine)
 {
-    static WCHAR empty[1];
-    return WORD(empty);
+    /* HWND, shell request index, output, WCHAR capacity. Glaze launches have
+     * no COShell request; a pointer return incorrectly selects PIM picker mode. */
+    if (a2 && a3)
+        *PTR(WCHAR, a2) = 0;
+    return a1 == 0xffffffffu ? 1 : 0;
 }
 CE_API(CoshExecute)
 {
@@ -471,6 +617,13 @@ CE_API(CSGetUserDiskName)
             memmove(out + ARRAY_SIZE(disk) - 1, PTR(void, a0), suffix * 2);
         memcpy(out, disk, sizeof(disk) - 2);
         out[length] = 0;
+        /* CS.DLL also creates the resulting directory tree. pimdb relies
+         * on that side effect before creating its index and record files. */
+        char path[FS_PATH_MAX];
+        if (!ce_path(path, out) || fs_mkdirs(path)) {
+            ce_error = 5;
+            return 0;
+        }
     }
     return length;
 }
@@ -798,7 +951,10 @@ CE_API(SHGetFileInfo)
 }
 
 static const struct ce_export exports[] = {
+    CE_EXPORT(Shell_NotifyIcon),
     CE_EXPORT(LoadMenuW),
+    CE_EXPORT(CreatePopupMenu), CE_EXPORT(AppendMenuW),
+    {"CreateMenu", (void *)ce_CreatePopupMenu},
     CE_EXPORT(GetSubMenu),
     CE_EXPORT(DestroyMenu),
     CE_EXPORT(EnableMenuItem),
@@ -814,6 +970,10 @@ static const struct ce_export exports[] = {
     CE_EXPORT(InitCSOButton),
     CE_EXPORT(CSOBar_AddButtons),
     CE_EXPORT(CSOBar_DeleteAllButtons),
+    CE_EXPORT(CSOBar_ChangeAllButtons), CE_EXPORT(CSOBar_SetButtonState), CE_EXPORT(CSOBar_ChangeMenu),
+    CE_EXPORT(CSOBar_GetButtonArea), CE_EXPORT(CSOBar_GetAdornmentsWidth),
+    CE_EXPORT(CSOBar_GetButtonItem), CE_EXPORT(CSOBar_InsertComboBox),
+    {"CSOBar_Show", (void *)ce_CommandBar_Show},
     {"CSOBar_Height", (void *)ce_CommandBar_Height},
     CE_EXPORT(CSOBar_AddAdornments),
     CE_EXPORT(CSOBar_Destroy),

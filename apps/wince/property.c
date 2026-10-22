@@ -125,6 +125,7 @@ static bool prepare(void *context, unsigned index)
     }
     p->window = w->handle;
     w->dialog_proc = ce_u32(p->spec + 24);
+    w->proc = WORD(ce_dialog_proc);
     w->property_page = true;
     CW first = ce_dialog_controls(w->handle, d, 0);
     free(d);

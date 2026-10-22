@@ -53,6 +53,8 @@ bool ce_dialog_decode(struct ce_dialog_template *d, const void *data, size_t siz
         return false;
     d->style = ce_u32(p);
     d->count = ce_u16(p + 8);
+    d->x = (int16_t)ce_u16(p + 10);
+    d->y = (int16_t)ce_u16(p + 12);
     d->width = (int16_t)ce_u16(p + 14);
     d->height = (int16_t)ce_u16(p + 16);
     if (d->count > 32 || d->width <= 0 || d->height <= 0)

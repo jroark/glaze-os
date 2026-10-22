@@ -115,7 +115,77 @@ void ce_draw_bitmap(const struct ce_object *object, int x, int y, int source_x, 
 
 struct memory_dc {
     CW bitmap, font, brush, pen;
+    bool has_clip;
+    struct ce_rect clip;
 };
+struct writable_dib {
+    uint8_t *data, *pixels;
+    unsigned width, height, stride, bits, colors;
+    bool top_down, rgb565;
+};
+static bool writable_dib(CW bitmap, struct writable_dib *d)
+{
+    struct ce_object *b = ce_object(bitmap, CE_OBJ_BITMAP);
+    if (!b || !(b->value & 0xc0000000u))
+        return false;
+    uint8_t *p = b->data;
+    unsigned bits = ce_u16(p + 14), colors = bits <= 8 ? ce_u32(p + 32) : 0;
+    if (bits <= 8 && !colors)
+        colors = 1u << bits;
+    unsigned offset = 40 + colors * 4 + (ce_u32(p + 16) == 3 ? 12 : 0);
+    *d = (struct writable_dib){p, p + offset, b->width, b->height,
+        ALIGN_UP((unsigned)b->width * bits, 32u) / 8, bits, colors,
+        (int32_t)ce_u32(p + 8) < 0, ce_u32(p + 16) == 3};
+    return true;
+}
+static uint8_t *dib_row(const struct writable_dib *d, unsigned y)
+{
+    return d->pixels + (d->top_down ? y : d->height - y - 1) * d->stride;
+}
+static uint32_t dib_rgb(const struct writable_dib *d, unsigned x, unsigned y)
+{
+    const uint8_t *p = dib_row(d, y);
+    if (d->bits <= 8) {
+        unsigned shift = 8 - d->bits - x * d->bits % 8;
+        unsigned index = (p[x * d->bits / 8] >> shift) & ((1u << d->bits) - 1);
+        if (index >= d->colors)
+            return 0;
+        p = d->data + 40 + index * 4;
+    } else if (d->bits == 16) {
+        unsigned v = ce_u16(p + x * 2);
+        return d->rgb565 ? ((v >> 11) * 255 / 31) << 16 |
+            ((v >> 5 & 63) * 255 / 63) << 8 | (v & 31) * 255 / 31 :
+            ((v >> 10 & 31) * 255 / 31) << 16 | ((v >> 5 & 31) * 255 / 31) << 8 |
+            (v & 31) * 255 / 31;
+    } else
+        p += x * (d->bits / 8);
+    return (uint32_t)p[2] << 16 | p[1] << 8 | p[0];
+}
+static void dib_put(const struct writable_dib *d, unsigned x, unsigned y, uint32_t rgb)
+{
+    uint8_t *p = dib_row(d, y);
+    if (d->bits <= 8) {
+        unsigned index = 0, distance = UINT32_MAX;
+        for (unsigned i = 0; i < d->colors; i++) {
+            const uint8_t *c = d->data + 40 + i * 4;
+            int r = (int)(rgb >> 16 & 255) - c[2], g = (int)(rgb >> 8 & 255) - c[1],
+                b = (int)(rgb & 255) - c[0];
+            unsigned delta = r * r + g * g + b * b;
+            if (delta < distance) { distance = delta; index = i; }
+            if (!delta) break;
+        }
+        unsigned shift = 8 - d->bits - x * d->bits % 8, mask = ((1u << d->bits) - 1) << shift;
+        p += x * d->bits / 8;
+        *p = (*p & ~mask) | index << shift;
+    } else if (d->bits == 16) {
+        unsigned v = d->rgb565 ? RGB565(rgb) :
+            ((rgb >> 19 & 31) << 10) | ((rgb >> 11 & 31) << 5) | (rgb >> 3 & 31);
+        ce_put16(p + x * 2, v);
+    } else {
+        p += x * (d->bits / 8);
+        p[0] = rgb; p[1] = rgb >> 8; p[2] = rgb >> 16;
+    }
+}
 static struct memory_dc *memory_dc(CW handle)
 {
     struct ce_object *o = ce_object(handle, CE_OBJ_DC);
@@ -170,6 +240,59 @@ CE_API(CreateCompatibleBitmap)
         free(b);
     return handle;
 }
+CE_API(CreateDIBSection)
+{
+    if (a3)
+        *PTR(CW, a3) = 0;
+    if (!a1 || !a3 || a2 || a4 || a5) {
+        ce_error = a2 || a4 || a5 ? 50 : 87;
+        return 0;
+    }
+    const uint8_t *info = PTR(uint8_t, a1);
+    uint32_t header = ce_u32(info), bits = ce_u16(info + 14), compression = ce_u32(info + 16);
+    int32_t width = (int32_t)ce_u32(info + 4), height = (int32_t)ce_u32(info + 8);
+    if (header != 40 || ce_u16(info + 12) != 1 || width <= 0 || width > 1024 || !height ||
+        height < -1024 || height > 1024 ||
+        (bits != 1 && bits != 4 && bits != 8 && bits != 16 && bits != 24 && bits != 32) ||
+        (compression && !(compression == 3 && bits == 16))) {
+        ce_error = 87;
+        return 0;
+    }
+    uint32_t colors = bits <= 8 ? ce_u32(info + 32) : 0;
+    if (bits <= 8 && !colors)
+        colors = 1u << bits;
+    if (colors > (bits <= 8 ? 1u << bits : 0)) {
+        ce_error = 87;
+        return 0;
+    }
+    /* The renderer uses RGB565 for BI_BITFIELDS. Other masks must not be
+     * silently interpreted as that format. BI_RGB sixteen-bit DIBs are RGB555. */
+    if (compression == 3 && (ce_u32(info + 40) != 0xf800 || ce_u32(info + 44) != 0x7e0 ||
+                             ce_u32(info + 48) != 31)) {
+        ce_error = 50;
+        return 0;
+    }
+    unsigned offset = header + colors * 4 + (compression == 3 ? 12 : 0);
+    unsigned stride = ALIGN_UP((unsigned)width * bits, 32u) / 8;
+    unsigned rows = height < 0 ? -height : height, bytes = offset + stride * rows;
+    uint8_t *data = calloc(1, bytes);
+    if (!data) {
+        ce_error = 8;
+        return 0;
+    }
+    memcpy(data, info, offset);
+    ce_put32(data + 20, stride * rows);
+    CW handle = ce_new_object(CE_OBJ_BITMAP, 0x40000000u, data, bytes);
+    struct ce_object *o = ce_object(handle, CE_OBJ_BITMAP);
+    if (!o) {
+        free(data);
+        return 0;
+    }
+    o->width = width;
+    o->height = rows;
+    *PTR(CW, a3) = WORD(data + offset);
+    return handle;
+}
 CE_API(BitBlt)
 {
     struct memory_dc *source = memory_dc(a5), *dest = memory_dc(a0);
@@ -177,6 +300,33 @@ CE_API(BitBlt)
     if (a8 != 0x00cc0020 || !bitmap || a3 > 1024 || a4 > 1024) {
         ce_error = 50;
         return 0;
+    }
+    if (dest) {
+        struct writable_dib source_dib, dest_dib;
+        if (!writable_dib(source->bitmap, &source_dib) || !writable_dib(dest->bitmap, &dest_dib)) {
+            ce_error = 50;
+            return 0;
+        }
+        /* Stage the source so overlapping copies behave like memmove. */
+        uint32_t *pixels = malloc(MAX(1u, a3 * a4) * sizeof(*pixels));
+        if (!pixels) { ce_error = 8; return 0; }
+        for (unsigned y = 0; y < a4; y++)
+            for (unsigned x = 0; x < a3; x++) {
+                int sx = (int32_t)a6 + (int)x, sy = (int32_t)a7 + (int)y;
+                pixels[y * a3 + x] = sx >= 0 && sy >= 0 && (unsigned)sx < source_dib.width &&
+                    (unsigned)sy < source_dib.height ? dib_rgb(&source_dib, sx, sy) : UINT32_MAX;
+            }
+        for (unsigned y = 0; y < a4; y++)
+            for (unsigned x = 0; x < a3; x++) {
+                int dx = (int32_t)a1 + (int)x, dy = (int32_t)a2 + (int)y;
+                if (dx < 0 || dy < 0 || (unsigned)dx >= dest_dib.width || (unsigned)dy >= dest_dib.height ||
+                    pixels[y * a3 + x] == UINT32_MAX || (dest->has_clip &&
+                    (dx < dest->clip.left || dx >= dest->clip.right || dy < dest->clip.top || dy >= dest->clip.bottom)))
+                    continue;
+                dib_put(&dest_dib, dx, dy, pixels[y * a3 + x]);
+            }
+        free(pixels);
+        return 1;
     }
     gfx_surface saved = ui.surf;
     gfx_rect r = ce_window_rect(a0);
@@ -227,7 +377,10 @@ CE_API(GetObjectW)
                      (CW)abs((int)ce_u32(b + 8)),
                      ALIGN_UP(ce_u32(b + 4) * ce_u16(b + 14), 32u) / 8,
                      (CW)ce_u16(b + 12) | ((CW)ce_u16(b + 14) << 16),
-                     0};
+                     (o->value & 0xc0000000u) ? WORD(b + ce_u32(b) +
+                         (ce_u16(b + 14) <= 8 ? (ce_u32(b + 32) ? ce_u32(b + 32) :
+                          1u << ce_u16(b + 14)) * 4 : 0) +
+                         (ce_u32(b + 16) == 3 && ce_u32(b) == 40 ? 12 : 0)) : 0};
         memcpy(PTR(void, a2), out, 24);
         return 24;
     }
@@ -354,6 +507,15 @@ CE_API(CreatePen)
     }
     return handle;
 }
+CE_API(CreatePenIndirect)
+{
+    if (!a0) {
+        ce_error = 87;
+        return 0;
+    }
+    const uint8_t *p = PTR(uint8_t, a0);
+    return ce_CreatePen(ce_u32(p), ce_u32(p + 4), ce_u32(p + 12), 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
 CE_API(CreateFontIndirectW)
 {
     int32_t height = (int32_t)ce_u32(PTR(void, a0));
@@ -368,8 +530,8 @@ CE_API(DeleteObject)
         struct image_list *l = o->data;
         for(unsigned i=0;i<l->count;i++)free(l->image[i].data);
     }
-    if (o->kind == CE_OBJ_IMAGE_LIST || o->kind == CE_OBJ_DC ||
-        (o->kind == CE_OBJ_BITMAP && o->value == 0x80000000u))
+    if (o->kind == CE_OBJ_IMAGE_LIST || o->kind == CE_OBJ_DC || o->kind == CE_OBJ_REGION ||
+        (o->kind == CE_OBJ_BITMAP && (o->value & 0xc0000000u)))
         free(o->data);
     memset(o, 0, sizeof(*o));
     return 1;
@@ -408,6 +570,160 @@ CE_API(FillRect)
     if (rgb != 0xffffffffu)
         gfx_fill(&ui.surf, rectangle(a0, PTR(struct ce_rect, a1)), rgb);
     return 1;
+}
+static bool drawing_surface(CW handle, gfx_surface *surface, gfx_rect *origin)
+{
+    struct memory_dc *dc = memory_dc(handle);
+    if (!dc) {
+        *surface = ui.surf;
+        *origin = ce_window_rect(handle);
+        return true;
+    }
+    struct ce_object *b = ce_object(dc->bitmap, CE_OBJ_BITMAP);
+    if (!b || b->value != 0x80000000u) {
+        ce_error = 50;
+        return false;
+    }
+    gfx_surface_init(surface, (uint16_t *)((uint8_t *)b->data + 52), b->width, b->height,
+                     ALIGN_UP(b->width, 2));
+    if (dc->has_clip)
+        gfx_set_clip(surface, gfx_r(dc->clip.left, dc->clip.top, dc->clip.right - dc->clip.left,
+                                   dc->clip.bottom - dc->clip.top));
+    ce_put32((uint8_t *)b->data + 8, (CW)-b->height);
+    *origin = gfx_r(0, 0, b->width, b->height);
+    return true;
+}
+CE_API(CreateRectRgn)
+{
+    int32_t x1 = (int32_t)a0, y1 = (int32_t)a1, x2 = (int32_t)a2, y2 = (int32_t)a3;
+    if (x1 < -32768 || y1 < -32768 || x2 < -32768 || y2 < -32768 ||
+        x1 > 32767 || y1 > 32767 || x2 > 32767 || y2 > 32767) {
+        ce_error = 87;
+        return 0;
+    }
+    struct ce_rect *r = malloc(sizeof(*r));
+    if (!r)
+        return 0;
+    *r = (struct ce_rect){MIN(x1, x2), MIN(y1, y2), MAX(x1, x2), MAX(y1, y2)};
+    CW handle = ce_new_object(CE_OBJ_REGION, 0, r, sizeof(*r));
+    if (!handle)
+        free(r);
+    return handle;
+}
+CE_API(SelectClipRgn)
+{
+    struct ce_object *region = a1 ? ce_object(a1, CE_OBJ_REGION) : NULL;
+    if (a1 && !region) {
+        ce_error = 6;
+        return 0;
+    }
+    struct memory_dc *dc = memory_dc(a0);
+    gfx_rect origin = ce_window_rect(a0);
+    struct ce_rect r = region ? *(struct ce_rect *)region->data :
+        (struct ce_rect){0, 0, dc ? 0 : origin.w, dc ? 0 : origin.h};
+    if (dc) {
+        dc->has_clip = region != NULL;
+        dc->clip = r;
+    } else
+        gfx_set_clip(&ui.surf, gfx_r(origin.x + r.left, origin.y + r.top,
+                                    r.right - r.left, r.bottom - r.top));
+    return region && (r.right == r.left || r.bottom == r.top) ? 1 : 2;
+}
+CE_API(PatBlt)
+{
+    unsigned rop = (a5 >> 16) & 255;
+    if (((rop >> 2) & 0x33) != (rop & 0x33)) {
+        ce_error = 50; /* PatBlt has no source bitmap. */
+        return 0;
+    }
+    if (a3 > 4096 || a4 > 4096 || (int32_t)a1 < -32768 || (int32_t)a1 > 32767 ||
+        (int32_t)a2 < -32768 || (int32_t)a2 > 32767) {
+        ce_error = 87;
+        return 0;
+    }
+    struct memory_dc *dc = memory_dc(a0);
+    if (dc) {
+        struct writable_dib d;
+        if (!writable_dib(dc->bitmap, &d)) { ce_error = 50; return 0; }
+        struct ce_object *brush = ce_object(dc->brush, CE_OBJ_BRUSH);
+        if (brush && brush->value == UINT32_MAX && rop == 0xf0)
+            return 1;
+        uint32_t pattern = brush ? brush->value : 0xffffff;
+        int left = MAX(0, (int32_t)a1), top = MAX(0, (int32_t)a2),
+            right = MIN((int)d.width, (int32_t)a1 + (int)a3), bottom = MIN((int)d.height, (int32_t)a2 + (int)a4);
+        if (dc->has_clip) {
+            left = MAX(left, dc->clip.left); top = MAX(top, dc->clip.top);
+            right = MIN(right, dc->clip.right); bottom = MIN(bottom, dc->clip.bottom);
+        }
+        for (int y = top; y < bottom; y++)
+            for (int x = left; x < right; x++) {
+                uint32_t dest = dib_rgb(&d, x, y);
+                uint32_t rgb = ((rop & 1) ? ~pattern & ~dest : 0) | ((rop & 2) ? ~pattern & dest : 0) |
+                    ((rop & 16) ? pattern & ~dest : 0) | ((rop & 32) ? pattern & dest : 0);
+                dib_put(&d, x, y, rgb & 0xffffff);
+            }
+        return 1;
+    }
+    gfx_surface surface;
+    gfx_rect origin, bounds;
+    if (!drawing_surface(a0, &surface, &origin))
+        return 0;
+    struct ce_object *brush = ce_object(dc ? dc->brush : selected_brush, CE_OBJ_BRUSH);
+    if (brush && brush->value == 0xffffffffu && rop == 0xf0)
+        return 1;
+    uint16_t pattern = RGB565(brush ? brush->value : 0xffffff);
+    gfx_rect area = gfx_r(origin.x + (int32_t)a1, origin.y + (int32_t)a2, a3, a4);
+    if (!gfx_rect_intersect(area, surface.clip, &bounds))
+        return 1;
+    for (int y = bounds.y; y < bounds.y + bounds.h; y++)
+        for (int x = bounds.x; x < bounds.x + bounds.w; x++) {
+            uint16_t *pixel = surface.px + y * surface.stride + x, dest = *pixel;
+            *pixel = ((rop & 1) ? ~pattern & ~dest : 0) |
+                ((rop & 2) ? ~pattern & dest : 0) |
+                ((rop & 16) ? pattern & ~dest : 0) | ((rop & 32) ? pattern & dest : 0);
+        }
+    return 1;
+}
+CE_API(Rectangle)
+{
+    int32_t left = (int32_t)a1, top = (int32_t)a2, right = (int32_t)a3, bottom = (int32_t)a4;
+    if (left < -32768 || top < -32768 || right > 32767 || bottom > 32767 || right < left ||
+        bottom < top || right - left > 4096 || bottom - top > 4096) {
+        ce_error = 87;
+        return 0;
+    }
+    gfx_surface surface;
+    gfx_rect origin;
+    if (!drawing_surface(a0, &surface, &origin))
+        return 0;
+    struct memory_dc *dc = memory_dc(a0);
+    struct ce_object *brush = ce_object(dc ? dc->brush : selected_brush, CE_OBJ_BRUSH);
+    struct ce_object *pen = ce_object(dc ? dc->pen : selected_pen, CE_OBJ_PEN);
+    gfx_rect r = gfx_r(origin.x + left, origin.y + top, right - left, bottom - top);
+    if (!brush || brush->value != 0xffffffffu)
+        gfx_fill(&surface, r, brush ? brush->value : 0xffffff);
+    if (!pen || pen->height != 5) {
+        unsigned width = pen ? MAX(1, pen->width) : 1;
+        uint32_t color = pen ? pen->value : 0;
+        for (unsigned i = 0; i < width && r.w > 0 && r.h > 0; i++) {
+            gfx_line(&surface, r.x, r.y, r.x + r.w - 1, r.y, color, 255);
+            gfx_line(&surface, r.x, r.y, r.x, r.y + r.h - 1, color, 255);
+            gfx_line(&surface, r.x, r.y + r.h - 1, r.x + r.w - 1, r.y + r.h - 1, color, 255);
+            gfx_line(&surface, r.x + r.w - 1, r.y, r.x + r.w - 1, r.y + r.h - 1, color, 255);
+            r.x++; r.y++; r.w -= 2; r.h -= 2;
+        }
+    }
+    return 1;
+}
+CE_API(GetCurrentObject)
+{
+    struct memory_dc *dc = memory_dc(a0);
+    CW object = a1 == 1 ? (dc ? dc->pen : selected_pen) :
+        a1 == 2 ? (dc ? dc->brush : selected_brush) :
+        a1 == 6 ? (dc ? dc->font : selected_font) : a1 == 7 && dc ? dc->bitmap : 0;
+    if (!object && (a1 == 1 || a1 == 2 || a1 == 6))
+        object = ce_GetStockObject(a1 == 1 ? 7 : a1 == 2 ? 0 : 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    return object;
 }
 CE_API(Polyline)
 {
@@ -772,6 +1088,7 @@ CE_API(DestroyIcon)
 
 static const struct ce_export exports[] = {
     CE_EXPORT(CreateCompatibleDC), CE_EXPORT(DeleteDC), CE_EXPORT(CreateCompatibleBitmap),
+    CE_EXPORT(CreateDIBSection),
     CE_EXPORT(BitBlt), CE_EXPORT(DrawFocusRect), CE_EXPORT(GetObjectW),
     {"GetWindowDC", (void *)ce_GetDC},
     CE_EXPORT(BeginPaint),
@@ -788,6 +1105,9 @@ static const struct ce_export exports[] = {
     CE_EXPORT(DeleteObject),
     CE_EXPORT(SelectObject),
     CE_EXPORT(FillRect),
+    CE_EXPORT(PatBlt),
+    CE_EXPORT(CreateRectRgn), CE_EXPORT(SelectClipRgn),
+    CE_EXPORT(Rectangle), CE_EXPORT(CreatePenIndirect), CE_EXPORT(GetCurrentObject),
     CE_EXPORT(Polyline),
     CE_EXPORT(DrawFrameControl),
     CE_EXPORT(SetTextColor),

@@ -89,6 +89,7 @@ void ce_fatal(const char *s)
     abort();
 }
 void ce_shutdown(void) {}
+void ce_missing(const char *s) { ce_fatal(s); }
 CW ce_call(CW proc, CW a, CW b, CW c, CW d) { return ((CW(*)(CW, CW, CW, CW))host_ptr(proc))(a, b, c, d); }
 unsigned ce_wlen(const WCHAR *s)
 {
@@ -105,6 +106,14 @@ int ce_wcmp(const WCHAR *a, const WCHAR *b)
         b++;
     }
     return *a - *b;
+}
+void ce_widen(WCHAR *out, uint32_t cap, const char *s)
+{
+    unsigned n = 0;
+    while (s && *s && n + 1 < cap)
+        out[n++] = (uint8_t)*s++;
+    if (cap)
+        out[n] = 0;
 }
 void ce_narrow(char *p, uint32_t cap, const WCHAR *s)
 {
@@ -165,6 +174,24 @@ int gfx_text(gfx_surface *s, int x, int y, const gfx_font *f, const char *t, uin
 }
 #include "../apps/wince/thread.c"
 #include "../apps/wince/view.c"
+#include "../apps/wince/mapping.c"
+#include "../apps/wince/string.c"
+#include "../apps/wince/scan.c"
+#include "../apps/wince/datetime.h"
+#include <glaze/notify.h>
+#include <glaze/tz.h>
+static int clock_zone = 3;
+static struct gz_datetime clock_value = {.year = 2026, .month = 7, .day = 1, .hour = 12};
+int pref_get(const char *key, void *out, uint32_t size)
+{
+    (void)key;
+    assert(size >= sizeof(clock_zone));
+    memcpy(out, &clock_zone, sizeof(clock_zone));
+    return sizeof(clock_zone);
+}
+static int gz_rtc_get(struct gz_datetime *out) { *out = clock_value; return 0; }
+#include "../apps/wince/timezone.c"
+
 #include <netinet/tcp.h>
 #define exports winsock_exports
 #include "../apps/wince/winsock.c"
@@ -187,12 +214,15 @@ static CW invoke(void *fn, CW a, CW b, CW c, CW d, CW e, CW f)
 {
     return ((CW(*)(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW))fn)(a, b, c, d, e, f, 0, 0, 0, 0, 0, 0);
 }
-static CW counter, slot;
+static CW counter, slot, worker_token;
 static CW worker(CW event, CW b, CW c, CW d)
 {
     (void)b;
     (void)c;
     (void)d;
+    worker_token = invoke(ce_GetCurrentThreadId, 0, 0, 0, 0, 0, 0);
+    assert(!invoke(ce_TlsGetValue, UINT32_MAX, 0, 0, 0, 0, 0));
+    assert(invoke(ce_TlsSetValue, UINT32_MAX, 91, 0, 0, 0, 0));
     assert(invoke(ce_TlsGetValue, slot, 0, 0, 0, 0, 0) == 0);
     assert(ce_error == 0);
     ce_error = 77;
@@ -214,11 +244,14 @@ static void sync_test(void)
     invoke(ce_LeaveCriticalSection, WORD(section), 0, 0, 0, 0, 0);
     invoke(ce_DeleteCriticalSection, WORD(section), 0, 0, 0, 0, 0);
     slot = invoke(ce_TlsAlloc, 0, 0, 0, 0, 0, 0);
+    assert(invoke(ce_TlsSetValue, UINT32_MAX, 73, 0, 0, 0, 0));
     assert(invoke(ce_TlsSetValue, slot, 17, 0, 0, 0, 0));
     ce_error = 99;
     CW event = invoke(ce_CreateEventW, 0, 0, 0, 0, 0, 0);
-    CW thread = invoke(ce_CreateThread, 0, 0, WORD(worker), event, 4, 0);
+    CW token = 0;
+    CW thread = invoke(ce_CreateThread, 0, 0, WORD(worker), event, 4, WORD(&token));
     assert(thread);
+    assert(token && token != invoke(ce_GetCurrentThreadId, 0, 0, 0, 0, 0, 0));
     assert(invoke(ce_WaitForSingleObject, event, 0, 0, 0, 0, 0) == 258);
     assert(invoke(ce_ResumeThread, thread, 0, 0, 0, 0, 0) == 1);
     ce_error = 99;
@@ -230,10 +263,15 @@ static void sync_test(void)
     CW code = 0;
     assert(invoke(ce_GetExitCodeThread, thread, WORD(&code), 0, 0, 0, 0) && code == 123);
     assert(counter == 20000 && ce_error == 99);
+    assert(worker_token == token);
+    assert(invoke(ce_TlsGetValue, UINT32_MAX, 0, 0, 0, 0, 0) == 73);
+    assert(!invoke(ce_TlsSetValue, TLS_SLOTS, 5, 0, 0, 0, 0) && ce_error == 87);
     assert(invoke(ce_TlsGetValue, slot, 0, 0, 0, 0, 0) == 17);
     assert(invoke(ce_TlsFree, slot, 0, 0, 0, 0, 0));
     assert(invoke(ce_TlsAlloc, 0, 0, 0, 0, 0, 0) == slot);
     assert(invoke(ce_TlsGetValue, slot, 0, 0, 0, 0, 0) == 0);
+    assert(invoke(ce_TlsCall, 1, slot, 0, 0, 0, 0));
+    assert(invoke(ce_TlsCall, 0, 0, 0, 0, 0, 0) == slot);
     bool handled;
     assert(ce_sync_close(thread, &handled) && handled);
     assert(!ce_sync_close(thread, &handled));
@@ -332,6 +370,111 @@ static void winsock_test(void)
     free(host_tcb.tls[0]);
     host_tcb.tls[0] = NULL;
 }
+static void timezone_test(void)
+{
+    uint8_t info[172];
+    assert(invoke(ce_GetTimeZoneInformation, WORD(info), 0, 0, 0, 0, 0) == 2);
+    assert((int32_t)ce_u32(info) == 480 && (int32_t)ce_u32(info + 168) == -60);
+    assert(ce_u16(info + 154) == 3 && ce_u16(info + 158) == 2);
+    uint16_t utc[8] = {2026, 7, 0, 1, 19, 30, 0, 123}, local[8];
+    uint64_t ticks;
+    uint8_t input[8], output[8], roundtrip[8];
+    assert(ce_datetime_ticks(utc, &ticks));
+    ce_put32(input, ticks); ce_put32(input + 4, ticks >> 32);
+    assert(invoke(ce_FileTimeToLocalFileTime, WORD(input), WORD(output), 0, 0, 0, 0));
+    ticks = ce_u32(output) | (uint64_t)ce_u32(output + 4) << 32;
+    assert(ce_datetime_from_ticks(ticks, local));
+    assert(local[4] == 12 && local[5] == 30 && local[7] == 123);
+    assert(invoke(ce_LocalFileTimeToFileTime, WORD(output), WORD(roundtrip), 0, 0, 0, 0));
+    assert(!memcmp(input, roundtrip, 8));
+    clock_value.month = 1;
+    assert(invoke(ce_GetTimeZoneInformation, WORD(info), 0, 0, 0, 0, 0) == 1);
+    clock_zone = 16;
+    assert(invoke(ce_GetTimeZoneInformation, WORD(info), 0, 0, 0, 0, 0) == 2);
+    clock_zone = 13; /* Kolkata: fixed half-hour offset. */
+    assert(invoke(ce_GetTimeZoneInformation, WORD(info), 0, 0, 0, 0, 0) == 0);
+    assert((int32_t)ce_u32(info) == -330);
+    assert(invoke(ce_FileTimeToLocalFileTime, WORD(input), WORD(output), 0, 0, 0, 0));
+    ticks = ce_u32(output) | (uint64_t)ce_u32(output + 4) << 32;
+    assert(ce_datetime_from_ticks(ticks, local));
+    assert(local[3] == 2 && local[4] == 1 && local[5] == 0);
+    assert(!invoke(ce_FileTimeToLocalFileTime, 0, WORD(output), 0, 0, 0, 0) && ce_error == 87);
+}
+static void scan_test(void)
+{
+    WCHAR input[64], format[64];
+    CW month = 0, day = 0, year = 0, used = 0;
+    ce_widen(input, 64, "10/21/2026");
+    ce_widen(format, 64, "%u/%u/%u%n");
+    assert(ce_swscanf(WORD(input), WORD(format), WORD(&month), WORD(&day), WORD(&year),
+        WORD(&used), 0, 0, 0, 0, 0, 0) == 3);
+    assert(month == 10 && day == 21 && year == 2026 && used == 10);
+    uint16_t small[2] = {0, 0xabcd};
+    ce_widen(input, 64, "14:ff"); ce_widen(format, 64, "%*u:%hx");
+    assert(invoke(ce_swscanf, WORD(input), WORD(format), WORD(small), 0, 0, 0) == 1);
+    assert(small[0] == 255 && small[1] == 0xabcd);
+    uint8_t large[8];
+    ce_widen(input, 64, "0x100000000"); ce_widen(format, 64, "%lli");
+    assert(invoke(ce_swscanf, WORD(input), WORD(format), WORD(large), 0, 0, 0) == 1);
+    assert(!ce_u32(large) && ce_u32(large + 4) == 1);
+    ce_widen(input, 64, "123"); ce_widen(format, 64, "%2u");
+    assert(invoke(ce_swscanf, WORD(input), WORD(format), WORD(&used), 0, 0, 0) == 1 && used == 12);
+    ce_widen(input, 64, "abc"); ce_widen(format, 64, "%u"); used = 99;
+    assert(!invoke(ce_swscanf, WORD(input), WORD(format), WORD(&used), 0, 0, 0) && used == 99);
+    input[0] = 0;
+    assert(invoke(ce_swscanf, WORD(input), WORD(format), WORD(&used), 0, 0, 0) == (CW)-1);
+}
+static void string_test(void)
+{
+    WCHAR input[] = {',', 'a', ',', ',', 'b', 0}, delim[] = {',', 0};
+    CW token = invoke(ce_wcstok, WORD(input), WORD(delim), 0, 0, 0, 0);
+    assert(PTR(WCHAR, token)[0] == 'a' && !PTR(WCHAR, token)[1]);
+    token = invoke(ce_wcstok, 0, WORD(delim), 0, 0, 0, 0);
+    assert(PTR(WCHAR, token)[0] == 'b' && !PTR(WCHAR, token)[1]);
+    assert(!invoke(ce_wcstok, 0, WORD(delim), 0, 0, 0, 0));
+    WCHAR output[64] = {'x', 0}, src[] = {'y', 'z', 0};
+    invoke(ce_wcsncat, WORD(output), WORD(src), 1, 0, 0, 0);
+    assert(output[0] == 'x' && output[1] == 'y' && !output[2]);
+    CW dup = invoke(ce__wcsdup, WORD(output), 0, 0, 0, 0, 0);
+    assert(dup && !memcmp(PTR(void, dup), output, 6));
+    free(PTR(void, dup));
+    invoke(ce__itow, 0x80000000u, WORD(output), 10, 0, 0, 0);
+    char narrow[64];
+    ce_narrow(narrow, sizeof(narrow), output);
+    assert(!strcmp(narrow, "-2147483648"));
+    invoke(ce__itow, 0xabcdefu, WORD(output), 16, 0, 0, 0);
+    ce_narrow(narrow, sizeof(narrow), output);
+    assert(!strcmp(narrow, "abcdef"));
+}
+static void mapping_test(void)
+{
+    WCHAR name[] = {'P', 'I', 'M', 0};
+    CW h = invoke(ce_CreateFileMappingW, (CW)-1, 0, 4, 0, 2048, WORD(name));
+    assert(h && !ce_error);
+    CW alias = invoke(ce_CreateFileMappingW, (CW)-1, 0, 4, 0, 4096, WORD(name));
+    assert(alias && alias != h && ce_error == 183);
+    CW v = invoke(ce_MapViewOfFile, h, 2, 0, 0, 2048, 0);
+    CW other = invoke(ce_MapViewOfFile, alias, 4, 0, 0, 0, 0);
+    assert(v && v == other && !*PTR(CW, v));
+    *PTR(CW, v) = 0xcafebabe;
+    bool handled;
+    assert(ce_mapping_close(h, &handled) && handled);
+    assert(!ce_mapping_close(h, &handled) && handled && ce_error == 6);
+    assert(!invoke(ce_MapViewOfFile, alias, 2, 0, 0, 2049, 0) && ce_error == 87);
+    assert(ce_mapping_close(alias, &handled));
+    assert(*PTR(CW, other) == 0xcafebabe);
+    assert(invoke(ce_UnmapViewOfFile, v, 0, 0, 0, 0, 0));
+    assert(*PTR(CW, other) == 0xcafebabe);
+    assert(invoke(ce_UnmapViewOfFile, other, 0, 0, 0, 0, 0));
+    assert(!invoke(ce_UnmapViewOfFile, other, 0, 0, 0, 0, 0));
+    h = invoke(ce_CreateFileMappingW, (CW)-1, 0, 2, 0, 2048, WORD(name));
+    assert(h && !ce_error);
+    assert(!invoke(ce_MapViewOfFile, h, 2, 0, 0, 0, 0) && ce_error == 5);
+    v = invoke(ce_MapViewOfFile, h, 4, 0, 0, 0, 0);
+    assert(v && !*PTR(CW, v));
+    assert(invoke(ce_UnmapViewOfFile, v, 0, 0, 0, 0, 0));
+    assert(ce_mapping_close(h, &handled));
+}
 static void ole_test(void)
 {
     WCHAR text[] = {'a', 0, 'b', 0};
@@ -350,6 +493,10 @@ int main(void)
     view_test();
     winsock_test();
     ole_test();
+    mapping_test();
+    string_test();
+    scan_test();
+    timezone_test();
     free(host_tcb.tls[1]);
     host_tcb.tls[1] = NULL;
     puts("WinCE runtime synchronization, views and Winsock passed");

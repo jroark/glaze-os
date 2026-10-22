@@ -1,0 +1,4 @@
+# Original Notes: open the New editor.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+25000 tap 20 12

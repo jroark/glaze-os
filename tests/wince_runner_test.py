@@ -3,7 +3,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
-from run_wince import read_package, read_registry
+from run_wince import read_package, read_registry, runtime_failures
 from wince_assets import encode_gzce_registry
 
 
@@ -53,6 +53,15 @@ class PackageTests(unittest.TestCase):
         struct.pack_into('<I', bad, 8 + 48, 0)
         with self.assertRaises(ValueError):
             self.read(bad)
+
+
+class RuntimeTests(unittest.TestCase):
+    def test_unexpected_exit(self):
+        abort = 'proc: cbea.aim pid 164 exited (255)'
+        self.assertEqual(runtime_failures([abort], 'cbea.aim'), [abort])
+        self.assertFalse(runtime_failures([abort], 'cbea.aim', 255))
+        self.assertFalse(runtime_failures(['proc: other pid 164 exited (255)'], 'cbea.aim'))
+        self.assertTrue(runtime_failures(['fault: Address load in cbea.aim'], 'cbea.aim', 255))
 
 
 class RegistryTests(unittest.TestCase):

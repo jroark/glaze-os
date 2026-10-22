@@ -108,21 +108,20 @@ void __assert_fail(const char *expr, const char *file, int line)
     exit(1);
 }
 
-/* Insertion sort: lists in Glaze are tiny (notes, settings rows). */
+/* Insertion sort: lists in Glaze are tiny (notes, settings rows, mail).
+ * Elements are swapped in place, so any element size works. */
 void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *))
 {
     char *a = base;
-    char tmp[256];
 
-    if (size > sizeof(tmp))
-        return;
     for (size_t i = 1; i < n; i++) {
-        memcpy(tmp, a + i * size, size);
-        size_t j = i;
-        while (j > 0 && cmp(a + (j - 1) * size, tmp) > 0) {
-            memcpy(a + j * size, a + (j - 1) * size, size);
-            j--;
+        for (size_t j = i; j > 0 && cmp(a + (j - 1) * size, a + j * size) > 0; j--) {
+            char *p = a + (j - 1) * size, *q = a + j * size;
+            for (size_t k = 0; k < size; k++) {
+                char t = p[k];
+                p[k] = q[k];
+                q[k] = t;
+            }
         }
-        memcpy(a + j * size, tmp, size);
     }
 }

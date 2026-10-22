@@ -21,6 +21,20 @@ static int64_t ce_ll_div(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
     return numerator / denominator;
 }
 
+static uint64_t ce_ull_div(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
+{
+    uint64_t denominator = (uint64_t)bhi << 32 | blo;
+    if (!denominator)
+        ce_fatal("WinCE integer division by zero");
+    return ((uint64_t)ahi << 32 | alo) / denominator;
+}
+static uint64_t ce_ull_rem(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
+{
+    uint64_t denominator = (uint64_t)bhi << 32 | blo;
+    if (!denominator)
+        ce_fatal("WinCE integer division by zero");
+    return ((uint64_t)ahi << 32 | alo) % denominator;
+}
 unsigned ce_wlen(const WCHAR *text)
 {
     unsigned n = 0;
@@ -511,16 +525,19 @@ CE_API(lstrcpyW)
 }
 CE_API(ExitThread)
 {
+    printf("wince: ExitThread %u from %08x\n", a0, WORD(__builtin_return_address(0)));
     ce_thread_exit(a0);
 }
 CE_API(ExitProcess)
 {
+    printf("wince: ExitProcess %u from %08x\n", a0, WORD(__builtin_return_address(0)));
     ce_shutdown();
     gz_exit((int)a0);
     return 0;
 }
 CE_API(TerminateProcess)
 {
+    printf("wince: TerminateProcess %08x %u from %08x\n", a0, a1, WORD(__builtin_return_address(0)));
     /* WinCE's current-process pseudo handle, used by its CRT exit thunk. */
     if (a0 != 0x42) {
         ce_error = 5;
@@ -612,8 +629,10 @@ static CW wide_format(WCHAR *out, const WCHAR *fmt, const CW *args, unsigned lim
         }
         bool zero = *fmt == '0';
         unsigned width = 0;
-        while (*fmt >= '0' && *fmt <= '9')
-            width = MIN(64u, width * 10u + (uint32_t)(*fmt++ - '0'));
+        while (*fmt >= '0' && *fmt <= '9') {
+            unsigned digit = *fmt++ - '0';
+            width = MIN(64u, width * 10u + digit);
+        }
         if (*fmt == 'l')
             fmt++;
         if (arg == nargs)
@@ -1464,7 +1483,8 @@ CE_API(CreateFileW)
             const char *open_path = path;
             char res_path[FS_PATH_MAX];
             struct fs_stat st;
-            if (fs_stat(path, &st) != 0) {
+            bool absent = fs_stat(path, &st) != 0;
+            if (absent) {
                 if (ce_bundled_file(canonical, res_path)) {
                     if (a4 == 1) {
                         ce_error = 80;
@@ -1500,6 +1520,8 @@ CE_API(CreateFileW)
             files[i].fd = fd;
             files[i].active = true;
             strlcpy(files[i].path, open_path, sizeof(files[i].path));
+            if ((absent && (flags & FS_O_CREATE)) || (flags & FS_O_TRUNC))
+                ce_file_touch(open_path, absent);
             ce_error = 0;
             return 0x72000000u + i;
         }
@@ -1512,6 +1534,9 @@ CE_API(CloseHandle)
     bool closed = ce_sync_close(a0, &handled);
     if (handled)
         return closed;
+    closed = ce_mapping_close(a0, &handled);
+    if (handled)
+        return closed;
     struct file_handle *f = file_handle(a0);
     if (!f) {
         ce_error = 6;
@@ -1519,7 +1544,9 @@ CE_API(CloseHandle)
     }
     int rv = fs_close(f->fd);
     f->active = false;
-    return rv < 0 ? file_error(rv) : 1;
+    if (rv < 0)
+        return file_error(rv);
+    return ce_file_flush_times() ? 1 : file_error(GZ_ENOSPC);
 }
 CE_API(ReadFile)
 {
@@ -1543,11 +1570,56 @@ CE_API(WriteFile)
         return 0;
     }
     int n = fs_write(f->fd, PTR(void, a1), a2);
+    if (n > 0 && !ce_file_touch(f->path, false)) {
+        ce_error = 112;
+        if (a3)
+            *PTR(CW, a3) = (CW)n;
+        return 0;
+    }
     if (!strncmp(f->path, "/Documents/", 11))
         printf("wince: wrote %s (%d bytes)\n", f->path, n);
     if (a3)
         *PTR(CW, a3) = n < 0 ? 0 : (CW)n;
     return n < 0 ? file_error(n) : 1;
+}
+CE_API(GetFileTime)
+{
+    struct file_handle *f = file_handle(a0);
+    if (!f) {
+        ce_error = 6;
+        return 0;
+    }
+    uint8_t times[24];
+    ce_file_times(f->path, times, false);
+    CW outputs[] = {a1, a2, a3};
+    for (unsigned i = 0; i < 3; i++)
+        if (outputs[i])
+            memcpy(PTR(void, outputs[i]), times + i * 8, 8);
+    return 1;
+}
+CE_API(SetFileTime)
+{
+    struct file_handle *f = file_handle(a0);
+    if (!f) {
+        ce_error = 6;
+        return 0;
+    }
+    uint8_t times[24];
+    ce_file_times(f->path, times, false);
+    CW inputs[] = {a1, a2, a3};
+    for (unsigned i = 0; i < 3; i++) {
+        if (!inputs[i])
+            continue;
+        uint8_t *value = PTR(uint8_t, inputs[i]);
+        uint32_t lo = ce_u32(value), hi = ce_u32(value + 4);
+        if ((lo || hi) && (lo != UINT32_MAX || hi != UINT32_MAX))
+            memcpy(times + i * 8, value, 8);
+    }
+    if (!ce_file_set_times(f->path, times)) {
+        ce_error = 112;
+        return 0;
+    }
+    return 1;
 }
 CE_API(GetFileSize)
 {
@@ -1607,6 +1679,8 @@ CE_API(MoveFileW)
     if (!ce_path(src, PTR(WCHAR, a0)) || !ce_path(dst, PTR(WCHAR, a1)))
         return 0;
     int rv = fs_rename(src, dst);
+    if (!rv && !ce_file_move_times(src, dst))
+        return file_error(GZ_ENOSPC);
     return rv < 0 ? file_error(rv) : 1;
 }
 CE_API(DeleteFileW)
@@ -1615,6 +1689,8 @@ CE_API(DeleteFileW)
     if (!ce_path(path, PTR(WCHAR, a0)))
         return 0;
     int rv = fs_remove(path);
+    if (!rv && !ce_file_move_times(path, NULL))
+        return file_error(GZ_ENOSPC);
     return rv < 0 ? file_error(rv) : 1;
 }
 CE_API(SetFilePointer)
@@ -1639,6 +1715,8 @@ CE_API(SetEndOfFile)
         return 0;
     }
     int rv = fs_set_end(f->fd);
+    if (!rv && !ce_file_touch(f->path, false))
+        return file_error(GZ_ENOSPC);
     return rv < 0 ? file_error(rv) : 1;
 }
 CE_API(GetModuleHandleW)
@@ -1706,10 +1784,20 @@ CE_API(GlobalMemoryStatus)
     p[7] = p[3];
     return 0;
 }
+CE_API(GetSystemInfo)
+{
+    if (!a0) { ce_error = 87; return 0; }
+    /* CE SYSTEM_INFO, MIPS R4000 family, one CPU, 4 KiB pages. */
+    CW info[] = {1, 4096, 0x10000, 0x7fff0000, 1, 1, 4000, 65536, 4};
+    memcpy(PTR(void, a0), info, sizeof(info));
+    return 0;
+}
 
 static const struct ce_export exports[] = {
+    CE_EXPORT(GetSystemInfo),
     {"__ll_mul", (void *)ce_ll_mul},
     {"__ll_div", (void *)ce_ll_div},
+    {"__ull_div", (void *)ce_ull_div}, {"__ull_rem", (void *)ce_ull_rem},
     CE_EXPORT(GetLastError),
     CE_EXPORT(SetLastError),
     CE_EXPORT(LocalAlloc),
@@ -1776,6 +1864,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(ReadFile),
     CE_EXPORT(WriteFile),
     CE_EXPORT(GetFileSize),
+    CE_EXPORT(GetFileTime), CE_EXPORT(SetFileTime),
     CE_EXPORT(GetFileAttributesW),
     CE_EXPORT(CreateDirectoryW),
     CE_EXPORT(RemoveDirectoryW),

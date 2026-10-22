@@ -12,9 +12,10 @@
 static struct ce_window windows[WINDOWS];
 static struct {
     char name[64];
-    CW proc;
-} classes[24];
-static unsigned class_count;
+    CW proc, atom, info[10];
+    WCHAR wide_name[64];
+} classes[64];
+static unsigned class_serial;
 static struct ce_message queue[QUEUE];
 static unsigned head, tail;
 static struct gz_mutex queue_lock = GZ_MUTEX_INIT;
@@ -31,6 +32,10 @@ bool ce_keyboard_open;
 static struct {
     CW window, id, interval, deadline, proc;
 } timers[16];
+static bool is_edit(const struct ce_window *w)
+{
+    return !strcasecmp(w->klass, "Edit") || !strcasecmp(w->klass, "CAPEDIT");
+}
 static CW builtin_proc(CW, CW, CW, CW);
 static void draw_control(struct ce_window *);
 static unsigned handle_index(CW handle)
@@ -85,13 +90,24 @@ CW ce_send(CW handle, CW message, CW wparam, CW lparam)
     struct ce_window *w = ce_window(handle);
     if (!w)
         return 0;
-    if (w->dialog_proc) {
-        CW result = ce_call(w->dialog_proc, handle, message, wparam, lparam);
-        if (result)
-            return result;
-        return builtin_proc(handle, message, wparam, lparam);
-    }
     return ce_call(w->proc, handle, message, wparam, lparam);
+}
+CW ce_dialog_proc(CW handle, CW message, CW wparam, CW lparam)
+{
+    struct ce_window *w = ce_window(handle);
+    if (!w)
+        return 0;
+    /* Dialog procedures often draw and return FALSE, leaving default paint
+     * validation to the dialog manager. Paint the background first so that
+     * default handling cannot erase the application's drawing afterwards. */
+    if (message == 0xf)
+        draw_control(w);
+    CW result = ce_call(w->dialog_proc, handle, message, wparam, lparam);
+    if (result)
+        return result;
+    if (message == 0xf)
+        return 0;
+    return builtin_proc(handle, message, wparam, lparam);
 }
 
 static bool set_text(struct ce_window *w, const WCHAR *text)
@@ -134,6 +150,7 @@ struct ce_window *ce_new_window(const WCHAR *klass, const WCHAR *text, CW style,
     struct ce_window *w = &windows[i];
     memset(w, 0, sizeof(*w));
     w->handle = 0x70000000u + i;
+    w->thread = WORD(gz_self()) >> 16;
     w->parent = parent;
     w->id = id;
     w->style = style;
@@ -141,10 +158,16 @@ struct ce_window *ce_new_window(const WCHAR *klass, const WCHAR *text, CW style,
     w->text_limit = 65535;
     if (WORD(klass) > 65535)
         ce_narrow(w->klass, sizeof(w->klass), klass);
-    else
+    else {
         strlcpy(w->klass, "Static", sizeof(w->klass));
+        for (unsigned j = 0; j < ARRAY_SIZE(classes); j++)
+            if (classes[j].atom == WORD(klass) && classes[j].atom) {
+                strlcpy(w->klass, classes[j].name, sizeof(w->klass));
+                break;
+            }
+    }
     if (!proc)
-        for (unsigned j = 0; j < class_count; j++)
+        for (unsigned j = 0; j < ARRAY_SIZE(classes); j++)
             if (!strcasecmp(classes[j].name, w->klass)) {
                 proc = classes[j].proc;
                 break;
@@ -183,6 +206,7 @@ struct ce_window *ce_new_window(const WCHAR *klass, const WCHAR *text, CW style,
         y = (p ? p->rect.bottom - p->rect.top : 320) - height;
     }
     w->rect = (struct ce_rect){x, y, x + width, y + height};
+
     if (!ce_list_init(w) || !ce_view_init(w) || !set_text(w, text)) {
         ce_list_free(w);
         ce_view_free(w);
@@ -191,6 +215,8 @@ struct ce_window *ce_new_window(const WCHAR *klass, const WCHAR *text, CW style,
         return NULL;
     }
     w->visible = (style & 0x10000000u) != 0;
+    printf("wince: window %08x %s parent %08x id %u style %08x rect %d,%d %d,%d\n",
+        w->handle, w->klass, parent, id, style, x, y, width, height);
     CW create[] = {arg,   ce_main.base, id,    parent,     (CW)height,  (CW)width,
                    (CW)y, (CW)x,        style, WORD(text), WORD(klass), 0};
     /* The callback can recursively create child windows. */
@@ -480,7 +506,7 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
         replace_selection(w, PTR(WCHAR, lp));
         return 1;
     case 0x102:
-        if (strcasecmp(w->klass, "Edit") || (w->style & 0x800))
+        if (!is_edit(w) || (w->style & 0x800))
             return 0;
         if (wp == 8) {
             if (w->sel_start == w->sel_end && w->cursor)
@@ -530,7 +556,7 @@ static void draw_control(struct ce_window *w)
     gfx_rect r = ce_window_rect(w->handle);
     if (w->dialog_proc) {
         gfx_fill(&ui.surf, r, 0xc0c0c0);
-        if (w->property_page)
+        if (w->property_page || (w->style & 0x40000000u))
             return;
         char title[256];
         ce_narrow(title, sizeof(title), w->text);
@@ -550,7 +576,7 @@ static void draw_control(struct ce_window *w)
             gfx_fill(&ui.surf, tab, (int)i == w->tabs->selected ? 0xeeeeee : 0xaaaaaa);
             gfx_text_center(&ui.surf, tab.x, tab.y + 4, tab.w, ui_font(FONT_R12), text, 0, 255);
         }
-    } else if (!strcasecmp(w->klass, "Edit")) {
+    } else if (is_edit(w)) {
         gfx_set_clip(&ui.surf, r);
         gfx_fill(&ui.surf, r, 0xffffff);
         int x = r.x + 2, y = r.y + 2;
@@ -756,7 +782,7 @@ static void input(const struct gz_input_event *e)
     gfx_rect r = ce_window_rect(w->handle);
     if (e->type == GZ_EV_TOUCH_DOWN) {
         focus = w->handle;
-        if (!strcasecmp(w->klass, "Edit") && !(w->style & 0x800)) {
+        if (is_edit(w) && !(w->style & 0x800)) {
             ce_keyboard_open = true;
             w->dirty = true;
         }
@@ -773,18 +799,91 @@ static void input(const struct gz_input_event *e)
     }
 }
 
+static int class_index(CW name)
+{
+    char text[64];
+    if (name >= 65536)
+        ce_narrow(text, sizeof(text), PTR(WCHAR, name));
+    for (unsigned i = 0; i < ARRAY_SIZE(classes); i++)
+        if (classes[i].atom && (name < 65536 ? classes[i].atom == name :
+                !strcasecmp(classes[i].name, text)))
+            return (int)i;
+    return -1;
+}
 CE_API(RegisterClassW)
 {
-    if (class_count == ARRAY_SIZE(classes))
-        return 0;
-    uint8_t *p = PTR(uint8_t, a0);
-    if (!p) {
+    if (!a0 || !ce_u32(PTR(uint8_t, a0) + 36)) {
         ce_error = 87;
         return 0;
     }
-    ce_narrow(classes[class_count].name, sizeof(classes[0].name), PTR(WCHAR, ce_u32(p + 36)));
-    classes[class_count].proc = ce_u32(p + 4);
-    return ++class_count;
+    CW name = ce_u32(PTR(uint8_t, a0) + 36);
+    if (class_index(name) >= 0) {
+        ce_error = 1410;
+        return 0;
+    }
+    for (unsigned i = 0; i < ARRAY_SIZE(classes); i++) {
+        if (classes[i].atom)
+            continue;
+        ce_narrow(classes[i].name, sizeof(classes[i].name), PTR(WCHAR, name));
+        ce_widen(classes[i].wide_name, ARRAY_SIZE(classes[i].wide_name), classes[i].name);
+        memcpy(classes[i].info, PTR(void, a0), sizeof(classes[i].info));
+        classes[i].proc = classes[i].info[1];
+        classes[i].info[9] = WORD(classes[i].wide_name);
+        return classes[i].atom = ++class_serial;
+    }
+    ce_error = 8;
+    return 0;
+}
+CE_API(UnregisterClassW)
+{
+    int index = class_index(a0);
+    if (index < 0) {
+        ce_error = 1411;
+        return 0;
+    }
+    for (unsigned i = 0; i < WINDOWS; i++)
+        if (windows[i].handle && !strcasecmp(windows[i].klass, classes[index].name)) {
+            ce_error = 1412;
+            return 0;
+        }
+    memset(&classes[index], 0, sizeof(classes[index]));
+    return 1;
+}
+CE_API(GetClassInfoW)
+{
+    int index = class_index(a1);
+    if (index < 0 || !a2) {
+        ce_error = index < 0 ? 1411 : 87;
+        return 0;
+    }
+    memcpy(PTR(void, a2), classes[index].info, sizeof(classes[index].info));
+    return 1;
+}
+CE_API(GetClassNameW)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w || !a1 || !a2) {
+        ce_error = w ? 87 : 1400;
+        return 0;
+    }
+    ce_widen(PTR(WCHAR, a1), a2, w->klass);
+    return MIN(strlen(w->klass), a2 - 1);
+}
+CE_API(EnumWindows)
+{
+    if (!a0) {
+        ce_error = 87;
+        return 0;
+    }
+    CW handles[WINDOWS];
+    unsigned count = 0;
+    for (unsigned i = 0; i < WINDOWS; i++)
+        if (windows[i].handle && !(windows[i].style & 0x40000000u))
+            handles[count++] = windows[i].handle;
+    for (unsigned i = 0; i < count; i++)
+        if (ce_window(handles[i]) && !ce_call(a0, handles[i], a1, 0, 0))
+            return 0;
+    return 1;
 }
 CE_API(CreateWindowExW)
 {
@@ -930,16 +1029,20 @@ CE_API(CreateDialogIndirectParamW)
         return 0;
     }
     static const WCHAR klass[] = {'_', 'c', 'e', '_', 'd', 'i', 'a', 'l', 'o', 'g', 0};
-    int width = MIN(240, d->width * 7 / 4), height = MIN(300, d->height * 14 / 8 + 54);
-    struct ce_window *w = ce_new_window(klass, d->title, d->style | 0x10000000u, (240 - width) / 2, 28, width,
-                                        height, 0, 0, 0, 0);
+    bool child = (d->style & 0x40000000u) != 0;
+    int width = MIN(240, d->width * 7 / 4),
+        height = MIN(300, d->height * 14 / 8 + (child ? 0 : 54));
+    struct ce_window *w = ce_new_window(klass, d->title, d->style | (child ? 0 : 0x10000000u),
+        child ? d->x * 7 / 4 : (240 - width) / 2, child ? d->y * 14 / 8 : 28,
+        width, height, a2, 0, 0, 0);
     if (!w) {
         free(d);
         return 0;
     }
     w->dialog_proc = a3;
+    w->proc = WORD(ce_dialog_proc);
     CW handle = w->handle;
-    CW first = ce_dialog_controls(handle, d, 24);
+    CW first = ce_dialog_controls(handle, d, child ? 0 : 24);
     free(d);
     if (first == 0xffffffffu) {
         ce_destroy_window(handle);
@@ -953,9 +1056,9 @@ CE_API(CreateDialogIndirectParamW)
             has_ok |= windows[i].id == 1;
             has_cancel |= windows[i].id == 2;
         }
-    if ((!has_ok &&
+    if ((!child && !has_ok &&
          !ce_new_window(button, yes, 0x50000001u, width - 120, height - 26, 54, 24, handle, 1, 0, 0)) ||
-        (!has_cancel &&
+        (!child && !has_cancel &&
          !ce_new_window(button, no, 0x50000000u, width - 64, height - 26, 62, 24, handle, 2, 0, 0))) {
         ce_destroy_window(handle);
         return 0;
@@ -1054,6 +1157,8 @@ CE_API(ShowWindow)
         parent->dirty = true;
     if (!w->parent)
         focus = w->handle;
+    if (was != w->visible)
+        ce_send(a0, 0x18, w->visible, 0); /* WM_SHOWWINDOW */
     return was;
 }
 CE_API(UpdateWindow)
@@ -1110,6 +1215,22 @@ CE_API(ClientToScreen)
     p[1] += r.y;
     return 1;
 }
+CE_API(ScreenToClient)
+{
+    if (!ce_window(a0) || !a1) {
+        ce_error = 87;
+        return 0;
+    }
+    gfx_rect r = ce_window_rect(a0);
+    int32_t *p = PTR(int32_t, a1);
+    p[0] -= r.x;
+    p[1] -= r.y;
+    return 1;
+}
+CE_API(GetKeyState)
+{
+    return a0 < ARRAY_SIZE(key_state) && key_state[a0] ? 0xffff8000u : 0;
+}
 CE_API(FindWindowW)
 {
     char klass[64];
@@ -1150,6 +1271,17 @@ CE_API(GetForegroundWindow)
             return windows[i].handle;
     return 0;
 }
+CE_API(GetWindowThreadProcessId)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w) {
+        ce_error = 1400;
+        return 0;
+    }
+    if (a1)
+        *PTR(CW, a1) = gz_getpid();
+    return w->thread;
+}
 CE_API(SendDlgItemMessageW)
 {
     for (unsigned i = 0; i < WINDOWS; i++)
@@ -1169,6 +1301,8 @@ CE_API(GetWindowLongW)
         return w->id;
     case -16:
         return w->style;
+    case 4:
+        return w->dialog_proc;
     case 0:
         return w->property_page ? w->dialog_message_result : w->user;
     case 8:
@@ -1193,6 +1327,9 @@ CE_API(SetWindowLongW)
         break;
     case -16:
         p = &w->style;
+        break;
+    case 4:
+        p = &w->dialog_proc;
         break;
     case 0:
         p = w->property_page ? &w->dialog_message_result : &w->user;
@@ -1361,10 +1498,8 @@ CE_API(SetWindowPos)
     }
     w->rect.right = w->rect.left + width;
     w->rect.bottom = w->rect.top + height;
-    if (a6 & 0x40)
-        w->visible = true;
-    if (a6 & 0x80)
-        w->visible = false;
+    if (a6 & 0xc0)
+        ce_ShowWindow(a0, (a6 & 0x80) ? 0 : 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     w->dirty = true;
     if (!(a6 & 1))
         ce_send(a0, 5, 0, (CW)(width & 65535) | (CW)height << 16);
@@ -1592,7 +1727,8 @@ CE_API(SipSetInfo)
 }
 
 static const struct ce_export exports[] = {
-    CE_EXPORT(RegisterClassW),
+    CE_EXPORT(RegisterClassW), CE_EXPORT(UnregisterClassW),
+    CE_EXPORT(GetClassInfoW), CE_EXPORT(GetClassNameW), CE_EXPORT(EnumWindows),
     CE_EXPORT(DialogBoxIndirectParamW),
     CE_EXPORT(CreateDialogIndirectParamW),
     CE_EXPORT(EndDialog),
@@ -1614,9 +1750,11 @@ static const struct ce_export exports[] = {
     CE_EXPORT(GetWindowRect),
     CE_EXPORT(MoveWindow),
     CE_EXPORT(ClientToScreen),
+    CE_EXPORT(ScreenToClient), CE_EXPORT(GetKeyState),
     CE_EXPORT(FindWindowW),
     CE_EXPORT(GetWindowLongW),
     CE_EXPORT(GetWindow),
+    CE_EXPORT(GetWindowThreadProcessId),
     CE_EXPORT(GetForegroundWindow),
     CE_EXPORT(SendDlgItemMessageW),
     CE_EXPORT(SetWindowLongW),

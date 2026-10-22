@@ -2,10 +2,13 @@
  * The VR4131 has no LL/SC; interlocked operations must use a kernel mutex. */
 #include "runtime.h"
 #include <glaze/thread.h>
+_Static_assert(GZ_THREAD_STACK == 65536u, "CE inline thread IDs require 64 KiB stacks");
 #define TLS_SLOTS 64
 #define SYNC_OBJECTS 64
 struct ce_thread_local {
     CW error, values[TLS_SLOTS], generations[TLS_SLOTS], object;
+    CW crt_word;
+    void *tokens[2];
 };
 static struct gz_mutex lock = GZ_MUTEX_INIT;
 static uint64_t tls_used;
@@ -13,7 +16,7 @@ static CW tls_generation[TLS_SLOTS];
 static CW serial;
 enum { SYNC_MUTEX = 1, SYNC_EVENT, SYNC_THREAD };
 static struct sync_object {
-    CW handle, kind, refs, owner, depth, code, proc, arg;
+    CW handle, kind, refs, owner, depth, code, proc, arg, tid;
     bool signaled, manual, suspended, open;
     WCHAR name[128];
 } objects[SYNC_OBJECTS];
@@ -27,6 +30,7 @@ static struct ce_thread_local *local(void)
     return gz_self()->tls[1];
 }
 CW *ce_error_slot(void) { return &local()->error; }
+void **ce_token_context(unsigned wide) { return &local()->tokens[wide != 0]; }
 static struct {
     CW handle;
     struct sync_object *object;
@@ -259,6 +263,13 @@ CE_API(TlsFree)
 CE_API(TlsGetValue)
 {
     struct ce_thread_local *t = local();
+    /* CE's supplied thunks use unchecked 32-bit pointer arithmetic. Some
+     * statically linked CRTs leave __tlsindex at -1 and use TLS[-1]. Model
+     * that extra word explicitly rather than exposing the native TCB. */
+    if (a0 == UINT32_MAX) {
+        ce_error = 0;
+        return t->crt_word;
+    }
     gz_mutex_lock(&lock);
     bool ok = a0 < TLS_SLOTS && (tls_used & ((uint64_t)1 << a0));
     CW value = ok && t->generations[a0] == tls_generation[a0] ? t->values[a0] : 0;
@@ -269,6 +280,10 @@ CE_API(TlsGetValue)
 CE_API(TlsSetValue)
 {
     struct ce_thread_local *t = local();
+    if (a0 == UINT32_MAX) {
+        t->crt_word = a1;
+        return 1;
+    }
     gz_mutex_lock(&lock);
     bool ok = a0 < TLS_SLOTS && (tls_used & ((uint64_t)1 << a0));
     if (ok) {
@@ -279,6 +294,15 @@ CE_API(TlsSetValue)
     if (!ok)
         ce_error = 87;
     return ok;
+}
+CE_API(TlsCall)
+{
+    if (a0 == 0)
+        return ce_TlsAlloc(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    if (a0 == 1)
+        return ce_TlsFree(a1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    ce_error = 87;
+    return 0;
 }
 void ce_thread_exit(CW code)
 {
@@ -309,6 +333,9 @@ static void start_thread(void *arg)
 {
     struct sync_object *o = arg;
     local()->object = o->handle;
+    gz_mutex_lock(&lock);
+    o->tid = WORD(gz_self()) >> 16;
+    gz_mutex_unlock(&lock);
     for (;;) {
         gz_mutex_lock(&lock);
         bool run = !o->suspended;
@@ -346,8 +373,18 @@ CE_API(CreateThread)
         ce_error = 8;
         return 0;
     }
-    if (a5)
-        *PTR(CW, a5) = tid;
+    /* The CE token must match inline KData reads translated by the loader. */
+    for (;;) {
+        gz_mutex_lock(&lock);
+        CW token = o->tid;
+        gz_mutex_unlock(&lock);
+        if (token) {
+            if (a5)
+                *PTR(CW, a5) = token;
+            break;
+        }
+        gz_sleep_ms(1);
+    }
     return h;
 }
 CE_API(ResumeThread)
@@ -364,7 +401,7 @@ CE_API(ResumeThread)
         ce_error = 6;
     return result;
 }
-CE_API(GetCurrentThreadId) { return gz_thread_id(); }
+CE_API(GetCurrentThreadId) { return WORD(gz_self()) >> 16; }
 CE_API(GetCurrentProcessId) { return gz_getpid(); }
 CE_API(GetCurrentProcess) { return 0x42; }
 CE_API(GetExitCodeThread)
@@ -394,6 +431,7 @@ static const struct ce_export exports[] = {CE_EXPORT(CreateMutexW),
                                            CE_EXPORT(InterlockedDecrement),
                                            CE_EXPORT(TlsAlloc),
                                            CE_EXPORT(TlsFree),
+                                           CE_EXPORT(TlsCall),
                                            CE_EXPORT(TlsGetValue),
                                            CE_EXPORT(TlsSetValue),
                                            CE_EXPORT(CreateThread),

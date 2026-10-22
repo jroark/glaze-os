@@ -37,6 +37,16 @@ void *ce_resolve_thread(const char *);
 void *ce_resolve_ole(const char *, const char *);
 void *ce_resolve_winsock(const char *, const char *);
 bool ce_sync_close(CW, bool *);
+bool ce_mapping_close(CW, bool *);
+void *ce_resolve_mapping(const char *);
+void *ce_resolve_string(const char *);
+void *ce_resolve_scan(const char *);
+void **ce_token_context(unsigned);
+bool ce_file_times(const char *, uint8_t [24], bool);
+bool ce_file_set_times(const char *, const uint8_t [24]);
+bool ce_file_touch(const char *, bool);
+bool ce_file_flush_times(void);
+bool ce_file_move_times(const char *, const char *);
 void ce_thread_exit(CW) __attribute__((noreturn));
 extern struct ui_keyboard ce_keyboard;
 extern bool ce_keyboard_open;
@@ -49,7 +59,7 @@ struct ce_message {
     int32_t x, y;
 };
 struct ce_window {
-    CW handle, parent, id, proc, style, user;
+    CW handle, parent, id, proc, style, user, thread;
     struct ce_rect rect;
     WCHAR *text;
     uint32_t length, capacity, cursor, sel_start, sel_end;
@@ -72,7 +82,7 @@ struct ce_tabs {
     int selected;
     WCHAR text[16][64];
 };
-enum { CE_OBJ_BRUSH = 1, CE_OBJ_FONT, CE_OBJ_BITMAP, CE_OBJ_MENU, CE_OBJ_IMAGE_LIST, CE_OBJ_PEN, CE_OBJ_ICON, CE_OBJ_DC };
+enum { CE_OBJ_BRUSH = 1, CE_OBJ_FONT, CE_OBJ_BITMAP, CE_OBJ_MENU, CE_OBJ_IMAGE_LIST, CE_OBJ_PEN, CE_OBJ_ICON, CE_OBJ_DC, CE_OBJ_REGION };
 struct ce_object {
     int kind;
     CW value;
@@ -85,6 +95,7 @@ void ce_fatal(const char *reason) __attribute__((noreturn));
 void ce_missing(const char *symbol) __attribute__((noreturn));
 void *ce_resolve_core(const char *);
 void *ce_resolve_time(const char *);
+void *ce_resolve_timezone(const char *);
 void *ce_resolve_window(const char *);
 void *ce_resolve_gdi(const char *);
 void *ce_resolve_shell(const char *, const char *);
@@ -118,6 +129,7 @@ uint32_t ce_registry_dword(const char *, const char *, uint32_t);
 bool ce_registry_set_dword(const char *, const char *, uint32_t);
 void ce_post(CW window, CW message, CW wparam, CW lparam);
 CW ce_send(CW window, CW message, CW wparam, CW lparam);
+CW ce_dialog_proc(CW, CW, CW, CW);
 struct ce_window *ce_window(CW);
 bool ce_window_visible(CW);
 struct ce_window *ce_new_window(const WCHAR *klass, const WCHAR *text, CW style, int x, int y, int w, int h,
