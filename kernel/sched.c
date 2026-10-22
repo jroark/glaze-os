@@ -88,6 +88,8 @@ struct thread *thread_by_tid(int tid)
 
 static void runq_push(struct thread *t)
 {
+    if (t->proc && t->proc->frozen)
+        return;                         /* runnable, but queued only when thawed */
     t->next = NULL;
     if (runq_tail[t->prio])
         runq_tail[t->prio]->next = t;
@@ -313,6 +315,26 @@ void sched_set_proc_prio(struct proc *p, int prio)
         } else {
             t->prio = prio;
         }
+    }
+    need_resched = true;
+}
+
+/* A frozen process's runnable threads are off the run queue; wake-ups
+ * leave them runnable there, and thawing queues them all. */
+void sched_freeze_proc(struct proc *p, bool frozen)
+{
+    if (p->frozen == frozen)
+        return;
+    if (frozen) {
+        for (int i = 0; i < MAX_THREADS; i++)
+            if (threads[i].proc == p && threads[i].state == T_RUNNABLE)
+                runq_remove(&threads[i]);
+        p->frozen = true;
+    } else {
+        p->frozen = false;
+        for (int i = 0; i < MAX_THREADS; i++)
+            if (threads[i].proc == p && threads[i].state == T_RUNNABLE)
+                runq_push(&threads[i]);
     }
     need_resched = true;
 }

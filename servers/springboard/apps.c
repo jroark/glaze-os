@@ -16,9 +16,6 @@
 #include <string.h>
 
 #define ICON_MAX    (16 * 1024)
-/* Left in the bundle at launch. A reinstall swaps in a new bundle without
- * it, even with the same version, so a background copy is known stale. */
-#define RUN_STAMP   ".running"
 
 static void *icon_data[SB_MAX_APPS];
 static bool seen[SB_MAX_APPS];
@@ -157,23 +154,18 @@ int apps_launch(int app)
     else if (rv >= 0)
         rv = GZ_EIO;
     free(elf);
-    if (rv > 0) {
-        snprintf(path, sizeof(path), "%s/" RUN_STAMP, a->path);
-        a->run_stamp = fs_write_file(path, "", 0) == 0;
-    }
+    if (rv > 0)
+        a->install_id = pkg_install_id(a->path);
     return rv;
 }
 
+/* A reinstall bumps the bundle's install id (glaze/pkg.h), even at the
+ * same version, so a copy still running is out of date. */
 bool apps_replaced(int app)
 {
     struct sb_app_info *a = &sb_apps[app];
-    char path[FS_PATH_MAX];
-    struct fs_stat st;
 
-    if (!a->installed || !a->run_stamp)
-        return false;
-    snprintf(path, sizeof(path), "%s/" RUN_STAMP, a->path);
-    return fs_stat(path, &st) == GZ_ENOENT;
+    return a->installed && pkg_install_id(a->path) != a->install_id;
 }
 
 int apps_uninstall(int app)

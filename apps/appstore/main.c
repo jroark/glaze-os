@@ -609,6 +609,15 @@ int main(void)
     bool dirty = false;
     for (;;) {
         if (ui_next_event(&e, 20)) {
+            if (e.type == GZ_EV_TOUCH_CANCEL) {
+                /* Home mid-touch: drop the touch without acting on it. */
+                bool changed;
+                ui_list_event(&list, &e, &changed);
+                ui_scroll_event(&detail_scroll, &e, 0);
+                ui_keyboard_event(&keyboard, &e, 0, &changed);
+                redraw();
+                continue;
+            }
             if (fetch && kind == 3) {
                 if (e.type == GZ_EV_TOUCH_UP && gfx_rect_contains(gfx_r(66, 174, 108, 29), e.x, e.y)) {
                     all_updates = false;

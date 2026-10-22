@@ -40,7 +40,7 @@ struct sb_app_info {
     char exec[16];              /* installed: the executable in the bundle */
     char id[28];                /* installed: package id (process name) */
     char version[16];           /* installed: package version */
-    bool run_stamp;             /* installed: launch left a stamp in the bundle */
+    uint32_t install_id;        /* installed: the bundle's install id at launch */
     int status_style;
     bool dock;
     bool installed;

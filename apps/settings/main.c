@@ -68,6 +68,7 @@ static const char *const tone_titles[3] = { "Timer", "Calendar Alerts", "Notific
 static int tone_for;                    /* which of them V_TONE picks */
 static gfx_rect volume_rect;
 static bool volume_drag;
+static int volume_before;           /* restored if the drag is cancelled */
 
 static void load(void)
 {
@@ -826,8 +827,10 @@ static bool volume_touch(const struct gz_input_event *ev)
 {
     if (view != V_SOUNDS)
         return false;
-    if (ev->type == GZ_EV_TOUCH_DOWN)
+    if (ev->type == GZ_EV_TOUCH_DOWN) {
         volume_drag = gfx_rect_contains(volume_rect, ev->x, ev->y);
+        volume_before = s_volume;
+    }
     if (!volume_drag)
         return false;
     int v = ui_slider_value(volume_rect, AUDIO_VOLUME_MAX, ev->x);
@@ -914,6 +917,19 @@ int main(void)
             } else {
                 redraw_rect(zone_area());  /* live uptime / clock / network */
             }
+            continue;
+        }
+        if (ev.type == GZ_EV_TOUCH_CANCEL) {
+            /* Home mid-touch: drop the touch without acting on it. */
+            pin_pc.pressed = -1;
+            if (volume_drag)
+                s_volume = volume_before;
+            volume_drag = false;
+            if (zone_drag)
+                ui_scroll_event(&zone_scroll, &ev, ev.y - UI_NAV_H);
+            zone_drag = false;
+            pressed = R_NONE;
+            redraw();
             continue;
         }
         if (pin_touch(&ev) || volume_touch(&ev) || zone_touch(&ev))

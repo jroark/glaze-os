@@ -47,7 +47,7 @@ enum state {
 #define SURFACE_BYTES   (SB_APP_W * GZ_FB_HEIGHT * 2)
 #define SHM_HEADER      4096
 #define LOW_MEM_PAGES   512     /* keep >= 2 MiB free when backgrounding/spawning */
-#define BG_POLL_MS      2000    /* look for background apps that have exited */
+#define SUSPEND_MS      1000    /* a background app not suspended by now is frozen */
 
 _Static_assert(sizeof(struct sb_shared) <= SHM_HEADER, "sb_shared must fit before the surface");
 
@@ -69,6 +69,7 @@ struct sb_running {
     gfx_surface surf;
     bool ready;
     bool fullscreen;
+    bool suspend_due;           /* background: freeze at last_active_ms + SUSPEND_MS */
     uint32_t last_active_ms;
 };
 static struct sb_running running[SB_MAX_RUNNING];
@@ -378,6 +379,20 @@ static bool slot_ensure_shm(struct sb_running *s)
     return true;
 }
 
+/* Slot 0 keeps its surface, so the first launch needs none; the others give
+ * theirs back with their app (freed once the app's mapping is gone too). */
+static void slot_release_shm(int i)
+{
+    struct sb_running *s = &running[i];
+
+    if (i == 0 || !s->shm_base)
+        return;
+    gz_shm_unmap(s->shm_base);
+    s->shm_base = NULL;
+    s->shared = NULL;
+    s->shm_id = 0;
+}
+
 static void slot_reset(int i)
 {
     struct sb_running *s = &running[i];
@@ -387,13 +402,15 @@ static void slot_reset(int i)
     s->port = 0;
     s->ready = false;
     s->fullscreen = false;
+    s->suspend_due = false;
     s->last_active_ms = 0;
+    if (front_slot == i)
+        front_slot = -1;
+    slot_release_shm(i);
     if (s->shm_base) {
         s->surf.h = SB_APP_H;
         gfx_reset_clip(&s->surf);
     }
-    if (front_slot == i)
-        front_slot = -1;
 }
 
 static void slot_kill(int i)
@@ -425,15 +442,6 @@ static int find_slot_by_app(int app_index)
             return i;
     }
     return -1;
-}
-
-static bool any_app_running(void)
-{
-    for (int i = 0; i < SB_MAX_RUNNING; i++) {
-        if (running[i].pid > 0)
-            return true;
-    }
-    return false;
 }
 
 static void send_slot_event(struct sb_running *s, const struct gz_input_event *ev)
@@ -470,7 +478,7 @@ static bool evict_lru_background(int exclude_slot)
 }
 
 /* Ends background apps while memory is low, but stops once ending one gives
- * nothing back: what is missing then is not theirs (surfaces are kept). */
+ * nothing back: what is missing then is not theirs. */
 static void reclaim_background_memory(int exclude_slot)
 {
     struct gz_sysinfo si;
@@ -545,9 +553,40 @@ static void app_background(void)
     s->last_active_ms = now_ms();
     struct gz_input_event e = { .type = GZ_EV_APP_DEACTIVATE, .time_ms = s->last_active_ms };
     send_slot_event(s, &e);
-    gz_proc_set_bg(s->pid, 1);
+    gz_proc_set_bg(s->pid, GZ_PROC_BG);
+    /* libui suspends the app once it has seen DEACTIVATE; one that never
+     * gets back to its event loop (or has other threads) is frozen later,
+     * unless it asked to keep running. */
+    s->suspend_due = true;
     front_slot = -1;
     reclaim_background_memory(-1);
+}
+
+/* ms until the next background app is due to be frozen, or -1. */
+static int suspend_next_ms(uint32_t t)
+{
+    int next = -1;
+
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        struct sb_running *s = &running[i];
+        if (s->pid <= 0 || !s->suspend_due)
+            continue;
+        int wait = MAX((int)(s->last_active_ms + SUSPEND_MS - t), 0);
+        next = next < 0 ? wait : MIN(next, wait);
+    }
+    return next;
+}
+
+static void suspend_due_apps(uint32_t t)
+{
+    for (int i = 0; i < SB_MAX_RUNNING; i++) {
+        struct sb_running *s = &running[i];
+        if (s->pid <= 0 || !s->suspend_due || (int)(t - s->last_active_ms) < SUSPEND_MS)
+            continue;
+        s->suspend_due = false;
+        if (!s->shared->keep_running)
+            gz_proc_set_bg(s->pid, GZ_PROC_SUSPENDED);
+    }
 }
 
 /* Benchmark lines (tests/bench.sh): an event, its time in ms, and memory. */
@@ -596,8 +635,9 @@ static void launch(int index)
             struct sb_running *s = &running[existing];
             front_slot = existing;
             s->shared->background = 0;
+            s->suspend_due = false;
             s->last_active_ms = now_ms();
-            gz_proc_set_bg(s->pid, 0);
+            gz_proc_set_bg(s->pid, GZ_PROC_FG);     /* also thaws it */
             struct gz_input_event e = { .type = GZ_EV_APP_ACTIVATE, .time_ms = s->last_active_ms };
             send_slot_event(s, &e);
             bench_log("launch", sb_apps[index].path, 0);
@@ -608,15 +648,15 @@ static void launch(int index)
     }
 
     reclaim_background_memory(-1);
-    /* A free slot, preferring one with a surface already: surfaces are
-     * never freed, so making another can only fail once memory or shm ids
-     * run out, and then the least recently used app gives up its own. */
+    /* A free slot, preferring one with a surface already (slot 0's); when
+     * none is free or no surface can be made, the least recently used app
+     * gives up its slot and its surface. */
     int slot = -1;
     for (int i = 0; i < SB_MAX_RUNNING; i++) {
         if (running[i].pid <= 0 && (slot < 0 || (running[i].shm_base && !running[slot].shm_base)))
             slot = i;
     }
-    if (slot < 0 || !slot_ensure_shm(&running[slot])) {
+    while (slot < 0 || !slot_ensure_shm(&running[slot])) {
         int victim = -1;
         for (int i = 0; i < SB_MAX_RUNNING; i++) {
             if (i != front_slot && running[i].pid > 0 &&
@@ -627,7 +667,7 @@ static void launch(int index)
             show_alert(-1, "Out of Memory", "Close an app and try again.");
             return;
         }
-        slot_kill(victim);              /* it had a surface */
+        slot_kill(victim);
         slot = victim;
     }
 
@@ -1615,6 +1655,7 @@ int main(void)
 
     sb_port = gz_port_create();
     gz_port_register(sb_port, SB_PORT_NAME);
+    gz_child_notify(sb_port);           /* GZ_NOTIFY_CHILD when an app exits */
     gz_input_bind(sb_port);
 
     update_clock(true);
@@ -1634,11 +1675,12 @@ int main(void)
         } else if (state == ST_LOCK && !dragging_knob && view.knob_x == 0) {
             int wait = (int)(shimmer_next - t);
             timeout = MIN(timeout, wait < 0 ? 0 : wait);
-        } else if (state == ST_LAUNCH_WAIT || front_slot >= 0) {
-            timeout = MIN(timeout, 250);    /* watch the front app */
-        } else if (any_app_running()) {
-            timeout = MIN(timeout, BG_POLL_MS);
+        } else if (state == ST_LAUNCH_WAIT) {
+            timeout = MIN(timeout, MAX((int)(launch_t0 + LAUNCH_TIMEOUT + 1 - t), 0));
         }
+        int freeze = suspend_next_ms(t);
+        if (freeze >= 0)
+            timeout = MIN(timeout, freeze);
         if (pin_wait)
             timeout = MIN(timeout, 1000);   /* count down "Try again" */
         if (state == ST_HOME && !anim.active) {
@@ -1719,6 +1761,8 @@ int main(void)
         if (state == ST_LAUNCH_WAIT && t - launch_t0 > LAUNCH_TIMEOUT)
             begin_zoom_in();                    /* show whatever it has */
 
+        suspend_due_apps(t);
+        /* Woken by GZ_NOTIFY_CHILD when one has exited. */
         for (int i = 0; i < SB_MAX_RUNNING; i++) {
             if (running[i].pid <= 0 || gz_proc_alive(running[i].pid))
                 continue;

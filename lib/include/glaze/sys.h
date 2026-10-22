@@ -59,6 +59,8 @@ static inline void *gz_shm_map(int id)
     int r = GZ_SC1(SYS_SHM_MAP, id);
     return r < 0 ? NULL : (void *)r;
 }
+/* The object is freed once no process maps it (its id is then reused). */
+static inline int gz_shm_unmap(void *va) { return GZ_SC1(SYS_SHM_UNMAP, va); }
 
 /* Milliseconds since boot (wraps after ~49 days); gz_time_us fills a u64. */
 static inline uint32_t gz_time_ms(void) { return (uint32_t)GZ_SC1(SYS_TIME_US, 0); }
@@ -125,7 +127,9 @@ static inline int gz_task_snapshot(struct gz_task_snapshot *s)
 { return GZ_SC2(SYS_TASK_SNAPSHOT, s, sizeof(*s)); }
 /* Cannot stop the caller or system services. PIDs include a generation. */
 static inline int gz_task_stop(int pid) { return GZ_SC1(SYS_TASK_STOP, pid); }
-static inline int gz_proc_set_bg(int pid, int bg) { return GZ_SC2(SYS_PROC_BG, pid, bg); }
+static inline int gz_proc_set_bg(int pid, int state) { return GZ_SC2(SYS_PROC_BG, pid, state); }
+/* GZ_NOTIFY_CHILD on `port` (the caller's) whenever a child process exits. */
+static inline int gz_child_notify(int port) { return GZ_SC1(SYS_CHILD_NOTIFY, port); }
 
 static inline const void *gz_romfs_map(const char *name, uint32_t *size)
 {

@@ -14,7 +14,8 @@ static void block(void *arg)
 int main(void)
 {
     int port = gz_port_create();
-    gz_port_register(port, "pong");
+    if (gz_port_register(port, "pong") < 0)
+        gz_port_register(port, "pong-victim");  /* a second copy, for ktest's task tests */
 
     for (;;) {
         struct gz_msg m;
@@ -47,6 +48,8 @@ int main(void)
             if (gz_task_stop((int)m.w[2]) == GZ_EPERM) checks |= 4;
             if (gz_spawn("bin/ktest_pong", GZ_SPAWN_APP) == GZ_EPERM) checks |= 8;
             if (gz_proc_set_bg((int)m.w[1], 0) == GZ_EPERM) checks |= 32;
+            /* Not in the background, so it may not suspend itself either. */
+            if (gz_proc_set_bg(gz_getpid(), GZ_PROC_SUSPENDED) == GZ_EPERM) checks |= 64;
             if (gz_task_stop((int)m.w[1]) == 0 && gz_task_stop((int)m.w[1]) == GZ_ENOENT) checks |= 16;
             m.w[0] = checks;
         } else if (m.w[0] == 0xFFFFFFFD) {

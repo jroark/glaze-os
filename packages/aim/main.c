@@ -1724,6 +1724,20 @@ static void touch(const struct gz_input_event *e)
     int kb_y = UI_H - UI_KB_H;
     static bool in_scroll, in_list;
 
+    if (e->type == GZ_EV_TOUCH_CANCEL) {
+        /* Home mid-touch: drop the touch without acting on it. */
+        bool d = false;
+        if (in_keyboard)
+            ui_keyboard_event(&kb, e, kb_y, &d);
+        if (in_list)
+            ui_list_event(&blist, e, &d);
+        if (in_scroll && sc)
+            ui_scroll_event(sc, e, 0);
+        in_keyboard = in_scroll = in_list = false;
+        pressed = (struct hit){ { 0, 0, 0, 0 }, H_NONE, 0, NULL };
+        dirty = true;
+        return;
+    }
     if (e->type == GZ_EV_TOUCH_DOWN) {
         in_keyboard = !alert_open && show_keyboard() && e->y >= kb_y;
         in_scroll = in_list = false;

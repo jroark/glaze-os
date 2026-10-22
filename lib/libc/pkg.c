@@ -327,6 +327,18 @@ static int copy_data(const char *src, const char *dst, uint8_t *buf, unsigned de
     return rv ? rv : crv;
 }
 
+uint32_t pkg_install_id(const char *bundle)
+{
+    char path[FS_PATH_MAX], num[12];
+    uint32_t id = 0;
+
+    snprintf(path, sizeof(path), "%s/" PKG_INSTALL_ID, bundle);
+    int n = fs_read_file(path, num, sizeof(num) - 1);
+    for (int i = 0; i < n && num[i] >= '0' && num[i] <= '9'; i++)
+        id = id * 10 + (uint32_t)(num[i] - '0');
+    return id;
+}
+
 int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX])
 {
     static struct entry ents[MAX_ENTRIES];
@@ -398,6 +410,14 @@ int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX])
             rv = 0;
         else
             rv = copy_data(source, path, buf, 0);
+    }
+    if (!rv) {
+        char num[12];
+        snprintf(num, sizeof(num), "%u", (unsigned)((*old ? pkg_install_id(old) : 0) + 1));
+        snprintf(path, sizeof(path), "%s/" PKG_INSTALL_ID, tmp);
+        int n = (int)strlen(num);
+        rv = fs_write_file(path, num, (uint32_t)n);
+        rv = rv == n ? 0 : rv < 0 ? rv : GZ_EIO;
     }
     if (!rv) {
         snprintf(path, sizeof(path), "%s/.pkg-ready", tmp);

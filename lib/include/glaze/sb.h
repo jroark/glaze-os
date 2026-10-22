@@ -79,6 +79,7 @@ struct sb_shared {
     struct sb_note_req req;         /* written by the app before a request */
     char bundle[48];                /* an installed app's bundle folder, else "" */
     volatile uint32_t background;   /* 1 while the app is in the background */
+    volatile uint32_t keep_running; /* app: not to be suspended there (ui_set_background_running) */
 };
 
 /* App-level events beyond the kernel's input codes. */

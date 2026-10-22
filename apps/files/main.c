@@ -907,7 +907,15 @@ int main(void)
                 if (!alert_open && view == V_NAME) name_input(&ev);
             } else if (ev.type == GZ_EV_APP_ACTIVATE)
                 ;
-            else if (alert_open)
+            else if (ev.type == GZ_EV_TOUCH_CANCEL) {
+                /* Home mid-touch: drop the touch without acting on it. */
+                bool changed;
+                pressed = P_NONE;
+                alert_pressed = -1;
+                ui_list_event(&list, &ev, &changed);
+                ui_scroll_event(&text_scroll, &ev, 0);
+                ui_keyboard_event(&kb, &ev, 0, &changed);
+            } else if (alert_open)
                 alert_event(&ev);
             else if (view == V_LIST)
                 list_event(&ev);

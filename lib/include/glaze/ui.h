@@ -26,9 +26,12 @@ extern struct ui_app ui;
 /* Connects to SpringBoard and maps the app surface; exits on failure. */
 void ui_init(int status_style);
 bool ui_in_background(void);
-/* After Home, ui_next_event returns GZ_EV_APP_DEACTIVATE and then waits for
- * GZ_EV_APP_ACTIVATE, so the app is suspended in the background. An app
- * that has work to do there (a network connection) turns that off. */
+/* After Home, ui_next_event returns GZ_EV_APP_DEACTIVATE, the moment to
+ * save anything unsaved and release shared resources (an audio stream):
+ * the next call suspends the app until GZ_EV_APP_ACTIVATE, and a suspended
+ * app may be ended without warning when memory or slots run short.
+ * SpringBoard freezes it anyway a second later. An app with work to do in
+ * the background (a network connection) turns suspension off here. */
 void ui_set_background_running(bool on);
 bool ui_has_hardware_keyboard(void);
 /* Height reserved for the on-screen keyboard (zero with a dock). */

@@ -424,7 +424,15 @@ int main(void)
         int wait = list.sc.animating && view == V_LIST ? 30 : POLL_MS;
 
         if (ui_next_event(&ev, wait)) {
-            if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
+            if (ev.type == GZ_EV_TOUCH_CANCEL) {
+                /* Home mid-touch: drop the touch (and any scrub) without acting on it. */
+                bool changed;
+                pressed_now = scrubbing = false;
+                pressed_ctrl = -1;
+                ui_list_event(&list, &ev, &changed);
+                poll_state();
+                redraw();
+            } else if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
                 key_event(&ev);
             else if (view == V_LIST)
                 list_event(&ev);

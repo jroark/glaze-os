@@ -270,6 +270,14 @@ int main(int argc, char **argv)
         assert(tried < 249);
         printf("package recovery mode %d: %d interruption points PASS\n", mode, tried - 1);
     }
+    /* Every install numbers its bundle one past the one it replaced. */
+    setup(false);
+    char installed[PKG_BUNDLE_MAX];
+    assert(!pkg_find("demo", installed) && pkg_install_id(installed) == 1);
+    assert(!pkg_install("/old.gzp", "", installed) && pkg_install_id(installed) == 2);
+    assert(!pkg_install("/new.gzp", "/Card", installed) && pkg_install_id(installed) == 3);
+    teardown();
+    printf("install ids PASS\n");
     setup(false);
     full = 1;
     char bundle[PKG_BUNDLE_MAX];

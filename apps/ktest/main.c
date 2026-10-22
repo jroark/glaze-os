@@ -88,6 +88,16 @@ static bool fs_raw_denied(void)
            gz_cf_read(0, 1, page) == GZ_EPERM;
 }
 
+static int victim_port;
+static volatile int victim_reply;
+
+static void send_victim(void *arg)
+{
+    struct gz_msg m = {{7}}, r;
+
+    victim_reply = gz_send(victim_port, &m, &r) == 0 && r.w[0] == 8 ? 1 : -1;
+}
+
 static void test_tasks(int peer_port)
 {
     static struct gz_task_snapshot before, after;
@@ -126,13 +136,37 @@ static void test_tasks(int peer_port)
     gz_task_snapshot(&after);
     for (unsigned i = 0; i < after.count; i++)
         if (after.tasks[i].pid == (uint32_t)pid) fg_flag = after.tasks[i].flags == GZ_TASK_APP;
-    CHECK(bg_set && bg_flag && fg_set && fg_flag && gz_proc_set_bg(-1, 1) == GZ_ENOENT,
-          "proc_set_bg toggles GZ_TASK_BG and priority");
+    CHECK(bg_set && bg_flag && fg_set && fg_flag && gz_proc_set_bg(-1, 1) == GZ_ENOENT &&
+          gz_proc_set_bg(pid, 3) == GZ_EINVAL, "proc_set_bg toggles GZ_TASK_BG and priority");
+
+    /* Suspended: a message to it gets no reply until it is resumed. */
+    for (int i = 0; i < 100 && (victim_port = gz_port_lookup("pong-victim")) < 0; i++)
+        gz_sleep_ms(5);
+    bool sus_set = gz_proc_set_bg(pid, GZ_PROC_SUSPENDED) == 0, sus_flag = false;
+    gz_task_snapshot(&after);
+    for (unsigned i = 0; i < after.count; i++)
+        if (after.tasks[i].pid == (uint32_t)pid)
+            sus_flag = after.tasks[i].flags == (GZ_TASK_APP | GZ_TASK_BG | GZ_TASK_SUSPENDED);
+    victim_reply = 0;
+    bool started = victim_port > 0 && gz_thread_create(send_victim, NULL) > 0;
+    gz_sleep_ms(100);
+    bool held = victim_reply == 0;
+    gz_proc_set_bg(pid, GZ_PROC_FG);
+    for (int i = 0; i < 100 && victim_reply == 0; i++)
+        gz_sleep_ms(5);
+    CHECK(sus_set && sus_flag && started && held && victim_reply == 1,
+          "suspended app runs nothing until resumed");
+
     /* Put it back in background to verify unprivileged task_stop still works on background apps. */
+    int cport = gz_port_create();
+    bool watch = gz_child_notify(peer_port) == GZ_EPERM && gz_child_notify(cport) == 0;
     gz_proc_set_bg(pid, 1);
     struct gz_msg m = {{0xFFFFFFFB, (uint32_t)pid, (uint32_t)gz_getpid()}}, r;
-    CHECK(gz_send(peer_port, &m, &r) == 0 && r.w[0] == 63 && !gz_proc_alive(pid),
+    CHECK(gz_send(peer_port, &m, &r) == 0 && r.w[0] == 127 && !gz_proc_alive(pid),
           "unprivileged monitor can end apps, protects services/self, cannot grant privileges");
+    CHECK(watch && gz_recv(cport, &m, 500) == GZ_RECV_NOTIFY && (m.w[0] & GZ_NOTIFY_CHILD),
+          "child exit notifies the parent's port");
+    gz_child_notify(0);
     if (pid > 0 && gz_proc_alive(pid)) gz_kill(pid);
 }
 
@@ -1036,6 +1070,13 @@ int main(void)
     m.w[1] = (uint32_t)shm;
     gz_send(port, &m, &r);
     CHECK(sp[0] == 0xC0FFEE && sp[16383] == 0xBEEF, "shm visible across processes");
+    /* Unmapping: pong still maps it, so it lives on; the address range is reused. */
+    bool unmapped = gz_shm_unmap(sp) == 0 && gz_shm_unmap(sp) == GZ_EINVAL;
+    uint32_t *sp2 = gz_shm_map(shm);
+    int lone = gz_shm_create(4096);
+    void *lp = gz_shm_map(lone);
+    bool freed = lp && gz_shm_unmap(lp) == 0 && !gz_shm_map(lone);
+    CHECK(unmapped && sp2 == sp && sp2[0] == 0xC0FFEE && freed, "shm unmap: shared object survives, lone one freed");
 
     /* notification: pong notifies our port */
     int myport = gz_port_create();

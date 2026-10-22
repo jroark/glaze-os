@@ -557,7 +557,11 @@ int main(void)
                 timeout = left;
         }
         if (ui_next_event(&ev, timeout)) {
-            if (alert_open)
+            if (ev.type == GZ_EV_TOUCH_CANCEL) {
+                pressed = P_NONE;           /* Home mid-touch: no dig, no flag */
+                press_cell = -1;
+                alert_pressed = -1;
+            } else if (alert_open)
                 alert_event(&ev);
             else
                 touch(&ev);

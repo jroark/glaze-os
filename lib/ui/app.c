@@ -53,13 +53,17 @@ bool ui_in_background(void)
 void ui_set_background_running(bool on)
 {
     bg_running = on;
+    ui.shared->keep_running = on;
 }
 
-/* Blocks until SpringBoard brings the app back, dropping what it sent meanwhile. */
+/* Suspends the whole process (every thread) until SpringBoard brings it
+ * back, then drops what it was sent meanwhile up to the ACTIVATE. The
+ * kernel refuses if it is already back in front; the wait covers that. */
 static void wait_activate(struct gz_input_event *ev)
 {
     struct sb_shared *sh = ui.shared;
 
+    gz_proc_set_bg(gz_getpid(), GZ_PROC_SUSPENDED);
     for (;;) {
         while (sh->tail != sh->head) {
             *ev = sh->ev[sh->tail % SB_RING];
