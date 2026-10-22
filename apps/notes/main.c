@@ -3,8 +3,8 @@
  * on-screen keyboard. Notes persist as files under /Library/Notes:
  *   index         array of struct meta (id + last edit time)
  *   <id>.txt      note text
- * Edits are saved after a short pause and on leaving the editor, since
- * pressing Home terminates the app.
+ * Edits are saved after a short pause, on leaving the editor and on Home
+ * (GZ_EV_APP_DEACTIVATE), since a suspended app may be ended at any time.
  */
 
 #include <glaze/fs.h>
@@ -582,7 +582,19 @@ int main(void)
         struct gz_input_event ev;
 
         if (ui_next_event(&ev, timeout)) {
-            if (ev.type == GZ_EV_TEXT || ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
+            if (ev.type == GZ_EV_APP_DEACTIVATE) {
+                if (dirty)
+                    save_current();
+            } else if (ev.type == GZ_EV_TOUCH_CANCEL) {
+                /* Home mid-touch: drop the touch without acting on it. */
+                bool changed;
+                pressed_plus = pressed_done = pressed_trash = in_keyboard = false;
+                alert_pressed = -1;
+                ui_list_event(&list, &ev, &changed);
+                ui_scroll_event(&edit_scroll, &ev, 0);
+                ui_keyboard_event(&kb, &ev, 0, &changed);
+                redraw();
+            } else if (ev.type == GZ_EV_TEXT || ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
                 physical_event(&ev);
             else if (view == V_LIST)
                 list_event(&ev);

@@ -26,8 +26,8 @@
 #include "lwip/prot/ip4.h"
 #include "server.h"
 
-#define MAX_SESSIONS    8
-#define MAX_SOCKETS     16
+#define MAX_SESSIONS    16
+#define MAX_SOCKETS     24
 #define WORKERS         6
 #define MAX_JOBS        32
 #define BACKLOG         4

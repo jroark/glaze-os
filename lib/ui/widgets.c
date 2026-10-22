@@ -343,6 +343,9 @@ bool ui_scroll_event(struct ui_scroll *sc, const struct gz_input_event *e, int y
         sc->last_y = y;
         sc->last_ms = t;
         break;
+    case GZ_EV_TOUCH_CANCEL:           /* settle where it is, without a fling */
+        sc->velocity = 0;
+        /* fall through */
     case GZ_EV_TOUCH_UP:
         if (!sc->dragging)
             break;

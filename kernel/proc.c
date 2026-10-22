@@ -26,6 +26,13 @@ int proc_count(void)
     return n;
 }
 
+/* A managed app and nothing more: a privileged app may not be ended or
+ * demoted by other apps, and goes back to PRIO_HIGH, not PRIO_NORMAL. */
+static bool proc_is_app(const struct proc *p)
+{
+    return (p->flags & ~PROC_BACKGROUND) == PROC_APP;
+}
+
 int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size)
 {
     struct gz_task_snapshot s;
@@ -42,7 +49,9 @@ int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size)
         struct gz_task_info *t = &s.tasks[s.count++];
         t->pid = (uint32_t)p->pid;
         t->parent = (uint32_t)p->parent;
-        t->flags = (p->flags == PROC_APP ? GZ_TASK_APP : 0) |
+        t->flags = (proc_is_app(p) ? GZ_TASK_APP : 0) |
+                   ((p->flags & PROC_BACKGROUND) ? GZ_TASK_BG : 0) |
+                   (p->frozen ? GZ_TASK_SUSPENDED : 0) |
                    (p == cur->proc ? GZ_TASK_SELF : 0);
         t->cpu_us = p->cpu_us;
         strncpy(t->name, p->name, sizeof(t->name) - 1);
@@ -62,8 +71,32 @@ int proc_task_stop(int pid)
 {
     struct proc *p = proc_by_pid(pid);
     if (!p) return GZ_ENOENT;
-    if (p == cur->proc || p->flags != PROC_APP) return GZ_EPERM;
+    if (p == cur->proc || !proc_is_app(p)) return GZ_EPERM;
     proc_exit(p, -9);
+    return 0;
+}
+
+int proc_set_bg(int pid, int state)
+{
+    struct proc *p = proc_by_pid(pid);
+    if (!p) return GZ_ENOENT;
+    if (!proc_is_app(p)) return GZ_EPERM;
+    if (state < GZ_PROC_FG || state > GZ_PROC_SUSPENDED) return GZ_EINVAL;
+    if (state != GZ_PROC_FG)
+        p->flags |= PROC_BACKGROUND;
+    else
+        p->flags &= ~PROC_BACKGROUND;
+    sched_set_proc_prio(p, state != GZ_PROC_FG ? PRIO_LOW : PRIO_NORMAL);
+    sched_freeze_proc(p, state == GZ_PROC_SUSPENDED);
+    if (p == cur->proc && p->frozen)
+        schedule();                     /* returns once thawed */
+    return 0;
+}
+
+int proc_child_notify(int port)
+{
+    if (port && !ipc_port_owned(port, cur->proc)) return GZ_EPERM;
+    cur->proc->child_port = port;
     return 0;
 }
 
@@ -157,6 +190,9 @@ void proc_exit(struct proc *p, int code)
     ipc_proc_cleanup(p);
     sem_proc_cleanup(p);
     sched_kill_proc_threads(p);
+    struct proc *parent = proc_by_pid(p->parent);
+    if (parent && parent->child_port && ipc_port_owned(parent->child_port, parent))
+        ipc_notify(parent->child_port, GZ_NOTIFY_CHILD);
     proc_reap();
 }
 

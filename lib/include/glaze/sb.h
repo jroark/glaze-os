@@ -78,10 +78,16 @@ struct sb_shared {
     uint32_t stride;                /* pixels */
     struct sb_note_req req;         /* written by the app before a request */
     char bundle[48];                /* an installed app's bundle folder, else "" */
+    volatile uint32_t background;   /* 1 while the app is in the background */
+    volatile uint32_t keep_running; /* app: not to be suspended there (ui_set_background_running) */
 };
 
 /* App-level events beyond the kernel's input codes. */
-#define GZ_EV_APP_ACTIVATE  0x100
-#define GZ_EV_APP_NOTIFY    0x101   /* code = low 16 bits of the note's id */
+#define GZ_EV_APP_ACTIVATE      0x100
+#define GZ_EV_APP_NOTIFY        0x101   /* code = low 16 bits of the note's id */
+#define GZ_EV_APP_DEACTIVATE    0x102
+/* From libui, before DEACTIVATE when a touch is down: the touch is over, but
+ * nothing was released, so nothing should act (x, y: its last position). */
+#define GZ_EV_TOUCH_CANCEL      0x103
 
 #endif

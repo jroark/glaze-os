@@ -137,6 +137,14 @@ taskmanager-test: ../tests/taskmanager.c ../tests/taskmanager_sys.h ../packages/
 	../out/host/taskmanager-test
 .PHONY: taskmanager-test
 
+ui-events-test: ../tests/ui_events.c ../tests/ui_events_sys.h ../lib/ui/app.c ../lib/ui/list.c ../lib/ui/keyboard.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/ui_events_sys.h \
+	    -o ../out/host/ui-events-test ../tests/ui_events.c ../lib/ui/app.c ../lib/ui/list.c \
+	    ../lib/ui/keyboard.c ../lib/ui/widgets.c hostres.c $(GFX)
+	../out/host/ui-events-test
+.PHONY: ui-events-test
+
 aim-test: ../tests/aim.c ../packages/aim/oscar.c ../packages/aim/md5.c ../packages/aim/text.c ../packages/aim/oscar.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/aim-test ../tests/aim.c \

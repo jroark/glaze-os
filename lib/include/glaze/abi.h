@@ -67,6 +67,9 @@ enum {
     SYS_VM_MAP,             /* private fixed-address pages for userspace loaders */
     SYS_VM_PUBLISH,         /* publish code; a2 = writable after publication */
     SYS_VM_RELEASE,         /* release a complete SYS_VM_MAP allocation */
+    SYS_PROC_BG,            /* a managed app's GZ_PROC_* state (priority, suspension) */
+    SYS_SHM_UNMAP,          /* release the caller's mapping at a0 */
+    SYS_CHILD_NOTIFY,       /* a0 = own port: GZ_NOTIFY_CHILD when a child exits, 0 = none */
     SYS_COUNT
 };
 
@@ -177,6 +180,14 @@ struct gz_sysinfo {
 #define GZ_TASK_MAX 32
 #define GZ_TASK_APP  1u
 #define GZ_TASK_SELF 2u
+#define GZ_TASK_BG   4u
+#define GZ_TASK_SUSPENDED 8u
+
+/* SYS_PROC_BG states. An app may suspend itself once in the background;
+ * everything else is for privileged callers (SpringBoard). */
+#define GZ_PROC_FG          0   /* PRIO_NORMAL */
+#define GZ_PROC_BG          1   /* PRIO_LOW, running */
+#define GZ_PROC_SUSPENDED   2   /* PRIO_LOW, no thread runs until another state */
 struct gz_task_info {
     uint32_t pid, parent, flags;
     uint32_t threads, runnable, mapped_pages;

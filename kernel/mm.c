@@ -385,9 +385,28 @@ int as_loader_release(struct addrspace *as, uint32_t va)
     return 0;
 }
 
+/* The lowest gap below mmap_top that holds len bytes and a guard page, so
+ * shm mapped and unmapped over and over doesn't use up the mmap range. */
+static uint32_t mmap_reuse(struct addrspace *as, uint32_t len)
+{
+    uint32_t va = USER_MMAP_BASE;
+    bool moved = true;
+
+    while (moved && va + len + PAGE_SIZE <= as->mmap_top) {
+        moved = false;
+        for (struct region_page *p = as->regions; p; p = p->next)
+            for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) {
+                struct region *r = &p->entry[i];
+                uint32_t end = r->va + r->npages * PAGE_SIZE + PAGE_SIZE;
+                if (r->kind && r->va < va + len + PAGE_SIZE && end > va) { va = end; moved = true; }
+            }
+    }
+    return va + len + PAGE_SIZE <= as->mmap_top ? va : as->mmap_top;
+}
+
 uint32_t as_map_frames(struct addrspace *as, const uint32_t *frames, uint32_t npages, int shm_id)
 {
-    uint32_t va = as->mmap_top;
+    uint32_t va = npages ? mmap_reuse(as, npages * PAGE_SIZE) : as->mmap_top;
     if (!npages || npages > (GZ_DSO_BASE - va - PAGE_SIZE) / PAGE_SIZE) return 0;
     struct region *r = as_region_add(as, va, 0, REGION_SHM, shm_id);
     if (!r) return 0;
@@ -398,8 +417,21 @@ uint32_t as_map_frames(struct addrspace *as, const uint32_t *frames, uint32_t np
         }
         r->npages++;
     }
-    as->mmap_top += npages * PAGE_SIZE + PAGE_SIZE;
+    if (va == as->mmap_top)
+        as->mmap_top += npages * PAGE_SIZE + PAGE_SIZE;
     return va;
+}
+
+int as_unmap_shm(struct addrspace *as, uint32_t va)
+{
+    struct region *r = region_at(as, va);
+    if (!r || r->kind != REGION_SHM || r->va != va) return GZ_EINVAL;
+    int id = r->shm_id;
+    for (uint32_t i = 0; i < r->npages; i++) as_unmap_page(as, va + i * PAGE_SIZE, false);
+    as_region_drop(as, r);
+    as_prune_tables(as);
+    shm_unref(id);
+    return 0;
 }
 
 void as_destroy(struct addrspace *as)

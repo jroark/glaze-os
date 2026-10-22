@@ -501,7 +501,15 @@ int main(void)
                 idle_work();
             continue;
         }
-        if (view == V_GRID)
+        if (ev.type == GZ_EV_TOUCH_CANCEL) {
+            /* Home mid-touch: drop the touch without acting on it. */
+            pressed_thumb = -1;
+            ui_scroll_event(&grid_scroll, &ev, 0);
+            if (touching && panning)
+                animate_to(0, current);     /* back to the photo it started on */
+            touching = false;
+            redraw();
+        } else if (view == V_GRID)
             grid_event(&ev);
         else if (ev.type == GZ_EV_KEY_DOWN && (ev.code == GZ_KEY_LEFT || ev.code == GZ_KEY_RIGHT))
             go_neighbour(ev.code == GZ_KEY_LEFT ? -1 : 1);

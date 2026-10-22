@@ -65,6 +65,14 @@ int main(void)
             }
             continue;
         }
+        if (e.type == GZ_EV_APP_DEACTIVATE || e.type == GZ_EV_TOUCH_CANCEL) {
+            lx = -1;                    /* Home: the stroke ends; save it now */
+            if (dirty) {
+                save();
+                draw();
+            }
+            continue;
+        }
         if (e.type == GZ_EV_TOUCH_DOWN || e.type == GZ_EV_TOUCH_MOVE) {
             if (e.x >= 8 && e.x < 8 + CW && e.y >= CY && e.y < CY + CH) {
                 int x = e.x - 8, y = e.y - CY;

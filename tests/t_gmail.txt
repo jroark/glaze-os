@@ -1,0 +1,29 @@
+# Gmail package, step 2: configure Server, sign in, read a message, and reply.
+# Boot the file system tests/t_gmail_install.txt installed Gmail into, with the
+# network card, against the local mock IMAP/SMTP server:
+#   out/host/gmail-test --serve 11143 11587 &
+#   FS_FROM=out/shots/t_gmail_install/glaze.bin NET=1 tests/run.sh tests/t_gmail.txt 56
+# Replace 192.168.68.53 below with this host's own address.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+17500 tap 210 35
+19000 tap 150 88
+20000 text 192.168.68.53
+21000 key enter
+21500 text 11143
+22500 key enter
+23000 key enter
+23500 text 11587
+24500 key enter
+25500 tap 190 242
+26500 tap 30 35
+28000 tap 150 106
+29000 text alex@gmail.com
+30500 key enter
+31000 text app-password
+32000 key enter
+39000 tap 120 75
+43000 tap 118 303
+44500 key enter
+46000 text Sounds great, thanks!
+48000 tap 212 35

@@ -16,7 +16,7 @@
 #define MAX_SEMS        256
 #define MAX_STACK_SLOTS 32          /* threads besides main, per process */
 #define MAX_PORTS       64
-#define MAX_SHM         32
+#define MAX_SHM         48
 
 #define USER_TEXT_BASE  0x00400000u
 #define USER_MMAP_BASE  0x10000000u
@@ -89,6 +89,7 @@ int as_loader_release(struct addrspace *, uint32_t);
 uint32_t as_map_phys(struct addrspace *as, uint32_t pa, uint32_t len, uint32_t cache);
 void as_activate(struct addrspace *as);
 uint32_t as_map_frames(struct addrspace *as, const uint32_t *frames, uint32_t npages, int shm_id);
+int as_unmap_shm(struct addrspace *as, uint32_t va);
 
 int copy_to_as(struct addrspace *as, uint32_t uva, const void *src, uint32_t len);
 int copy_from_as(struct addrspace *as, void *dst, uint32_t uva, uint32_t len);
@@ -155,13 +156,16 @@ struct proc {
     int exit_code;
     uint32_t stack_slots;           /* bitmap of thread stacks in use */
     uint64_t cpu_us;                /* accumulated scheduled time, all threads */
+    bool frozen;                    /* GZ_PROC_SUSPENDED: runnable threads stay off the run queue */
+    int child_port;                 /* own port told GZ_NOTIFY_CHILD on a child's exit, or 0 */
 };
 
 #define PROC_PRIVILEGED     0x1     /* may map the framebuffer, bind input */
 #define PROC_FLASH          0x2     /* raw NAND (kernel-granted, file server) */
 #define PROC_NET            0x4     /* Ethernet frames (kernel-granted, net server) */
 #define PROC_AUDIO          0x8     /* wave output (kernel-granted, audio server) */
-#define PROC_APP            0x10    /* managed foreground app, may be ended */
+#define PROC_APP            0x10    /* managed foreground/background app, may be ended */
+#define PROC_BACKGROUND     0x20    /* app is currently in the background (PRIO_LOW) */
 
 extern struct thread *cur;
 extern uint32_t cur_kstack_top;
@@ -187,6 +191,8 @@ struct proc *proc_by_pid(int pid);
 void proc_exit(struct proc *p, int code);
 void proc_reap(void);
 void sched_kill_proc_threads(struct proc *p);
+void sched_set_proc_prio(struct proc *p, int prio);
+void sched_freeze_proc(struct proc *p, bool frozen);
 int sched_reap_threads(struct proc *p);
 int sched_live_threads(struct proc *p);
 uint64_t sched_account(uint64_t now);
@@ -194,6 +200,8 @@ void sched_task_info(struct proc *p, struct gz_task_info *info);
 int proc_count(void);
 int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size);
 int proc_task_stop(int pid);
+int proc_set_bg(int pid, int state);
+int proc_child_notify(int port);
 int thread_spawn(uint32_t entry, uint32_t arg);
 int thread_exit(void);
 
@@ -216,6 +224,7 @@ int ipc_send(int port, uint32_t umsg, uint32_t ureply);
 int ipc_recv(int port, uint32_t umsg, int timeout_ms);
 int ipc_reply(int token, uint32_t umsg);
 int ipc_notify(int port, uint32_t bits);
+bool ipc_port_owned(int port, const struct proc *p);
 void ipc_proc_cleanup(struct proc *p);
 void ipc_timeout(struct thread *t);
 

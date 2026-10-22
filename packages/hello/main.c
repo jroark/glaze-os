@@ -86,6 +86,9 @@ int main(void)
                 pressed = in;
                 draw();
             }
+        } else if (ev.type == GZ_EV_TOUCH_CANCEL) {
+            pressed = false;            /* Home mid-touch: not a tap */
+            draw();
         } else if (ev.type == GZ_EV_TOUCH_UP) {
             if (pressed && gfx_rect_contains(button, ev.x, ev.y)) {
                 count++;
