@@ -147,6 +147,9 @@ PROG_DEPS_audio := $(OUT)/pic/libhelix.a $(OUT)/shared/libmedia.so.1
 PROG_LDLIBS_audio := $(OUT)/pic/libhelix.a -l:libmedia.so.1
 PROG_DEPS_browser := $(OUT)/pic/libwolfssl.a
 PROG_LDLIBS_browser := $(OUT)/pic/libwolfssl.a
+PROG_CFLAGS_gmail := $(WOLFSSL_INC)
+PROG_DEPS_gmail := $(OUT)/pic/libwolfssl.a
+PROG_LDLIBS_gmail := $(OUT)/pic/libwolfssl.a
 
 USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libwolfssl.a \
     $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a $(OUT)/lib/libnetstack.a
