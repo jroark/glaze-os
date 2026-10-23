@@ -213,3 +213,51 @@ wince-test: ../tests/wince_property.c ../apps/wince/property_state.c ../apps/win
 ../out/host/wince-fs-read: ../tests/wince_fs_read.c $(FS)
 	@mkdir -p ../out/host
 	$(CC) $(FS_CFLAGS) -o $@ $^
+
+# NES portable core plus original homebrew cartridge, with memory/UB checking.
+NES := $(filter-out ../packages/nes/main.c,$(wildcard ../packages/nes/*.c))
+nes-test: ../out/pkg-res/nes/demo.nes
+	@mkdir -p ../out/host
+	$(CC) -std=gnu11 -O2 -g -fno-strict-aliasing -fsanitize=address,undefined \
+	    -o ../out/host/nes-test ../tests/nes.c $(NES)
+	../out/host/nes-test ../out/pkg-res/nes/demo.nes
+.PHONY: nes-test
+
+nes-cpu-test:
+	@mkdir -p ../out/host
+	$(CC) -std=gnu11 -O2 -g -fno-strict-aliasing -fsanitize=address,undefined \
+	    -o ../out/host/nes-trace ../tests/nes_trace.c $(NES)
+	../out/host/nes-trace "$(NES_TEST_ROM)" "$(NES_TEST_LOG)"
+.PHONY: nes-cpu-test
+
+# Game Boy portable adapter and original DMG/CGB cartridges.
+GAMEBOY := $(filter-out ../packages/gameboy/main.c ../packages/gameboy/save.c,$(wildcard ../packages/gameboy/*.c))
+gameboy-test: gameboy-save-test ../out/pkg-res/gameboy/demo.gb ../out/pkg-res/gameboy/demo.gbc
+	@mkdir -p ../out/host
+	$(CC) -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -fno-strict-aliasing -DIS_LITTLE_ENDIAN -fsanitize=address,undefined \
+	    -o ../out/host/gameboy-test ../tests/gameboy.c $(GAMEBOY)
+	../out/host/gameboy-test ../out/pkg-res/gameboy/demo.gb ../out/pkg-res/gameboy/demo.gbc
+.PHONY: gameboy-test
+
+gameboy-rom-test:
+	@mkdir -p ../out/host
+	$(CC) -std=gnu11 -O2 -g -fno-strict-aliasing -DIS_LITTLE_ENDIAN -fsanitize=address,undefined \
+	    -o ../out/host/gameboy-rom ../tests/gameboy_rom.c $(GAMEBOY)
+	../out/host/gameboy-rom "$(GB_TEST_ROM)"
+.PHONY: gameboy-rom-test
+
+
+gameboy-save-test:
+	@mkdir -p ../out/host
+	$(CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
+	    -o ../out/host/gameboy-save ../tests/gameboy_save.c ../packages/gameboy/save.c
+	../out/host/gameboy-save
+.PHONY: gameboy-save-test
+
+
+../out/pkg-res/nes/demo.nes: ../tools/mknesdemo.py
+	python3 $< --output $@
+../out/pkg-res/gameboy/demo.gb: ../tools/mkgbdemo.py
+	python3 $< --output-dir $(dir $@) --mode dmg
+../out/pkg-res/gameboy/demo.gbc: ../tools/mkgbdemo.py
+	python3 $< --output-dir $(dir $@) --mode cgb

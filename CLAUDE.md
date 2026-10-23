@@ -26,6 +26,10 @@ The website (glaze-os.com) is static HTML in `site/`; `tools/mksite.py` builds i
 
 Romfs is for the OS and built-in apps only. User files, settings and app data belong in the file system: `userdata/` is the factory volume, which `host/mkfsimg` (built with `HOSTCC`, default `cc`) formats into `out/fs.img` and `tools/mk_nand.py --fs-image` places at 0x500000. Don't name files in `userdata/` with spaces, since make lists them.
 
+ROM binaries must not be committed, including original demos and uploaded test games.
+Generate demo cartridges only under ignored `out/pkg-res/`; keep external ROMs outside
+the source tree or under ignored `out/`. Build and native-test targets generate their own demos.
+
 ## Running and testing
 
 ```sh

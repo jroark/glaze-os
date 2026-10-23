@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Original CC0 NES controller/audio demo. No assembler or external ROM needed."""
+import argparse, pathlib, struct
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+class Asm:
+    def __init__(self): self.code=bytearray(); self.labels={}; self.fix=[]
+    def label(self,s): self.labels[s]=0x8000+len(self.code)
+    def emit(self,*v): self.code.extend(v)
+    def abs(self,op,addr):
+        self.emit(op)
+        if isinstance(addr,str): self.fix.append((len(self.code),addr,False)); self.emit(0,0)
+        else: self.code.extend(struct.pack('<H',addr))
+    def branch(self,op,label): self.emit(op); self.fix.append((len(self.code),label,True)); self.emit(0)
+    def finish(self):
+        for at,label,relative in self.fix:
+            value=self.labels[label]-(0x8000+at+1) if relative else self.labels[label]
+            if relative:
+                assert -128<=value<128, (label,value)
+                self.code[at]=value&255
+            else: struct.pack_into('<H',self.code,at,value)
+        return self.code
+
+def build():
+    a=Asm(); e=a.emit; w=a.abs; b=a.branch; l=a.label
+    l('reset'); e(0x78,0xd8,0xa2,0xff,0x9a,0xe8) # SEI CLD LDX #ff TXS INX
+    w(0x8e,0x2000); w(0x8e,0x2001); w(0x8e,0x4010)
+    for label in ['vblank1','vblank2']:
+        l(label); w(0x2c,0x2002); b(0x10,label)
+    e(0xa9,0,0xa2,0)
+    l('zero'); e(0x95,0,0xe8); b(0xd0,'zero')
+    e(0xa9,0xff,0xa2,0)
+    l('oam'); w(0x9d,0x0200); e(0xe8); b(0xd0,'oam')
+    # Tile 1 fills the nametable; all attribute bytes use palette 0.
+    e(0xa9,0x20); w(0x8d,0x2006); e(0xa9,0); w(0x8d,0x2006)
+    e(0xa0,4,0xa2,0)
+    l('ntpage'); e(0xa9,1)
+    l('nt'); w(0x8d,0x2007); e(0xe8); b(0xd0,'nt'); e(0x88); b(0xd0,'ntpage')
+    e(0xa9,0x23); w(0x8d,0x2006); e(0xa9,0xc0); w(0x8d,0x2006)
+    e(0xa2,64,0xa9,0)
+    l('attr'); w(0x8d,0x2007); e(0xca); b(0xd0,'attr')
+    e(0xa9,0x3f); w(0x8d,0x2006); e(0xa9,0); w(0x8d,0x2006); e(0xa2,0)
+    l('pal'); w(0xbd,'palette'); w(0x8d,0x2007); e(0xe8,0xe0,32); b(0xd0,'pal')
+    e(0xa9,120,0x85,3,0x85,4,0xa9,2); w(0x8d,0x0201)
+    e(0xa9,0x40); w(0x8d,0x4017)
+    e(0xa9,1); w(0x8d,0x4015); e(0xa9,0x7f); w(0x8d,0x4002)
+    e(0xa9,8); w(0x8d,0x4003)
+    e(0xa9,0); w(0x8d,0x2005); w(0x8d,0x2005)
+    e(0xa9,0x80); w(0x8d,0x2000); e(0xa9,0x1e); w(0x8d,0x2001)
+    l('main'); e(0xa5,0); l('wait'); e(0xc5,0); b(0xf0,'wait')
+    e(0xa9,1); w(0x8d,0x4016); e(0xa9,0); w(0x8d,0x4016); e(0x85,1,0xa2,8)
+    l('pad'); w(0xad,0x4016); e(0x4a,0x66,1,0xca); b(0xd0,'pad')
+    for name,mask,op,reg in [('right',128,0xe6,3),('left',64,0xc6,3),('down',32,0xe6,4),('up',16,0xc6,4)]:
+        e(0xa5,1,0x29,mask); b(0xf0,name); e(op,reg); l(name)
+    e(0xa5,1,0x29,8); b(0xf0,'nostart'); e(0xa9,120,0x85,3,0x85,4); l('nostart')
+    # Store input and a live frame counter in battery RAM for integration checks.
+    e(0xa5,1); w(0x8d,0x6000); e(0xa5,0); w(0x8d,0x6001)
+    e(0xa5,1,0x29,1); w(0x8d,0x0202); b(0xf0,'quiet')
+    e(0xa9,0xbf); b(0xd0,'volume'); l('quiet'); e(0xa9,0xb0); l('volume'); w(0x8d,0x4000)
+    e(0xa5,3); w(0x8d,0x0203); e(0xa5,4); w(0x8d,0x0200); w(0x4c,'main')
+    l('nmi'); e(0x48,0xa9,0); w(0x8d,0x2003); e(0xa9,2); w(0x8d,0x4014)
+    e(0xe6,0,0x68,0x40)
+    l('irq'); e(0x40)
+    l('palette'); e(*([0x0f,0x01,0x11,0x21]*4+[0x0f,0x2a,0x30,0x16]+[0x0f,0x16,0x30,0x2a]*3))
+    code=a.finish(); assert len(code)<0x3ffa
+    prg=bytearray(16384); prg[:len(code)]=code
+    struct.pack_into('<HHH',prg,0x3ffa,a.labels['nmi'],a.labels['reset'],a.labels['irq'])
+    chr=bytearray(8192)
+    chr[16:24]=bytes([0x80]*8) # subtle background grid
+    chr[32:40]=bytes([0x7e,0xff,0xc3,0xdb,0xdb,0xc3,0xff,0x7e])
+    header=b'NES\x1a'+bytes([1,1,2,0])+bytes(8)
+    return header+prg+chr
+
+if __name__=='__main__':
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output',type=pathlib.Path,default=ROOT/'out/pkg-res/nes/demo.nes')
+    path=parser.parse_args().output
+    path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_bytes(build());print(path)

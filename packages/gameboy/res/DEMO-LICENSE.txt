@@ -1,0 +1,4 @@
+The Glaze DMG and Color demos, generator tools/mkgbdemo.py and icon
+are original work dedicated to the public domain under CC0 1.0.
+https://creativecommons.org/publicdomain/zero/1.0/
+No Nintendo boot ROM, logo or commercial game content is included.

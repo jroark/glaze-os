@@ -280,3 +280,13 @@ early companion-UART output is consumed by the dock model when enabled.
 
 Run `make -C host stowaway-test` for native decoder/editor tests with ASan/UBSan.
 See [tests/STOWAWAY.md](tests/STOWAWAY.md) for emulator regression checks.
+
+## NES emulator
+
+`make out/pkg/nes.gzp` builds the installable NES app, with an original demo,
+iNES 1.0/NES 2.0 ROM browsing, physical controls, audio and battery saves. See
+[NES](docs/NES.md) for cartridge support, installation and tests.
+
+Game Boy and Game Boy Color are available as the installable `gameboy.gzp` package,
+with hardware controls, audio, battery saves and cartridge clocks. See
+[Game Boy](docs/GAMEBOY.md) for installation, compatibility and tests.
