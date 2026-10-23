@@ -502,6 +502,31 @@ CE_API(CSOBar_GetButtonArea)
     *r = (struct ce_rect){0, 0, bar->rect.right - bar->rect.left - (bar->style & 1 ? 24 : 0), 26};
     return 1;
 }
+/* Observed: bar, insert-after, x, y, width, row height, SWP_* flags, rows.
+ * Combo boxes move to the second row of a two-row bar. */
+CE_API(CSOBar_SetWindowPos)
+{
+    struct ce_window *bar = ce_window(a0);
+    if (!bar)
+        return 0;
+    int row = (int)a5 > 0 ? (int)a5 : 26, rows = (int)a7 > 0 && (int)a7 <= 3 ? (int)a7 : 1;
+    if (!(a6 & 2)) /* SWP_NOMOVE */
+        bar->rect = (struct ce_rect){(int)a2, (int)a3, (int)a2 + (bar->rect.right - bar->rect.left),
+                                     (int)a3 + (bar->rect.bottom - bar->rect.top)};
+    if (!(a6 & 1)) /* SWP_NOSIZE */
+        bar->rect.right = bar->rect.left + (int)MIN(a4, 240u);
+    bar->rect.bottom = bar->rect.top + row * rows;
+    for (unsigned i = 0; rows > 1 && i < CE_WINDOWS; i++) {
+        struct ce_window *child = ce_window(0x70000000u + i);
+        if (child && child->parent == a0 && child->list) {
+            int height = child->rect.bottom - child->rect.top;
+            child->rect.top = row + 2;
+            child->rect.bottom = child->rect.top + height;
+        }
+    }
+    bar->dirty = true;
+    return 1;
+}
 CE_API(CSOBar_GetAdornmentsWidth)
 {
     struct ce_window *bar = ce_window(a0);
@@ -521,6 +546,10 @@ CE_API(CSOBar_GetButtonItem)
     }
     return 0;
 }
+/* CSO.DLL packs the arguments for the bar's message 0xfd5: hInstance, a2,
+ * style, position, command id, x, width and drop height. WorldTALK passes
+ * WS_VSCROLL | CBS_AUTOHSCROLL | CBS_DROPDOWN as the style and toggles the
+ * button by command id 0x640 (a5). */
 CE_API(CSOBar_InsertComboBox)
 {
     struct ce_window *bar = ce_window(a0);
@@ -528,7 +557,7 @@ CE_API(CSOBar_InsertComboBox)
         return 0;
     static const WCHAR combo[] = {'C', 'o', 'm', 'b', 'o', 'B', 'o', 'x', 0};
     int y = bar->rect.bottom - bar->rect.top > 26 ? 28 : 2;
-    struct ce_window *w = ce_new_window(combo, NULL, a2 | 0x50000000u, (int)a6, y, (int)a7,
+    struct ce_window *w = ce_new_window(combo, NULL, a3 | 0x50000000u, (int)a6, y, (int)a7,
                                        22, a0, a5, 0, 0);
     return w ? w->handle : 0;
 }
@@ -691,10 +720,14 @@ CE_API(CGDFlushAlarm)
 CE_API(CSGetUserDiskName)
 {
     /* Matching CS.DLL: suffix, output, capacity in WCHARs, disk selector;
-     * returns the combined length, excluding its terminator. */
+     * returns the combined length, excluding its terminator. Selector 1 is
+     * the user's documents: Clock's \Alarm and Internet's \Internet data
+     * sit in My Documents on original images. */
     static const WCHAR disk[] = {'\\', 'N', 'a', 'n', 'd', ' ', 'D', 'i', 's', 'k', 0};
-    unsigned suffix = ce_wlen(PTR(WCHAR, a0));
-    unsigned length = ARRAY_SIZE(disk) - 1 + suffix;
+    static const WCHAR documents[] = {'\\', 'M', 'y', ' ', 'D', 'o', 'c', 'u', 'm', 'e', 'n', 't', 's', 0};
+    const WCHAR *base = a3 == 1 ? documents : disk;
+    unsigned prefix = ce_wlen(base), suffix = ce_wlen(PTR(WCHAR, a0));
+    unsigned length = prefix + suffix;
     if (suffix > 259 || a2 <= length) {
         ce_error = 122;
         return 0;
@@ -702,8 +735,8 @@ CE_API(CSGetUserDiskName)
     if (a1) {
         WCHAR *out = PTR(WCHAR, a1);
         if (suffix)
-            memmove(out + ARRAY_SIZE(disk) - 1, PTR(void, a0), suffix * 2);
-        memcpy(out, disk, sizeof(disk) - 2);
+            memmove(out + prefix, PTR(void, a0), suffix * 2);
+        memcpy(out, base, prefix * 2);
         out[length] = 0;
         /* CS.DLL also creates the resulting directory tree. pimdb relies
          * on that side effect before creating its index and record files. */
@@ -714,6 +747,17 @@ CE_API(CSGetUserDiskName)
         }
     }
     return length;
+}
+/* Matching CS.DLL: writes the temporary folder to its one argument and
+ * creates it; returns nonzero on success. */
+CE_API(CSGetTempFolder)
+{
+    static const WCHAR temp[] = {'\\', 'T', 'e', 'm', 'p', '\\', 0};
+    char path[FS_PATH_MAX];
+    if (!a0 || !ce_path(path, temp) || fs_mkdirs(path))
+        return 0;
+    memcpy(PTR(void, a0), temp, sizeof(temp));
+    return 1;
 }
 CE_API(OpenClipboard)
 {
@@ -1094,7 +1138,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CSOBar_DeleteAllButtons),
     CE_EXPORT(CSOBar_ChangeAllButtons), CE_EXPORT(CSOBar_SetButtonState), CE_EXPORT(CSOBar_ChangeMenu),
     CE_EXPORT(CSOBar_GetButtonArea), CE_EXPORT(CSOBar_GetAdornmentsWidth),
-    CE_EXPORT(CSOBar_GetButtonItem), CE_EXPORT(CSOBar_InsertComboBox),
+    CE_EXPORT(CSOBar_GetButtonItem), CE_EXPORT(CSOBar_InsertComboBox), CE_EXPORT(CSOBar_SetWindowPos),
     {"CSOBar_Show", (void *)ce_CommandBar_Show},
     {"CSOBar_Height", (void *)ce_CommandBar_Height},
     CE_EXPORT(CSOBar_AddAdornments),
@@ -1108,6 +1152,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CGDFlushRegistry),
     CE_EXPORT(CGDFlushAlarm),
     CE_EXPORT(CSGetUserDiskName),
+    CE_EXPORT(CSGetTempFolder),
     CE_EXPORT(OpenClipboard),
     CE_EXPORT(EmptyClipboard),
     CE_EXPORT(CloseClipboard),
