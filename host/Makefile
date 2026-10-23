@@ -188,6 +188,7 @@ ftl-verify-bench: ../tests/ftl_verify.c $(FS)
 wince-test: ../tests/wince_pe.c ../apps/wince/pe.c ../apps/wince/pe.h ../tests/wince_datetime.c ../apps/wince/datetime.c ../apps/wince/datetime.h ../tests/wince_ordinals.c ../apps/wince/ordinals.c ../apps/wince/ordinals.h
 wince-test: ../tests/wince_registry.c ../apps/wince/registry.c ../apps/wince/registry.h ../tests/wince_dialog.c ../apps/wince/dialog_template.c ../apps/wince/dialog_template.h
 wince-test: ../tests/wince_property.c ../apps/wince/property_state.c ../apps/wince/property_state.h ../apps/wince/number.c ../apps/wince/number.h
+wince-test: ../tests/wince_text.c ../apps/wince/text.c ../apps/wince/text.h
 	@mkdir -p ../out/host
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
 	    -o ../out/host/wince-pe-test ../tests/wince_pe.c ../apps/wince/pe.c
@@ -207,6 +208,9 @@ wince-test: ../tests/wince_property.c ../apps/wince/property_state.c ../apps/win
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
 	    -o ../out/host/wince-property-test ../tests/wince_property.c ../apps/wince/property_state.c ../apps/wince/number.c
 	../out/host/wince-property-test
+	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
+	    -o ../out/host/wince-text-test ../tests/wince_text.c ../apps/wince/text.c
+	../out/host/wince-text-test
 	python3 ../tests/wince_assets_test.py
 .PHONY: wince-test
 

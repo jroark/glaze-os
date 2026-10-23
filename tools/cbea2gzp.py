@@ -393,7 +393,7 @@ def convert_cbea(
             entries[f"res/{res_name}"] = item["data"]
             manifest_lines.append(f"{res_name} {item['canonical']}\n")
 
-        entries["res/files.txt"] = "".join(manifest_lines).encode("latin1")
+        entries["res/files.txt"] = "".join(manifest_lines).encode("utf-8")
         if runner is not None:
             packages[f"{pkg_id}.gzp"] = package(entries)
         package_meta.append({

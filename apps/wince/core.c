@@ -1,6 +1,7 @@
 /* WinCE core services used by the original BE-300 applications. */
 #include "registry.h"
 #include "runtime.h"
+#include "text.h"
 
 CW ce_error;
 
@@ -302,10 +303,8 @@ CE_API(mbstowcs)
     const uint8_t *s = PTR(uint8_t, a1);
     unsigned n = 0;
     while (s[n] && (!a0 || n < a2)) {
-        if (s[n] >= 128)
-            return 0xffffffffu;
         if (a0)
-            PTR(WCHAR, a0)[n] = s[n];
+            PTR(WCHAR, a0)[n] = ce_cp1252_decode(s[n]);
         n++;
     }
     if (a0 && n < a2)
@@ -317,10 +316,11 @@ CE_API(wcstombs)
     const WCHAR *s = PTR(WCHAR, a1);
     unsigned n = 0;
     while (s[n] && (!a0 || n < a2)) {
-        if (s[n] >= 128)
+        int byte = ce_cp1252_encode(s[n]);
+        if (byte < 0)
             return 0xffffffffu;
         if (a0)
-            PTR(char, a0)[n] = (char)s[n];
+            PTR(char, a0)[n] = (char)byte;
         n++;
     }
     if (a0 && n < a2)
@@ -543,58 +543,23 @@ CE_API(GetModuleFileNameW)
     return length;
 }
 
-/* CE's wide printf uses 16-bit strings. Formatting is bounded internally;
- * unsupported conversions abort instead of pretending formatting succeeded. */
+/* CE's wide printf uses 16-bit strings and a 1024-character buffer.
+ * Unsupported conversions abort instead of pretending formatting succeeded. */
 CE_API(wsprintfW)
 {
-    CW args[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
-    WCHAR *out = PTR(WCHAR, a0), *fmt = PTR(WCHAR, a1);
-    unsigned pos = 0, arg = 0;
-    while (*fmt && pos < 1023) {
-        if (*fmt != '%') {
-            out[pos++] = *fmt++;
-            continue;
-        }
-        fmt++;
-        if (*fmt == '%') {
-            out[pos++] = *fmt++;
-            continue;
-        }
-        bool zero = *fmt == '0';
-        unsigned width = 0;
-        while (*fmt >= '0' && *fmt <= '9')
-            width = MIN(64u, width * 10u + (uint32_t)(*fmt++ - '0'));
-        if (*fmt == 'l')
-            fmt++;
-        if (arg == ARRAY_SIZE(args))
-            ce_missing("wsprintfW: too many arguments");
-        CW value = args[arg++];
-        WCHAR spec = *fmt++;
-        if (spec == 's') {
-            WCHAR *s = PTR(WCHAR, value);
-            while (s && *s && pos < 1023)
-                out[pos++] = *s++;
-        } else if (spec == 'c')
-            out[pos++] = (WCHAR)value;
-        else {
-            char buffer[80], format[16];
-            if (spec != 'd' && spec != 'i' && spec != 'u' && spec != 'x' && spec != 'X')
-                ce_missing("wsprintfW conversion");
-            snprintf(format, sizeof(format), "%%%s%u%c", zero ? "0" : "", width, (char)spec);
-            snprintf(buffer, sizeof(buffer), format, value);
-            for (char *s = buffer; *s && pos < 1023;)
-                out[pos++] = (WCHAR)(uint8_t)*s++;
-        }
-    }
-    out[pos] = 0;
-    return pos;
+    const uintptr_t args[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
+    int n = ce_wformat(PTR(WCHAR, a0), 1024, PTR(WCHAR, a1), args, ARRAY_SIZE(args));
+    if (n < 0)
+        ce_missing("wsprintfW conversion");
+    return (CW)n;
 }
 
+/* CP_ACP and CP_OEMCP are Windows-1252 on the BE-300. */
 CE_API(MultiByteToWideChar)
 {
-    const char *input = PTR(char, a2);
+    const uint8_t *input = PTR(uint8_t, a2);
     int length = (int)a3;
-    if (a0 != 0 && a0 != 1252 && a0 != 65001) {
+    if (a0 > 1 && a0 != 1252 && a0 != 65001) {
         ce_error = 87;
         return 0;
     }
@@ -603,34 +568,27 @@ CE_API(MultiByteToWideChar)
         return 0;
     }
     if (length < 0)
-        length = (int)strlen(input) + 1;
+        length = (int)strlen((const char *)input) + 1;
+    CW needed = a0 == 65001 ? ce_utf8_decode(input, (size_t)length, NULL, 0) : (CW)length;
     if (!a4)
-        return (CW)length;
-    if (a5 < (CW)length) {
+        return needed;
+    if (a5 < needed) {
         ce_error = 122;
         return 0;
     }
     WCHAR *out = PTR(WCHAR, a4);
-    if (a0 == 65001) {
-        char *copy = malloc((unsigned)length + 1);
-        if (!copy)
-            return 0;
-        memcpy(copy, input, (unsigned)length);
-        copy[length] = 0;
-        ce_widen(out, a5, copy);
-        CW count = ce_wlen(out) + (input[length - 1] == 0);
-        free(copy);
-        return count;
-    }
-    for (int i = 0; i < length; i++)
-        out[i] = (uint8_t)input[i];
-    return (CW)length;
+    if (a0 == 65001)
+        ce_utf8_decode(input, (size_t)length, out, a5);
+    else
+        for (int i = 0; i < length; i++)
+            out[i] = ce_cp1252_decode(input[i]);
+    return needed;
 }
 CE_API(WideCharToMultiByte)
 {
     const WCHAR *input = PTR(WCHAR, a2);
     int length = (int)a3;
-    if (a0 != 0 && a0 != 1252 && a0 != 65001) {
+    if (a0 > 1 && a0 != 1252 && a0 != 65001) {
         ce_error = 87;
         return 0;
     }
@@ -640,26 +598,31 @@ CE_API(WideCharToMultiByte)
     }
     if (length < 0)
         length = (int)ce_wlen(input) + 1;
+    CW needed = a0 == 65001 ? ce_utf8_encode(input, (size_t)length, NULL, 0) : (CW)length;
     if (!a4)
-        return (CW)length * (a0 == 65001 ? 3 : 1);
-    if (a0 == 65001) {
-        ce_narrow(PTR(char, a4), a5, input);
-        return (CW)strlen(PTR(char, a4)) + (input[length - 1] == 0);
-    }
-    if (a5 < (CW)length) {
+        return needed;
+    if (a5 < needed) {
         ce_error = 122;
         return 0;
     }
-    char *out = PTR(char, a4);
+    uint8_t *out = PTR(uint8_t, a4);
+    if (a0 == 65001) {
+        ce_utf8_encode(input, (size_t)length, out, a5);
+        return needed;
+    }
     bool replaced = false;
+    uint8_t fallback = a6 ? *PTR(uint8_t, a6) : '?';
     for (int i = 0; i < length; i++) {
-        if (input[i] > 255)
+        int byte = ce_cp1252_encode(input[i]);
+        if (byte < 0) {
             replaced = true;
-        out[i] = input[i] > 255 ? '?' : (char)input[i];
+            byte = fallback;
+        }
+        out[i] = (uint8_t)byte;
     }
     if (a7)
         *PTR(CW, a7) = replaced;
-    return (CW)length;
+    return needed;
 }
 CE_API(CompareStringW)
 {
@@ -1076,18 +1039,46 @@ static bool ce_bundled_dir(const char *canonical)
     return false;
 }
 
-static bool copy_bundled_to_drive(const char *res_path, const char *drive_path, bool copy_bytes)
+static bool make_parent(const char *path)
 {
     char dir[FS_PATH_MAX];
-    strlcpy(dir, drive_path, sizeof(dir));
+    strlcpy(dir, path, sizeof(dir));
     char *slash = strrchr(dir, '/');
     if (slash && slash != dir) {
         *slash = 0;
-        if (fs_mkdirs(dir))
-            return false;
+        return !fs_mkdirs(dir);
     }
-    if (!copy_bytes)
-        return true;
+    return true;
+}
+
+/* The CE root and its standard folders exist on a real device, so their
+ * backing directories are created on first use. */
+static bool standard_dir(const char *canonical)
+{
+    static const char *const folders[] = {"/", "/Windows", "/Program Files", "/Temp"};
+    for (unsigned i = 0; i < ARRAY_SIZE(folders); i++)
+        if (!strcasecmp(canonical, folders[i]))
+            return true;
+    return ce_bundled_dir(canonical);
+}
+static bool parent_is_standard(const char *canonical)
+{
+    char parent[FS_PATH_MAX];
+    strlcpy(parent, canonical, sizeof(parent));
+    char *slash = strrchr(parent, '/');
+    if (!slash)
+        return false;
+    if (slash == parent)
+        parent[1] = 0;
+    else
+        *slash = 0;
+    return standard_dir(parent);
+}
+
+static bool copy_bundled_to_drive(const char *res_path, const char *drive_path)
+{
+    if (!make_parent(drive_path))
+        return false;
     int in = fs_open(res_path, FS_O_READ);
     if (in < 0)
         return false;
@@ -1170,7 +1161,7 @@ static CW find_next(struct find_handle *search, CW out)
         int count = fs_list(search->path, search->index++, &entry, 1);
         if (count <= 0) {
             search->fs_done = true;
-            if (count < 0 && !ce_bundled_dir(search->canonical_dir)) {
+            if (count < 0 && !standard_dir(search->canonical_dir)) {
                 ce_error = 3;
                 return 0;
             }
@@ -1324,23 +1315,14 @@ CE_API(CreateFileW)
                     if (!(flags & (FS_O_WRITE | FS_O_TRUNC))) {
                         open_path = res_path;
                         flags = FS_O_READ;
-                    } else if (!copy_bundled_to_drive(res_path, path, !(flags & FS_O_TRUNC))) {
+                    } else if (!((flags & FS_O_TRUNC) ? make_parent(path) : copy_bundled_to_drive(res_path, path))) {
                         ce_error = 5;
                         return 0xffffffffu;
                     }
-                } else if (flags & FS_O_CREATE) {
-                    char parent[FS_PATH_MAX];
-                    strlcpy(parent, canonical, sizeof(parent));
-                    char *slash = strrchr(parent, '/');
-                    if (slash) {
-                        if (slash == parent)
-                            parent[1] = 0;
-                        else
-                            *slash = 0;
-                        if (ce_bundled_dir(parent))
-                            copy_bundled_to_drive("", path, false);
-                    }
-                }
+                    if (flags & FS_O_TRUNC)
+                        flags |= FS_O_CREATE; /* the bundled file exists */
+                } else if ((flags & FS_O_CREATE) && parent_is_standard(canonical))
+                    make_parent(path);
             }
             int fd = fs_open(open_path, flags);
             if (fd < 0) {
@@ -1398,18 +1380,20 @@ CE_API(WriteFile)
 CE_API(GetFileSize)
 {
     struct file_handle *f = file_handle(a0);
-    struct fs_stat st;
     if (!f) {
         ce_error = 6;
         return 0xffffffffu;
     }
-    if (fs_stat(f->path, &st)) {
+    /* The handle's own end, which includes writes not yet on the volume. */
+    int position = fs_seek(f->fd, 0, FS_SEEK_CUR);
+    int end = position < 0 ? position : fs_seek(f->fd, 0, FS_SEEK_END);
+    if (position < 0 || end < 0 || fs_seek(f->fd, position, FS_SEEK_SET) < 0) {
         ce_error = 5;
         return 0xffffffffu;
     }
     if (a1)
         *PTR(CW, a1) = 0;
-    return st.size;
+    return (CW)end;
 }
 CE_API(GetFileAttributesW)
 {
@@ -1421,7 +1405,7 @@ CE_API(GetFileAttributesW)
         return st.type == FS_DIR ? 16 : 0x80;
     if (ce_bundled_file(canonical, res_path) && !fs_stat(res_path, &st))
         return 0x80;
-    if (ce_bundled_dir(canonical))
+    if (standard_dir(canonical))
         return 16;
     ce_error = 2;
     return 0xffffffffu;
@@ -1466,7 +1450,10 @@ CE_API(DeleteFileW)
 CE_API(SetFilePointer)
 {
     struct file_handle *f = file_handle(a0);
-    if (!f || (a2 && *PTR(CW, a2)) || a3 > 2) {
+    /* With lpDistanceToMoveHigh the distance is 64-bit; only values that
+     * fit the file server's signed 32-bit offset are accepted. */
+    CW high = a2 ? *PTR(CW, a2) : ((int32_t)a1 < 0 ? 0xffffffffu : 0);
+    if (!f || high != ((int32_t)a1 < 0 ? 0xffffffffu : 0) || a3 > 2) {
         ce_error = 87;
         return 0xffffffffu;
     }
@@ -1475,6 +1462,8 @@ CE_API(SetFilePointer)
         file_error(rv);
         return 0xffffffffu;
     }
+    if (a2)
+        *PTR(CW, a2) = 0;
     return (CW)rv;
 }
 CE_API(SetEndOfFile)
