@@ -213,3 +213,19 @@ wince-test: ../tests/wince_property.c ../apps/wince/property_state.c ../apps/win
 ../out/host/wince-fs-read: ../tests/wince_fs_read.c $(FS)
 	@mkdir -p ../out/host
 	$(CC) $(FS_CFLAGS) -o $@ $^
+
+# NES portable core plus original homebrew cartridge, with memory/UB checking.
+NES := $(filter-out ../packages/nes/main.c,$(wildcard ../packages/nes/*.c))
+nes-test:
+	@mkdir -p ../out/host
+	$(CC) -std=gnu11 -O2 -g -fno-strict-aliasing -fsanitize=address,undefined \
+	    -o ../out/host/nes-test ../tests/nes.c $(NES)
+	../out/host/nes-test ../packages/nes/res/demo.nes
+.PHONY: nes-test
+
+nes-cpu-test:
+	@mkdir -p ../out/host
+	$(CC) -std=gnu11 -O2 -g -fno-strict-aliasing -fsanitize=address,undefined \
+	    -o ../out/host/nes-trace ../tests/nes_trace.c $(NES)
+	../out/host/nes-trace "$(NES_TEST_ROM)" "$(NES_TEST_LOG)"
+.PHONY: nes-cpu-test

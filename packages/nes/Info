@@ -1,0 +1,4 @@
+id=nes
+name=NES
+version=1.0
+exec=app

@@ -151,6 +151,9 @@ PROG_CFLAGS_gmail := $(WOLFSSL_INC)
 PROG_DEPS_gmail := $(OUT)/pic/libwolfssl.a
 PROG_LDLIBS_gmail := $(OUT)/pic/libwolfssl.a
 
+# InfoNES is portable C despite upstream's historical .cpp filenames.
+PROG_CFLAGS_nes := -fno-strict-aliasing
+
 USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libwolfssl.a \
     $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a $(OUT)/lib/libnetstack.a
 

@@ -1,0 +1,4 @@
+Glaze NES demo and icon: original work, dedicated to the public domain under
+CC0-1.0. Source: tools/mknesdemo.py. No commercial game data is included.
+Move the sprite with arrows; hold A for colour and a pulse tone; Start recentres.
+InfoNES itself is separately licensed; see LICENSE in this resource directory.

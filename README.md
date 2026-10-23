@@ -280,3 +280,9 @@ early companion-UART output is consumed by the dock model when enabled.
 
 Run `make -C host stowaway-test` for native decoder/editor tests with ASan/UBSan.
 See [tests/STOWAWAY.md](tests/STOWAWAY.md) for emulator regression checks.
+
+## NES emulator
+
+`make out/pkg/nes.gzp` builds the installable NES app, with an original demo,
+ROM browsing, physical controls, audio and battery saves. See
+[NES](docs/NES.md) for cartridge support, installation and tests.
