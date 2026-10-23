@@ -286,3 +286,9 @@ sms-banks-test:
 	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-banks ../tests/sms_banks.c $(SMS_CORE) ../tests/sega_audio_stub.c
 	../out/host/sms-banks
 .PHONY: sms-banks-test
+
+sega-rom-runners:
+	@mkdir -p ../out/host
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-rom ../tests/sega_rom.c $(SMS_CORE)
+	$(CC) $(SEGA_TEST_FLAGS) -o ../out/host/genesis-rom ../tests/sega_rom.c $(GENESIS_CORE)
+.PHONY: sega-rom-runners

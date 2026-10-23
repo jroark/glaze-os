@@ -1,4 +1,4 @@
-# One package (mastersystem.gzp or genesis.gzp) plus its demo named test.sms/test.gen.
+# One package plus a cartridge named test.sms/test.gen (generated demo by default).
 3000 drag 40 280 235 280 500
 4500 tap 30 120
 6500 tap 120 64
@@ -31,3 +31,7 @@
 51000 tap 90 192
 53000 key right
 54000 key ok
+56000 key enter
+60000 key ok
+62000 key right
+64000 key esc

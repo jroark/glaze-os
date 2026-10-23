@@ -97,6 +97,9 @@ return to the library. Suspended apps reduce available memory.
 ```sh
 make -C host mastersystem-test sms-banks-test genesis-test
 python3 tests/sega_smoke.py --be300 /path/to/be300
+make -C host sega-rom-runners
+out/host/sms-rom /external/game.sms out/host/sms-game
+out/host/genesis-rom /external/game.bin out/host/genesis-game
 ```
 
 Native tests use ASan/UBSan. Both adapters execute original generated cartridges
@@ -115,6 +118,28 @@ checks guest logs for faults and restores a normal unscripted NAND build in
 environment for this runner. Boot disposable images: the BE-300 emulator writes
 NAND and CF back on exit. These tests do not establish cycle accuracy or broad
 commercial-game compatibility.
+
+The optional `sms-rom` and `genesis-rom` native runners execute an external
+cartridge for 3,600 frames with scripted Start/action/direction inputs, record
+PPM screenshots at selected frames, check graphics/audio activity, preserve ROM
+bytes and check RAM retention across reset. These are smoke checks, not game
+correctness oracles; inspect the pictures. No game data is required in the
+repository. For Glaze Card-loading tests, pass `--sms-rom /path/to/game.sms`
+and/or `--genesis-rom /path/to/game.bin` to `sega_smoke.py`. Container runs need
+the files in a mounted directory; ignored `out/test-roms/` is suitable.
+
+The supplied 512 KiB R-Type (SMS) and Sonic the Hedgehog (Genesis) images were
+tested on 2026-10-23. Both completed the 3,600-frame native run plus 120 frames
+after reset without ASan/UBSan errors. Screenshots showed gameplay, and PCM
+samples changed over time for both titles. These limited runs do not establish
+that either game can be completed or that every sound is accurate. The images
+and generated screenshots remain in ignored build output.
+
+Both images also passed Glaze Card loading, reset and Home/resume smoke checks.
+The Genesis run ended on Sonic's SEGA startup screen after the 100-second test
+(which includes installation, demo checks and a reset); target gameplay and
+real-time performance remain unverified. Native gameplay screenshots alone do
+not establish that the game is playable at an acceptable speed on the BE-300.
 
 See [TotalSMS provenance](../third_party/totalsms/UPSTREAM.md) and
 [ClownMDEmu provenance](../third_party/clownmdemu/UPSTREAM.md) for upstream pins,
