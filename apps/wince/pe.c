@@ -277,8 +277,10 @@ const char *ce_pe_imports(const struct ce_pe *pe, void *image, ce_resolver resol
  * uses that same -3078 trap address. Translate only these complete sequences
  * in executable sections of the private loaded image, before publication.
  * JAL preserves the original return address and delay slot. No source bytes
- * are changed; other implicit calls remain unsupported. */
-const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, ce_resolver resolve, void *arg)
+ * are changed; other implicit calls remain unsupported. `base` is the load
+ * address, which differs from the preferred base for a relocated DLL. */
+const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, uint32_t base, ce_resolver resolve,
+                               void *arg)
 {
     uint32_t target = 0;
     for (unsigned s = 0; s < pe->count; s++) {
@@ -303,7 +305,7 @@ const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, ce_resolver 
                 continue;
             if (!target)
                 target = resolve("coredll.dll", "TerminateProcess", 0, arg);
-            uint32_t pc = pe->base + section->rva + off + call;
+            uint32_t pc = base + section->rva + off + call;
             if (!target || (target & 3) || ((pc + 4) >> 28) != (target >> 28))
                 return "cannot bridge direct WinCE termination call";
             ce_put32(p + call, 0x0c000000u | ((target >> 2) & 0x03ffffffu));

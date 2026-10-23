@@ -840,15 +840,17 @@ CE_API(EndDialog)
 }
 CE_API(DialogBoxIndirectParamW)
 {
-    /* Loaded resource templates must stay within the mapped PE. */
-    if (a1 < ce_main.base || a1 - ce_main.base >= ce_main.pe.size || !a3) {
+    /* Loaded resource templates must stay within a mapped PE: the program or
+     * a library whose resources it loaded. */
+    uint32_t extent = ce_module_extent(a1);
+    if (!extent || !a3) {
         ce_error = 87;
         return (CW)-1;
     }
     struct ce_dialog_template *d = malloc(sizeof(*d));
     if (!d)
         return (CW)-1;
-    if (!ce_dialog_decode(d, PTR(void, a1), ce_main.pe.size - (a1 - ce_main.base))) {
+    if (!ce_dialog_decode(d, PTR(void, a1), extent)) {
         free(d);
         ce_error = 50;
         return (CW)-1;

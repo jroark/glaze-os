@@ -68,10 +68,18 @@ static void publish_bridges(void)
 
 static CW bridge(void *address, const char *missing)
 {
+    CW fn = WORD(address);
+    /* One bridge per service: repeated GetProcAddress calls must not use up
+     * the bridge page. */
+    if (!missing)
+        for (unsigned i = 0; i < bridge_count; i++) {
+            const uint32_t *p = bridges + i * CE_BRIDGE_WORDS;
+            if (!p[0] && p[2] == (0x3c190000u | (fn >> 16)) && p[3] == (0x37390000u | (fn & 65535u)))
+                return WORD(p);
+        }
     if (bridge_count >= CE_BRIDGE_BYTES / (CE_BRIDGE_WORDS * 4u))
         ce_fatal("Too many WinCE imports");
     uint32_t *p = bridges + bridge_count++ * CE_BRIDGE_WORDS;
-    CW fn = WORD(address);
     p[0] = missing ? 0x3c040000u | (WORD(missing) >> 16) : 0;
     p[1] = missing ? 0x34840000u | (WORD(missing) & 65535u) : 0;
     p[2] = 0x3c190000u | (fn >> 16);
@@ -81,6 +89,29 @@ static CW bridge(void *address, const char *missing)
     return WORD(p);
 }
 
+static void *resolve_service(const char *dll, const char *name)
+{
+    void *fn = NULL;
+    if (!strcasecmp(dll, "coredll.dll")) {
+        fn = ce_resolve_core(name);
+        if (!fn)
+            fn = ce_resolve_time(name);
+        if (!fn)
+            fn = ce_resolve_window(name);
+        if (!fn)
+            fn = ce_resolve_gdi(name);
+    } else if (!strcasecmp(dll, "commctrl.dll") || !strcasecmp(dll, "CSO.dll")) {
+        fn = ce_resolve_window(name);
+        if (!fn)
+            fn = ce_resolve_gdi(name);
+    }
+    if (!fn)
+        fn = ce_resolve_property(name);
+    if (!fn)
+        fn = ce_resolve_shell(dll, name);
+    return fn;
+}
+
 static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, void *arg)
 {
     (void)arg;
@@ -88,28 +119,9 @@ static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, vo
     if (!name && ordinals && ce_ordinal_find(ordinals, ordinal_size, dll, ordinal,
             ordinal_symbol, sizeof(ordinal_symbol)))
         name = ordinal_symbol;
-    void *fn = NULL;
-    if (name) {
-        if (!strcasecmp(dll, "coredll.dll")) {
-            fn = ce_resolve_core(name);
-            if (!fn)
-                fn = ce_resolve_time(name);
-            if (!fn)
-                fn = ce_resolve_window(name);
-            if (!fn)
-                fn = ce_resolve_gdi(name);
-        } else if (!strcasecmp(dll, "commctrl.dll") || !strcasecmp(dll, "CSO.dll")) {
-            fn = ce_resolve_window(name);
-            if (!fn)
-                fn = ce_resolve_gdi(name);
-        }
-        if (!fn)
-            fn = ce_resolve_property(name);
-        if (!fn)
-            fn = ce_resolve_shell(dll, name);
-        if (fn)
-            return bridge(fn, NULL);
-    }
+    void *fn = name ? resolve_service(dll, name) : NULL;
+    if (fn)
+        return bridge(fn, NULL);
     CW module = ce_load_library(dll);
     if (module) {
         CW address = name ? ce_find_symbol(module, name) : ce_find_ordinal(module, ordinal);
@@ -129,9 +141,20 @@ static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, vo
     return bridge((void *)ce_missing, copy);
 }
 
-CW ce_import_address(const char *dll, const char *name)
+/* GetProcAddress on COREDLL: unlike an import, an unimplemented name yields
+ * NULL so applications can fall back, as they do for an absent export. */
+CW ce_core_proc(const char *name, uint16_t ordinal)
 {
-    CW address = resolve_import(dll, name, 0, NULL);
+    char symbol[256];
+    if (!name) {
+        if (!ordinals || !ce_ordinal_find(ordinals, ordinal_size, "coredll.dll", ordinal, symbol, sizeof(symbol)))
+            return 0;
+        name = symbol;
+    }
+    void *fn = resolve_service("coredll.dll", name);
+    if (!fn)
+        return 0;
+    CW address = bridge(fn, NULL);
     if (published != bridge_count)
         publish_bridges();
     return address;
@@ -172,7 +195,7 @@ static void finish_module(struct ce_module *m, const char *resource)
     const char *error = ce_pe_imports(&m->pe, m->image, resolve_import, m);
     if (error)
         ce_fatal(error);
-    error = ce_pe_direct_calls(&m->pe, m->image, resolve_import, m);
+    error = ce_pe_direct_calls(&m->pe, m->image, m->base, resolve_import, m);
     if (error)
         ce_fatal(error);
     if (gz_vm_publish(m->base, ALIGN_UP(m->pe.headers, 4096u), 0))
@@ -317,6 +340,16 @@ CW ce_find_symbol(CW handle, const char *name)
                 return 0;
             return m->base + rva;
         }
+    }
+    return 0;
+}
+
+uint32_t ce_module_extent(CW address)
+{
+    for (unsigned i = 0; i <= library_count; i++) {
+        const struct ce_module *m = i ? &libraries[i - 1] : &ce_main;
+        if (m->image && address >= m->base && address - m->base < m->pe.size)
+            return m->pe.size - (address - m->base);
     }
     return 0;
 }

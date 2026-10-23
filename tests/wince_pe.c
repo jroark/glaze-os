@@ -79,26 +79,30 @@ static void direct_calls(void)
     assert(image);
     ce_pe_copy(&p, image);
     direct_target = 0x0e000020;
-    assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL));
+    assert(!ce_pe_direct_calls(&p, image, p.base, resolve_direct, NULL));
     assert(ce_u32(image + 4104) == (0x0c000000u | (direct_target >> 2)));
     assert(ce_u32(image + 4108) == 0x8fa50020);
     assert(ce_u32(image + 8196) == 0x0300f809);
     assert(ce_u32(file + 520) == 0x0300f809); /* unchanged source executable */
     ce_pe_copy(&p, image);
     direct_target = 0x1e000020;
-    assert(ce_pe_direct_calls(&p, image, resolve_direct, NULL)); /* JAL region mismatch */
+    assert(ce_pe_direct_calls(&p, image, p.base, resolve_direct, NULL)); /* JAL region mismatch */
+    ce_pe_copy(&p, image);
+    assert(!ce_pe_direct_calls(&p, image, 0x1e000000u, resolve_direct, NULL)); /* relocated module */
+    assert(ce_u32(image + 4104) == (0x0c000000u | ((direct_target >> 2) & 0x03ffffffu)));
+    ce_pe_copy(&p, image);
     direct_target = 0x0e000021;
-    assert(ce_pe_direct_calls(&p, image, resolve_direct, NULL)); /* unaligned bridge */
+    assert(ce_pe_direct_calls(&p, image, p.base, resolve_direct, NULL)); /* unaligned bridge */
     ce_put32(image + 4096, 0x2418f3f8);
-    assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL)); /* unknown trap untouched */
+    assert(!ce_pe_direct_calls(&p, image, p.base, resolve_direct, NULL)); /* unknown trap untouched */
     assert(ce_u32(image + 4104) == 0x0300f809);
     ce_put32(image + 4096, 0x2418f3fa);
     ce_put32(image + 4104, 0x0320f809);
-    assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL)); /* different target register */
+    assert(!ce_pe_direct_calls(&p, image, p.base, resolve_direct, NULL)); /* different target register */
     assert(ce_u32(image + 4104) == 0x0320f809);
     p.section[0].size = 12; /* incomplete delay slot */
     ce_put32(image + 4104, 0x0300f809);
-    assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL));
+    assert(!ce_pe_direct_calls(&p, image, p.base, resolve_direct, NULL));
     assert(ce_u32(image + 4104) == 0x0300f809);
     free(image);
 }

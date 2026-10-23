@@ -52,10 +52,8 @@ static const void *page_template(struct page *p, uint32_t *size)
     CW flags = ce_u32(p->spec + 4), resource = ce_u32(p->spec + 12);
     if (!(flags & 1))
         return ce_resource(ce_u32(p->spec + 8), 5, resource, size);
-    if (resource < ce_main.base || resource - ce_main.base >= ce_main.pe.size)
-        return NULL;
-    *size = ce_main.pe.size - (resource - ce_main.base);
-    return PTR(void, resource);
+    *size = ce_module_extent(resource);
+    return *size ? PTR(void, resource) : NULL;
 }
 CE_API(CreatePropertySheetPageW)
 {

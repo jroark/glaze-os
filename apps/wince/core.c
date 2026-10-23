@@ -20,6 +20,41 @@ static int64_t ce_ll_div(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
         return INT64_MIN;
     return numerator / denominator;
 }
+static uint64_t ce_ull_div(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
+{
+    uint64_t denominator = (uint64_t)bhi << 32 | blo;
+    if (!denominator)
+        ce_fatal("WinCE integer division by zero");
+    return ((uint64_t)ahi << 32 | alo) / denominator;
+}
+static int64_t ce_ll_rem(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
+{
+    int64_t numerator = (int64_t)((uint64_t)ahi << 32 | alo);
+    int64_t denominator = (int64_t)((uint64_t)bhi << 32 | blo);
+    if (!denominator)
+        ce_fatal("WinCE integer division by zero");
+    return denominator == -1 ? 0 : numerator % denominator;
+}
+static uint64_t ce_ull_rem(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
+{
+    uint64_t denominator = (uint64_t)bhi << 32 | blo;
+    if (!denominator)
+        ce_fatal("WinCE integer division by zero");
+    return ((uint64_t)ahi << 32 | alo) % denominator;
+}
+/* Shift helpers take the value pair and the count in a2. */
+static uint64_t ce_ll_lshift(uint32_t lo, uint32_t hi, uint32_t count)
+{
+    return ((uint64_t)hi << 32 | lo) << (count & 63);
+}
+static int64_t ce_ll_rshift(uint32_t lo, uint32_t hi, uint32_t count)
+{
+    return (int64_t)((uint64_t)hi << 32 | lo) >> (count & 63);
+}
+static uint64_t ce_ull_rshift(uint32_t lo, uint32_t hi, uint32_t count)
+{
+    return ((uint64_t)hi << 32 | lo) >> (count & 63);
+}
 
 unsigned ce_wlen(const WCHAR *text)
 {
@@ -1471,20 +1506,26 @@ CE_API(LoadLibraryW)
         return 0x73000000u;
     return ce_load_library(name);
 }
+static CW proc_address(CW module, const char *name, CW ordinal)
+{
+    CW address = module == 0x73000000u ? ce_core_proc(name, (uint16_t)ordinal)
+                 : name                ? ce_find_symbol(module, name)
+                                       : ce_find_ordinal(module, (uint16_t)ordinal);
+    if (!address)
+        ce_error = 127;
+    return address;
+}
 CE_API(GetProcAddressW)
 {
     if (a1 < 65536)
-        return ce_find_ordinal(a0, (uint16_t)a1);
+        return proc_address(a0, NULL, a1);
     char name[128];
     ce_narrow(name, sizeof(name), PTR(WCHAR, a1));
-    return a0 == 0x73000000u ? ce_import_address("coredll.dll", name) : ce_find_symbol(a0, name);
+    return proc_address(a0, name, 0);
 }
 CE_API(GetProcAddressA)
 {
-    if (a1 < 65536)
-        return ce_find_ordinal(a0, (uint16_t)a1);
-    const char *name = PTR(char, a1);
-    return a0 == 0x73000000u ? ce_import_address("coredll.dll", name) : ce_find_symbol(a0, name);
+    return proc_address(a0, a1 < 65536 ? NULL : PTR(char, a1), a1);
 }
 CE_API(FreeLibrary)
 {
@@ -1519,6 +1560,12 @@ CE_API(GlobalMemoryStatus)
 static const struct ce_export exports[] = {
     {"__ll_mul", (void *)ce_ll_mul},
     {"__ll_div", (void *)ce_ll_div},
+    {"__ull_div", (void *)ce_ull_div},
+    {"__ll_rem", (void *)ce_ll_rem},
+    {"__ull_rem", (void *)ce_ull_rem},
+    {"__ll_lshift", (void *)ce_ll_lshift},
+    {"__ll_rshift", (void *)ce_ll_rshift},
+    {"__ull_rshift", (void *)ce_ull_rshift},
     CE_EXPORT(GetLastError),
     CE_EXPORT(SetLastError),
     CE_EXPORT(LocalAlloc),
