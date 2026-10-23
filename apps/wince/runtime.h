@@ -34,6 +34,7 @@ extern struct ce_module ce_main;
 extern CW ce_error;
 extern struct ui_keyboard ce_keyboard;
 extern bool ce_keyboard_open;
+extern bool ce_screen_dirty; /* drawn outside WM_PAINT; present on idle */
 
 struct ce_rect {
     int32_t left, top, right, bottom;

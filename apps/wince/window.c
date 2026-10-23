@@ -622,13 +622,19 @@ void ce_redraw_all(void)
             windows[i].dirty = true;
 }
 
-void ce_render(void)
+bool ce_screen_dirty = true;
+
+/* The idle message loop presents only when a window repainted or drew
+ * through a DC; explicit renders (UpdateWindow, popups, keyboard) always do. */
+static void render(bool force)
 {
+    bool drawn = force || ce_screen_dirty;
     for (unsigned i = 0; i < WINDOWS; i++) {
         struct ce_window *w = &windows[i];
         if (!w->handle || !ce_window_visible(w->handle) || !w->dirty)
             continue;
         w->dirty = false;
+        drawn = true;
         if (w->proc == WORD(builtin_proc))
             draw_control(w);
         else
@@ -640,6 +646,8 @@ void ce_render(void)
             if (windows[j].handle && windows[j].parent == w->handle)
                 windows[j].dirty = true;
     }
+    if (!drawn)
+        return;
     if (ce_keyboard_open && !ui.hardware_keyboard)
         ui_draw_keyboard(&ui.surf, &ce_keyboard, 320 - UI_KB_H);
     ce_shell_draw();
@@ -660,8 +668,14 @@ void ce_render(void)
         if (ce_keyboard_open && !ui.hardware_keyboard)
             ui_draw_keyboard(&ui.surf, &ce_keyboard, 320 - UI_KB_H);
     }
+    ce_screen_dirty = false;
     ui_invalidate_all();
     ui_present();
+}
+
+void ce_render(void)
+{
+    render(true);
 }
 
 static bool is_button(const struct ce_window *w)
@@ -707,6 +721,19 @@ static void post_return(void)
 
 static void input(const struct gz_input_event *e)
 {
+    /* Home: tell top-level windows before libui suspends the process (it
+     * may then be ended without warning), and repaint on return. */
+    if (e->type == GZ_EV_APP_DEACTIVATE || e->type == GZ_EV_APP_ACTIVATE) {
+        bool active = e->type == GZ_EV_APP_ACTIVATE;
+        for (unsigned i = 0; i < WINDOWS; i++)
+            if (windows[i].handle && !windows[i].parent && windows[i].visible)
+                ce_send(windows[i].handle, 6, active, 0);
+        if (active) {
+            ce_redraw_all();
+            ce_screen_dirty = true;
+        }
+        return;
+    }
     if (ce_list_popup_input(e))
         return;
     if (!modal && ce_shell_input(e)) {
@@ -885,7 +912,7 @@ CE_API(GetMessageW)
             *PTR(struct ce_message, a0) = m;
             return m.message != 0x12;
         }
-        ce_render();
+        render(false);
         CW now = gz_time_ms();
         for (unsigned i = 0; i < ARRAY_SIZE(timers); i++)
             if (timers[i].id && (int32_t)(now - timers[i].deadline) >= 0) {

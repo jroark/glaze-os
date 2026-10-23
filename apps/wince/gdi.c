@@ -42,6 +42,7 @@ static void border(gfx_rect r, uint32_t top, uint32_t bottom)
 
 void ce_draw_bitmap(const struct ce_object *object, int x, int y, int source_x, int width, CW mask)
 {
+    ce_screen_dirty = true;
     const uint8_t *b = object->data;
     if (!b || object->bytes < 40)
         return;
@@ -99,6 +100,7 @@ void ce_draw_bitmap(const struct ce_object *object, int x, int y, int source_x, 
 
 CE_API(BeginPaint)
 {
+    ce_screen_dirty = true;
     struct ce_window *w = ce_window(a0);
     if (!w || !a1)
         return 0;
@@ -119,6 +121,7 @@ CE_API(EndPaint)
 }
 CE_API(GetDC)
 {
+    ce_screen_dirty = true;
     gfx_reset_clip(&ui.surf);
     return a0 ? a0 : 0x74000000u;
 }
@@ -252,6 +255,7 @@ CE_API(SelectObject)
 }
 CE_API(FillRect)
 {
+    ce_screen_dirty = true;
     struct ce_object *brush = ce_object(a2, CE_OBJ_BRUSH);
     CW rgb = brush ? brush->value : 0xc0c0c0;
     if (rgb != 0xffffffffu)
@@ -260,6 +264,7 @@ CE_API(FillRect)
 }
 CE_API(Polyline)
 {
+    ce_screen_dirty = true;
     if (a2 > 4096)
         return 0;
     gfx_rect r = ce_window_rect(a0);
@@ -281,6 +286,7 @@ CE_API(Polyline)
 }
 CE_API(DrawFrameControl)
 {
+    ce_screen_dirty = true;
     gfx_rect r = rectangle(a0, PTR(struct ce_rect, a1));
     gfx_fill(&ui.surf, r, 0xc0c0c0);
     border(r, (a3 & 0x200) ? 0x404040 : 0xffffff, (a3 & 0x200) ? 0xffffff : 0x404040);
@@ -306,6 +312,7 @@ CE_API(SetBkMode)
 }
 CE_API(TextOutW)
 {
+    ce_screen_dirty = true;
     if (a4 > 65535)
         return 0;
     WCHAR *copy = malloc((a4 + 1) * 2);
@@ -327,6 +334,7 @@ CE_API(TextOutW)
 }
 CW ce_draw_text(CW a0, CW a1, CW a2, CW a3, CW a4)
 {
+    ce_screen_dirty = true;
     if (!a1 || !a3)
         return 0;
     unsigned length = a2 == 0xffffffffu ? ce_wlen(PTR(WCHAR, a1)) : a2;
