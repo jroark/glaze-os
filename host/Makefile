@@ -189,6 +189,9 @@ wince-test: ../tests/wince_pe.c ../apps/wince/pe.c ../apps/wince/pe.h ../tests/w
 wince-test: ../tests/wince_registry.c ../apps/wince/registry.c ../apps/wince/registry.h ../tests/wince_dialog.c ../apps/wince/dialog_template.c ../apps/wince/dialog_template.h
 wince-test: ../tests/wince_property.c ../apps/wince/property_state.c ../apps/wince/property_state.h ../apps/wince/number.c ../apps/wince/number.h
 wince-test: ../tests/wince_text.c ../apps/wince/text.c ../apps/wince/text.h
+wince-test: ../tests/wince_runtime.c ../tests/wince_runtime_host.h ../tests/wince_filemeta.c ../apps/wince/filemeta.c ../apps/wince/thread.c ../apps/wince/mapping.c ../apps/wince/timezone.c ../apps/wince/scan.c ../apps/wince/string.c ../apps/wince/view.c ../apps/wince/winsock.c ../apps/wince/ole.c
+wince-test: ../apps/wince/list.c ../apps/wince/date_control.c ../apps/wince/tabs.c
+wince-test: ../apps/wince/database.c ../tests/wince_database.c
 	@mkdir -p ../out/host
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
 	    -o ../out/host/wince-pe-test ../tests/wince_pe.c ../apps/wince/pe.c
@@ -211,7 +214,17 @@ wince-test: ../tests/wince_text.c ../apps/wince/text.c ../apps/wince/text.h
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
 	    -o ../out/host/wince-text-test ../tests/wince_text.c ../apps/wince/text.c
 	../out/host/wince-text-test
+	$(CC) -std=c11 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -I../lib/include \
+	    -fsanitize=address,undefined -pthread -o ../out/host/wince-runtime-test ../tests/wince_runtime.c ../apps/wince/pe.c ../apps/wince/datetime.c ../lib/libc/tz.c
+	../out/host/wince-runtime-test
+	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined -D_DEFAULT_SOURCE \
+	    -o ../out/host/wince-filemeta-test ../tests/wince_filemeta.c ../apps/wince/datetime.c ../apps/wince/pe.c
+	../out/host/wince-filemeta-test
+	$(CC) -std=c11 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -I../lib/include -fsanitize=address,undefined \
+	    -o ../out/host/wince-database-test ../tests/wince_database.c ../apps/wince/pe.c
+	../out/host/wince-database-test
 	python3 ../tests/wince_assets_test.py
+	python3 ../tests/wince_runner_test.py
 .PHONY: wince-test
 
 ../out/host/wince-fs-read: ../tests/wince_fs_read.c $(FS)

@@ -228,5 +228,5 @@ void *ce_resolve_time(const char *name)
 {
     for (unsigned i = 0; i < ARRAY_SIZE(exports); i++)
         if (!strcmp(name, exports[i].name)) return exports[i].address;
-    return NULL;
+    return ce_resolve_timezone(name);
 }

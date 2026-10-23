@@ -141,6 +141,13 @@ $(OUT)/apps/appstore/main.o $(OUT)/dyn/apps/appstore/main.o: FORCE
 PROG_CFLAGS_browser := -Ithird_party/stb $(WOLFSSL_INC)
 PROG_CFLAGS_video := -Ithird_party/stb
 PROG_CFLAGS_audio := $(HELIX_INC)
+# CE entry points have a uniform twelve-word C signature, but original callers
+# reserve stack space only for the real API's arguments. A sibling call to
+# another adapter may otherwise spill unused words over the caller's saved ra.
+PROG_CFLAGS_wince := -fno-optimize-sibling-calls
+$(OUT)/apps/wince/%.o: USER_CFLAGS += -fno-optimize-sibling-calls
+$(patsubst %.c,$(OUT)/%.o,$(wildcard apps/wince/*.c)) \
+$(patsubst %.c,$(OUT)/dyn/%.o,$(wildcard apps/wince/*.c)): Makefile
 PROG_DEPS_video := $(OUT)/shared/libmedia.so.1
 PROG_LDLIBS_video := -l:libmedia.so.1
 PROG_DEPS_audio := $(OUT)/pic/libhelix.a $(OUT)/shared/libmedia.so.1

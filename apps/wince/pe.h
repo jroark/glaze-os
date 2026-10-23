@@ -36,7 +36,7 @@ const char *ce_pe_copy(const struct ce_pe *, void *image);
 const char *ce_pe_relocate(const struct ce_pe *, void *image, uint32_t base);
 typedef uint32_t (*ce_resolver)(const char *dll, const char *name, uint16_t ordinal, void *);
 const char *ce_pe_imports(const struct ce_pe *, void *image, ce_resolver, void *);
-const char *ce_pe_direct_calls(const struct ce_pe *, void *image, uint32_t base, ce_resolver, void *);
+const char *ce_pe_direct_calls(const struct ce_pe *, void *image, ce_resolver, void *);
 const void *ce_pe_resource(const struct ce_pe *, void *image, uint16_t type, uint16_t id, uint32_t *bytes);
 
 #endif

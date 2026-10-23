@@ -272,43 +272,76 @@ const char *ce_pe_imports(const struct ce_pe *pe, void *image, ce_resolver resol
     return "unterminated PE import directory";
 }
 
-/* The CE 3 MIPS CRT embeds an implicit TerminateProcess call instead of an
- * import: li r,-3078; [li a0,0x42]; jalr r. The matching local COREDLL export
- * uses that same -3078 trap address. Translate only these complete sequences
- * in executable sections of the private loaded image, before publication.
- * JAL preserves the original return address and delay slot. No source bytes
- * are changed; other implicit calls remain unsupported. `base` is the load
- * address, which differs from the preferred base for a relocated DLL. */
-const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, uint32_t base, ce_resolver resolve,
-                               void *arg)
+/* Stay inside a straight-line sequence, and stop if the trap-address register
+ * is overwritten. CE compilers schedule argument setup between li and jalr. */
+static bool keeps_trap_register(uint32_t word, unsigned reg)
 {
-    uint32_t target = 0;
+    unsigned op = word >> 26, rt = word >> 16 & 31, rd = word >> 11 & 31;
+    if (!op) {
+        unsigned fn = word & 63;
+        if (fn == 8 || fn == 9 || fn == 12 || fn == 13)
+            return false;
+        if (fn == 15 || fn == 17 || fn == 19 || (fn >= 24 && fn <= 31))
+            return true;
+        return rd != reg;
+    }
+    if ((op >= 8 && op <= 15) || (op >= 0x20 && op <= 0x27) ||
+        op == 0x30 || op == 0x34 || op == 0x37 || op == 0x38 || op == 0x3c)
+        return rt != reg;
+    return op >= 0x28 && op <= 0x2f; /* Stores do not change their GPR. */
+}
+/* CE CRTs embed kernel traps and inline current-thread reads. Translate
+ * complete li/jalr trap sequences before publishing executable pages. Glaze
+ * stacks are 64 KiB aligned, so their upper sixteen bits provide a unique
+ * live-thread token, also returned by the CE thread APIs. A single SRL can
+ * replace the KData read even when it occupies another call's delay slot. */
+const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, ce_resolver resolve, void *arg)
+{
+    struct {
+        uint16_t trap;
+        const char *name;
+        uint32_t target;
+    } traps[] = {{0xf3fa, "TerminateProcess", 0}, {0xfa9e, "GetLastError", 0},
+                 {0xfaa2, "SetLastError", 0}, {0xfbc6, "TlsCall", 0},
+                 {0xfb2a, "CreateThread", 0}};
     for (unsigned s = 0; s < pe->count; s++) {
         const struct ce_section *section = &pe->section[s];
         if (!(section->flags & 0x20000000u))
             continue;
         uint32_t length = MIN(section->size, section->bytes);
-        for (uint32_t off = 0; ce_range(off, 12, length); off += 4) {
-            uint8_t *p = ce_pe_at(pe, image, section->rva + off, 12);
+        for (uint32_t off = 0; ce_range(off, 4, length); off += 4) {
+            uint8_t *p = ce_pe_at(pe, image, section->rva + off, 4);
             if (!p)
                 return "invalid direct-call section";
             uint32_t load = ce_u32(p), reg = (load >> 16) & 31;
-            if (!reg || reg == 31 || (load & 0xffe0ffffu) != 0x2400f3fau)
+            if ((load & 0xffffu) == 0x5808u && (load & 0xffe00000u) == 0x8c000000u && reg) {
+                ce_put32(p, (29u << 16) | (reg << 11) | (16u << 6) | 2u);
                 continue;
-            uint32_t call = 4;
-            if (ce_u32(p + 4) == 0x24040042u && reg != 4) {
-                if (!ce_range(off, 16, length))
-                    continue;
-                call = 8;
             }
-            if (ce_u32(p + call) != ((reg << 21) | 0x0000f809u))
+            if (!reg || reg == 31 || (load & 0xffe00000u) != 0x24000000u)
                 continue;
-            if (!target)
-                target = resolve("coredll.dll", "TerminateProcess", 0, arg);
-            uint32_t pc = base + section->rva + off + call;
-            if (!target || (target & 3) || ((pc + 4) >> 28) != (target >> 28))
-                return "cannot bridge direct WinCE termination call";
-            ce_put32(p + call, 0x0c000000u | ((target >> 2) & 0x03ffffffu));
+            for (unsigned t = 0; t < ARRAY_SIZE(traps); t++) {
+                if ((load & 65535u) != traps[t].trap || !ce_range(off, 12, length))
+                    continue;
+                uint32_t call;
+                for (call = 4; call <= 48 && ce_range(off, call + 8, length); call += 4) {
+                    uint32_t instruction = ce_u32(p + call);
+                    if (instruction == ((reg << 21) | 0x0000f809u))
+                        break;
+                    if (!keeps_trap_register(instruction, reg))
+                        break;
+                }
+                if (call > 48 || !ce_range(off, call + 8, length) ||
+                    ce_u32(p + call) != ((reg << 21) | 0x0000f809u))
+                    continue;
+                if (!traps[t].target)
+                    traps[t].target = resolve("coredll.dll", traps[t].name, 0, arg);
+                uint32_t target = traps[t].target;
+                uint32_t pc = pe->base + section->rva + off + call;
+                if (!target || (target & 3) || ((pc + 4) >> 28) != (target >> 28))
+                    return "cannot bridge direct WinCE kernel call";
+                ce_put32(p + call, 0x0c000000u | ((target >> 2) & 0x03ffffffu));
+            }
         }
     }
     return NULL;

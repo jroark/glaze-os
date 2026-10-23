@@ -43,6 +43,8 @@ static void select_item(struct ce_window *w, int index, bool double_click)
         return;
     bool changed = l->selected != index;
     l->selected = index;
+    if (l->combo)
+        ce_send(w->handle, 0xc, 0, WORD(l->items[index].text));
     unsigned rows = MAX(1, (w->rect.bottom - w->rect.top) / 18);
     if ((unsigned)index < l->top)
         l->top = index;
@@ -63,6 +65,30 @@ bool ce_list_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
     /* Translate combo operations to their list equivalents. */
     if (l->combo)
         switch (msg) {
+        case 0x141: /* CB_LIMITTEXT */
+            w->text_limit = wp ? MIN(wp, 65535u) : 65535u;
+            if (w->combo_edit) ce_send(w->combo_edit, 0xc5, wp, 0);
+            return true;
+        case 0x140: /* CB_GETEDITSEL */
+            if (w->combo_edit) {
+                *result = ce_send(w->combo_edit, 0xb0, wp, lp);
+                return true;
+            }
+            if (wp) *PTR(CW, wp) = w->sel_start;
+            if (lp) *PTR(CW, lp) = w->sel_end;
+            *result = (w->sel_start & 65535u) | w->sel_end << 16;
+            return true;
+        case 0x142: /* CB_SETEDITSEL */
+            if ((w->style & 3) == 3) { *result = (CW)-1; return true; }
+            if (w->combo_edit) {
+                ce_send(w->combo_edit, 0xb1, (int16_t)lp, (int16_t)(lp >> 16));
+                return true;
+            }
+            w->sel_start = MIN(lp & 65535u, w->length);
+            w->sel_end = MIN(lp >> 16, w->length);
+            w->cursor = w->sel_end;
+            w->dirty = true;
+            return true;
         case 0x143:
             msg = 0x180;
             break; /* ADDSTRING */
@@ -87,6 +113,9 @@ bool ce_list_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
         case 0x14b:
             msg = 0x184;
             break;
+        case 0x14c: msg = 0x18f; break; /* FINDSTRING */
+        case 0x14d: msg = 0x18c; break; /* SELECTSTRING */
+        case 0x158: msg = 0x1a2; break; /* FINDSTRINGEXACT */
         case 0x14e:
             msg = 0x186;
             break;
@@ -101,6 +130,34 @@ bool ce_list_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
             return true;
         }
     switch (msg) {
+    case 0x18f:
+    case 0x18c:
+    case 0x1a2: {
+        *result = (CW)-1;
+        if (!lp || !l->count) break;
+        const WCHAR *needle = PTR(WCHAR, lp);
+        unsigned start = wp < l->count ? wp + 1 : 0;
+        for (unsigned n = 0; n < l->count; n++) {
+            unsigned index = (start + n) % l->count, pos = 0;
+            const WCHAR *candidate = l->items[index].text;
+            while (needle[pos] && candidate[pos]) {
+                unsigned a = needle[pos], b = candidate[pos];
+                if (a >= 'A' && a <= 'Z') a += 32;
+                if (b >= 'A' && b <= 'Z') b += 32;
+                if (a != b) break;
+                pos++;
+            }
+            if (needle[pos] || (msg == 0x1a2 && candidate[pos])) continue;
+            *result = index;
+            if (msg == 0x18c) {
+                l->selected = (int)index;
+                if (l->combo) ce_send(w->handle, 0xc, 0, WORD(candidate));
+                w->dirty = true;
+            }
+            break;
+        }
+        break;
+    }
     case 0x180:
     case 0x181: { /* ADDSTRING / INSERTSTRING */
         if (!lp || l->count == ITEMS || ce_wlen(PTR(WCHAR, lp)) > 4096) {
@@ -155,6 +212,10 @@ bool ce_list_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
         break;
     case 0x186:
         l->selected = wp < l->count ? (int)wp : -1;
+        if (l->combo) {
+            static const WCHAR empty[] = {0};
+            ce_send(w->handle, 0xc, 0, WORD(l->selected < 0 ? empty : l->items[l->selected].text));
+        }
         w->dirty = true;
         *result = (CW)l->selected;
         break;
@@ -200,7 +261,9 @@ bool ce_list_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
     case 0x202: {
         int y = (int16_t)(lp >> 16);
         if (l->combo) {
-            dropdown = dropdown == w->handle ? 0 : w->handle;
+            int x = (int16_t)lp;
+            if ((w->style & 3) == 3 || x >= w->rect.right - w->rect.left - 18)
+                dropdown = dropdown == w->handle ? 0 : w->handle;
             break;
         }
         if (y < 0)
@@ -246,7 +309,11 @@ void ce_list_draw(struct ce_window *w)
     gfx_set_clip(&ui.surf, r);
     gfx_fill(&ui.surf, r, 0xffffff);
     if (l->combo) {
-        if (l->selected >= 0)
+        if ((w->style & 3) != 3) {
+            char text[1024];
+            ce_narrow(text, sizeof(text), w->text);
+            gfx_text(&ui.surf, r.x + 2, r.y + 3, ui_font(FONT_R12), text, 0, 255);
+        } else if (l->selected >= 0)
             row(w, r, l->selected);
         gfx_text(&ui.surf, r.x + r.w - 12, r.y + 3, ui_font(FONT_R12), "v", 0, 255);
     } else

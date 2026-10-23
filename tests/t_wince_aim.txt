@@ -1,0 +1,4 @@
+# Original AIM startup, including the component-installation dialog.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+18000 tap 145 124

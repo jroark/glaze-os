@@ -52,7 +52,7 @@ static const void *page_template(struct page *p, uint32_t *size)
     CW flags = ce_u32(p->spec + 4), resource = ce_u32(p->spec + 12);
     if (!(flags & 1))
         return ce_resource(ce_u32(p->spec + 8), 5, resource, size);
-    *size = ce_module_extent(resource);
+    *size = ce_image_remaining(resource);
     return *size ? PTR(void, resource) : NULL;
 }
 CE_API(CreatePropertySheetPageW)
@@ -123,6 +123,7 @@ static bool prepare(void *context, unsigned index)
     }
     p->window = w->handle;
     w->dialog_proc = ce_u32(p->spec + 24);
+    w->proc = WORD(ce_dialog_proc);
     w->property_page = true;
     CW first = ce_dialog_controls(w->handle, d, 0);
     free(d);

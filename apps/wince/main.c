@@ -89,26 +89,40 @@ static CW bridge(void *address, const char *missing)
     return WORD(p);
 }
 
-static void *resolve_service(const char *dll, const char *name)
+static void *native_symbol(const char *dll, const char *name)
 {
     void *fn = NULL;
-    if (!strcasecmp(dll, "coredll.dll")) {
-        fn = ce_resolve_core(name);
-        if (!fn)
-            fn = ce_resolve_time(name);
-        if (!fn)
+    if (name) {
+        if (!strcasecmp(dll, "coredll.dll")) {
+            fn = ce_resolve_core(name);
+            if (!fn)
+                fn = ce_resolve_mapping(name);
+            if (!fn)
+                fn = ce_resolve_database(name);
+            if (!fn)
+                fn = ce_resolve_string(name);
+            if (!fn)
+                fn = ce_resolve_thread(name);
+            if (!fn)
+                fn = ce_resolve_time(name);
+            if (!fn)
+                fn = ce_resolve_window(name);
+            if (!fn)
+                fn = ce_resolve_gdi(name);
+        } else if (!strcasecmp(dll, "commctrl.dll") || !strcasecmp(dll, "CSO.dll")) {
             fn = ce_resolve_window(name);
+            if (!fn)
+                fn = ce_resolve_gdi(name);
+        }
         if (!fn)
-            fn = ce_resolve_gdi(name);
-    } else if (!strcasecmp(dll, "commctrl.dll") || !strcasecmp(dll, "CSO.dll")) {
-        fn = ce_resolve_window(name);
+            fn = ce_resolve_property(name);
         if (!fn)
-            fn = ce_resolve_gdi(name);
+            fn = ce_resolve_shell(dll, name);
+        if (!fn)
+            fn = ce_resolve_ole(dll, name);
+        if (!fn)
+            fn = ce_resolve_winsock(dll, name);
     }
-    if (!fn)
-        fn = ce_resolve_property(name);
-    if (!fn)
-        fn = ce_resolve_shell(dll, name);
     return fn;
 }
 
@@ -119,7 +133,7 @@ static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, vo
     if (!name && ordinals && ce_ordinal_find(ordinals, ordinal_size, dll, ordinal,
             ordinal_symbol, sizeof(ordinal_symbol)))
         name = ordinal_symbol;
-    void *fn = name ? resolve_service(dll, name) : NULL;
+    void *fn = name ? native_symbol(dll, name) : NULL;
     if (fn)
         return bridge(fn, NULL);
     CW module = ce_load_library(dll);
@@ -141,21 +155,19 @@ static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, vo
     return bridge((void *)ce_missing, copy);
 }
 
-/* GetProcAddress on COREDLL: unlike an import, an unimplemented name yields
- * NULL so applications can fall back, as they do for an absent export. */
-CW ce_core_proc(const char *name, uint16_t ordinal)
+CW ce_import_address(const char *dll, const char *name)
 {
-    char symbol[256];
-    if (!name) {
-        if (!ordinals ||
-            !ce_ordinal_find(ordinals, ordinal_size, "coredll.dll", ordinal, symbol, sizeof(symbol)))
-            return 0;
-        name = symbol;
+    /* Capability probes must see NULL for absent APIs. Only static imports
+     * receive a diagnostic trap, since execution cannot safely continue. */
+    void *fn = native_symbol(dll, name);
+    CW address = fn ? bridge(fn, NULL) : 0;
+    if (!address) {
+        CW module = ce_load_library(dll);
+        if (module)
+            address = ce_find_symbol(module, name);
     }
-    void *fn = resolve_service("coredll.dll", name);
-    if (!fn)
-        return 0;
-    CW address = bridge(fn, NULL);
+    if (!address)
+        ce_error = 127;
     if (published != bridge_count)
         publish_bridges();
     return address;
@@ -196,7 +208,9 @@ static void finish_module(struct ce_module *m, const char *resource)
     const char *error = ce_pe_imports(&m->pe, m->image, resolve_import, m);
     if (error)
         ce_fatal(error);
-    error = ce_pe_direct_calls(&m->pe, m->image, m->base, resolve_import, m);
+    struct ce_pe relocated = m->pe;
+    relocated.base = m->base;
+    error = ce_pe_direct_calls(&relocated, m->image, resolve_import, m);
     if (error)
         ce_fatal(error);
     if (gz_vm_publish(m->base, ALIGN_UP(m->pe.headers, 4096u), 0))
@@ -279,15 +293,24 @@ CW ce_load_library(const char *name)
     publish_bridges();
     if (!library_initialized[i]) {
         library_initialized[i] = true;
+        printf("wince: initializing %s\n", base);
         if (libraries[i].pe.entry &&
             !ce_call(libraries[i].base + libraries[i].pe.entry, libraries[i].base, 1, 0, 0))
             ce_fatal("WinCE library initialization failed");
+        printf("wince: initialized %s\n", base);
     }
     return libraries[i].base;
 }
 
 CW ce_find_ordinal(CW handle, uint16_t ordinal)
 {
+    if (handle == 0x73000000u) {
+        char name[256];
+        if (ce_ordinal_find(ordinals, ordinal_size, "coredll.dll", ordinal, name, sizeof(name)))
+            return ce_import_address("coredll.dll", name);
+        ce_error = 127;
+        return 0;
+    }
     for (unsigned i = 0; i < library_count; i++) {
         struct ce_module *m = &libraries[i];
         if (m->base != handle)
@@ -345,16 +368,6 @@ CW ce_find_symbol(CW handle, const char *name)
     return 0;
 }
 
-uint32_t ce_module_extent(CW address)
-{
-    for (unsigned i = 0; i <= library_count; i++) {
-        const struct ce_module *m = i ? &libraries[i - 1] : &ce_main;
-        if (m->image && address >= m->base && address - m->base < m->pe.size)
-            return m->pe.size - (address - m->base);
-    }
-    return 0;
-}
-
 const void *ce_resource(CW handle, uint16_t type, uint16_t id, uint32_t *size)
 {
     struct ce_module *m = &ce_main;
@@ -362,6 +375,24 @@ const void *ce_resource(CW handle, uint16_t type, uint16_t id, uint32_t *size)
         if (libraries[i].base == handle)
             m = &libraries[i];
     return ce_pe_resource(&m->pe, m->image, type, id, size);
+}
+
+uint32_t ce_image_remaining(CW address)
+{
+    if (address >= ce_main.base && address - ce_main.base < ce_main.pe.size)
+        return ce_main.pe.size - (address - ce_main.base);
+    for (unsigned i = 0; i < library_count; i++)
+        if (address >= libraries[i].base && address - libraries[i].base < libraries[i].pe.size)
+            return libraries[i].pe.size - (address - libraries[i].base);
+    return 0;
+}
+
+const char *ce_module_name(CW handle)
+{
+    for (unsigned i = 0; i < library_count; i++)
+        if (libraries[i].base == handle)
+            return library_names[i];
+    return NULL;
 }
 
 void ce_shutdown(void)
