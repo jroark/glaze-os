@@ -16,8 +16,9 @@
 #define NES_RIGHT 128u
 struct nes_cart {
     uint32_t prg_size, chr_size, prg_offset, chr_offset, hash;
-    unsigned mapper;
-    bool battery, trainer;
+    uint32_t prg_ram_size, prg_nvram_size, chr_ram_size;
+    unsigned mapper, submapper;
+    bool battery, trainer, nes2;
 };
 const char *nes_validate(const uint8_t *rom, size_t size, struct nes_cart *cart);
 uint32_t nes_hash(const void *data, size_t size);

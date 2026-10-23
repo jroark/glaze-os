@@ -45,13 +45,26 @@ approximate; audio can underrun when emulation is slower than real time.
 
 ## Cartridge support and saves
 
-Supported: standard NTSC iNES cartridges, mappers 0 (NROM), 1 (MMC1), 2
+Supported: standard NTSC-compatible iNES 1.0 and NES 2.0 cartridges, mappers
+0 (NROM), 1 (MMC1), 2
 (UxROM), 3 (CNROM), and 4 (MMC3), CHR ROM/RAM, trainers, and up to 8 KiB of
 battery SRAM. The loader validates bank sizes and complete payload lengths
 before exposing the image to the core. Limits are 512 KiB PRG, 256 KiB CHR,
 1 MiB total file, power-of-two bank counts, and mapper-specific restrictions.
-NES 2.0, PAL, Vs./PlayChoice, other mappers and larger save RAM are rejected
-with an explanation. This scanline core does not promise compatibility with
+NES 2.0 linear and exponent/multiplier ROM sizes are decoded before the same
+bank and memory limits are applied. The 12-bit mapper number is checked in
+full; nonzero submappers are rejected rather than silently treated as their
+parent mapper. NTSC and multi-region ROMs are accepted (multi-region runs as
+NTSC); PAL-only, Dendy, Vs./PlayChoice and extended consoles are rejected.
+
+NES 2.0 RAM declarations must fit the core: no PRG RAM or one 8 KiB volatile
+or battery-backed bank, plus exactly 8 KiB volatile CHR RAM when CHR ROM is
+absent. Mixed PRG RAM/NVRAM, hybrid CHR ROM/RAM, CHR NVRAM and other RAM sizes
+are unsupported. Battery flags must match the declared nonvolatile RAM.
+Miscellaneous ROM sections and expansion devices beyond standard controllers
+are also rejected with an explanation. Metadata is translated into the core's
+legacy configuration without changing the ROM file or its PRG/CHR payload.
+This scanline core does not promise compatibility with
 all games; PPU/APU timing and some mapper variants are approximate.
 
 Battery saves are keyed by the ROM content fingerprint in
@@ -71,9 +84,10 @@ The portable test builds with AddressSanitizer and UndefinedBehaviorSanitizer:
 make -C host nes-test
 ```
 
-It checks malformed/truncated headers, mapper 0–4 bank selection, RGB555
-conversion and 120 frames of the original demo. It checks actual
-6502 controller reads into SRAM, moving PPU output, nonzero APU samples and
+It checks iNES and NES 2.0 headers (including both size encodings, overflow,
+extended mapper/submapper fields, timing, RAM, trainers and rejected hardware),
+mapper 0–4 bank selection, RGB555 conversion and 120 frames of the original
+demo using NES 2.0 metadata. It checks actual 6502 controller reads into SRAM, moving PPU output, nonzero APU samples and
 SRAM retention across reset. Regenerate the demo with `python3 tools/mknesdemo.py`.
 
 An optional external CPU oracle uses Kevin Horton's `nestest.nes` and Nintendulator
@@ -93,7 +107,7 @@ covered; this does not establish PPU timing accuracy.
 `tests/t_nes.txt` exercises installation, the demo, controls, pause/resume,
 loading the same cartridge from Card, save restoration, reset, and Home/warm resume. Build with
 `make -j4 INPUT_SCRIPT=tests/t_nes.txt`, then boot a copy of the resulting NAND
-with a card containing `nes.gzp` and the demo renamed `test.nes`. Run for 46
+with a card containing `nes.gzp` and the demo renamed `test.nes`. Run for 60
 seconds, capture both serial streams, and check `nes: loaded`, `nes: paused`,
 `nes: resumed`, `nes: battery restored` and `nes: reset`. Always boot copies:
 the BE-300 emulator writes NAND and CF on exit. Do not leave scripted input in

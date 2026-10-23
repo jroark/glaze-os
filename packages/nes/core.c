@@ -47,7 +47,15 @@ const char *nes_open(const uint8_t *data, size_t size)
     nes_close();
     ROM = prg; VROM = chr;
     nes_cartridge = c;
-    memcpy(&NesHeader, data, 16);
+    /* Adapt parsed metadata to InfoNES's legacy configuration. Raw NES 2.0
+     * size/region bytes are not legacy bank counts or reserved bytes.
+     * ROM payload and the caller's file remain byte-for-byte unchanged. */
+    memset(&NesHeader, 0, sizeof NesHeader);
+    memcpy(NesHeader.byID, "NES\032", 4);
+    NesHeader.byRomSize = c.prg_size / 16384;
+    NesHeader.byVRomSize = c.chr_size / 8192;
+    NesHeader.byInfo1 = (data[6] & 15) | ((c.mapper & 15) << 4);
+    NesHeader.byInfo2 = c.mapper & 0xf0;
     memset(SRAM, 0, SRAM_SIZE);
     if (c.trainer) memcpy(SRAM + 0x1000, data + 16, 512);
     for (int i = 0; i < 64; i++) {

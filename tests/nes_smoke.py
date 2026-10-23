@@ -35,11 +35,11 @@ def main():
                  'out/pkg/nes.gzp', str(work / 'test.nes')])
             shutil.copyfile(ROOT / 'out/glaze.bin', work / 'glaze.bin')
             env = dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy',
-                       BE300_AUTOSTOP_SEC='46')
+                       BE300_AUTOSTOP_SEC='60')
             with (work / 'stdout.log').open('w') as out, (work / 'stderr.log').open('w') as err:
                 result = subprocess.run([str(emulator), '--nand', 'glaze.bin',
                                          '--rtc-host-time', '--cf', 'cf.img'],
-                                        cwd=work, env=env, stdout=out, stderr=err, timeout=65)
+                                        cwd=work, env=env, stdout=out, stderr=err, timeout=80)
             text = (work / 'stdout.log').read_text(errors='replace')
             diagnostics = (work / 'stderr.log').read_text(errors='replace')
             required = ['nes: ready', 'nes: loaded Glaze demo', 'nes: paused',

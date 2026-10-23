@@ -284,5 +284,5 @@ See [tests/STOWAWAY.md](tests/STOWAWAY.md) for emulator regression checks.
 ## NES emulator
 
 `make out/pkg/nes.gzp` builds the installable NES app, with an original demo,
-ROM browsing, physical controls, audio and battery saves. See
+iNES 1.0/NES 2.0 ROM browsing, physical controls, audio and battery saves. See
 [NES](docs/NES.md) for cartridge support, installation and tests.
