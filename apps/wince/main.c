@@ -96,6 +96,8 @@ static void *native_symbol(const char *dll, const char *name)
         if (!strcasecmp(dll, "coredll.dll")) {
             fn = ce_resolve_core(name);
             if (!fn)
+                fn = ce_resolve_crt(name);
+            if (!fn)
                 fn = ce_resolve_mapping(name);
             if (!fn)
                 fn = ce_resolve_database(name);

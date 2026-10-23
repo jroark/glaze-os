@@ -307,6 +307,29 @@ CE_API(WSAStartup)
     return 0;
 }
 CE_API(WSACleanup) { return 0; }
+/* Dotted quads only; the result is in network order in memory. */
+CE_API(inet_addr)
+{
+    const char *s = PTR(char, a0);
+    uint32_t parts[4] = {0};
+    for (unsigned n = 0; n < 4; n++) {
+        if (!s || *s < '0' || *s > '9')
+            return 0xffffffffu; /* INADDR_NONE */
+        while (*s >= '0' && *s <= '9')
+            if ((parts[n] = parts[n] * 10 + (uint32_t)(*s++ - '0')) > 255)
+                return 0xffffffffu;
+        if (n < 3 && *s++ != '.')
+            return 0xffffffffu;
+    }
+    if (*s)
+        return 0xffffffffu;
+    return parts[0] | parts[1] << 8 | parts[2] << 16 | parts[3] << 24;
+}
+CE_API(WSAIoctl)
+{
+    ce_error = 10045; /* WSAEOPNOTSUPP */
+    return (CW)-1;
+}
 static const struct ce_export exports[] = {CE_EXPORT(socket),
                                            CE_EXPORT(closesocket),
                                            CE_EXPORT(connect),
@@ -329,6 +352,8 @@ static const struct ce_export exports[] = {CE_EXPORT(socket),
                                            CE_EXPORT(setsockopt),
                                            CE_EXPORT(gethostbyname),
                                            CE_EXPORT(inet_ntoa),
+                                           CE_EXPORT(inet_addr),
+                                           CE_EXPORT(WSAIoctl),
                                            CE_EXPORT(__WSAFDIsSet),
                                            CE_EXPORT(select),
                                            CE_EXPORT(WSAGetLastError),

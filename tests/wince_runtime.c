@@ -595,6 +595,10 @@ static void winsock_test(void)
     CW host = invoke(ce_gethostbyname, WORD("127.0.0.1"), 0, 0, 0, 0, 0);
     assert(host && PTR(CW, host)[2] == (2u | (4u << 16)));
     assert(*PTR(CW, PTR(CW, PTR(CW, host)[3])[0]) == 0x0100007f);
+    assert(invoke(ce_inet_addr, WORD("10.0.2.15"), 0, 0, 0, 0, 0) == 0x0f02000a);
+    assert(invoke(ce_inet_addr, WORD("256.0.0.1"), 0, 0, 0, 0, 0) == 0xffffffffu);
+    assert(invoke(ce_inet_addr, WORD("10.0.2"), 0, 0, 0, 0, 0) == 0xffffffffu);
+    assert(invoke(ce_inet_addr, WORD("10.0.2.15x"), 0, 0, 0, 0, 0) == 0xffffffffu);
     free(host_tcb.tls[0]);
     host_tcb.tls[0] = NULL;
     assert(!socketpair(AF_UNIX, SOCK_STREAM, 0, pair));

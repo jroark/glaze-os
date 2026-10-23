@@ -1450,6 +1450,33 @@ CE_API(GetKeyState)
 {
     return a0 < ARRAY_SIZE(key_state) && key_state[a0] ? 0xffff8000u : 0;
 }
+CE_API(keybd_event)
+{
+    /* Synthesized keys go to the focus, as typed keys do. */
+    if (a0 < ARRAY_SIZE(key_state))
+        key_state[a0] = !(a2 & 2); /* KEYEVENTF_KEYUP */
+    if (focus)
+        ce_post(focus, (a2 & 2) ? 0x101 : 0x100, a0 & 255, 0);
+    return 0;
+}
+CE_API(BringWindowToTop)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w)
+        return 0;
+    w->dirty = true;
+    return 1;
+}
+CE_API(IntersectRect)
+{
+    if (!a0 || !a1 || !a2)
+        return 0;
+    struct ce_rect a = *PTR(struct ce_rect, a1), b = *PTR(struct ce_rect, a2);
+    struct ce_rect r = {MAX(a.left, b.left), MAX(a.top, b.top), MIN(a.right, b.right), MIN(a.bottom, b.bottom)};
+    bool empty = r.left >= r.right || r.top >= r.bottom;
+    *PTR(struct ce_rect, a0) = empty ? (struct ce_rect){0, 0, 0, 0} : r;
+    return !empty;
+}
 CE_API(FindWindowW)
 {
     char klass[64];
@@ -2004,7 +2031,8 @@ static const struct ce_export exports[] = {
     CE_EXPORT(GetWindowRect),
     CE_EXPORT(MoveWindow),
     CE_EXPORT(ClientToScreen),
-    CE_EXPORT(ScreenToClient), CE_EXPORT(GetKeyState),
+    CE_EXPORT(ScreenToClient), CE_EXPORT(GetKeyState), CE_EXPORT(keybd_event),
+    CE_EXPORT(BringWindowToTop), CE_EXPORT(IntersectRect),
     CE_EXPORT(SetScrollInfo), CE_EXPORT(GetScrollInfo), CE_EXPORT(SetScrollPos),
     CE_EXPORT(FindWindowW),
     CE_EXPORT(GetWindowLongW),

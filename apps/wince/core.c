@@ -1693,6 +1693,28 @@ CE_API(MoveFileW)
         return file_error(GZ_ENOSPC);
     return rv < 0 ? file_error(rv) : 1;
 }
+/* Free bytes for the caller, total bytes, free bytes: the volume holding
+ * the path. */
+CE_API(GetDiskFreeSpaceExW)
+{
+    char path[FS_PATH_MAX];
+    struct fs_info info;
+    static const WCHAR root[] = {'\\', 0};
+    if (!ce_path(path, a0 ? PTR(WCHAR, a0) : root))
+        return 0;
+    int rv = fs_statvfs(path, &info);
+    if (rv < 0)
+        return file_error(rv);
+    uint32_t available = info.total > info.used ? info.total - info.used : 0;
+    const CW out[3] = {a1, a2, a3};
+    const uint32_t value[3] = {available, info.total, available};
+    for (unsigned i = 0; i < 3; i++)
+        if (out[i]) {
+            ce_put32(PTR(void, out[i]), value[i]);
+            ce_put32(PTR(uint8_t, out[i]) + 4, 0);
+        }
+    return 1;
+}
 CE_API(DeleteFileW)
 {
     char path[FS_PATH_MAX];
@@ -1929,6 +1951,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(RemoveDirectoryW),
     CE_EXPORT(MoveFileW),
     CE_EXPORT(DeleteFileW),
+    CE_EXPORT(GetDiskFreeSpaceExW),
     CE_EXPORT(CopyFileW),
     CE_EXPORT(SetFilePointer),
     CE_EXPORT(SetEndOfFile),
