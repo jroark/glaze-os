@@ -993,14 +993,40 @@ CE_API(UnregisterClassW)
     memset(&classes[index], 0, sizeof(classes[index]));
     return 1;
 }
+/* The system control classes the runtime draws itself. */
+static bool system_class(CW name)
+{
+    static const char *const names[] = {"Button", "Edit", "Static", "ListBox", "ComboBox", "ScrollBar",
+        "msctls_updown32", "msctls_statusbar32", "SysTabControl32", "SysListView32", "SysTreeView32",
+        "SysDateTimePick32", "SysMonthCal32"};
+    char text[64];
+    if (name < 65536)
+        return false;
+    ce_narrow(text, sizeof(text), PTR(WCHAR, name));
+    for (unsigned i = 0; i < ARRAY_SIZE(names); i++)
+        if (!strcasecmp(names[i], text))
+            return true;
+    return false;
+}
+/* System classes report the built-in procedure, which subclassing
+ * controls (WorldTALK's address bar edit) call for default handling. */
 CE_API(GetClassInfoW)
 {
     int index = class_index(a1);
-    if (index < 0 || !a2) {
-        ce_error = index < 0 ? 1411 : 87;
+    bool known = index >= 0 || system_class(a1);
+    if (!known || !a2) {
+        ce_error = known ? 87 : 1411;
         return 0;
     }
-    memcpy(PTR(void, a2), classes[index].info, sizeof(classes[index].info));
+    if (index >= 0) {
+        memcpy(PTR(void, a2), classes[index].info, sizeof(classes[index].info));
+        return 1;
+    }
+    uint8_t *p = PTR(uint8_t, a2); /* WNDCLASSW */
+    memset(p, 0, 40);
+    ce_put32(p + 4, WORD(builtin_proc));
+    ce_put32(p + 16, a0);
+    ce_put32(p + 36, a1);
     return 1;
 }
 CE_API(GetClassNameW)

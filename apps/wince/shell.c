@@ -502,20 +502,22 @@ CE_API(CSOBar_GetButtonArea)
     *r = (struct ce_rect){0, 0, bar->rect.right - bar->rect.left - (bar->style & 1 ? 24 : 0), 26};
     return 1;
 }
-/* Observed: bar, insert-after, x, y, width, row height, SWP_* flags, rows.
- * Combo boxes move to the second row of a two-row bar. */
+/* Observed: bar, insert-after, x, y, width, height, SWP_* flags, rows
+ * (WorldTALK: 240 wide, 52 high, two rows). Combo boxes move to the second
+ * row of a two-row bar. */
 CE_API(CSOBar_SetWindowPos)
 {
     struct ce_window *bar = ce_window(a0);
     if (!bar)
         return 0;
-    int row = (int)a5 > 0 ? (int)a5 : 26, rows = (int)a7 > 0 && (int)a7 <= 3 ? (int)a7 : 1;
+    int rows = (int)a7 > 0 && (int)a7 <= 3 ? (int)a7 : 1;
+    int height = (int)a5 > 0 && (int)a5 <= 120 ? (int)a5 : 26 * rows, row = height / rows;
     if (!(a6 & 2)) /* SWP_NOMOVE */
         bar->rect = (struct ce_rect){(int)a2, (int)a3, (int)a2 + (bar->rect.right - bar->rect.left),
                                      (int)a3 + (bar->rect.bottom - bar->rect.top)};
     if (!(a6 & 1)) /* SWP_NOSIZE */
         bar->rect.right = bar->rect.left + (int)MIN(a4, 240u);
-    bar->rect.bottom = bar->rect.top + row * rows;
+    bar->rect.bottom = bar->rect.top + height;
     for (unsigned i = 0; rows > 1 && i < CE_WINDOWS; i++) {
         struct ce_window *child = ce_window(0x70000000u + i);
         if (child && child->parent == a0 && child->list) {
