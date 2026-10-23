@@ -1,0 +1,4 @@
+Original Glaze HuCard demo, its generator tools/mkpcedemo.py,
+and original Glaze app icons are CC0 1.0.
+https://creativecommons.org/publicdomain/zero/1.0/
+ROM binaries are generated only into ignored out/ build output.

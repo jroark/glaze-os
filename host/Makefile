@@ -266,7 +266,7 @@ gameboy-save-test:
 SMS_CORE := $(filter-out ../packages/mastersystem/main.c ../packages/mastersystem/save.c,$(wildcard ../packages/mastersystem/*.c))
 GENESIS_CORE := $(filter-out ../packages/genesis/main.c ../packages/genesis/save.c,$(wildcard ../packages/genesis/*.c))
 SMS_FLAGS := -I../third_party/totalsms -I../third_party/totalsms/scheduler -DSMS_PIXEL_WIDTH=16 -DSMS_LITTLE_ENDIAN=1
-SEGA_TEST_FLAGS := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefined
+SEGA_TEST_FLAGS := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefined -fno-sanitize-recover=all
 mastersystem-test: ../out/pkg-res/mastersystem/demo.sms
 	@mkdir -p ../out/host
 	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-test ../tests/sega.c $(SMS_CORE)
@@ -292,3 +292,29 @@ sega-rom-runners:
 	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-rom ../tests/sega_rom.c $(SMS_CORE)
 	$(CC) $(SEGA_TEST_FLAGS) -o ../out/host/genesis-rom ../tests/sega_rom.c $(GENESIS_CORE)
 .PHONY: sega-rom-runners
+
+GG_CORE := $(filter-out ../packages/gamegear/main.c ../packages/gamegear/save.c,$(wildcard ../packages/gamegear/*.c))
+PCE_CORE := $(filter-out ../packages/turbografx16/main.c ../packages/turbografx16/save.c,$(wildcard ../packages/turbografx16/*.c))
+gamegear-test: ../out/pkg-res/gamegear/demo.gg
+	@mkdir -p ../out/host
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -DTEST_GG -o ../out/host/gamegear-test ../tests/console.c $(GG_CORE)
+	../out/host/gamegear-test $< ../out/host/gamegear.ppm
+turbografx16-test: ../out/pkg-res/turbografx16/demo.pce
+	@mkdir -p ../out/host
+	$(CC) $(SEGA_TEST_FLAGS) -fno-strict-aliasing -o ../out/host/turbografx16-test ../tests/console.c $(PCE_CORE)
+	../out/host/turbografx16-test $< ../out/host/turbografx16.ppm
+../out/pkg-res/gamegear/demo.gg: ../tools/mksegademo.py
+	python3 $< gamegear --output $@
+../out/pkg-res/turbografx16/demo.pce: ../tools/mkpcedemo.py
+	python3 $< --output $@
+.PHONY: gamegear-test turbografx16-test
+
+gamegear-hardware-test: ../out/pkg-res/gamegear/demo.gg
+	@mkdir -p ../out/host
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/gamegear-hardware ../tests/gamegear_hardware.c $(GG_CORE) ../tests/sega_audio_stub.c
+	../out/host/gamegear-hardware $<
+pce-hardware-test:
+	@mkdir -p ../out/host
+	$(CC) $(SEGA_TEST_FLAGS) -fno-strict-aliasing -o ../out/host/pce-hardware ../tests/pce_hardware.c $(PCE_CORE)
+	../out/host/pce-hardware
+.PHONY: gamegear-hardware-test pce-hardware-test

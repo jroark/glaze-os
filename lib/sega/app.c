@@ -15,16 +15,30 @@
 #define SEGA_TITLE "Genesis"
 #define SEGA_EXTENSION ".gen"
 #define SEGA_DEMO "demo.gen"
+#define SEGA_START_NAME "Start"
+#elif defined(SEGA_GAMEGEAR)
+#define SEGA_TITLE "Game Gear"
+#define SEGA_EXTENSION ".gg"
+#define SEGA_DEMO "demo.gg"
+#define SEGA_START_NAME "Start"
+#elif defined(SEGA_TURBOGRAFX)
+#define SEGA_TITLE "TurboGrafx"
+#define SEGA_EXTENSION ".pce"
+#define SEGA_DEMO "demo.pce"
+#define SEGA_START_NAME "Run"
 #else
 #define SEGA_TITLE "Master System"
 #define SEGA_EXTENSION ".sms"
 #define SEGA_DEMO "demo.sms"
+#define SEGA_START_NAME "Console Pause"
 #endif
+#ifndef SEGA_TURBOGRAFX
 static unsigned button_pair; /* Genesis: B/C, A/B or A/C. */
 static unsigned missing_button(void) {
     static const unsigned missing[]={SEGA_A,SEGA_C,SEGA_B};
     return missing[button_pair];
 }
+#endif
 #ifdef SEGA_GENESIS
 static const char *button_label(unsigned b) { return b==SEGA_A ? "A" : b==SEGA_B ? "B" : "C"; }
 #endif
@@ -91,15 +105,22 @@ static void draw_game(void)
         gfx_text_center(&ui.surf,0,65,240,ui_font(FONT_B17),title,0xffffff,255);
         ui_draw_button(&ui.surf,gfx_r(65,96,110,30),"Reset",false);
         ui_draw_button(&ui.surf,gfx_r(65,136,110,30),sound_enabled ? "Sound On" : "Sound Off",false);
+#if defined(SEGA_GENESIS) || defined(SEGA_TURBOGRAFX)
 #ifdef SEGA_GENESIS
         ui_draw_button(&ui.surf,gfx_r(15,176,100,30),"Start",false);
         ui_draw_button(&ui.surf,gfx_r(125,176,100,30),button_label(missing_button()),false);
         static const char *pairs[]={"OK/Esc: B/C","OK/Esc: A/B","OK/Esc: A/C"};
         ui_draw_button(&ui.surf,gfx_r(10,216,120,30),pairs[button_pair],false);
 #else
-        ui_draw_button(&ui.surf,gfx_r(40,176,160,30),"Console Pause",false);
+        ui_draw_button(&ui.surf,gfx_r(15,176,100,30),"Run",false);
+        ui_draw_button(&ui.surf,gfx_r(125,176,100,30),"Select",false);
 #endif
+#else
+        ui_draw_button(&ui.surf,gfx_r(40,176,160,30),SEGA_START_NAME,false);
+#endif
+#if !defined(SEGA_GAMEGEAR) && !defined(SEGA_TURBOGRAFX)
         ui_draw_button(&ui.surf,gfx_r(135,216,95,30),sega_cartridge.pal ? "PAL" : "NTSC",false);
+#endif
         if (save_failed) gfx_text_center(&ui.surf,0,264,240,ui_font(FONT_R11),"Could not save battery RAM",0xffbbbb,255);
     }
     ui_invalidate_all(); ui_present();
@@ -110,8 +131,11 @@ void sega_video(const uint16_t *pixels)
     if (paused) return;
     /* Preserve the full picture and aspect ratio, centred below navigation. */
     unsigned w=sega_width(),h=sega_height();
-    if(!w || !h || w>320 || h>240) return;
+    if(!w || !h || w>512 || h>240) return;
     unsigned vh=h*UI_W/w;
+#ifdef SEGA_TURBOGRAFX
+    vh=180; /* Dot-clock-dependent pixel widths all target a 4:3 television. */
+#endif
     unsigned top=UI_NAV_H+(UI_H-UI_NAV_H-vh)/2;
     for (unsigned y=0;y<vh;y++) {
         uint16_t *out=ui.surf.px+(y+top)*ui.surf.stride;
@@ -144,7 +168,12 @@ static uint8_t key_bit(unsigned code)
         return SEGA_B;
 #endif
     case GZ_KEY_ENTER:return SEGA_START;
-    case GZ_KEY_TAB:return missing_button();
+    case GZ_KEY_TAB:
+#ifdef SEGA_TURBOGRAFX
+        return SEGA_C;
+#else
+        return missing_button();
+#endif
     default:return 0;
     }
 }
@@ -188,22 +217,31 @@ static void game_event(const struct gz_input_event *e)
         } else if (paused && gfx_rect_contains(gfx_r(65,136,110,30),e->x,e->y)) {
             sound_enabled=!sound_enabled; puts(sound_enabled ? "sega: sound on" : "sega: sound off"); draw_game();
         } else if (paused && gfx_rect_contains(
-#ifdef SEGA_GENESIS
+#if defined(SEGA_GENESIS) || defined(SEGA_TURBOGRAFX)
             gfx_r(15,176,100,30),
 #else
             gfx_r(40,176,160,30),
 #endif
             e->x,e->y)) {
             pulse_keys|=SEGA_START; puts("sega: console Start/Pause"); resume_game();
-#ifdef SEGA_GENESIS
+#if defined(SEGA_GENESIS) || defined(SEGA_TURBOGRAFX)
         } else if (paused && gfx_rect_contains(gfx_r(125,176,100,30),e->x,e->y)) {
-            pulse_keys|=missing_button(); puts("sega: extra button"); resume_game();
+#ifdef SEGA_TURBOGRAFX
+            pulse_keys|=SEGA_C;
+#else
+            pulse_keys|=missing_button();
+#endif
+            puts("sega: extra button"); resume_game();
+#ifdef SEGA_GENESIS
         } else if (paused && gfx_rect_contains(gfx_r(10,216,120,30),e->x,e->y)) {
             button_pair=(button_pair+1)%3; keys=pulse_keys=0; puts("sega: remapped buttons"); draw_game();
 #endif
+#endif
+#if !defined(SEGA_GAMEGEAR) && !defined(SEGA_TURBOGRAFX)
         } else if (paused && gfx_rect_contains(gfx_r(135,216,95,30),e->x,e->y)) {
             save_battery(); sega_set_pal(!sega_cartridge.pal); keys=pulse_keys=0;
             timing_reset(); puts("sega: changed TV standard"); draw_game();
+#endif
         }
     }
 }
@@ -301,10 +339,10 @@ static void draw_library(void)
     ui_draw_navbar(&ui.surf,*directory ? strrchr(directory,'/')+1 : SEGA_TITLE,*directory ? "Back" : NULL,&back_button,0);
     ui_list_draw(&ui.surf,&list,draw_row,NULL);
     const gfx_font *f=ui_font(FONT_R10);
-    gfx_text_center(&ui.surf,0,263,240,f,*notice ? notice : "Arrows + OK/Esc. Enter: Start/Pause.",UI_TEXT_DETAIL,255);
+    gfx_text_center(&ui.surf,0,263,240,f,*notice ? notice : "Arrows + OK/Esc. Enter: " SEGA_START_NAME,UI_TEXT_DETAIL,255);
     if (more) ui_draw_button(&ui.surf,gfx_r(130,278,100,24),"More...",false);
     if (page_skip) ui_draw_button(&ui.surf,gfx_r(10,278,100,24),"First page",false);
-    if (!*directory) gfx_text_center(&ui.surf,0,284,240,f,"Enter: Start/Pause",UI_TEXT_DETAIL,255);
+    if (!*directory) gfx_text_center(&ui.surf,0,284,240,f,"Enter: " SEGA_START_NAME,UI_TEXT_DETAIL,255);
     ui_invalidate_all(); ui_present();
 }
 

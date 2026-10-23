@@ -156,6 +156,8 @@ PROG_CFLAGS_nes := -fno-strict-aliasing
 PROG_CFLAGS_gameboy := -fno-strict-aliasing -DIS_LITTLE_ENDIAN
 PROG_CFLAGS_mastersystem := -Ithird_party/totalsms -Ithird_party/totalsms/scheduler -DSMS_PIXEL_WIDTH=16 -DSMS_LITTLE_ENDIAN=1
 PROG_CFLAGS_genesis := -DNDEBUG -Ithird_party/clownmdemu/platform
+PROG_CFLAGS_gamegear := $(PROG_CFLAGS_mastersystem)
+PROG_CFLAGS_turbografx16 := -fno-strict-aliasing
 
 USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libwolfssl.a \
     $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a $(OUT)/lib/libnetstack.a
@@ -374,6 +376,8 @@ endif
 # Files in packages/<name>/res/ go in as res/<file>, next to the icon.
 # ROM binaries are generated into ignored build output, never source directories.
 PKG_GENERATED_mastersystem := $(OUT)/pkg-res/mastersystem/demo.sms
+PKG_GENERATED_gamegear := $(OUT)/pkg-res/gamegear/demo.gg
+PKG_GENERATED_turbografx16 := $(OUT)/pkg-res/turbografx16/demo.pce
 PKG_GENERATED_genesis := $(OUT)/pkg-res/genesis/demo.gen
 PKG_GENERATED_nes := $(OUT)/pkg-res/nes/demo.nes
 PKG_GENERATED_gameboy := $(OUT)/pkg-res/gameboy/demo.gb $(OUT)/pkg-res/gameboy/demo.gbc
@@ -381,6 +385,10 @@ PKG_RES = $(wildcard packages/$(1)/res/*) $(PKG_GENERATED_$(1))
 
 $(OUT)/pkg-res/mastersystem/demo.sms: tools/mksegademo.py
 	$(PYTHON) $< sms --output $@
+$(OUT)/pkg-res/gamegear/demo.gg: tools/mksegademo.py
+	$(PYTHON) $< gamegear --output $@
+$(OUT)/pkg-res/turbografx16/demo.pce: tools/mkpcedemo.py
+	$(PYTHON) $< --output $@
 $(OUT)/pkg-res/genesis/demo.gen: tools/mksegademo.py
 	$(PYTHON) $< genesis --output $@
 

@@ -7,7 +7,7 @@ struct Sn76489 {
     uint32_t clock,rate,time,phase,divider;
     unsigned period[3],counter[4],level[4],attenuation[4],gain[4],master;
     unsigned latched,noise,taps,feed,lfsr,stereo;
-    int16_t samples[2048]; unsigned count,read;
+    int16_t samples[4096]; unsigned count,read;
 };
 static const int volume[16]={8191,6506,5168,4105,3261,2590,2057,1634,1298,1031,819,650,517,410,326,0};
 Sn76489 *psg_init(uint32_t clock,uint32_t rate) {
@@ -43,12 +43,20 @@ static void sync_to(Sn76489 *p,uint32_t time) {
         while(p->divider>=16) { tick(p); p->divider-=16; }
         p->phase+=step*p->rate; p->time+=step; delta-=step;
         if (p->phase>=p->clock) {
-            p->phase-=p->clock; int sum=0;
-            for(unsigned i=0;i<4;i++) sum+=(p->level[i] ? 1 : -1)*volume[p->attenuation[i]]*(int)p->gain[i]/256;
-            sum=sum*(int)p->master/256;
-            if (sum>32767) sum=32767;
-            if (sum< -32768) sum= -32768;
-            if (p->count<2048) p->samples[p->count++]=sum;
+            p->phase-=p->clock;
+            int sum[2]={0,0};
+            for(unsigned ch=0;ch<4;ch++) {
+                int v=(p->level[ch] ? 1 : -1)*volume[p->attenuation[ch]]*(int)p->gain[ch]/256;
+                if(p->stereo&(1u<<(ch+4))) sum[0]+=v;
+                if(p->stereo&(1u<<ch)) sum[1]+=v;
+            }
+            for(unsigned lr=0;lr<2;lr++) {
+                int v=sum[lr]*(int)p->master/256;
+                if(v>32767)v=32767;
+                if(v< -32768)v= -32768;
+                if(p->count<2048)p->samples[p->count*2+lr]=v;
+            }
+            if(p->count<2048)p->count++;
         }
     }
 }
@@ -69,7 +77,7 @@ void psg_end_frame(Sn76489 *p,unsigned t) { sync_to(p,t); }
 int psg_samples_avaliable(const Sn76489 *p) { return p->count-p->read; }
 int psg_read_samples(Sn76489 *p,short *out,int n) {
     if(n>(int)(p->count-p->read)) n=p->count-p->read;
-    for(int i=0;i<n;i++) { out[i*2]=out[i*2+1]=p->samples[p->read++]; }
+    for(int i=0;i<n;i++) { out[i*2]=p->samples[p->read*2]; out[i*2+1]=p->samples[p->read*2+1]; p->read++; }
     if(p->read==p->count) p->read=p->count=0;
     return n;
 }

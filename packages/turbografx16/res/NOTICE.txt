@@ -1,0 +1,5 @@
+Mednafen / Beetle PCE Fast: GPL-2.0-or-later.
+This combined Glaze integration elects GPLv3.
+Source: https://github.com/jroark/glaze-os
+Core source: https://github.com/libretro/beetle-pce-fast-libretro
+Provenance and local changes: third_party/beetle-pce-fast/UPSTREAM.md

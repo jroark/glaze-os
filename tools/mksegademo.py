@@ -18,7 +18,7 @@ class Z80:
         for at,n in self.fix: struct.pack_into('<H',self.data,at,self.labels[n])
         return self.data
 
-def sms():
+def sms(gamegear=False):
     z=Z80();z.e(0xf3,0x31,0xf0,0xdf);z.a(8);z.write(0xfffc)
     z.read(0x8000);z.e(0xfe,8);z.j(0xd2,'pos');z.a(120)
     z.l('pos');z.write(0xc000);z.a(80);z.write(0xc001)
@@ -31,7 +31,12 @@ def sms():
     for v in tile+sprite:z.out(0xbe,v)
     z.addr(0,0xc0)
     palette=[0,3,12,48,63,15,51,60]+[0]*8+[0,3,12,48,63,15,51,60]+[63]*8
-    for v in palette:z.out(0xbe,v)
+    for v in palette:
+        if gamegear:
+            c=((v&3)*5)|((((v>>2)&3)*5)<<4)|((((v>>4)&3)*5)<<8)
+            if v==15:c=0x3ad
+            z.out(0xbe,c&255);z.out(0xbe,c>>8)
+        else:z.out(0xbe,v)
     z.addr(0x3800);z.e(0x01,0xc0,3)
     z.l('map');z.out(0xbe,1);z.out(0xbe,0);z.e(0x0b,0x78,0xb1);z.j(0xc2,'map')
     z.addr(0x3f00);z.out(0xbe,79);z.out(0xbe,208)
@@ -42,6 +47,8 @@ def sms():
     z.e(0xdb,0xdc,0x2f,0xe6,0x3f);z.write(0x8001);z.e(0x47)
     for bit,addr,op,label in [(3,0xc000,0x3c,'r'),(2,0xc000,0x3d,'l'),(1,0xc001,0x3c,'d'),(0,0xc001,0x3d,'u')]:
         z.e(0xcb,0x40+8*bit);z.j(0xca,label);z.read(addr);z.e(op);z.write(addr);z.l(label)
+    if gamegear:
+        z.e(0xdb,0,0x2f,0xe6,0x80);z.write(0x8004)
     z.e(0x78,0xe6,0x30);z.j(0xca,'quiet');z.out(0x7f,0x90);z.j(0xc3,'draw')
     z.l('quiet');z.out(0x7f,0x9f)
     z.l('draw');z.addr(0x3f80);z.read(0xc000);z.write(0x8000);z.e(0xd3,0xbe)
@@ -49,7 +56,7 @@ def sms():
     z.read(0x8003);z.e(0x3c);z.write(0x8003);z.j(0xc3,'frame')
     rom=bytearray(32768);rom[:3]=b'\xc3\x00\x01';rom[0x66:0x6e]=bytes([0xe5,0x21,4,0x80,0x34,0xe1,0xed,0x45])
     data=z.done();assert len(data)<0x3ef0;rom[0x100:0x100+len(data)]=data
-    rom[0x7ff0:0x7ff8]=b'TMR SEGA';rom[0x7fff]=0x4c
+    rom[0x7ff0:0x7ff8]=b'TMR SEGA';rom[0x7fff]=0x6c if gamegear else 0x4c
     return rom
 
 class M68K:
@@ -112,8 +119,8 @@ def genesis():
     return rom
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('system',choices=['sms','genesis']);p.add_argument('--output',type=Path)
-    args=p.parse_args();name='mastersystem' if args.system=='sms' else 'genesis';ext='sms' if args.system=='sms' else 'gen'
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('system',choices=['sms','gamegear','genesis']);p.add_argument('--output',type=Path)
+    args=p.parse_args();name={'sms':'mastersystem','gamegear':'gamegear','genesis':'genesis'}[args.system];ext={'sms':'sms','gamegear':'gg','genesis':'gen'}[args.system]
     out=args.output or Path(__file__).resolve().parents[1]/f'out/pkg-res/{name}/demo.{ext}'
-    out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(sms() if args.system=='sms' else genesis())
+    out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(genesis() if args.system=='genesis' else sms(args.system=='gamegear'))
 if __name__=='__main__':main()
