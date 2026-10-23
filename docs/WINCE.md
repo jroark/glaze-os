@@ -100,6 +100,21 @@ from the original executable's icon resources.
 Use `--app regedit` to build **CE RegEdit**. It is opt-in and does not change
 the four default packages.
 Use `--app tweak` to build **CE PalmTweak** with the limited page support above.
+Use `--app internet` with an eXpod-family image to build **CE Internet**, the
+Tenik WorldTALK browser, with its `IMGDECMP.DLL` image decoder.
+
+Some apps need original data files. The importer copies the FAT files and
+folders listed in `DATA` into `res/`, and `res/files.txt` serves them at
+their WinCE paths: Clock's `\Program Files\TIMEZONEINFO.txt`, and
+WorldTALK's `\My Documents\WebPage` (the Welcome page) and
+`\My Documents\Internet`. A `.cpk` file is decompressed and loses the
+suffix, as the CCFS driver presents it.
+
+An app's private registry can also start with values from `REGISTRY`. Without
+one, WorldTALK opens `file:///windows/default.htm`, which this ROM does not
+contain. The image's saved registry sets
+`HKCU\Software\Tenik\WorldTALK\Common\HomePage` to the bundled Welcome
+page, and the importer seeds that one value.
 
 The importer reads the source image without changing it. It validates the
 FAT16 allocation chains, decodes the Casio CPK blocks, reads the matching
@@ -123,6 +138,8 @@ The audited local executables are:
 | clock.exe | 69,120 | `e3bf037d19078e33e216ab64ab5bdd3fd9bae3a18203755cae59fe9171b3596f` |
 | RegEdit.exe | 30,208 | `5d9aa371e689835c2e212e91e2041f6ddaf4340aa651d2446b57aeefbdc2f8c2` |
 | Tweak.exe | 62,976 | `dc27793762228e105b1b42f59611e0da2c0da8fcc465e35ec89be54074c76163` |
+| Internet.exe | 980,992 | `abae1194315175af4c5eb494988125194e42c83b60795db91f3082176e4960e3` |
+| IMGDECMP.DLL | 53,856 | `3700de24b665d757ca10ef9e1061bcdd41be72629ca530bd5ee708e9a570d50c` |
 
 The importer preserves these bytes. It does not patch entry points, imports,
 or application instructions on disk. PE import resolution happens in the
@@ -373,6 +390,17 @@ The screenshot should display the same saved text. `BE300` can select another
 emulator binary. The test runner fails if the original executable does not
 start, or a runtime error/kernel fault occurs. `tests/t_wince_install.txt`
 separately exercises installation from a card through Files.
+
+WorldTALK takes about 40 seconds of emulator time to lay out its home page:
+
+```sh
+python3 tests/run_wince.py --image ../be300/nand/expod.bin --app internet \
+  --seconds 45 --headless
+```
+
+The screenshot should show the **Welcome to the Internet World** page and its
+images under a two-row bar holding the page's `file:` URL. The bar's own
+buttons are not drawn yet.
 
 Owner tests enter **Alex from Glaze**, switch to Notes, enter **Original app
 compatibility**, select the Notes checkbox, and save with the toolbar button. `--check-owner`

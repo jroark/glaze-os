@@ -9,10 +9,12 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import struct
 import sys
 
-from wince_assets import AssetError, CpkDecoder, Fat16, NkImage, cstr, exports, span, u16, u32
+from wince_assets import (AssetError, CpkDecoder, Fat16, NkImage, cstr, encode_gzce_registry, exports, span,
+                          u16, u32)
 
 APPLICATIONS = {
     "tweak": ("CE PalmTweak", "Tweak.exe", ()),
@@ -22,8 +24,84 @@ APPLICATIONS = {
     "owner": ("CE Owner", "Owner.exe", ()),
     "ownerinfo": ("CE Owner Info", "OwnerInfo.exe", ()),
     "clock": ("CE Clock", "clock.exe", ()),
+    "internet": ("CE Internet", "Internet.exe", ("IMGDECMP.DLL",)),
+}
+# Original data files packaged with an app: FAT files or folders, served at
+# their WinCE paths through res/files.txt.
+DATA = {
+    "clock": ("Program Files/TIMEZONEINFO.txt",),
+    "internet": ("My Documents/WebPage", "My Documents/Internet"),
+}
+# Registry values an app's private registry starts with (key, name, REG_SZ
+# text). WorldTALK otherwise opens file:///windows/default.htm, which is not
+# in this ROM; the image's saved registry holds this HomePage.
+REGISTRY = {
+    "internet": ((r"HKCU\Software\Tenik\WorldTALK\Common", "HomePage",
+                  "file:///Nand Disk/My Documents/WebPage/Welcome to the Internet.html"),),
 }
 BAYER = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
+RESERVED_RES = {"icon.gzi", "program.exe", "ordinals.txt", "source.txt", "registry", "files.txt"}
+
+
+def sanitize_res_name(filename, used):
+    """Map an arbitrary filename to a valid Glaze res/<name> entry (<= 43 chars, no spaces)."""
+    base = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip(".")
+    while ".." in safe:
+        safe = safe.replace("..", "_")
+    if not safe:
+        safe = "file"
+    if "." in safe:
+        stem, ext = safe.rsplit(".", 1)
+        ext = "." + ext[:12]
+    else:
+        stem, ext = safe, ""
+    max_stem = max(1, 43 - len(ext))
+    candidate = stem[:max_stem] + ext
+    idx = 2
+    while candidate.casefold() in used or candidate.casefold() in RESERVED_RES:
+        suffix = f"_{idx}"
+        candidate = stem[: max(1, max_stem - len(suffix))] + suffix + ext
+        idx += 1
+    used.add(candidate.casefold())
+    return candidate
+
+
+def canonical_path(fat_path):
+    """The runtime's canonical form of a FAT path: My Documents is /Documents."""
+    parts = fat_path.strip("/").split("/")
+    if parts[0].casefold() == "my documents":
+        parts[0] = "Documents"
+    return "/" + "/".join(parts)
+
+
+def data_files(volume, decoder, path):
+    """(FAT path, bytes) for a file or every file below a folder. Casio
+    .cpk files are decompressed and lose the suffix, as the CCFS driver does."""
+    parts = path.strip("/").split("/")
+    directory, attr, cluster, size = volume.root, 16, 0, 0
+    for i, part in enumerate(parts):
+        match = next((e for e in volume.entries(directory)
+                      if part.casefold() in (e[0].casefold(), e[1].casefold())
+                      or part.casefold() + ".cpk" == e[0].casefold()), None)
+        if match is None:
+            raise AssetError(f"not found in local NAND: {path}")
+        name, _, attr, cluster, size = match
+        parts[i] = name
+        if attr & 16:
+            directory = volume.chain(cluster)
+        elif i < len(parts) - 1:
+            raise AssetError("non-directory in FAT path")
+    if not attr & 16:
+        data = span(volume.chain(cluster), 0, size) if size else b""
+        name = "/".join(parts)
+        if name.casefold().endswith(".cpk"):
+            return [(name[:-4], decoder.unpack(data))]
+        return [(name, data)]
+    found = []
+    for entry, _, child_attr, _, _ in volume.entries(directory):
+        found += data_files(volume, decoder, "/".join(parts) + "/" + entry)
+    return found
 
 
 def validate_runner(data):
@@ -72,7 +150,9 @@ def pe_sections(data):
     return machine, header, sections, rva
 
 
-def pe_report(data, ordinals, dll_ordinals=None):
+def pe_report(data, ordinals, dll_ordinals=None, bundled=()):
+    """Inventory a PE. Ordinal imports from a packaged library need no name:
+    the runtime resolves them from that library's own export table."""
     machine, header, sections, rva = pe_sections(data)
     imports = []
     start, length = u32(header, 104), u32(header, 108)
@@ -93,7 +173,7 @@ def pe_report(data, ordinals, dll_ordinals=None):
                 ordinal = thunk & 65535
                 names = ordinals if dll.lower() == "coredll.dll" else (dll_ordinals or {}).get(dll.lower(), {})
                 resolved = names.get(ordinal)
-                if resolved is None:
+                if resolved is None and dll.lower() not in bundled:
                     raise AssetError(f"cannot identify {dll} ordinal {ordinal} in matching image")
                 symbols.append({"ordinal": ordinal, "name": resolved})
             else:
@@ -309,9 +389,10 @@ def main():
     selected = list(dict.fromkeys(args.app or ("calculator", "notepad", "owner", "ownerinfo")))
     required = dict.fromkeys(name for app in selected
                              for name in (APPLICATIONS[app][1], *APPLICATIONS[app][2]))
+    bundled = {name.lower() for app in selected for name in APPLICATIONS[app][2]}
     for name in required:
         payloads[name] = decoder.unpack(volume.read("Program Files/" + name + ".cpk"))
-        report["programs"][name] = pe_report(payloads[name], ordinals, dll_ordinals)
+        report["programs"][name] = pe_report(payloads[name], ordinals, dll_ordinals, bundled)
     runner = None if args.audit_only else args.runner.read_bytes()
     if runner is not None:
         validate_runner(runner)
@@ -331,6 +412,20 @@ def main():
                    "res/source.txt": ("\\Program Files\\" + executable).encode()}
         for library in libraries:
             entries["res/" + library] = payloads[library]
+        manifest, used = [], set(RESERVED_RES) | {name.casefold() for name in libraries}
+        for path in DATA.get(stem, ()):
+            for fat_path, data in data_files(volume, decoder, path):
+                res_name = sanitize_res_name(fat_path, used)
+                entries["res/" + res_name] = data
+                manifest.append(f"{res_name} {canonical_path(fat_path)}\n")
+        if manifest:
+            if len(manifest) > 63:
+                raise AssetError(f"{stem} data has more than 63 files")
+            entries["res/files.txt"] = "".join(manifest).encode("utf-8")
+        if stem in REGISTRY:
+            entries["res/registry"] = encode_gzce_registry(
+                [{"key": key, "name": name, "type": 1, "data": (text + "\0").encode("utf-16le")}
+                 for key, name, text in REGISTRY[stem]])
         outputs[f"wince.{stem}.gzp"] = package(entries)
     args.output.mkdir(parents=True, exist_ok=True)
     for name, data in outputs.items():
