@@ -58,6 +58,8 @@ struct ce_window {
     CW spin_buddy;
     int32_t spin_low, spin_high;
     bool dialog_done;
+    /* GWL_USERDATA is `user`; DWL_USER and the cbWndExtra longs are separate. */
+    CW exstyle, dialog_user, extra[16];
 };
 struct ce_tabs {
     unsigned count;

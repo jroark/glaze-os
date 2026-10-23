@@ -340,11 +340,8 @@ CE_API(CSOBar_DeleteAllButtons)
         return 0;
     for (unsigned i = 0; i < CE_WINDOWS; i++) {
         struct ce_window *child = ce_window(0x70000000u + i);
-        if (child && child->parent == bar->handle) {
-            free(child->text);
-            free(child->tabs);
-            memset(child, 0, sizeof(*child));
-        }
+        if (child && child->parent == bar->handle)
+            ce_destroy_window(child->handle);
     }
     bar->dirty = true;
     return 1;
@@ -396,12 +393,10 @@ CE_API(CSOBar_AddAdornments)
 }
 CE_API(CSOBar_Destroy)
 {
-    struct ce_window *w = ce_window(a0);
-    if (!w)
+    if (!ce_window(a0))
         return 0;
-    w->visible = false;
-    w->handle = 0;
-    free(w->text);
+    ce_destroy_window(a0);
+    ce_redraw_all();
     return 1;
 }
 CE_API(CoshGetCommandLine)
@@ -546,23 +541,43 @@ CE_API(MessageBoxW)
     ce_narrow(title, sizeof(title), PTR(WCHAR, a2));
     ce_narrow(message, sizeof(message), PTR(WCHAR, a1));
     unsigned style = a3 & 15;
-    const char *left = "OK", *right = NULL;
-    CW left_id = 1, right_id = 2;
+    const char *left = "OK", *right = NULL, *third = NULL;
+    CW left_id = 1, right_id = 2, third_id = 2, escape_id = 0;
     if (style == 3 || style == 4) {
         left = "Yes";
         right = "No";
         left_id = 6;
         right_id = 7;
-    } else if (style == 1)
+        third = style == 3 ? "Cancel" : NULL;
+        escape_id = style == 3 ? 2 : 0;
+    } else if (style == 1) {
         right = "Cancel";
+        escape_id = 2;
+    } else if (style == 2) {
+        left = "Retry";
+        right = "Ignore";
+        third = "Abort";
+        left_id = 4;
+        right_id = 5;
+        third_id = 3;
+    } else if (style == 5) {
+        left = "Retry";
+        right = "Cancel";
+        left_id = 4;
+        escape_id = 2;
+    } else
+        escape_id = 1;
     gfx_fill(&ui.surf, gfx_r(0, 0, 240, 320), 0xc0c0c0);
     gfx_fill(&ui.surf, gfx_r(0, 0, 240, 24), 0x000080);
     gfx_text(&ui.surf, 6, 4, ui_font(FONT_B12), title, 0xffffff, 255);
     for (unsigned pos = 0, y = 42; message[pos] && y < 218; y += 16) {
         char line[35];
         unsigned n = 0;
-        while (message[pos] && message[pos] != '\n' && n < 34)
-            line[n++] = message[pos++];
+        while (message[pos] && message[pos] != '\n' && n < 34) {
+            if (message[pos] != '\r')
+                line[n++] = message[pos];
+            pos++;
+        }
         if (message[pos] == '\n')
             pos++;
         line[n] = 0;
@@ -573,8 +588,8 @@ CE_API(MessageBoxW)
     ui_draw_button(&ui.surf, l, left, false);
     if (right)
         ui_draw_button(&ui.surf, r, right, false);
-    if (style == 3)
-        ui_draw_button(&ui.surf, c, "Cancel", false);
+    if (third)
+        ui_draw_button(&ui.surf, c, third, false);
     ui_invalidate_all();
     ui_present();
     CW result = 0;
@@ -587,13 +602,13 @@ CE_API(MessageBoxW)
                 result = left_id;
             if (right && gfx_rect_contains(r, e.x, e.y))
                 result = right_id;
-            if (style == 3 && gfx_rect_contains(c, e.x, e.y))
-                result = 2;
+            if (third && gfx_rect_contains(c, e.x, e.y))
+                result = third_id;
         }
-        if (e.type == GZ_EV_KEY_DOWN && e.code == GZ_KEY_ENTER)
+        if (e.type == GZ_EV_KEY_DOWN && (e.code == GZ_KEY_ENTER || e.code == GZ_KEY_OK))
             result = left_id;
         if (e.type == GZ_EV_KEY_DOWN && e.code == GZ_KEY_ESC)
-            result = 2;
+            result = escape_id;
     }
     repaint();
     return result;
@@ -654,7 +669,7 @@ static CW file_dialog(CW address, bool save)
                 ch = 8;
             if (e.code == GZ_KEY_ESC)
                 done = true;
-            if (e.code == GZ_KEY_ENTER)
+            if (e.code == GZ_KEY_ENTER || e.code == GZ_KEY_OK)
                 e = (struct gz_input_event){.type = GZ_EV_TOUCH_UP, .x = 180, .y = 150};
         }
         if (!ui.hardware_keyboard && e.y >= 320 - UI_KB_H &&
@@ -692,6 +707,16 @@ static CW file_dialog(CW address, bool save)
             if (gfx_rect_contains(cancel, e.x, e.y))
                 done = true;
             if (gfx_rect_contains(ok, e.x, e.y) && name[0]) {
+                /* lpstrDefExt (OPENFILENAME+60) completes a bare save name. */
+                CW default_ext = ce_u32(ofn) >= 64 ? ce_u32(ofn + 60) : 0;
+                if (save && default_ext && !strchr(name, '.')) {
+                    char ext[16];
+                    ce_narrow(ext, sizeof(ext), PTR(WCHAR, default_ext));
+                    if (ext[0] && strlen(name) + strlen(ext) + 1 < sizeof(name)) {
+                        strlcat(name, ".", sizeof(name));
+                        strlcat(name, ext, sizeof(name));
+                    }
+                }
                 snprintf(full, sizeof(full), "/Documents/%s", name);
                 struct fs_stat st;
                 if (save || (!fs_stat(full, &st) && st.type == FS_FILE)) {
@@ -705,6 +730,9 @@ static CW file_dialog(CW address, bool save)
                         uint16_t extension = dot ? (uint16_t)(dot - ce_name + 1) : 0;
                         ofn[58] = extension & 255;
                         ofn[59] = extension >> 8;
+                        CW title = ce_u32(ofn + 36), title_capacity = ce_u32(ofn + 40);
+                        if (title && title_capacity > strlen(name))
+                            ce_widen(PTR(WCHAR, title), title_capacity, name);
                         result = 1;
                         done = true;
                     } else {
