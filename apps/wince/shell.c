@@ -108,7 +108,8 @@ void ce_shell_draw(void)
     for (unsigned i = 0; i < CE_WINDOWS; i++) {
         CW handle = 0x70000000u + i;
         struct ce_window *w = ce_window(handle);
-        if (!w || !ce_window_visible(handle) || strcmp(w->klass, "_ce_commandbar"))
+        if (!w || !ce_window_visible(handle) || !ce_modal_allows(handle) ||
+            strcmp(w->klass, "_ce_commandbar"))
             continue;
         gfx_rect r = ce_window_rect(handle);
         gfx_fill(&ui.surf, r, 0xc0c0c0);
@@ -152,6 +153,8 @@ bool ce_shell_input(const struct gz_input_event *e)
 {
     if (e->type != GZ_EV_TOUCH_DOWN && e->type != GZ_EV_TOUCH_UP && e->type != GZ_EV_TOUCH_MOVE)
         return false;
+    if (popup && !ce_modal_allows(popup_owner))
+        popup = 0;
     if (popup) {
         if (e->type != GZ_EV_TOUCH_UP)
             return true;
@@ -190,7 +193,8 @@ bool ce_shell_input(const struct gz_input_event *e)
     }
     for (unsigned i = 0; i < CE_WINDOWS; i++) {
         struct ce_window *w = ce_window(0x70000000u + i);
-        if (!w || !ce_window_visible(w->handle) || strcmp(w->klass, "_ce_commandbar"))
+        if (!w || !ce_window_visible(w->handle) || !ce_modal_allows(w->handle) ||
+            strcmp(w->klass, "_ce_commandbar"))
             continue;
         gfx_rect r = ce_window_rect(w->handle);
         if (!gfx_rect_contains(r, e->x, e->y))
@@ -333,8 +337,30 @@ CE_API(CheckMenuItem)
 CE_API(CommandBar_Create)
 {
     static const WCHAR klass[] = {'_', 'c', 'e', '_', 'c', 'o', 'm', 'm', 'a', 'n', 'd', 'b', 'a', 'r', 0};
-    struct ce_window *w = ce_new_window(klass, NULL, 0x10000000, 0, 0, 240, 26, a1, a2, 0, 0);
+    struct ce_window *w = ce_new_window(klass, NULL, 0x50000000, 0, 0, 240, 26, a1, a2, 0, 0);
     return w ? w->handle : 0;
+}
+bool ce_shell_attach_menu(CW parent, CW instance, CW id)
+{
+    struct ce_window *owner = ce_window(parent);
+    CW resource = load_menu(instance, id);
+    if (!owner || !resource)
+        return false;
+    static const WCHAR klass[] = {'_', 'c', 'e', '_', 'c', 'o', 'm', 'm', 'a', 'n', 'd', 'b', 'a', 'r', 0};
+    struct ce_window *bar = ce_new_window(klass, NULL, 0x50000000u, 0, 24,
+        owner->rect.right - owner->rect.left, 26, parent, 0, 0, 0);
+    if (!bar)
+        return false;
+    bar->nonclient = true;
+    bar->user = resource;
+    owner->menu = resource;
+    owner->client_top = 50;
+    return true;
+}
+CE_API(GetMenu)
+{
+    struct ce_window *w = ce_window(a0);
+    return w ? w->menu : 0;
 }
 /* CSOBARINFO is passed by value after the three leading arguments: this
  * OEM entry point has thirteen words, one more than the common CE adapters. */
@@ -369,7 +395,6 @@ CE_API(CSOBar_AddButtons)
     static const WCHAR empty[] = {0};
     static const WCHAR ok[] = {'O', 'K', 0};
     static const WCHAR cancel[] = {'C', 'a', 'n', 'c', 'e', 'l', 0};
-    int next_x = 6;
     for (CW i = 0; i < a2; i++) {
         const uint8_t *p = PTR(uint8_t, a3) + i * 76;
         CW label = ce_u32(p + 20);
@@ -384,17 +409,26 @@ CE_API(CSOBar_AddButtons)
             width = MAX(26, gfx_text_width(ui_font(FONT_R12), text) + 14);
         if (height <= 0)
             height = 22;
-        if (x < 0)
-            x = next_x;
         if (y < 0)
             y = 2;
-        next_x = x + width + 4;
+        if (x < 0) {
+            x = 6;
+            /* AddButtons can append one item per call. Continue the row
+             * after its existing controls instead of overlapping them. */
+            for (unsigned j = 0; j < CE_WINDOWS; j++) {
+                struct ce_window *child = ce_window(0x70000000u + j);
+                if (child && child->parent == bar->handle && child->rect.top == y)
+                    x = MAX(x, child->rect.right + 4);
+            }
+        }
         struct ce_window *button =
             ce_new_window(kind ? klass : spacer, caption, 0x50000000u, x, y, width, height,
                            bar->handle, id, 0, 0);
         if (!button)
             return 0;
-        button->enabled = kind && ce_u32(p + 8) == 1;
+        /* This flag is a byte in the OEM record. Calendar leaves the
+         * neighboring bytes populated with other button metadata. */
+        button->enabled = kind && p[8] == 1;
         CW item = ce_u32(p + 24);
         if (menu(item) || ce_window(item))
             button->user = item; /* borrowed popup menu or embedded control */
@@ -447,10 +481,12 @@ CE_API(CSOBar_ChangeMenu)
 {
     if (!ce_window(a0))
         return 0;
-    struct menu_item *it = find_item(a1, a2, false, 0);
+    struct menu_item *it = find_item(a1, a2, (a3 & 0x400) != 0, 0);
     if (!it)
         return 0;
-    it->flags = (it->flags & ~3u) | (a3 ? 0 : 3);
+    /* The OEM wrapper takes EnableMenuItem flags: zero enables, while
+     * MF_GRAYED/MF_DISABLED disable. It is not an enable boolean. */
+    it->flags = (it->flags & ~3u) | (a3 & 3);
     return 1;
 }
 CE_API(CommandBar_Height)
@@ -566,9 +602,7 @@ CE_API(CSOBar_Destroy)
     struct ce_window *w = ce_window(a0);
     if (!w)
         return 0;
-    w->visible = false;
-    w->handle = 0;
-    free(w->text);
+    ce_destroy_window(a0);
     return 1;
 }
 CE_API(CoshGetCommandLine)
@@ -596,9 +630,64 @@ CE_API(StopBuzzer)
     audio_sound_stop();
     return 1;
 }
+CE_API(sndPlaySoundW)
+{
+    if (!a0) { audio_sound_stop(); return 1; }
+    if (a1 & 4) { ce_error = 50; return 0; } /* Memory WAV playback is unavailable. */
+    if (a1 & 2) { ce_error = 2; return 0; } /* SND_NODEFAULT: no replacement for a missing WAV. */
+    /* CE permits the default sound when the requested filename is absent. */
+    audio_sound(AUDIO_SND_NOTIFY);
+    return 1;
+}
+CE_API(PlaySoundW)
+{
+    if (a2 & 0x40000u) { ce_error = 50; return 0; } /* SND_RESOURCE */
+    return ce_sndPlaySoundW(a0, a2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+CE_API(CLBAPODisable)
+{
+    /* The CE power driver is absent. Report its ordinary failure result;
+     * these optional calls must not terminate a file-save operation. */
+    ce_error = 50;
+    return 0;
+}
+CE_API(CLBAPOEnable)
+{
+    ce_error = 50;
+    return 0;
+}
+CE_API(RegOpenKeyExW);
+CE_API(RegQueryValueExW);
+CE_API(RegCloseKey);
+CE_API(SendtoCheck)
+{
+    /* The supplied Sendto.dll checks for a nonempty APATH in the selected
+     * launcher's registry key. This is a capability query, not a transfer. */
+    static const char *apps[] = {"CASIO Mail", "CASIO Notes", "CASIO Calendar", "CASIO Tasks", "CASIO Contacts"};
+    if (a0 < 1 || a0 > ARRAY_SIZE(apps)) return 0;
+    char key[96];
+    WCHAR wide[96], path[260];
+    snprintf(key, sizeof(key), "SOFTWARE\\MENU\\%s", apps[a0 - 1]);
+    ce_widen(wide, ARRAY_SIZE(wide), key);
+    CW handle = 0, type = 0, size = sizeof(path);
+    if (ce_RegOpenKeyExW(0x80000002u, WORD(wide), 0, 0, WORD(&handle), 0, 0, 0, 0, 0, 0, 0)) return 0;
+    static const WCHAR name[] = {'A','P','A','T','H',0};
+    memset(path, 0, sizeof(path));
+    CW status = ce_RegQueryValueExW(handle, WORD(name), 0, WORD(&type), WORD(path), WORD(&size), 0, 0, 0, 0, 0, 0);
+    ce_RegCloseKey(handle, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    return !status && type == 1 && size >= 2 && path[0] != 0;
+}
 CE_API(CGDFlushRegistry)
 { /* RegSetValueExW already synchronizes each update. */
     return 1;
+}
+CE_API(CGDFlushAlarm)
+{
+    /* Casio's service exports CE alarm records to its global backup files.
+     * Glaze has no CE alarm scheduler. The private catalog is durable already;
+     * report unavailable alarm export instead of terminating a PIM save. */
+    ce_error = 50;
+    return 0;
 }
 CE_API(CSGetUserDiskName)
 {
@@ -739,7 +828,7 @@ CE_API(MessageBoxW)
     char title[128], message[1024];
     ce_narrow(title, sizeof(title), PTR(WCHAR, a2));
     ce_narrow(message, sizeof(message), PTR(WCHAR, a1));
-    printf("wince: message box: %s: %s\n", title, message);
+    printf("wince: message box from %08x: %s: %s\n", WORD(__builtin_return_address(0)), title, message);
     unsigned style = a3 & 15;
     const char *left = "OK", *right = NULL;
     CW left_id = 1, right_id = 2;
@@ -953,6 +1042,7 @@ CE_API(SHGetFileInfo)
 static const struct ce_export exports[] = {
     CE_EXPORT(Shell_NotifyIcon),
     CE_EXPORT(LoadMenuW),
+    CE_EXPORT(GetMenu),
     CE_EXPORT(CreatePopupMenu), CE_EXPORT(AppendMenuW),
     {"CreateMenu", (void *)ce_CreatePopupMenu},
     CE_EXPORT(GetSubMenu),
@@ -981,7 +1071,10 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CoshExecute),
     CE_EXPORT(MessageBuzzer),
     CE_EXPORT(StopBuzzer),
+    CE_EXPORT(sndPlaySoundW), CE_EXPORT(PlaySoundW),
+    CE_EXPORT(CLBAPODisable), CE_EXPORT(CLBAPOEnable),
     CE_EXPORT(CGDFlushRegistry),
+    CE_EXPORT(CGDFlushAlarm),
     CE_EXPORT(CSGetUserDiskName),
     CE_EXPORT(OpenClipboard),
     CE_EXPORT(EmptyClipboard),
@@ -999,6 +1092,13 @@ static const struct ce_export exports[] = {
 };
 void *ce_resolve_shell(const char *dll, const char *name)
 {
+    if (!strcasecmp(dll, "Sendto.dll"))
+        return !strcmp(name, "SendtoCheck") ? (void *)ce_SendtoCheck : NULL;
+    if (!strcasecmp(dll, "clblib.dll")) {
+        if (!strcmp(name, "CLBAPODisable")) return (void *)ce_CLBAPODisable;
+        if (!strcmp(name, "CLBAPOEnable")) return (void *)ce_CLBAPOEnable;
+        return NULL;
+    }
     if (strcasecmp(dll, "coredll.dll") && strcasecmp(dll, "commctrl.dll") && strcasecmp(dll, "CSO.dll") &&
         strcasecmp(dll, "COShellApi.dll") && strcasecmp(dll, "GetDisk.dll") && strcasecmp(dll, "CS.dll"))
         return NULL;

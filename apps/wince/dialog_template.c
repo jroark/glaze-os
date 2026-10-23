@@ -57,9 +57,13 @@ bool ce_dialog_decode(struct ce_dialog_template *d, const void *data, size_t siz
     d->y = (int16_t)ce_u16(p + 12);
     d->width = (int16_t)ce_u16(p + 14);
     d->height = (int16_t)ce_u16(p + 16);
-    if (d->count > 32 || d->width <= 0 || d->height <= 0)
+    if (d->count > CE_DIALOG_ITEMS || d->width <= 0 || d->height <= 0)
         return false;
-    if (!text(&c, NULL, 0, &ordinal) || !text(&c, NULL, 0, &ordinal) || !text(&c, d->title, 256, NULL))
+    uint16_t menu_name[64];
+    if (!text(&c, menu_name, 64, &ordinal) || menu_name[0])
+        return false;
+    d->menu = ordinal;
+    if (!text(&c, NULL, 0, &ordinal) || !text(&c, d->title, 256, NULL))
         return false;
     if ((d->style & 0x40) && (!take(&c, 2, &p) || !text(&c, NULL, 0, NULL)))
         return false;

@@ -1,27 +1,27 @@
 # Reopen the saved key, edit its existing Greeting string, then close REQ.
 3000 drag 40 280 235 280 500
 4500 tap 90 192
-8000 tap 6 89
-9500 tap 65 107
-11000 key enter
-12000 key down
-14500 tap 70 141
-14700 tap 70 141
-16500 tap 70 85
-17000 key backspace
-17100 key backspace
-17200 key backspace
-17300 key backspace
-17400 key backspace
-17500 key backspace
-17600 key backspace
-17700 key backspace
-17800 key backspace
-17900 key backspace
-18000 key backspace
-18100 key backspace
-18200 key backspace
-18300 key backspace
-19000 text Updated by REQ
-21500 key enter
-24000 tap 224 12
+16000 tap 6 89
+17500 tap 65 107
+19000 key enter
+20000 key down
+22500 tap 70 141
+22700 tap 70 141
+24500 tap 70 85
+25000 key backspace
+25100 key backspace
+25200 key backspace
+25300 key backspace
+25400 key backspace
+25500 key backspace
+25600 key backspace
+25700 key backspace
+25800 key backspace
+25900 key backspace
+26000 key backspace
+26100 key backspace
+26200 key backspace
+26300 key backspace
+27000 text Updated by REQ
+29500 key enter
+32000 tap 224 12

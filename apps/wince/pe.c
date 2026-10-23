@@ -272,6 +272,24 @@ const char *ce_pe_imports(const struct ce_pe *pe, void *image, ce_resolver resol
     return "unterminated PE import directory";
 }
 
+/* Stay inside a straight-line sequence, and stop if the trap-address register
+ * is overwritten. CE compilers schedule argument setup between li and jalr. */
+static bool keeps_trap_register(uint32_t word, unsigned reg)
+{
+    unsigned op = word >> 26, rt = word >> 16 & 31, rd = word >> 11 & 31;
+    if (!op) {
+        unsigned fn = word & 63;
+        if (fn == 8 || fn == 9 || fn == 12 || fn == 13)
+            return false;
+        if (fn == 15 || fn == 17 || fn == 19 || (fn >= 24 && fn <= 31))
+            return true;
+        return rd != reg;
+    }
+    if ((op >= 8 && op <= 15) || (op >= 0x20 && op <= 0x27) ||
+        op == 0x30 || op == 0x34 || op == 0x37 || op == 0x38 || op == 0x3c)
+        return rt != reg;
+    return op >= 0x28 && op <= 0x2f; /* Stores do not change their GPR. */
+}
 /* CE CRTs embed kernel traps and inline current-thread reads. Translate
  * complete li/jalr trap sequences before publishing executable pages. Glaze
  * stacks are 64 KiB aligned, so their upper sixteen bits provide a unique
@@ -284,7 +302,8 @@ const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, ce_resolver 
         const char *name;
         uint32_t target;
     } traps[] = {{0xf3fa, "TerminateProcess", 0}, {0xfa9e, "GetLastError", 0},
-                 {0xfaa2, "SetLastError", 0}, {0xfbc6, "TlsCall", 0}};
+                 {0xfaa2, "SetLastError", 0}, {0xfbc6, "TlsCall", 0},
+                 {0xfb2a, "CreateThread", 0}};
     for (unsigned s = 0; s < pe->count; s++) {
         const struct ce_section *section = &pe->section[s];
         if (!(section->flags & 0x20000000u))
@@ -304,13 +323,16 @@ const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, ce_resolver 
             for (unsigned t = 0; t < ARRAY_SIZE(traps); t++) {
                 if ((load & 65535u) != traps[t].trap || !ce_range(off, 12, length))
                     continue;
-                uint32_t call = 4;
-                if (traps[t].trap == 0xf3fa && ce_u32(p + 4) == 0x24040042u && reg != 4) {
-                    if (!ce_range(off, 16, length))
-                        continue;
-                    call = 8;
+                uint32_t call;
+                for (call = 4; call <= 48 && ce_range(off, call + 8, length); call += 4) {
+                    uint32_t instruction = ce_u32(p + call);
+                    if (instruction == ((reg << 21) | 0x0000f809u))
+                        break;
+                    if (!keeps_trap_register(instruction, reg))
+                        break;
                 }
-                if (ce_u32(p + call) != ((reg << 21) | 0x0000f809u))
+                if (call > 48 || !ce_range(off, call + 8, length) ||
+                    ce_u32(p + call) != ((reg << 21) | 0x0000f809u))
                     continue;
                 if (!traps[t].target)
                     traps[t].target = resolve("coredll.dll", traps[t].name, 0, arg);

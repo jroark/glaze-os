@@ -108,10 +108,37 @@ CE_API(_itow)
     out[n] = 0;
     return a1;
 }
+CE_API(_wtol)
+{
+    /* BE-300 COREDLL ordinal 78 recognizes an optional leading zero followed
+     * by x/X before the decimal sign handling. Tasks uses this CE extension
+     * to read its hidden "0x%08x" record-ID column. Arithmetic wraps at 32 bits
+     * like the original MIPS routine, including on overflow. */
+    const WCHAR *p = PTR(WCHAR, a0);
+    while (*p == ' ' || (*p >= '\t' && *p <= '\r')) p++;
+    if (*p == '0') p++;
+    CW value = 0;
+    if (*p == 'x' || *p == 'X') {
+        p++;
+        for (;;) {
+            unsigned digit = *p >= '0' && *p <= '9' ? *p - '0' :
+                *p >= 'a' && *p <= 'f' ? *p - 'a' + 10 :
+                *p >= 'A' && *p <= 'F' ? *p - 'A' + 10 : 16;
+            if (digit == 16) return value;
+            value = value * 16u + digit;
+            p++;
+        }
+    }
+    bool negative = *p == '-';
+    if (*p == '-' || *p == '+') p++;
+    while (*p >= '0' && *p <= '9') value = value * 10u + *p++ - '0';
+    return negative ? 0u - value : value;
+}
 void *ce_resolve_string(const char *name)
 {
     static const struct ce_export exports[] = {CE_EXPORT(wcstok),  CE_EXPORT(strtok),  CE_EXPORT(wcsncat),
-                                               CE_EXPORT(_wcsdup), CE_EXPORT(wcspbrk), CE_EXPORT(_itow)};
+                                               CE_EXPORT(_wcsdup), CE_EXPORT(wcspbrk), CE_EXPORT(_itow),
+                                               CE_EXPORT(_wtol)};
     for (unsigned i = 0; i < ARRAY_SIZE(exports); i++)
         if (!strcmp(name, exports[i].name))
             return exports[i].address;

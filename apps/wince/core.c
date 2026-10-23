@@ -429,19 +429,6 @@ CE_API(_wcsnicmp)
 {
     return wcasecmp(a0, a1, a2);
 }
-CE_API(_wtol)
-{
-    const WCHAR *p = PTR(WCHAR, a0);
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-        p++;
-    bool negative = *p == '-';
-    if (*p == '-' || *p == '+')
-        p++;
-    uint32_t value = 0;
-    while (*p >= '0' && *p <= '9')
-        value = value * 10u + *p++ - '0';
-    return negative ? 0u - value : value;
-}
 CE_API(memcpy)
 {
     return WORD(memcpy(PTR(void, a0), PTR(void, a1), a2));
@@ -1347,9 +1334,12 @@ static CW find_next(struct find_handle *search, CW out)
         if (!match_name(search->pattern, entry.name))
             continue;
         /* CE WIN32_FIND_DATA is 560 bytes: dwOID precedes the UTF-16 name
-         * at offset 40. The backing FS supplies no timestamps or OIDs. */
+         * at offset 40. File times come from this app's private sidecar. */
         memset(PTR(void, out), 0, 560);
         ce_put32(PTR(void, out), entry.type == FS_DIR ? 16 : 128);
+        char path[FS_PATH_MAX];
+        if (snprintf(path, sizeof(path), "%s/%s", search->path, entry.name) < (int)sizeof(path))
+            ce_file_times(path, PTR(uint8_t, out) + 4, false);
         ce_put32(PTR(uint8_t, out) + 32, entry.size);
         ce_widen(PTR(WCHAR, out + 40), 260, entry.name);
         return 1;
@@ -1537,6 +1527,9 @@ CE_API(CloseHandle)
     closed = ce_mapping_close(a0, &handled);
     if (handled)
         return closed;
+    closed = ce_database_close(a0, &handled);
+    if (handled)
+        return closed;
     struct file_handle *f = file_handle(a0);
     if (!f) {
         ce_error = 6;
@@ -1665,6 +1658,13 @@ CE_API(CreateDirectoryW)
     int rv = fs_mkdirs(path);
     return rv < 0 ? file_error(rv) : 1;
 }
+CE_API(SetFileAttributesW)
+{
+    /* Native files have no DOS attribute bits. Normal attributes already
+     * match their state; requests for persistent flags are unsupported. */
+    if (a1 && a1 != 0x80) { ce_error = 50; return 0; }
+    return ce_GetFileAttributesW(a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) != (CW)-1;
+}
 CE_API(RemoveDirectoryW)
 {
     char path[FS_PATH_MAX];
@@ -1692,6 +1692,41 @@ CE_API(DeleteFileW)
     if (!rv && !ce_file_move_times(path, NULL))
         return file_error(GZ_ENOSPC);
     return rv < 0 ? file_error(rv) : 1;
+}
+CE_API(CopyFileW)
+{
+    char src[FS_PATH_MAX], dst[FS_PATH_MAX];
+    if (!a0 || !a1 || !ce_path(src, PTR(WCHAR, a0)) || !ce_path(dst, PTR(WCHAR, a1))) return 0;
+    if (!strcasecmp(src, dst)) { ce_error = 87; return 0; }
+    CW input = ce_CreateFileW(a0, 0x80000000u, 1, 0, 3, 0, 0, 0, 0, 0, 0, 0);
+    if (input == (CW)-1) return 0;
+    uint8_t times[24];
+    ce_file_times(file_handle(input)->path, times, false);
+    CW output = ce_CreateFileW(a1, 0x40000000u, 0, 0, a2 ? 1 : 2, 0, 0, 0, 0, 0, 0, 0);
+    if (output == (CW)-1) {
+        CW error = ce_error;
+        ce_CloseHandle(input, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        ce_error = error;
+        return 0;
+    }
+    uint8_t buffer[FS_IO_MAX];
+    int in = file_handle(input)->fd, out = file_handle(output)->fd, rv;
+    CW error = 0;
+    while ((rv = fs_read(in, buffer, sizeof(buffer))) > 0) {
+        int position = 0;
+        while (position < rv) {
+            int written = fs_write(out, buffer + position, (unsigned)(rv - position));
+            if (written <= 0) { file_error(written < 0 ? written : GZ_ENOSPC); error = ce_error; break; }
+            position += written;
+        }
+        if (error) break;
+    }
+    if (rv < 0) { file_error(rv); error = ce_error; }
+    if (!ce_CloseHandle(output, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) && !error) error = ce_error;
+    if (!ce_CloseHandle(input, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) && !error) error = ce_error;
+    if (!error && !ce_file_set_times(dst, times)) error = 112;
+    ce_error = error;
+    return error == 0;
 }
 CE_API(SetFilePointer)
 {
@@ -1815,7 +1850,6 @@ static const struct ce_export exports[] = {
     CE_EXPORT(wcsstr),
     CE_EXPORT(_wcsicmp),
     CE_EXPORT(_wcsnicmp),
-    CE_EXPORT(_wtol),
 
     CE_EXPORT(free),
     {"??2@YAPAXI@Z", (void *)ce_malloc},
@@ -1866,10 +1900,12 @@ static const struct ce_export exports[] = {
     CE_EXPORT(GetFileSize),
     CE_EXPORT(GetFileTime), CE_EXPORT(SetFileTime),
     CE_EXPORT(GetFileAttributesW),
+    CE_EXPORT(SetFileAttributesW),
     CE_EXPORT(CreateDirectoryW),
     CE_EXPORT(RemoveDirectoryW),
     CE_EXPORT(MoveFileW),
     CE_EXPORT(DeleteFileW),
+    CE_EXPORT(CopyFileW),
     CE_EXPORT(SetFilePointer),
     CE_EXPORT(SetEndOfFile),
     CE_EXPORT(ExitThread),

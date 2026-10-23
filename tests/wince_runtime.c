@@ -127,13 +127,56 @@ void ce_narrow(char *p, uint32_t cap, const WCHAR *s)
 }
 static unsigned notifications;
 static CW last_notification;
+static CW activation_data, activation_item;
+static unsigned double_clicks, activations;
+static unsigned list_changing, list_changed;
+static CW list_before, list_after;
 static bool veto;
+static struct ce_window *combo_fixture;
+static const WCHAR *owner_caption;
+struct ce_window *ce_window(CW handle)
+{
+    return combo_fixture && combo_fixture->handle == handle ? combo_fixture : NULL;
+}
+bool ce_window_visible(CW handle) { return ce_window(handle) != NULL; }
+void ce_redraw_all(void) {}
 CW ce_send(CW w, CW msg, CW wp, CW lp)
 {
+    if (combo_fixture) {
+        if (msg == 0xc) {
+            assert(w == combo_fixture->handle);
+            unsigned n = ce_wlen(PTR(WCHAR, lp));
+            combo_fixture->text = realloc(combo_fixture->text, (n + 1) * 2);
+            assert(combo_fixture->text);
+            memcpy(combo_fixture->text, PTR(void, lp), (n + 1) * 2);
+            combo_fixture->length = n;
+        } else {
+            assert(msg == 0x111);
+            last_notification = wp >> 16;
+            notifications++;
+        }
+        return 0;
+    }
     (void)w;
     (void)wp;
     assert(msg == 0x4e);
     CW *n = PTR(CW, lp);
+    if (n[2] == (CW)-100) {
+        list_changing++;
+        list_before = n[6]; list_after = n[5];
+    }
+    if (n[2] == (CW)-101) list_changed++;
+    if (n[2] == (CW)-3) double_clicks++;
+    if (n[2] == (CW)-114) activations++;
+    if (n[2] == (CW)-2 || n[2] == (CW)-3 || n[2] == (CW)-114) {
+        activation_item = n[3];
+        activation_data = n[10];
+    }
+    if (owner_caption && n[2] == (CW)-177) {
+        assert(n[3] == 1 && n[4] == 1 && n[5] == 0);
+        n[8] = WORD(owner_caption);
+        return 0;
+    }
     notifications++;
     last_notification = n[2];
     return veto;
@@ -174,6 +217,35 @@ int gfx_text(gfx_surface *s, int x, int y, const gfx_font *f, const char *t, uin
 }
 #include "../apps/wince/thread.c"
 #include "../apps/wince/view.c"
+#include "../apps/wince/list.c"
+#include "../apps/wince/tabs.c"
+
+static void tabs_test(void)
+{
+    struct ce_tabs tabs = {.selected = -1};
+    struct ce_window w = {.handle = 11, .parent = 9, .id = 1001, .tabs = &tabs};
+    static const WCHAR label[] = {'C','h','a','t',0};
+    CW item[] = {11, 0, 0, WORD(label), 0, 7, 0x12345678};
+    bool handled;
+    assert(ce_tabs_message(&w, 0x133e, 0, WORD(item), &handled) == 0 && handled);
+    item[6] = 0x87654321;
+    assert(ce_tabs_message(&w, 0x133e, 0, WORD(item), &handled) == 0);
+    WCHAR text[3];
+    CW out[] = {11, 0, 0, WORD(text), 3, 0, 0};
+    assert(ce_tabs_message(&w, 0x133c, 1, WORD(out), &handled) == 1);
+    assert(out[6] == 0x12345678 && out[5] == 7 && text[0] == 'C' && text[1] == 'h' && !text[2]);
+    item[0] = 8; item[6] = 0xfeed;
+    assert(ce_tabs_message(&w, 0x133d, 1, WORD(item), &handled) == 1);
+    assert(tabs.param[1] == 0xfeed && tabs.image[1] == 7 && tabs.text[1][0] == 'C');
+    assert(ce_tabs_message(&w, 0x1308, 0, 0, &handled) == 1);
+    assert(tabs.count == 1 && tabs.param[0] == 0xfeed);
+    while (tabs.count < 16) ce_tabs_message(&w, 0x133e, tabs.count, WORD(item), &handled);
+    assert(ce_tabs_message(&w, 0x133e, 16, WORD(item), &handled) == (CW)-1);
+    ce_tabs_message(&w, 0x1309, 0, 0, &handled);
+    assert(!tabs.count && tabs.selected == -1);
+    ce_tabs_message(&w, 0xc, 0, 0, &handled);
+    assert(!handled);
+}
 #include "../apps/wince/mapping.c"
 #include "../apps/wince/string.c"
 #include "../apps/wince/scan.c"
@@ -191,11 +263,95 @@ int pref_get(const char *key, void *out, uint32_t size)
 }
 static int gz_rtc_get(struct gz_datetime *out) { *out = clock_value; return 0; }
 #include "../apps/wince/timezone.c"
+#include "../apps/wince/date_control.c"
+
+static void date_control_test(void)
+{
+    struct ce_window w = {.handle = 10, .parent = 9, .id = 1000};
+    strcpy(w.klass, "SysDateTimePick32");
+    CW result;
+    uint16_t value[8] = {2024, 2, 4, 29, 10, 30, 0, 0}, out[16] = {0};
+    assert(ce_date_message(&w, 0x1002, 0, WORD(value), &result) && result == 1);
+    ce_date_message(&w, 0x1001, 0, WORD(out), &result);
+    assert(!result && !memcmp(value, out, 16));
+    value[0] = 2023; /* An invalid leap day must leave the old value intact. */
+    ce_date_message(&w, 0x1002, 0, WORD(value), &result);
+    assert(!result && w.date.value[0] == 2024);
+    uint16_t bounds[16] = {2024, 2, 0, 28, 0, 0, 0, 0, 2024, 3, 0, 1, 23, 59, 59, 0};
+    ce_date_message(&w, 0x1004, 3, WORD(bounds), &result);
+    assert(result == 1);
+    ce_date_message(&w, 0x1003, 0, WORD(out), &result);
+    assert(result == 3 && !memcmp(bounds, out, 32));
+    unsigned before = notifications;
+    ce_date_message(&w, 0x100, 0x26, 0, &result);
+    assert(w.date.value[1] == 3 && w.date.value[3] == 1);
+    assert(notifications == before + 1 && last_notification == (CW)-759);
+    ce_date_message(&w, 0x100, 0x26, 0, &result);
+    assert(w.date.value[3] == 1 && notifications == before + 1);
+    ce_date_message(&w, 0x1002, 1, 0, &result);
+    assert(!result); /* GDT_NONE requires DTS_SHOWNONE. */
+    w.style |= 2;
+    ce_date_message(&w, 0x1002, 1, 0, &result);
+    assert(result == 1);
+    ce_date_message(&w, 0x1001, 0, WORD(out), &result);
+    assert(result == 1);
+    WCHAR text[64];
+    ce_date_text(&w, text, ARRAY_SIZE(text));
+    assert(!text[0]);
+    ce_date_message(&w, 0x1002, 0, WORD(bounds), &result);
+    ce_date_text(&w, text, ARRAY_SIZE(text));
+    static const WCHAR expected[] = {'2','0','2','4','-','0','2','-','2','8',0};
+    assert(!ce_wcmp(text, expected));
+    /* An inverted range is rejected without replacing the previous range. */
+    ce_date_message(&w, 0x1004, 3, WORD(out), &result);
+    assert(result == 1); /* out still holds the valid range from GETRANGE. */
+    memcpy(out, bounds + 8, 16); memcpy(out + 8, bounds, 16);
+    ce_date_message(&w, 0x1004, 3, WORD(out), &result);
+    assert(!result && !memcmp(w.date.minimum, bounds, 16));
+}
 
 #include <netinet/tcp.h>
+#include <errno.h>
+#include <poll.h>
+#include <sys/socket.h>
+static pthread_mutex_t serial_network = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t poll_notice = PTHREAD_COND_INITIALIZER;
+static bool serial_enabled, poll_entered;
+static bool connect_in_progress;
+static int progress_connect(int fd, const struct sockaddr *address, socklen_t length)
+{
+    if (connect_in_progress) { errno = EINPROGRESS; return -1; }
+    return connect(fd, address, length);
+}
+static int serial_poll(struct pollfd *fds, nfds_t count, int timeout)
+{
+    if (!serial_enabled) return poll(fds, count, timeout);
+    pthread_mutex_lock(&serial_network);
+    pthread_mutex_lock(&host_lock);
+    poll_entered = true;
+    pthread_cond_signal(&poll_notice);
+    pthread_mutex_unlock(&host_lock);
+    int result = poll(fds, count, timeout);
+    pthread_mutex_unlock(&serial_network);
+    return result;
+}
+static ssize_t serial_send(int fd, const void *data, size_t size, int flags)
+{
+    if (!serial_enabled) return send(fd, data, size, flags);
+    pthread_mutex_lock(&serial_network);
+    ssize_t result = send(fd, data, size, flags);
+    pthread_mutex_unlock(&serial_network);
+    return result;
+}
+#define poll serial_poll
+#define send serial_send
+#define connect progress_connect
 #define exports winsock_exports
 #include "../apps/wince/winsock.c"
 #undef exports
+#undef poll
+#undef send
+#undef connect
 #define exports ole_exports
 #include "../apps/wince/ole.c"
 #undef exports
@@ -328,17 +484,89 @@ static void view_test(void)
     ce_view_free(&w);
     strcpy(w.klass, "SysListView32");
     assert(ce_view_init(&w));
-    CW row[9] = {1 | 4, 0, 0, 0, 0, WORD(root), 0, 0, 999};
+    CW row[9] = {1 | 2 | 4, 0, 0, 0, 0, WORD(root), 0, (CW)-1, 999};
     assert(send_view(&w, 0x104d, 0, WORD(row)) == 0);
     assert(send_view(&w, 0x1004, 0, 0) == 1);
-    CW data[9] = {4, 0};
-    assert(send_view(&w, 0x104b, 0, WORD(data)) && data[8] == 999);
+    CW data[9] = {2 | 4, 0};
+    assert(send_view(&w, 0x104b, 0, WORD(data)) && data[8] == 999 && data[7] == (CW)-1);
+    data[7] = 3;
+    assert(send_view(&w, 0x104c, 0, WORD(data)));
+    data[7] = 0;
+    assert(send_view(&w, 0x104b, 0, WORD(data)) && data[7] == 3);
+    WCHAR row_text[16];
+    CW text_item[9] = {0xffffffffu, 77, 0, 0xabcdef, 0xffffffffu,
+        WORD(row_text), ARRAY_SIZE(row_text), 456, 789};
+    assert(send_view(&w, 0x1073, 0, WORD(text_item)) == ce_wlen(root));
+    assert(!ce_wcmp(row_text, root) && text_item[3] == 0xabcdef && text_item[7] == 456 && text_item[8] == 789);
+    text_item[5] = WORD(child);
+    assert(send_view(&w, 0x1074, 0, WORD(text_item)));
+    assert(send_view(&w, 0x104b, 0, WORD(data)) && data[8] == 999 && data[7] == 3);
+    CW state[9] = {0, 0, 0, 3, 3};
+    unsigned changes = list_changed;
+    veto = true;
+    assert(send_view(&w, 0x102b, 0, WORD(state)));
+    assert(send_view(&w, 0x102c, 0, 3) == 0 && list_changed == changes);
+    veto = false;
+    assert(send_view(&w, 0x102b, 0, WORD(state)));
+    assert(send_view(&w, 0x102c, 0, 3) == 3);
+    assert(list_changing && list_before == 0 && list_after == 3);
+    send_view(&w, 8, 0, 0);
+    assert(send_view(&w, 0x102c, 0, 3) == 2 && list_before == 3 && list_after == 2);
+    send_view(&w, 7, 0, 0);
+    assert(send_view(&w, 0x102c, 0, 3) == 3 && list_before == 2 && list_after == 3);
+    state[3] = 0x2000; state[4] = 0xf000;
+    assert(send_view(&w, 0x102b, 0, WORD(state)));
+    assert(send_view(&w, 0x102c, 0, 0xffff) == 0x2003);
+    state[3] = 0; state[4] = 2;
+    assert(send_view(&w, 0x102b, (CW)-1, WORD(state)));
+    assert(send_view(&w, 0x102c, 0, 2) == 0 && send_view(&w, 0x1032, 0, 0) == 0);
+    assert(send_view(&w, 0x102c, 0, 0xf000) == 0x2000);
+    assert(send_view(&w, 0x102c, 99, 3) == 0);
+    send_view(&w, 0x202, 0, 1u << 16 | 1);
+    assert(last_notification == (CW)-2 && activation_item == 0 && activation_data == 999);
+    unsigned doubles = double_clicks, activated = activations;
+    send_view(&w, 0x202, 0, 1u << 16 | 1);
+    assert(last_notification == (CW)-114 && activation_item == 0 && activation_data == 999);
+    assert(double_clicks == doubles + 1 && activations == activated + 1);
+    send_view(&w, 0x100, 13, 0);
+    assert(last_notification == (CW)-114 && activations == activated + 2 && double_clicks == doubles + 1);
     assert(send_view(&w, 0x1009, 0, 0));
     assert(!w.view->count);
     ce_view_free(&w);
+    w.style = 0x1000;
+    assert(ce_view_init(&w));
+    assert(send_view(&w, 0x102f, 3, 0));
+    static const WCHAR before[] = {'O', 'l', 'd', 0}, after[] = {'N', 'e', 'w', 0};
+    WCHAR caption[16];
+    CW virtual_row[9] = {1, 1, 0, 0, 0, WORD(caption), ARRAY_SIZE(caption)};
+    owner_caption = before;
+    assert(send_view(&w, 0x1073, 1, WORD(virtual_row)) == 3 && caption[0] == 'O');
+    owner_caption = after;
+    assert(send_view(&w, 0x1073, 1, WORD(virtual_row)) == 3 && caption[0] == 'N');
+    assert(!send_view(&w, 0x102f, VIEW_ITEMS + 1, 0));
+    assert(send_view(&w, 0x1004, 0, 0) == 3);
+    assert(send_view(&w, 0x102f, 0, 0));
+    assert(send_view(&w, 0x1004, 0, 0) == 0);
+    owner_caption = NULL;
+    ce_view_free(&w);
+}
+struct duplex_select { CW fd, result; };
+static void *duplex_wait(void *arg)
+{
+    struct duplex_select *state = arg;
+    CW set[65] = {1, state->fd}, timeout[] = {0, 500000};
+    state->result = invoke(ce_select, 0, WORD(set), 0, 0, WORD(timeout), 0);
+    free(host_tcb.tls[1]);
+    host_tcb.tls[1] = NULL;
+    return NULL;
 }
 static void winsock_test(void)
 {
+    struct sockaddr_in address = {.sin_family = AF_INET, .sin_port = htons(5190)};
+    connect_in_progress = true;
+    assert(invoke(ce_connect, 0, WORD(&address), sizeof(address), 0, 0, 0) == (CW)-1);
+    assert(ce_error == 10035); /* Winsock connect reports WSAEWOULDBLOCK. */
+    connect_in_progress = false;
     int pair[2];
     assert(!socketpair(AF_UNIX, SOCK_STREAM, 0, pair));
     CW millis = 1000, size = 4, observed = 0;
@@ -369,6 +597,54 @@ static void winsock_test(void)
     assert(*PTR(CW, PTR(CW, PTR(CW, host)[3])[0]) == 0x0100007f);
     free(host_tcb.tls[0]);
     host_tcb.tls[0] = NULL;
+    assert(!socketpair(AF_UNIX, SOCK_STREAM, 0, pair));
+    serial_enabled = true;
+    poll_entered = false;
+    struct duplex_select waiting = {(CW)pair[0], (CW)-1};
+    pthread_t worker;
+    assert(!pthread_create(&worker, NULL, duplex_wait, &waiting));
+    pthread_mutex_lock(&host_lock);
+    while (!poll_entered)
+        pthread_cond_wait(&poll_notice, &host_lock);
+    pthread_mutex_unlock(&host_lock);
+    assert(invoke(ce_sock_send, pair[1], WORD("x"), 1, 0, 0, 0) == 1);
+    pthread_join(worker, NULL);
+    assert(waiting.result == 1); /* A blocking select must allow concurrent writes. */
+    serial_enabled = false;
+    close(pair[0]); close(pair[1]);
+    host_tcb.tls[0] = NULL;
+}
+static void combo_test(void)
+{
+    struct ce_window w = {.handle = 0x70000000, .parent = 0x70000001, .id = 1010,
+        .style = 0x50000002, .rect = {0, 0, 240, 24}};
+    strcpy(w.klass, "ComboBox");
+    combo_fixture = &w;
+    assert(ce_list_init(&w));
+    WCHAR name[] = {'T', 'e', 's', 't', 0};
+    CW result;
+    assert(ce_list_message(&w, 0x143, 0, WORD(name), &result) && result == 0);
+    assert(ce_list_message(&w, 0x14e, 0, 0, &result) && result == 0);
+    assert(w.length == 4 && !memcmp(w.text, name, sizeof(name)));
+    assert(ce_list_message(&w, 0x142, 0, 3u << 16 | 1, &result));
+    CW start = 99, end = 99;
+    assert(ce_list_message(&w, 0x140, WORD(&start), WORD(&end), &result));
+    assert(start == 1 && end == 3 && result == (3u << 16 | 1));
+    assert(ce_list_message(&w, 0x202, 0, 5, &result) && !dropdown);
+    assert(ce_list_message(&w, 0x202, 0, 230, &result) && dropdown == w.handle);
+    assert(ce_list_message(&w, 0x14e, (CW)-1, 0, &result));
+    assert(!w.length && result == (CW)-1);
+    static const WCHAR prefix[] = {'t','e',0}, exact[] = {'t','E','s','T',0};
+    assert(ce_list_message(&w, 0x14c, (CW)-1, WORD(prefix), &result) && result == 0);
+    assert(ce_list_message(&w, 0x158, (CW)-1, WORD(prefix), &result) && result == (CW)-1);
+    assert(ce_list_message(&w, 0x158, 0, WORD(exact), &result) && result == 0);
+    unsigned before = notifications;
+    assert(ce_list_message(&w, 0x14d, (CW)-1, WORD(prefix), &result) && result == 0);
+    assert(w.length == 4 && !memcmp(w.text, name, sizeof(name)) && notifications == before);
+    assert(ce_list_message(&w, 0x141, 20, 0, &result) && w.text_limit == 20);
+    ce_list_free(&w);
+    free(w.text);
+    combo_fixture = NULL;
 }
 static void timezone_test(void)
 {
@@ -445,6 +721,17 @@ static void string_test(void)
     invoke(ce__itow, 0xabcdefu, WORD(output), 16, 0, 0, 0);
     ce_narrow(narrow, sizeof(narrow), output);
     assert(!strcmp(narrow, "abcdef"));
+    static const struct { const char *text; CW expected; } numbers[] = {
+        {"0x00000001", 1}, {"  0Xabcdef", 0xabcdef}, {"xFf!", 255},
+        {"-2147483648", 0x80000000u}, {"+123 tail", 123}, {"0123", 123},
+        {"0xffffffff", 0xffffffffu}, {"4294967296", 0}, {"0", 0},
+        {"-0xff", 0}, {"0x", 0}, {"", 0}, {"\v\f42", 42},
+    };
+    assert(ce_resolve_string("_wtol") == (void *)ce__wtol);
+    for (unsigned i = 0; i < ARRAY_SIZE(numbers); i++) {
+        ce_widen(output, ARRAY_SIZE(output), numbers[i].text);
+        assert(invoke(ce__wtol, WORD(output), 0, 0, 0, 0, 0) == numbers[i].expected);
+    }
 }
 static void mapping_test(void)
 {
@@ -491,12 +778,15 @@ int main(void)
 {
     sync_test();
     view_test();
+    combo_test();
+    tabs_test();
     winsock_test();
     ole_test();
     mapping_test();
     string_test();
     scan_test();
     timezone_test();
+    date_control_test();
     free(host_tcb.tls[1]);
     host_tcb.tls[1] = NULL;
     puts("WinCE runtime synchronization, views and Winsock passed");

@@ -1,7 +1,7 @@
 # Reopen REQ's private test key after a cold boot and display Greeting.
 3000 drag 40 280 235 280 500
 4500 tap 90 192
-8000 tap 6 89
-9500 tap 65 107
-11000 key enter
-12000 key down
+16000 tap 6 89
+17500 tap 65 107
+19000 key enter
+20000 key down

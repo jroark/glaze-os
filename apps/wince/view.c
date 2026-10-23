@@ -53,6 +53,18 @@ static void read_text(CW dst, CW capacity, const WCHAR *src)
         memcpy(PTR(void, dst), src, n * 2);
     PTR(WCHAR, dst)[n] = 0;
 }
+static bool owner_text(struct ce_window *w, unsigned row, unsigned column)
+{
+    struct ce_view *v = w->view;
+    WCHAR buffer[512] = {0};
+    CW notice[12] = {w->handle, w->id, (CW)-177, 1, row, column,
+        0, 0, WORD(buffer), ARRAY_SIZE(buffer), 0, 0};
+    ce_send(w->parent, 0x4e, w->id, WORD(notice)); /* LVN_GETDISPINFOW */
+    if (w->view != v || row >= v->count)
+        return false;
+    buffer[ARRAY_SIZE(buffer) - 1] = 0;
+    return copy_text(&w->view->item[row].text[column], notice[8]);
+}
 bool ce_view_init(struct ce_window *w)
 {
     bool tree = !strcasecmp(w->klass, "SysTreeView32");
@@ -111,12 +123,34 @@ static int order_pos(struct ce_view *v, int i)
             return p;
     return -1;
 }
+static bool list_state(struct ce_window *w, int index, CW state)
+{
+    struct ce_view *v = w->view;
+    CW old = v->item[index].state;
+    if (old == state) return true;
+    CW n[] = {w->handle, w->id, (CW)-100, (CW)order_pos(v, index), 0,
+        state, old, 8, 0, 0, v->item[index].data};
+    CW vetoed = (w->style & 0x1000) ? 0 : ce_send(w->parent, 0x4e, w->id, WORD(n));
+    if (w->view != v || !v->item[index].used || vetoed) return false;
+    v->item[index].state = state;
+    if (state & 2) v->selected = index;
+    else if (v->selected == index) v->selected = -1;
+    w->dirty = true;
+    n[2] = (CW)-101;
+    ce_send(w->parent, 0x4e, w->id, WORD(n));
+    return w->view == v;
+}
 static void select_row(struct ce_window *w, int index)
 {
     struct ce_view *v = w->view;
     if (index < 0 || !v->item[index].used || v->selected == index)
         return;
     int old = v->selected;
+    if (!v->tree) {
+        if (old >= 0 && !list_state(w, old, v->item[old].state & ~3u)) return;
+        list_state(w, index, v->item[index].state | 3);
+        return;
+    }
     if (v->tree && tree_notify(w, (CW)-450, 0, old, index))
         return;
     if (old >= 0)
@@ -124,12 +158,7 @@ static void select_row(struct ce_window *w, int index)
     v->selected = index;
     v->item[index].state |= 3;
     w->dirty = true;
-    if (v->tree)
-        tree_notify(w, (CW)-451, 0, old, index);
-    else {
-        CW n[] = {w->handle, w->id, (CW)-101, (CW)order_pos(v, index), 0, 3, 0, 8, 0, 0, v->item[index].data};
-        ce_send(w->parent, 0x4e, w->id, WORD(n));
-    }
+    tree_notify(w, (CW)-451, 0, old, index);
 }
 static void expand(struct ce_window *w, int i, CW action)
 {
@@ -193,6 +222,14 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
     if (!v)
         return false;
     *result = 0;
+    if (!v->tree && (msg == 7 || msg == 8)) {
+        if (v->selected >= 0) {
+            int index = v->selected;
+            CW state = v->item[index].state;
+            list_state(w, index, msg == 7 ? state | 1u : state & ~1u);
+        }
+        return true;
+    }
     if ((v->tree && msg == 0x1109) || (!v->tree && msg == 0x1003)) {
         *result = v->images;
         v->images = lp;
@@ -328,6 +365,30 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
     if (!v->tree && msg >= 0x1000 && msg < 0x1100) {
         int i = wp < v->count ? (int)v->order[wp] : -1;
         switch (msg) {
+        case 0x102f: /* LVM_SETITEMCOUNT for LVS_OWNERDATA */
+            if (!(w->style & 0x1000) || wp > VIEW_ITEMS) {
+                ce_error = wp > VIEW_ITEMS ? 8 : 87;
+                return true;
+            }
+            for (unsigned n = wp; n < v->count; n++) {
+                for (unsigned c = 0; c < VIEW_COLS; c++) {
+                    free(v->item[n].text[c]);
+                    v->item[n].text[c] = NULL;
+                }
+                memset(&v->item[n], 0, sizeof(v->item[n]));
+            }
+            for (unsigned n = 0; n < wp; n++) {
+                v->item[n].used = true;
+                v->order[n] = n;
+            }
+            v->count = wp;
+            if (v->selected >= (int)wp)
+                v->selected = -1;
+            if (v->top >= wp)
+                v->top = 0;
+            w->dirty = true;
+            *result = 1;
+            return true;
         case 0x1004:
             *result = v->count;
             return true;
@@ -344,6 +405,7 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
                 return true;
             it->used = true;
             it->data = (p[0] & 4) ? p[8] : 0;
+            it->image = (p[0] & 2) ? (int)p[7] : -1;
             memmove(v->order + pos + 1, v->order + pos, (v->count - pos) * sizeof(unsigned));
             v->order[pos] = i;
             v->count++;
@@ -377,19 +439,26 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
                 return true;
             struct view_item *it = &v->item[i];
             bool get = msg == 0x104b || msg == 0x1073;
+            if (get && (w->style & 0x1000) && (msg == 0x1073 || (p[0] & 1)) &&
+                !owner_text(w, i, p[2]))
+                return true;
             if (get) {
                 if (msg == 0x1073 || (p[0] & 1))
                     read_text(p[5], p[6], it->text[p[2]]);
-                if (p[0] & 4)
+                if (msg == 0x104b && (p[0] & 2))
+                    p[7] = it->image;
+                if (msg == 0x104b && (p[0] & 4))
                     p[8] = it->data;
-                if (p[0] & 8)
+                if (msg == 0x104b && (p[0] & 8))
                     p[3] = it->state & p[4];
             } else {
                 if ((msg == 0x1074 || (p[0] & 1)) && !copy_text(&it->text[p[2]], p[5]))
                     return true;
-                if (p[0] & 4)
+                if (msg == 0x104c && (p[0] & 2))
+                    it->image = (int)p[7];
+                if (msg == 0x104c && (p[0] & 4))
                     it->data = p[8];
-                if ((p[0] & 8) && (p[3] & 2))
+                if (msg == 0x104c && (p[0] & 8) && (p[3] & 2))
                     select_row(w, i);
                 w->dirty = true;
             }
@@ -427,16 +496,24 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
         case 0x1032:
             *result = v->selected >= 0;
             return true;
+        case 0x102c: /* LVM_GETITEMSTATE */
+            *result = i >= 0 ? v->item[i].state & lp : 0;
+            return true;
         case 0x102b:
-            if (lp && i >= 0) {
+            if (lp && (i >= 0 || wp == (CW)-1)) {
                 CW *p = PTR(CW, lp);
-                if (p[3] & 2)
-                    select_row(w, i);
-                else {
-                    v->item[i].state &= ~p[4];
-                    if (v->selected == i)
-                        v->selected = -1;
+                for (unsigned n = 0; n < v->count; n++) {
+                    int index = (int)v->order[n];
+                    if (wp != (CW)-1 && index != i) continue;
+                    if ((p[4] & 2) && (p[3] & 2)) {
+                        select_row(w, index);
+                        if (w->view != v) return true;
+                        if (v->selected != index) continue; /* selection was vetoed */
+                    }
+                    list_state(w, index, (v->item[index].state & ~p[4]) | (p[3] & p[4]));
+                    if (w->view != v) return true;
                 }
+                w->dirty = true;
             }
             *result = 1;
             return true;
@@ -467,12 +544,24 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
             v->last_tap = i;
             v->tap_time = twice ? 0 : now;
             select_row(w, i);
+            if (w->view != v || !v->item[i].used) return true;
             if (v->tree) {
                 if (twice || (int16_t)lp < 24)
                     expand(w, i, 3);
-            } else if (twice) {
-                CW n[] = {w->handle, w->id, (CW)-3, (CW)row, 0};
+            } else if (msg == 0x202 || twice) {
+                /* NM_CLICK/NM_DBLCLK carry a complete NMITEMACTIVATE, including
+                 * lParam. A short NMHDR+iItem leaves original handlers reading
+                 * unrelated stack words as their persistent record ID. */
+                CW n[] = {w->handle, w->id, msg == 0x100 ? (CW)-114 : twice ? (CW)-3 : (CW)-2, (CW)row, 0,
+                    0, 0, 0, (CW)(int32_t)(int16_t)lp, (CW)(int32_t)(int16_t)(lp >> 16),
+                    v->item[i].data, 0};
                 ce_send(w->parent, 0x4e, w->id, WORD(n));
+                if (w->view != v) return true;
+                if (twice && msg == 0x202) {
+                    n[2] = (CW)-114; /* LVN_ITEMACTIVATE follows a double click. */
+                    ce_send(w->parent, 0x4e, w->id, WORD(n));
+                    if (w->view != v) return true;
+                }
             }
             if (row < (int)v->top)
                 v->top = row;
@@ -524,6 +613,10 @@ void ce_view_draw(struct ce_window *w)
         }
         for (unsigned c = 0; c < (v->tree ? 1 : MAX(1u, v->col_count)); c++) {
             char text[1024];
+            if (!v->tree && (w->style & 0x1000) && !owner_text(w, i, c)) {
+                gfx_reset_clip(&ui.surf);
+                return;
+            }
             ce_narrow(text, sizeof(text), it->text[c]);
             gfx_text(&ui.surf, x + 2, y + 2, ui_font(FONT_R12), text, color, 255);
             x += MAX(24, v->widths[c]);

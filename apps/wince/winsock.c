@@ -69,7 +69,13 @@ static CW result(int r)
 }
 CE_API(socket) { return result(socket(a0, a1, a2)); }
 CE_API(closesocket) { return result(close(a0)); }
-CE_API(connect) { return result(connect(a0, PTR(struct sockaddr, a1), a2)); }
+CE_API(connect)
+{
+    int connected = connect(a0, PTR(struct sockaddr, a1), a2);
+    /* Nonblocking Winsock connect uses WSAEWOULDBLOCK, rather than the
+     * WSAEINPROGRESS code for a blocking operation already in progress. */
+    return connected < 0 && errno == EINPROGRESS ? (ce_error = 10035, (CW)-1) : result(connected);
+}
 CE_API(bind) { return result(bind(a0, PTR(struct sockaddr, a1), a2)); }
 CE_API(listen) { return result(listen(a0, a1)); }
 CE_API(accept) { return result(accept(a0, PTR(struct sockaddr, a1), PTR(socklen_t, a2))); }
@@ -172,7 +178,8 @@ CE_API(gethostbyname)
         return 0;
     }
     strlcpy(t->name, PTR(char, a0), sizeof(t->name));
-    if (net_resolve(t->name, &t->address, 10000) < 0) {
+    int resolved = net_resolve(t->name, &t->address, 10000);
+    if (resolved < 0) {
         ce_error = 11001;
         return 0;
     }
@@ -245,7 +252,19 @@ CE_API(select)
         uint64_t ms = (uint64_t)tv[0] * 1000 + (tv[1] + 999) / 1000;
         timeout = ms > INT32_MAX ? INT32_MAX : (int)ms;
     }
-    int r = poll(fds, count, timeout);
+    /* Glaze's network client serializes a session's shared buffer. Release
+     * it regularly so a socket reader waiting in select cannot prevent
+     * another CE thread from sending the data that drives the connection. */
+    CW started = gz_time_ms();
+    int r;
+    for (;;) {
+        unsigned elapsed = gz_time_ms() - started;
+        int remaining = timeout < 0 ? 25 : elapsed >= (unsigned)timeout ? 0 : timeout - (int)elapsed;
+        r = poll(fds, count, MIN(remaining, 25));
+        if (r || (timeout >= 0 && gz_time_ms() - started >= (unsigned)timeout))
+            break;
+        gz_sleep_ms(1);
+    }
     if (r < 0)
         return result(r);
     unsigned total = 0;

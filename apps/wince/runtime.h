@@ -38,6 +38,8 @@ void *ce_resolve_ole(const char *, const char *);
 void *ce_resolve_winsock(const char *, const char *);
 bool ce_sync_close(CW, bool *);
 bool ce_mapping_close(CW, bool *);
+bool ce_database_close(CW, bool *);
+void *ce_resolve_database(const char *);
 void *ce_resolve_mapping(const char *);
 void *ce_resolve_string(const char *);
 void *ce_resolve_scan(const char *);
@@ -59,7 +61,7 @@ struct ce_message {
     int32_t x, y;
 };
 struct ce_window {
-    CW handle, parent, id, proc, style, user, thread;
+    CW handle, parent, id, proc, style, user, thread, serial;
     struct ce_rect rect;
     WCHAR *text;
     uint32_t length, capacity, cursor, sel_start, sel_end;
@@ -71,16 +73,31 @@ struct ce_window {
     struct ce_view *view;
     CW dialog_proc, dialog_result;
     CW dialog_message_result;
+    CW dialog_user, extra[16];
     bool property_page;
     CW spin_buddy;
+    CW combo_edit;
     unsigned bar_images;
     int32_t spin_low, spin_high;
     bool dialog_done;
+    CW menu;
+    unsigned client_top;
+    bool nonclient;
+    struct {
+        uint16_t value[8], minimum[8], maximum[8], format[64];
+        unsigned range;
+        bool initialized, none;
+    } date;
+    struct {
+        int32_t minimum, maximum, position, track;
+        uint32_t page;
+    } scroll[2];
 };
 struct ce_tabs {
     unsigned count;
     int selected;
     WCHAR text[16][64];
+    CW param[16], image[16], state[16];
 };
 enum { CE_OBJ_BRUSH = 1, CE_OBJ_FONT, CE_OBJ_BITMAP, CE_OBJ_MENU, CE_OBJ_IMAGE_LIST, CE_OBJ_PEN, CE_OBJ_ICON, CE_OBJ_DC, CE_OBJ_REGION };
 struct ce_object {
@@ -130,6 +147,12 @@ bool ce_registry_set_dword(const char *, const char *, uint32_t);
 void ce_post(CW window, CW message, CW wparam, CW lparam);
 CW ce_send(CW window, CW message, CW wparam, CW lparam);
 CW ce_dialog_proc(CW, CW, CW, CW);
+bool ce_modal_allows(CW);
+bool ce_date_message(struct ce_window *, CW, CW, CW, CW *);
+void ce_date_text(struct ce_window *, WCHAR *, unsigned);
+CW ce_tabs_message(struct ce_window *, CW, CW, CW, bool *);
+bool ce_shell_attach_menu(CW, CW, CW);
+gfx_rect ce_client_rect(CW);
 struct ce_window *ce_window(CW);
 bool ce_window_visible(CW);
 struct ce_window *ce_new_window(const WCHAR *klass, const WCHAR *text, CW style, int x, int y, int w, int h,

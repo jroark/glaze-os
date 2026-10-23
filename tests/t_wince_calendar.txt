@@ -1,0 +1,7 @@
+# Original Calendar: open its New appointment editor.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+25000 tap 20 12
+65000 tap 100 130
+66000 text Compatibility appointment
+70000 tap 20 12

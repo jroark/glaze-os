@@ -33,7 +33,7 @@ uint32_t ce_color(CW color)
 
 static gfx_rect rectangle(CW dc, const struct ce_rect *rect)
 {
-    gfx_rect r = ce_window_rect(dc);
+    gfx_rect r = ce_client_rect(dc);
     return gfx_r(r.x + rect->left, r.y + rect->top, rect->right - rect->left, rect->bottom - rect->top);
 }
 
@@ -329,19 +329,7 @@ CE_API(BitBlt)
         return 1;
     }
     gfx_surface saved = ui.surf;
-    gfx_rect r = ce_window_rect(a0);
-    if (dest) {
-        struct ce_object *b = ce_object(dest->bitmap, CE_OBJ_BITMAP);
-        if (!b || b->value != 0x80000000u) {
-            ce_error = 87;
-            return 0;
-        }
-        gfx_surface_init(&ui.surf, (uint16_t *)((uint8_t *)b->data + 52), b->width, b->height,
-                         ALIGN_UP(b->width, 2));
-        /* Writable compatible DIBs use top-down scan lines. */
-        ce_put32((uint8_t *)b->data + 8, (CW)-b->height);
-        r = gfx_r(0, 0, b->width, b->height);
-    }
+    gfx_rect r = ce_client_rect(a0);
     gfx_set_clip(&ui.surf, gfx_r(r.x + (int)a1, r.y + (int)a2, a3, a4));
     ce_draw_bitmap(bitmap, r.x + (int)a1, r.y + (int)a2 - (int)a7, a6, a3, 0xffffffffu);
     ui.surf = saved;
@@ -398,7 +386,7 @@ CE_API(BeginPaint)
     p[1] = 1;
     *PTR(struct ce_rect, a1 + 8) =
         (struct ce_rect){0, 0, w->rect.right - w->rect.left, w->rect.bottom - w->rect.top};
-    gfx_set_clip(&ui.surf, ce_window_rect(a0));
+    gfx_set_clip(&ui.surf, ce_client_rect(a0));
     w->dirty = false;
     return a0;
 }
@@ -576,7 +564,7 @@ static bool drawing_surface(CW handle, gfx_surface *surface, gfx_rect *origin)
     struct memory_dc *dc = memory_dc(handle);
     if (!dc) {
         *surface = ui.surf;
-        *origin = ce_window_rect(handle);
+        *origin = ce_client_rect(handle);
         return true;
     }
     struct ce_object *b = ce_object(dc->bitmap, CE_OBJ_BITMAP);
@@ -618,7 +606,7 @@ CE_API(SelectClipRgn)
         return 0;
     }
     struct memory_dc *dc = memory_dc(a0);
-    gfx_rect origin = ce_window_rect(a0);
+    gfx_rect origin = ce_client_rect(a0);
     struct ce_rect r = region ? *(struct ce_rect *)region->data :
         (struct ce_rect){0, 0, dc ? 0 : origin.w, dc ? 0 : origin.h};
     if (dc) {
@@ -729,7 +717,7 @@ CE_API(Polyline)
 {
     if (a2 > 4096)
         return 0;
-    gfx_rect r = ce_window_rect(a0);
+    gfx_rect r = ce_client_rect(a0);
     struct ce_object *pen = ce_object(selected_pen, CE_OBJ_PEN);
     if (pen && pen->height == 5)
         return 1;
@@ -786,7 +774,7 @@ CE_API(TextOutW)
         return 0;
     }
     ce_narrow(text, a4 * 3 + 1, copy);
-    gfx_rect r = ce_window_rect(a0);
+    gfx_rect r = ce_client_rect(a0);
     gfx_text(&ui.surf, r.x + (int)a1, r.y + (int)a2, ui_font(FONT_R12), text, text_color, 255);
     free(text);
     free(copy);
@@ -805,7 +793,7 @@ CW ce_draw_text(CW a0, CW a1, CW a2, CW a3, CW a4)
     int width = MAX(1, rect->right - rect->left), y = rect->top, widest = 0, lines = 0;
     if ((a4 & 0x24) == 0x24)
         y += (rect->bottom - rect->top - 14) / 2;
-    gfx_rect origin = ce_window_rect(a0), old_clip = ui.surf.clip;
+    gfx_rect origin = ce_client_rect(a0), old_clip = ui.surf.clip;
     if (!(a4 & (0x100 | 0x400)))
         gfx_set_clip(&ui.surf, rectangle(a0, rect));
     for (unsigned pos = 0; pos < length && source[pos];) {
@@ -1068,7 +1056,7 @@ CE_API(ImageList_Draw)
     if (!o || a1 >= ((struct image_list *)o->data)->count)
         return 0;
     struct ce_object *image = &((struct image_list *)o->data)->image[a1];
-    gfx_rect r = ce_window_rect(a2);
+    gfx_rect r = ce_client_rect(a2);
     ce_draw_bitmap(image, r.x + (int)a3, r.y + (int)a4, image->kind == CE_OBJ_ICON ? 0 : image->value,
                    o->width, (a5 & 1) ? o->value : 0xffffffffu);
     return 1;

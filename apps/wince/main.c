@@ -90,6 +90,8 @@ static void *native_symbol(const char *dll, const char *name)
             if (!fn)
                 fn = ce_resolve_mapping(name);
             if (!fn)
+                fn = ce_resolve_database(name);
+            if (!fn)
                 fn = ce_resolve_string(name);
             if (!fn)
                 fn = ce_resolve_thread(name);
@@ -323,28 +325,6 @@ CW ce_find_ordinal(CW handle, uint16_t ordinal)
     return 0;
 }
 
-static CW debug_registration(CW a0, CW a1, CW a2, CW a3, CW target)
-{
-    printf("wince: registering %08x args %08x %08x\n", target, a0, a1);
-    CW result = ce_call(target, a0, a1, a2, a3);
-    printf("wince: registered %08x result %08x\n", target, result);
-    return result;
-}
-static CW debug_registration_bridge(CW target)
-{
-    if (bridge_count + 2 > CE_BRIDGE_BYTES / (CE_BRIDGE_WORDS * 4u))
-        ce_fatal("Too many WinCE imports");
-    CW fn = WORD(debug_registration);
-    uint32_t *p = bridges + bridge_count * CE_BRIDGE_WORDS;
-    bridge_count += 2;
-    uint32_t code[16] = {0x27bdffe0u, 0xafbf001cu,
-        0x3c080000u | (target >> 16), 0x35080000u | (target & 65535u), 0xafa80010u,
-        0x3c190000u | (fn >> 16), 0x37390000u | (fn & 65535u), 0x0320f809u, 0,
-        0x8fbf001cu, 0x27bd0020u, 0x03e00008u, 0, 0, 0, 0};
-    memcpy(p, code, sizeof(code));
-    publish_bridges();
-    return WORD(p);
-}
 CW ce_find_symbol(CW handle, const char *name)
 {
     for (unsigned i = 0; i < library_count; i++) {
@@ -374,8 +354,6 @@ CW ce_find_symbol(CW handle, const char *name)
             uint32_t rva = ce_u32(fp);
             if (!ce_pe_at(&m->pe, m->image, rva, 4))
                 return 0;
-            if (!strcmp(name, "DllRegisterServer"))
-                return debug_registration_bridge(m->base + rva);
             return m->base + rva;
         }
     }
@@ -425,6 +403,11 @@ void ce_shutdown(void)
 int main(void)
 {
     ui_init(SB_STATUS_FULLSCREEN);
+    /* CE supplies a writable Temp directory independently of app setup. */
+    char temporary[FS_PATH_MAX];
+    snprintf(temporary, sizeof(temporary), "%s/data/drive/Temp", res_bundle());
+    if (fs_mkdirs(temporary))
+        ce_fatal("Cannot create WinCE temporary directory");
     ui_keyboard_init(&ce_keyboard);
     if (ui.surf.h != 320)
         ce_fatal("This Glaze build does not support full-screen compatibility apps");

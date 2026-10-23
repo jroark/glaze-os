@@ -48,7 +48,7 @@ def executable():
     u32(432, 4096)
     u32(436, 4608)
     u32(452, 0xc0000040)
-    cursor = 0x2100
+    cursor = 0x2180
     def data(payload):
         nonlocal cursor
         start = cursor
@@ -59,14 +59,16 @@ def executable():
         return data((text + "\0").encode('utf-16le'))
     imports = ['SipSetInfo', 'GetModuleHandleW', 'GetProcAddressW', 'GetCurrentThreadId',
                'CreateDIBSection', 'GetObjectW', 'DeleteObject', 'CreateCompatibleDC',
-               'SelectObject', 'PatBlt', 'DeleteDC']
+               'SelectObject', 'PatBlt', 'DeleteDC', 'BitBlt',
+               'CreateWindowExW', 'GetWindow', 'GetWindowLongW', 'SetWindowLongW',
+               'GetClientRect', 'DestroyWindow', 'SendMessageW', 'SetWindowTextW']
     for i, name in enumerate(imports):
         hint = data(b'\0\0' + name.encode() + b'\0') - 0x10000
         u32(4608 + 0x40 + i * 4, hint)
-        u32(4608 + 0x80 + i * 4, hint)
+        u32(4608 + 0xc0 + i * 4, hint)
     u32(4608, 0x2040)
     u32(4608 + 12, data(b'COREDLL.dll\0') - 0x10000)
-    u32(4608 + 16, 0x2080)
+    u32(4608 + 16, 0x20c0)
     sip = data(struct.pack('<I', 48) + bytes(44))
     core = wide('coredll.dll')
     absent = wide('NoSuchCEFunction')
@@ -75,6 +77,11 @@ def executable():
     dib = data(struct.pack('<IiiHHIIIIII', 40, 9, -2, 1, 1, 0, 0, 0, 0, 0, 0) +
                b'\0\0\0\0\xff\xff\xff\0')
     bitmap = data(bytes(36))  # output bits pointer, handle, BITMAP, DC
+    controls = data(bytes(96))
+    static_class = wide('Static')
+    combo_class = wide('ComboBox')
+    caption = wide('Owner')
+    edit_text = wide('Editable combo')
     code, fixups, labels = [], [], {}
     def emit(*words):
         code.extend(words)
@@ -82,7 +89,7 @@ def executable():
         emit(0x3c000000 | reg << 16 | value >> 16,
              0x34000000 | reg << 21 | reg << 16 | (value & 65535))
     def call(name):
-        load(25, 0x12080 + imports.index(name) * 4)
+        load(25, 0x120c0 + imports.index(name) * 4)
         emit(0x8f390000, 0x0320f809, 0)
     def branch(op, rs, rt, label):
         fixups.append((len(code), label))
@@ -119,7 +126,7 @@ def executable():
     load(14, 73)
     branch(5, 2, 14, 'fail')
     # Six-argument API: explicitly reserve the two stack arguments.
-    emit(0x27bdffe0, 0xafa00010, 0xafa00014)
+    emit(0x27bdffd8, 0xafa00010, 0xafa00014)
     load(4, 0)
     load(5, dib)
     load(6, 0)
@@ -170,21 +177,108 @@ def executable():
     branch(5, 10, 14, 'dib_fail')
     emit(0x912a0002)
     branch(5, 10, 0, 'dib_fail')
+    # Clear one source pixel, then copy right within the same bitmap. The
+    # copy must preserve its original source even though the regions overlap.
+    emit(0x8d040020)
+    load(5, 0)
+    load(6, 0)
+    load(7, 1)
+    load(14, 1)
+    emit(0xafae0010)
+    load(14, 0x42)  # BLACKNESS
+    emit(0xafae0014)
+    call('PatBlt')
+    branch(4, 2, 0, 'dib_fail')
+    load(8, bitmap)
+    emit(0x8d040020, 0xafa40014, 0xafa00018, 0xafa0001c)
+    load(5, 1)
+    load(6, 0)
+    load(7, 8)
+    load(14, 0x00cc0020)
+    emit(0xafae0020)
+    call('BitBlt')
+    branch(4, 2, 0, 'dib_fail')
+    load(8, bitmap)
+    emit(0x8d090000, 0x912a0000)
+    load(14, 63)
+    branch(5, 10, 14, 'dib_fail')
+    emit(0x912a0004)
+    load(14, 255)
+    branch(5, 10, 14, 'dib_fail')
     emit(0x8d040020)
     call('DeleteDC')
     load(8, bitmap)
     emit(0x8d040004)
     call('DeleteObject')
     branch(4, 2, 0, 'dib_fail')
-    emit(0x27bd0020)
+    emit(0x27bd0028)
+    # Owned popups and child controls have different GW_OWNER behavior.
+    # Editable combos expose a real Edit child used by original subclassers.
+    emit(0x27bdffd0)  # twelve-word CreateWindowEx argument area
+    def create_window(klass, style, parent_offset=None):
+        for offset, value in [(16, 0), (20, 0), (24, 80), (28, 40), (36, 100), (40, 0), (44, 0)]:
+            load(14, value)
+            emit(0xafae0000 | offset)
+        if parent_offset is None:
+            emit(0xafa00020)
+        else:
+            load(8, controls)
+            emit(0x8d0e0000 | parent_offset, 0xafae0020)
+        load(4, 0); load(5, klass); load(6, caption); load(7, style)
+        call('CreateWindowExW')
+        branch(4, 2, 0, 'control_fail')
+    def saved_handle(offset, reg=4):
+        load(8, controls)
+        emit(0x8d000000 | reg << 16 | offset)
+    create_window(static_class, 0x10000000)
+    load(8, controls); emit(0xad020000)
+    create_window(static_class, 0x10000000, 0)
+    load(8, controls); emit(0xad020008)
+    emit(0x00402025); load(5, 4); call('GetWindow')
+    saved_handle(0, 14)
+    branch(5, 2, 14, 'control_fail')
+    create_window(combo_class, 0x50000002, 0)
+    load(8, controls); emit(0xad020004)
+    emit(0x00402025); load(5, 4); call('GetWindow')
+    branch(5, 2, 0, 'control_fail')
+    saved_handle(4); load(5, 5); call('GetWindow')
+    branch(4, 2, 0, 'control_fail')
+    load(8, controls); emit(0xad02000c)
+    emit(0x00402025); load(5, -4 & 0xffffffff); call('GetWindowLongW')
+    branch(4, 2, 0, 'control_fail')
+    saved_handle(4); load(5, edit_text); call('SetWindowTextW')
+    branch(4, 2, 0, 'control_fail')
+    saved_handle(12); load(5, 0xe); load(6, 0); load(7, 0); call('SendMessageW')
+    load(14, len('Editable combo'))
+    branch(5, 2, 14, 'control_fail')
+    saved_handle(12); load(5, controls + 16); call('GetClientRect')
+    branch(4, 2, 0, 'control_fail')
+    load(8, controls); emit(0x8d090018)
+    load(14, 62)
+    branch(5, 9, 14, 'control_fail')
+    saved_handle(0); load(5, 0); load(6, 123); call('SetWindowLongW')
+    saved_handle(0); load(5, -21 & 0xffffffff); load(6, 456); call('SetWindowLongW')
+    saved_handle(0); load(5, 0); call('GetWindowLongW')
+    load(14, 123)
+    branch(5, 2, 14, 'control_fail')
+    saved_handle(0); load(5, -21 & 0xffffffff); call('GetWindowLongW')
+    load(14, 456)
+    branch(5, 2, 14, 'control_fail')
+    saved_handle(0); call('DestroyWindow')
+    branch(4, 2, 0, 'control_fail')
+    emit(0x27bd0030)
     load(2, 37)
     branch(4, 0, 0, 'return')
     labels['fail'] = len(code)
     load(2, 1)
     branch(4, 0, 0, 'return')
     labels['dib_fail'] = len(code)
-    emit(0x27bd0020)
+    emit(0x27bd0028)
     load(2, 2)
+    branch(4, 0, 0, 'return')
+    labels['control_fail'] = len(code)
+    emit(0x27bd0030)
+    load(2, 3)
     labels['return'] = len(code)
     emit(0x8fb00010, 0x8fbf0014, 0x27bd0018, 0x03e00008, 0)
     for i, label in fixups:

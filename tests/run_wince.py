@@ -117,6 +117,10 @@ def main():
                         help="assert a persisted REG_SZ value")
     parser.add_argument("--check-file-utf16", nargs=2, action="append", default=[], metavar=("PATH", "TEXT"),
                         help="assert UTF-16 text in a file relative to this app's private data directory")
+    parser.add_argument("--check-file-text", nargs=2, action="append", default=[], metavar=("PATH", "TEXT"),
+                        help="assert UTF-8 text in a file relative to this app's private data directory")
+    parser.add_argument("--check-no-file", action="append", default=[], metavar="PATH",
+                        help="assert a private data file is absent by listing its existing parent directory")
     args = parser.parse_args()
     if args.package and (args.app or any((args.check_document, args.check_owner, args.check_regedit, args.check_tweak))):
         parser.error("--package cannot be combined with NAND app selection or app-specific checks")
@@ -190,16 +194,31 @@ def main():
     for line in lines:
         if any(token in line for token in ("wince:", "fault:", "PANIC", "sb: launch")):
             print(line)
-    if args.check_file_utf16:
+    if args.check_file_utf16 or args.check_file_text:
         subprocess.run(["make", "-C", "host", "../out/host/wince-fs-read"], check=True)
-        for path, expected in args.check_file_utf16:
+        for path, expected, encoding in [(p, t, "utf-16le") for p, t in args.check_file_utf16] + [
+                (p, t, "utf-8") for p, t in args.check_file_text]:
             if any(p in ("", ".", "..") for p in path.split("/")) or "\\" in path:
                 raise ValueError("private file assertion requires a relative data path")
             result = subprocess.run([str(root / "out/host/wince-fs-read"), str(work / "glaze.bin"),
                 f"/Applications/{app_id}.app/data/{path}"], capture_output=True, check=True)
-            if not expected.encode("utf-16le") + b"\0\0" in result.stdout:
-                raise RuntimeError(f"missing persisted UTF-16 text in {path}")
+            needle = (expected + ("\0" if encoding == "utf-16le" else "")).encode(encoding)
+            if needle not in result.stdout:
+                raise RuntimeError(f"missing persisted {encoding} text in {path}")
         print("wince: persisted private file assertions verified")
+    if args.check_no_file:
+        subprocess.run(["make", "-C", "host", "../out/host/wince-fs-read"], check=True)
+        for path in args.check_no_file:
+            parts = path.split("/")
+            if any(p in ("", ".", "..") for p in parts) or "\\" in path:
+                raise ValueError("private file assertion requires a relative data path")
+            parent = "/".join(parts[:-1])
+            result = subprocess.run([str(root / "out/host/wince-fs-read"), str(work / "glaze.bin"),
+                "--list", f"/Applications/{app_id}.app/data/{parent}"], capture_output=True, check=True)
+            names = [line.split(" ", 2)[2] for line in result.stdout.decode().splitlines()]
+            if parts[-1] in names:
+                raise RuntimeError(f"private file still exists: {path}")
+        print("wince: private file deletion assertions verified")
     if args.check_key or args.check_string:
         subprocess.run(["make", "-C", "host", "../out/host/wince-fs-read"], check=True)
         result = subprocess.run([str(root / "out/host/wince-fs-read"), str(work / "glaze.bin"),
