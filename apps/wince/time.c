@@ -112,6 +112,7 @@ CE_API(GetLocaleInfoW)
     case 0x20: value = "dddd, MMMM d, yyyy"; break;
     case 0x21: case 0x22: value = "0"; break; /* month/day/year */
     case 0x23: value = locale_24h ? "1" : "0"; break;
+    case 0x25: case 0x26: case 0x27: value = "0"; break; /* h:mm:ss and M/d/yyyy */
     case 0x28: value = "AM"; break;
     case 0x29: value = "PM"; break;
     case 0x1003: value = "h:mm:ss tt"; break;
@@ -191,5 +192,5 @@ void *ce_resolve_time(const char *name)
 {
     for (unsigned i = 0; i < ARRAY_SIZE(exports); i++)
         if (!strcmp(name, exports[i].name)) return exports[i].address;
-    return NULL;
+    return ce_resolve_timezone(name);
 }

@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#define CE_DIALOG_ITEMS 128
 struct ce_dialog_item {
     uint32_t style;
     uint16_t id, klass[64], text[256], text_resource;
@@ -10,10 +11,11 @@ struct ce_dialog_item {
 };
 struct ce_dialog_template {
     uint32_t style;
-    int16_t width, height;
+    int16_t x, y, width, height;
+    uint16_t menu;
     uint16_t title[256];
     unsigned count;
-    struct ce_dialog_item items[32];
+    struct ce_dialog_item items[CE_DIALOG_ITEMS];
 };
 bool ce_dialog_decode(struct ce_dialog_template *, const void *, size_t);
 #endif

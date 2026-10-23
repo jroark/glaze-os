@@ -56,8 +56,10 @@ implemented. Decorative resource icons are not drawn.
 
 This is a selected-app milestone, not general Windows CE compatibility.
 PocketNotepad's Search, Font and About dialogs remain unvalidated; process creation,
-arbitrary vendor DLLs, original installers, networking and multimedia APIs are
-not implemented. The editor currently supports typing and deletion; clipboard,
+general vendor DLL compatibility, original installers and multimedia APIs are
+not implemented. IPv4 Winsock adapters support the original AIM client's local
+server sign-on and bidirectional messaging; see the converted-app notes below.
+The editor currently supports typing and deletion; clipboard,
 undo, scrolling and touch placement of the caret are not yet supported.
 Calling an unimplemented import shows its DLL/function name and a
 "Cannot Run WinCE App" screen; Home still works. Unused unsupported imports are
@@ -131,8 +133,9 @@ general implicit-call or WinCE kernel support.
 `apps/wince` implements a bounded PE32/MIPS loader and the WinCE service subset.
 It supports section loading, zero-filled data, named/ordinal imports, resources,
 and HIGHLOW/MIPS_JMPADDR relocations. The selected binaries load at their
-preferred addresses. Only the packaged `LC.dll` is loaded as an original DLL;
-the remaining supported libraries are service adapters. TLS, managed images,
+preferred addresses. Packaged original DLLs can also load, including relocation
+when their preferred address is unavailable. Supported OS libraries use service
+adapters. PE TLS directories, managed images,
 delay imports and other relocation formats are rejected.
 
 Every import has a MIPS tail-call bridge that sets `t9` before entering GCC
@@ -222,6 +225,69 @@ a default WinCE icon when an executable has no icon resource), and writes:
 
 ## Validation
 
+### Converted packages and REQ
+
+The test runner accepts `--package` instead of `--image` and derives the app ID
+and executable from `Info`. It validates package paths and bounds, installs into
+a disposable NAND, and replaces the embedded runner with the current build.
+`--net` inserts the NE2000; `--headless` uses SDL's dummy video/audio drivers.
+`--no-build` reuses the existing NAND boot code, runner and **already compiled input
+script**, so use it only after building the desired script.
+
+REQ's original tree, report list, menus and dialogs support this registry workflow:
+
+```sh
+python3 tests/run_wince.py --package out/cbea/cbea.req.gzp \
+  --input tests/t_wince_req.txt --seconds 65 --headless --expect-exit 0 \
+  --check-key 'HKLM\SOFTWARE\GlazeCompat' \
+  --check-string 'HKLM\SOFTWARE\GlazeCompat' Greeting 'Hello from REQ'
+```
+
+The script creates the key beneath the package's seeded SOFTWARE branch, saves
+`Greeting`, and closes REQ. The assertions read its private registry directly from
+NAND. To inspect the value after a cold boot, use the printed run directory:
+
+```sh
+python3 tests/run_wince.py --package out/cbea/cbea.req.gzp \
+  --input tests/t_wince_req_reopen.txt --seconds 35 --headless \
+  --reuse-fs out/cbea.req-EXAMPLE/glaze.bin \
+  --check-string 'HKLM\SOFTWARE\GlazeCompat' Greeting 'Hello from REQ'
+```
+
+`tests/t_wince_req_modify.txt` reopens the existing string, changes it to
+`Updated by REQ`, and closes the app. Run it against the save image with
+`--seconds 60 --expect-exit 0` and the corresponding `--check-string` assertion.
+The REQ scripts allow additional startup time for the larger compatibility runner.
+Reused filesystems must contain the same runner as the current build.
+Each run writes `report.json` with loaded modules, unresolved imports, runtime
+errors, and the compositor's launch/memory measurements, alongside serial logs
+and a screenshot.
+
+The MIPS adapters must compile with `-fno-optimize-sibling-calls`. Their uniform
+twelve-word C signature does not mean an original caller reserved twelve argument
+words. GCC sibling calls between adapters could overwrite that caller's saved
+return address. A synthetic executable exercises this exact small-stack call:
+
+```sh
+python3 tests/make_wince_abi.py
+python3 tests/run_wince.py --package out/wince-abi.gzp \
+  --seconds 14 --headless --expect-exit 37
+```
+
+The host suite covers tree notifications/deletion, report-list item data,
+recursive/named mutexes, events, thread completion, explicit TLS and per-thread
+errors, BSTR strings, and Winsock nonblocking I/O and descriptor sets. Explicit
+TLS APIs are distinct from unsupported PE TLS directories.
+
+AIM and the Casio PIM suite remain bring-up targets. AIM can load its original
+Xprt, Xpcs, Xptl, CoolUtils, CoolSocket and CoolBucky DLLs, but its complete login
+flow and message exchange against the existing `oos` Docker service remain
+unfinished. PIM applications still require vendor services and persistent CE
+database APIs; local data workflows and Mail account setup are not supported yet.
+No shared PIM/native Glaze database is exposed.
+
+### Original NAND apps
+
 ```sh
 make -C host wince-test
 python3 tests/run_wince.py --image ../be300/nand/beshell.bin --app calculator
@@ -309,3 +375,85 @@ card; FAT16 and FAT32 tests also passed with the new truncation cases.
 Calculator's original engine produced 5 for 2 + 3; Notepad's saved
 document was verified from NAND and reopened after a cold boot. The observed
 first launches left about 12 MiB free on the 16 MiB emulator.
+
+### Converted application bring-up
+
+The additional runtime services cover the supplied AIM and Casio PIM binaries:
+
+- Original threads, critical sections, events, mutexes and thread-local storage;
+  embedded CE thread/error/TLS traps are translated in the private loaded image.
+- Named anonymous mappings with independent handle and view lifetimes. File-backed
+  mappings remain unsupported.
+- Per-app file timestamps in `data/filetimes`, including enumeration, rename and
+  copy; timestamps are buffered until close. `data/drive/Temp` is created at launch.
+- A persistent catalog for empty CE databases in `data/databases`. Creating,
+  opening, closing and querying an empty alarm catalog work. Record writing,
+  database change notifications and Casio alarm export remain unsupported.
+- UTC/local FILETIME conversion using Glaze's configured time zone, numeric wide
+  scanning, and additional CRT string operations. `_wtol` matches the supplied
+  COREDLL's hexadecimal extension, used by Tasks' hidden record-ID column.
+- Editable combo children, tab item data, owner-data report lists, dialog
+  subclassing, command bars in modal loops, and larger bounded dialog templates.
+  Report lists preserve item images, send changing/changed and activation
+  notifications, and honor selection vetoes. OEM menu state uses CE menu flags.
+- Writable DIB sections for indexed, RGB555/RGB565, 24-bit and 32-bit pixels,
+  memory-DC copies and source-independent pattern blits.
+
+Tasks saves its original record in `data/drive/ToDo/00000001`; create, append/save,
+cold reopen/modify, and cold-launch deletion have been verified against the actual NAND.
+Contacts saves
+`data/drive/Address/00000001`; entering “Compatibility Contact” produces the
+original app's sorted display name “Contact, Compatibility”. Notes saves plain
+text in `data/drive/Text/Text1.txt`. These are separate private stores, not Glaze's
+native PIM databases. Form scrolling and the other PIM edit/delete workflows
+remain under validation. Calendar saves its original appointment record in
+`data/drive/Appointment/00000001`, with date values and editable fields. Scheduled
+alarms remain unsupported; the no-reminder save path is validated. Mail remains blocked by its
+original NFC C++ framework dependency, which is absent from the CBEA package.
+A ROM export-name snapshot is not a runnable replacement for that DLL.
+BibleReader (`OTKJ`) currently stops at the unsupported COREDLL `_setjmp` call;
+its startup baseline does not establish document-reading support.
+
+Private-file assertions support both encodings used by the original apps:
+
+```sh
+python3 tests/run_wince.py --package out/cbea/cbea.tasks.gzp \
+  --input tests/t_wince_tasks.txt --seconds 120 --headless \
+  --check-file-utf16 drive/ToDo/00000001 'Compatibility task'
+python3 tests/run_wince.py --package out/cbea/cbea.contacts.gzp \
+  --input tests/t_wince_contacts.txt --seconds 140 --headless \
+  --check-file-utf16 drive/Address/00000001 'Contact, Compatibility'
+python3 tests/run_wince.py --package out/cbea/cbea.notes.gzp \
+  --input tests/t_wince_notes.txt --seconds 140 --headless \
+  --check-file-text drive/Text/Text1.txt 'Compatibility note'
+```
+
+Use `--reuse-fs <previous-run>/glaze.bin` with the corresponding reopen script
+for a cold-launch check. The runner must match the current build. Script times
+are guest milliseconds; allow more host time when several emulators run together.
+`--check-no-file` verifies deletion by listing an existing private parent
+directory. The Tasks modify/delete scripts exercise the original UI; report-list
+selection queries include `LVM_GETITEMSTATE` and masked state updates. Double
+clicks send both `NM_DBLCLK` and `LVN_ITEMACTIVATE`, with the complete item payload.
+The modify script presses Right before typing to collapse the original app's
+selected subject, then appends ` updated` and saves the same record.
+
+The original AIM client requires a complete first registration launch, followed
+by another launch using its saved registry and `Xpcs_Registry.dat`. Its server is
+configured through private `HKCU\Software\America Online\AimCE\Config` values
+`Host` (REG_SZ) and `Port` (REG_DWORD). Both the login address and the OSCAR
+server's advertised BOS address must be reachable from the emulator; guest
+`127.0.0.1` addresses the guest. `tests/t_wince_aim_message.txt` uses local test
+accounts “Glaze User” and “GlazeBob”. The original client sent “Compatibility
+ping” to a local `aim-test` echo account and displayed its “echo from aim-test”
+reply in the original conversation window. Notification sounds use Glaze's default
+sound when the requested CE WAV is absent; memory/resource WAV playback is not
+implemented.
+
+`make -C host wince-test` exercises these services under ASan/UBSan, including
+concurrent `select` and `send` over the serialized native network transport,
+nonblocking connect errors, mapping lifetime, TLS isolation, date-picker ranges,
+tab item data, report-list selection vetoes and activation data, CE hexadecimal
+record IDs, owner-data callbacks, and cold file-time reloads. The synthetic
+ABI package additionally checks owned-popup lookup, separate window extra data,
+editable combo children and writable/overlapping bitmap operations on MIPS.
