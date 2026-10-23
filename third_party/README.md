@@ -4,6 +4,8 @@ Vendored projects (local changes are listed below):
 
 | Directory | Project | Version | License |
 | --- | --- | --- | --- |
+| `totalsms/` | [TotalSMS](https://github.com/ITotalJustice/TotalSMS), Master System CPU/VDP and cartridge mappers; scheduler dependency | `05bbb8bbd931` | MIT; pins and port changes in `totalsms/UPSTREAM.md`; original integer PSG in `packages/mastersystem/psg.c` |
+| `clownmdemu/` | [ClownMDEmu](https://github.com/Clownacy/clownmdemu), Genesis CPU/VDP/FM/PSG, Clown68000 and ClownZ80 | `88ef45a65855` | AGPL-3.0-or-later; clowncommon ISC; dependency pins and port changes in `clownmdemu/UPSTREAM.md` |
 | `gnuboy/` | [gnuboy](https://github.com/rofl0r/gnuboy), DMG/CGB CPU, graphics and integer APU | `4c2f6c441eb3` | GPL-2.0-or-later, `gnuboy/COPYING`; election in `NOTICE`, local changes in `UPSTREAM.md` |
 | `infones/` | [InfoNES](https://github.com/jay-kumogata/InfoNES), CPU/PPU/integer APU and mappers 0–4 | `fe3295c0a86b` | Apache-2.0, `infones/LICENSE`; port changes in `infones/UPSTREAM.md` |
 | `littlefs/` | [littlefs](https://github.com/littlefs-project/littlefs) | v2.11 (`6cb4e86540ec`) | BSD-3-Clause, `littlefs/LICENSE.md` |

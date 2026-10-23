@@ -1,0 +1,4 @@
+TotalSMS, Copyright (c) 2021 ITotalJustice, MIT. Scheduler, Copyright 2024 TotalJustice, MIT.
+Integer SN76489 backend and Glaze integration: Glaze project, GPLv3.
+Source: https://github.com/jroark/glaze-os
+Provenance and changes: third_party/totalsms/UPSTREAM.md

@@ -1,0 +1,33 @@
+# One package (mastersystem.gzp or genesis.gzp) plus its demo named test.sms/test.gen.
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+6500 tap 120 64
+8500 tap 120 64
+10500 tap 120 242
+15000 tap 120 203
+16000 key home
+18000 tap 90 192
+20000 tap 100 65
+22000 key right
+23000 key ok
+24000 key esc
+25000 tap 210 31
+26000 tap 65 207
+28000 tap 210 31
+29000 tap 175 207
+31000 tap 210 31
+32000 tap 65 247
+33000 tap 180 247
+34000 tap 180 247
+35000 tap 120 167
+36000 tap 120 167
+37000 tap 210 31
+40000 tap 25 31
+42000 tap 100 132
+44000 tap 100 65
+46000 tap 210 31
+47000 tap 120 127
+49000 key home
+51000 tap 90 192
+53000 key right
+54000 key ok

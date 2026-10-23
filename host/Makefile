@@ -261,3 +261,28 @@ gameboy-save-test:
 	python3 $< --output-dir $(dir $@) --mode dmg
 ../out/pkg-res/gameboy/demo.gbc: ../tools/mkgbdemo.py
 	python3 $< --output-dir $(dir $@) --mode cgb
+
+# Sega adapters use original cartridges generated only into ignored output.
+SMS_CORE := $(filter-out ../packages/mastersystem/main.c ../packages/mastersystem/save.c,$(wildcard ../packages/mastersystem/*.c))
+GENESIS_CORE := $(filter-out ../packages/genesis/main.c ../packages/genesis/save.c,$(wildcard ../packages/genesis/*.c))
+SMS_FLAGS := -I../third_party/totalsms -I../third_party/totalsms/scheduler -DSMS_PIXEL_WIDTH=16 -DSMS_LITTLE_ENDIAN=1
+SEGA_TEST_FLAGS := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefined
+mastersystem-test: ../out/pkg-res/mastersystem/demo.sms
+	@mkdir -p ../out/host
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-test ../tests/sega.c $(SMS_CORE)
+	../out/host/sms-test $< ../out/host/sms.ppm
+genesis-test: ../out/pkg-res/genesis/demo.gen
+	@mkdir -p ../out/host
+	$(CC) $(SEGA_TEST_FLAGS) -DTEST_GENESIS -o ../out/host/genesis-test ../tests/sega.c $(GENESIS_CORE)
+	../out/host/genesis-test $< ../out/host/genesis.ppm
+../out/pkg-res/mastersystem/demo.sms: ../tools/mksegademo.py
+	python3 $< sms --output $@
+../out/pkg-res/genesis/demo.gen: ../tools/mksegademo.py
+	python3 $< genesis --output $@
+.PHONY: mastersystem-test genesis-test
+
+sms-banks-test:
+	@mkdir -p ../out/host
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-banks ../tests/sms_banks.c $(SMS_CORE) ../tests/sega_audio_stub.c
+	../out/host/sms-banks
+.PHONY: sms-banks-test

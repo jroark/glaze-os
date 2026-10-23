@@ -1,0 +1,5 @@
+ClownMDEmu, Clown68000 and ClownZ80 by Clownacy, AGPLv3-or-later.
+Clowncommon, Copyright (c) 2021–2023 Clownacy, ISC.
+Glaze integration distributed under AGPLv3.
+Source: https://github.com/jroark/glaze-os
+Provenance and changes: third_party/clownmdemu/UPSTREAM.md
