@@ -1013,7 +1013,8 @@ CW ce_modal_run(CW handle)
             break;
         /* A focused multiline ES_WANTRETURN edit keeps Enter. */
         struct ce_window *target = ce_window(focus);
-        bool wants_return = target && !strcasecmp(target->klass, "Edit") && (target->style & 0x1004) == 0x1004;
+        bool wants_return =
+            target && !strcasecmp(target->klass, "Edit") && (target->style & 0x1004) == 0x1004;
         if (m.message == 0x100 && ((m.wparam == 13 && !wants_return) || m.wparam == 27)) {
             ce_send(handle, 0x111, m.wparam == 13 ? 1 : 2, 0);
         } else if (m.message == 0x100 && m.wparam == 9) {

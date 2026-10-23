@@ -27,7 +27,8 @@ static void check(const char *format, const uintptr_t *args, unsigned count, con
         assert(0);
     }
 }
-#define A(...) ((const uintptr_t[]){__VA_ARGS__}), sizeof((const uintptr_t[]){__VA_ARGS__}) / sizeof(uintptr_t)
+#define A(...)                                                                                        \
+    ((const uintptr_t[]){__VA_ARGS__}), sizeof((const uintptr_t[]){__VA_ARGS__}) / sizeof(uintptr_t)
 
 int main(void)
 {

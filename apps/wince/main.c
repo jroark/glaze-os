@@ -147,7 +147,8 @@ CW ce_core_proc(const char *name, uint16_t ordinal)
 {
     char symbol[256];
     if (!name) {
-        if (!ordinals || !ce_ordinal_find(ordinals, ordinal_size, "coredll.dll", ordinal, symbol, sizeof(symbol)))
+        if (!ordinals ||
+            !ce_ordinal_find(ordinals, ordinal_size, "coredll.dll", ordinal, symbol, sizeof(symbol)))
             return 0;
         name = symbol;
     }

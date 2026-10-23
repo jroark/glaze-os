@@ -20,6 +20,7 @@ void ce_reg_clear(struct ce_registry *);
 bool ce_reg_exists(const struct ce_registry *, const char *);
 int ce_reg_create(struct ce_registry *, const char *);
 int ce_reg_delete(struct ce_registry *, const char *);
+int ce_reg_delete_tree(struct ce_registry *, const char *);
 const char *ce_reg_child(const struct ce_registry *, const char *, unsigned);
 struct ce_reg_value *ce_reg_value_at(struct ce_registry *, const char *, unsigned);
 struct ce_reg_value *ce_reg_find(struct ce_registry *, const char *, const char *);

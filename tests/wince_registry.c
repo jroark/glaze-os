@@ -74,6 +74,18 @@ int main(int argc, char **argv)
     assert(copy->value_count == 3 && !ce_reg_find(copy, "HKCU", "D"));
     assert(!ce_reg_set(copy, "HKCU", "A", 4, binary, 4));
     free(large);
+    ce_reg_clear(copy);
+    assert(!ce_reg_create(copy, "HKCU\\App\\A\\Deep"));
+    assert(!ce_reg_create(copy, "HKCU\\App\\B"));
+    assert(!ce_reg_create(copy, "HKCU\\Apple"));
+    assert(!ce_reg_set(copy, "HKCU\\App\\A\\Deep", "v", 4, binary, 4));
+    assert(!ce_reg_set(copy, "HKCU\\App", "w", 4, binary, 4));
+    assert(!ce_reg_set(copy, "HKCU\\Apple", "x", 4, binary, 4));
+    assert(ce_reg_delete_tree(copy, "HKCU") == 5);
+    assert(ce_reg_delete_tree(copy, "HKCU\\Missing") == 2);
+    assert(!ce_reg_delete_tree(copy, "hkcu\\app"));
+    assert(!ce_reg_exists(copy, "HKCU\\App") && !ce_reg_exists(copy, "HKCU\\App\\A\\Deep"));
+    assert(ce_reg_exists(copy, "HKCU\\Apple") && copy->value_count == 1 && copy->key_count == 1);
     ce_reg_clear(r);
     for (int i = 1; i < argc; i++) {
         FILE *f = fopen(argv[i], "rb");

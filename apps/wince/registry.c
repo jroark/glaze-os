@@ -179,6 +179,29 @@ int ce_reg_delete(struct ce_registry *r, const char *key)
         }
     return 2;
 }
+/* Windows CE's RegDeleteKey also removes the key's subkeys and their
+ * values. The longest descendant never has children of its own. */
+int ce_reg_delete_tree(struct ce_registry *r, const char *key)
+{
+    if (root(key))
+        return 5;
+    if (!ce_reg_exists(r, key))
+        return 2;
+    for (;;) {
+        int deepest = -1;
+        for (unsigned i = 0; i < r->key_count; i++)
+            if (below(r->keys[i], key) && (deepest < 0 || strlen(r->keys[i]) > strlen(r->keys[deepest])))
+                deepest = (int)i;
+        if (deepest < 0)
+            break;
+        char child[256];
+        strcpy(child, r->keys[deepest]);
+        int error = ce_reg_delete(r, child);
+        if (error)
+            return error;
+    }
+    return ce_reg_delete(r, key);
+}
 static const char *name_at(const uint8_t *p, size_t size, size_t pos, uint32_t n, unsigned max)
 {
     if (!n || n > max || pos > size || n > size - pos || p[pos + n - 1] || memchr(p + pos, 0, n - 1))

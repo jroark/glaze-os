@@ -950,10 +950,12 @@ CE_API(RegDeleteKeyW)
         return 87;
     if (snprintf(path, sizeof(path), "%s\\%s", key, name) >= (int)sizeof(path))
         return 87;
+    size_t length = strlen(path);
     for (unsigned i = 0; i < ARRAY_SIZE(reg_handles); i++)
-        if (reg_handles[i].handle && !strcasecmp(reg_handles[i].path, path))
+        if (reg_handles[i].handle && !strncasecmp(reg_handles[i].path, path, length) &&
+            (!reg_handles[i].path[length] || reg_handles[i].path[length] == '\\'))
             return 5;
-    CW error = ce_reg_delete(&registry, path);
+    CW error = ce_reg_delete_tree(&registry, path);
     return error ? error : reg_save() ? 0 : 5;
 }
 
@@ -1315,7 +1317,8 @@ CE_API(CreateFileW)
                     if (!(flags & (FS_O_WRITE | FS_O_TRUNC))) {
                         open_path = res_path;
                         flags = FS_O_READ;
-                    } else if (!((flags & FS_O_TRUNC) ? make_parent(path) : copy_bundled_to_drive(res_path, path))) {
+                    } else if (!((flags & FS_O_TRUNC) ? make_parent(path)
+                                                      : copy_bundled_to_drive(res_path, path))) {
                         ce_error = 5;
                         return 0xffffffffu;
                     }

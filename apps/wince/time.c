@@ -69,9 +69,9 @@ static CW format_time(bool date, CW flags, CW input, CW format, CW out, CW capac
         if (date)
             default_format = (flags & 2) ? "dddd, MMMM d, yyyy" : (flags & 8) ? "MMMM yyyy" : "M/d/yyyy";
         else if (flags & 1)
-            default_format = (flags & 8) ? "HH" : (flags & 4) ? "h" : "h tt";
+            default_format = ((flags & 8) || locale_24h) ? "HH" : (flags & 4) ? "h" : "h tt";
         else if (flags & 2)
-            default_format = (flags & 8) ? "HH:mm" : (flags & 4) ? "h:mm" : "h:mm tt";
+            default_format = ((flags & 8) || locale_24h) ? "HH:mm" : (flags & 4) ? "h:mm" : "h:mm tt";
         else
             default_format = ((flags & 8) || locale_24h) ? "HH:mm:ss" : (flags & 4) ? "h:mm:ss" : "h:mm:ss tt";
         ce_widen(pattern, ARRAY_SIZE(pattern), default_format);
@@ -94,32 +94,69 @@ CE_API(GetTimeFormatW)
 }
 CE_API(GetLocaleInfoW)
 {
+    /* LOCALE_NOUSEROVERRIDE and LOCALE_USE_CP_ACP change nothing here;
+     * LOCALE_RETURN_NUMBER returns a numeric field as a DWORD. */
+    bool number = (a1 & 0x20000000u) != 0;
+    CW type = a1 & 0x0fffffffu;
     const char *value;
-    char first_day[] = {(char)('0' + locale_first_day), 0};
-    WCHAR *override = locale_format(a1);
-    if (override && *override) {
+    char text[16], first_day[] = {(char)('0' + locale_first_day), 0};
+    WCHAR *override = locale_format(type);
+    if (override && *override && !number) {
         CW required = ce_wlen(override) + 1;
         if (!a3) return required;
         if (!a2 || a3 < required) { ce_error = 122; return 0; }
         memcpy(PTR(void, a2), override, required * 2);
         return required;
     }
-    switch (a1) {
+    switch (type) {
+    case 0xc: value = ","; break;               /* SLIST */
+    case 0xd: value = "1"; break;               /* IMEASURE: U.S. */
     case 0xe: value = "."; break;
+    case 0xf: value = ","; break;               /* STHOUSAND */
+    case 0x10: value = "3;0"; break;            /* SGROUPING */
+    case 0x11: value = "2"; break;              /* IDIGITS */
+    case 0x12: value = "1"; break;              /* ILZERO */
+    case 0x14: value = "$"; break;              /* SCURRENCY */
     case 0x1d: value = "/"; break;
     case 0x1e: value = ":"; break;
     case 0x1f: value = "M/d/yyyy"; break;
     case 0x20: value = "dddd, MMMM d, yyyy"; break;
     case 0x21: case 0x22: value = "0"; break; /* month/day/year */
     case 0x23: value = locale_24h ? "1" : "0"; break;
+    case 0x24: value = "1"; break;              /* ICENTURY */
+    case 0x25: value = locale_24h ? "1" : "0"; break; /* ITLZERO */
+    case 0x26: case 0x27: value = "0"; break;   /* IDAYLZERO, IMONLZERO */
     case 0x28: value = "AM"; break;
     case 0x29: value = "PM"; break;
     case 0x1003: value = "h:mm:ss tt"; break;
     case 0x100c: value = first_day; break;
     default:
+        /* SDAYNAME1-7 and SABBREVDAYNAME1-7 start on Monday. */
+        if (type >= 0x2a && type <= 0x4f) {
+            unsigned i = type < 0x31 ? type - 0x2a : type < 0x38 ? type - 0x31
+                       : type < 0x44 ? type - 0x38 : type - 0x44;
+            value = type < 0x38 ? ce_day_names[(i + 1) % 7] : ce_month_names[i];
+            bool abbreviated = (type >= 0x31 && type < 0x38) || type >= 0x44;
+            strlcpy(text, value, abbreviated ? 4 : sizeof(text));
+            value = text;
+            break;
+        }
         printf("wince: unsupported locale field %x\n", a1);
         ce_error = 87;
         return 0;
+    }
+    if (number) {
+        if (value[0] < '0' || value[0] > '9' || (value[1] && (value[1] < '0' || value[1] > '9'))) {
+            ce_error = 1004;
+            return 0;
+        }
+        if (!a3) return 2;
+        if (!a2 || a3 < 2) { ce_error = 122; return 0; }
+        CW n = 0;
+        for (const char *p = value; *p; p++)
+            n = n * 10 + (CW)(*p - '0');
+        ce_put32(PTR(void, a2), n);
+        return 2;
     }
     CW required = strlen(value) + 1;
     if (!a3) return required;
