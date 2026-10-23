@@ -1,8 +1,9 @@
 # Cold boot using --reuse-fs from the save test. Open the persisted document.
 3000 drag 40 280 235 280 500
 4500 tap 90 192
-7000 tap 16 12
-8000 tap 35 60
-9000 tap 40 54
-9200 text compatibility.txt
-11000 tap 180 150
+# Leave time for PE loading and the first window to become interactive.
+9000 tap 16 12
+10000 tap 35 60
+11000 tap 40 54
+11200 text compatibility.txt
+13000 tap 180 150

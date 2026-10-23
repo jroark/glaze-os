@@ -1,12 +1,13 @@
 # Original Owner settings imported by run_wince.py.
 3000 drag 40 280 235 280 500
 4500 tap 90 192
-7000 tap 60 80
-7500 text Alex from Glaze
+# Leave time for PE loading and the first window to become interactive.
+9000 tap 60 80
+9500 text Alex from Glaze
 # Switch tabs while the keyboard is open; hidden edits must not receive text.
-9000 tap 180 40
-10000 tap 60 100
-10500 text Original app compatibility
-11500 tap 16 156
+11000 tap 180 40
+12000 tap 60 100
+12500 text Original app compatibility
+13500 tap 16 156
 # Original toolbar close command writes the app's registry and closes the app.
-12500 tap 210 14
+14500 tap 210 14
