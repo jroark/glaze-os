@@ -124,16 +124,18 @@ static struct image *image_get(struct addrspace *as, const struct romfs_entry *r
     if (!rom) {
         uint32_t count = ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE;
         for (uint32_t i = 0; i < count; i++) {
-            void *page = page_alloc_colour(i * PAGE_SIZE);
+            void *page = page_alloc_colour_raw(i * PAGE_SIZE);
             if (!page) {
                 for (uint32_t j = 0; j < i; j++) page_free((void *)KSEG0(im->frames[j]));
                 page_free(im); return NULL;
             }
             im->frames[i] = PHYS(page);
-            if (copy_from_as(as, page, src + i * PAGE_SIZE, MIN(PAGE_SIZE, size - i * PAGE_SIZE))) {
+            uint32_t n = MIN(PAGE_SIZE, size - i * PAGE_SIZE);
+            if (copy_from_as(as, page, src + i * PAGE_SIZE, n)) {
                 for (uint32_t j = 0; j <= i; j++) page_free((void *)KSEG0(im->frames[j]));
                 page_free(im); return NULL;
             }
+            memset((uint8_t *)page + n, 0, PAGE_SIZE - n);
             mm_sync_code(page, PAGE_SIZE);
         }
     }

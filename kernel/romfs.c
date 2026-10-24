@@ -119,7 +119,7 @@ static uint32_t page_pa(uint32_t idx)
         return ram_pa + idx * PAGE_SIZE;
     if (cache[idx])
         return (uint32_t)(cache[idx] - 1) * PAGE_SIZE;
-    uint8_t *page = page_alloc_colour(idx * PAGE_SIZE);
+    uint8_t *page = page_alloc_colour_raw(idx * PAGE_SIZE);     /* all read below */
     if (!page)
         return 0;
     for (uint32_t i = 0; i < NAND_PER_PAGE; i++)

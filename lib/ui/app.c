@@ -1,6 +1,7 @@
 /* libui: connection to SpringBoard, event queue, presentation. */
 
 #include "sound.h"
+#include "transition.h"
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
@@ -113,6 +114,7 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
                 ui_invalidate_all();
             else if (ev->type == GZ_EV_APP_DEACTIVATE) {
                 suspend_next = !bg_running;
+                uitr_release();
                 if (touching) {
                     touching = false;
                     deactivate_held = true;

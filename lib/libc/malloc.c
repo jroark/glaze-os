@@ -1,6 +1,8 @@
 /*
- * First-fit allocator with coalescing, grown in 64 KiB+ chunks from
+ * First-fit allocator with coalescing, grown in 64 KiB chunks from
  * SYS_MMAP_ANON. Blocks carry an 8-byte header; sizes are 8-byte aligned.
+ * Requests of 64 KiB or more get a mapping of their own, marked by bit 0 of
+ * the size, which free returns to the kernel; the chunks are never returned.
  * One lock covers the heap once the process has threads.
  */
 
@@ -17,6 +19,9 @@ struct block {
 #define HDR         8u
 #define CHUNK       (64u * 1024u)
 #define MIN_SPLIT   32u
+#define BIG         CHUNK
+#define PAGE        4096u
+#define MAPPED      1u          /* size bit: the block is its own mapping */
 
 static struct block *free_list;
 static struct gz_mutex lock = GZ_MUTEX_INIT;
@@ -57,6 +62,19 @@ static bool grow(size_t need)
     return true;
 }
 
+/* Zeroed, since the kernel hands out zeroed pages. */
+static void *map_big(size_t n)
+{
+    size_t len = ALIGN_UP(n + HDR, PAGE);
+    if (len < n)
+        return NULL;
+    struct block *b = gz_mmap_anon(len);
+    if (!b)
+        return NULL;
+    b->size = (len - HDR) | MAPPED;
+    return (char *)b + HDR;
+}
+
 static void *malloc_unlocked(size_t n)
 {
     if (!n)
@@ -92,6 +110,8 @@ static void free_unlocked(void *p)
 
 void *malloc(size_t n)
 {
+    if (n >= BIG)
+        return map_big(n);
     gz_mutex_lock(&lock);
     void *p = malloc_unlocked(n);
     gz_mutex_unlock(&lock);
@@ -100,6 +120,10 @@ void *malloc(size_t n)
 
 void free(void *p)
 {
+    if (p && ((struct block *)((char *)p - HDR))->size & MAPPED) {
+        gz_munmap_anon((char *)p - HDR);
+        return;
+    }
     gz_mutex_lock(&lock);
     free_unlocked(p);
     gz_mutex_unlock(&lock);
@@ -107,6 +131,10 @@ void free(void *p)
 
 void *calloc(size_t n, size_t m)
 {
+    if (m && n > (size_t)-1 / m)
+        return NULL;
+    if (n * m >= BIG)
+        return map_big(n * m);
     void *p = malloc(n * m);
 
     if (p)
@@ -119,11 +147,12 @@ void *realloc(void *p, size_t n)
     if (!p)
         return malloc(n);
     struct block *b = (struct block *)((char *)p - HDR);
-    if (b->size >= n)
+    size_t size = b->size & ~(size_t)MAPPED;
+    if (size >= n)
         return p;
     void *q = malloc(n);
     if (q) {
-        memcpy(q, p, b->size);
+        memcpy(q, p, size);
         free(p);
     }
     return q;

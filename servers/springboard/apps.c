@@ -30,12 +30,19 @@ static bool on_card(int app)
 static void load_icon(int app)
 {
     char path[FS_PATH_MAX];
+    struct fs_stat st;
     gfx_image img;
 
     free(icon_data[app]);
-    icon_data[app] = malloc(ICON_MAX);
+    icon_data[app] = NULL;
     snprintf(path, sizeof(path), "%s/res/icon.gzi", sb_apps[app].path);
-    int n = icon_data[app] ? fs_read_file(path, icon_data[app], ICON_MAX) : GZ_ENOMEM;
+    int n = fs_stat(path, &st);
+    if (!n && st.size && st.size <= ICON_MAX) {
+        icon_data[app] = malloc(st.size);
+        n = icon_data[app] ? fs_read_file(path, icon_data[app], st.size) : GZ_ENOMEM;
+    } else if (!n) {
+        n = GZ_EINVAL;
+    }
     if (n > 0 && gfx_image_parse(&img, icon_data[app], (size_t)n)) {
         sb_set_icon(app, &img);
         return;

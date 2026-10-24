@@ -60,6 +60,7 @@ int gz_proc_set_bg(int pid, int state)
 
 void uisnd_event(const struct gz_input_event *e) { sounds++; }
 void uisnd_sounded(void) {}
+void uitr_release(void) {}
 void audio_sound(int sound) {}
 void res_set_bundle(const char *bundle) {}
 

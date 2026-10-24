@@ -53,6 +53,7 @@ static inline void *gz_mmap_anon(uint32_t len)
     int r = GZ_SC1(SYS_MMAP_ANON, len);
     return r < 0 ? NULL : (void *)r;
 }
+static inline int gz_munmap_anon(void *va) { return GZ_SC1(SYS_MUNMAP_ANON, va); }
 static inline int gz_shm_create(uint32_t len) { return GZ_SC1(SYS_SHM_CREATE, len); }
 static inline void *gz_shm_map(int id)
 {

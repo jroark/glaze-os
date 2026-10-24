@@ -74,6 +74,7 @@ enum {
     SYS_NAND_READ,          /* the whole NAND, in a RAM boot only */
     SYS_NAND_PROG,
     SYS_NAND_ERASE,
+    SYS_MUNMAP_ANON,        /* free a whole SYS_MMAP_ANON allocation at a0 */
     SYS_COUNT
 };
 
