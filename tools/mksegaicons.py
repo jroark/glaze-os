@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Regenerate Glaze's original Sega app icons (Pillow required)."""
+"""Regenerate Glaze's original Sega and TurboGrafx app icons (Pillow required)."""
 from pathlib import Path
 from PIL import Image, ImageDraw
 import struct
 root=Path(__file__).resolve().parents[1]
-for app,bg in [('mastersystem','#c43b34'),('genesis','#4257a0')]:
+for app,bg in [('mastersystem','#c43b34'),('genesis','#4257a0'),('gamegear','#348c99'),('turbografx16','#ba6c28')]:
     im=Image.new('RGB',(57,57),bg);d=ImageDraw.Draw(im)
     d.rounded_rectangle((4,8,52,33),radius=5,fill='#242831',outline='#cbd0dc',width=2)
-    if app=='mastersystem':
+    if app=='gamegear':
+        d.rectangle((18,12,39,29),fill='#78b4ba',outline='#11151b',width=2)
+        d.rectangle((9,18,14,21),fill='#c1c6d2');d.rectangle((10,16,12,23),fill='#c1c6d2')
+        d.ellipse((44,19,47,22),fill='#d44249')
+    elif app=='turbografx16':
+        d.rectangle((10,12,35,29),fill='#10151c');d.line((14,16,31,16),fill='#d17a38',width=3)
+        d.rectangle((40,13,46,25),fill='#9ba4ad')
+    elif app=='mastersystem':
         d.rectangle((9,12,46,16),fill='#ab2f2b');d.rectangle((12,20,42,24),fill='#11151b')
     else:
         d.ellipse((15,11,42,29),fill='#080d15',outline='#707a89',width=2)

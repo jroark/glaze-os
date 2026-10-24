@@ -1,0 +1,4 @@
+Original Glaze Sega demo, generator tools/mksegademo.py and icons
+are dedicated to the public domain under CC0 1.0.
+https://creativecommons.org/publicdomain/zero/1.0/
+All ROM binaries are generated only into ignored out/ build output.

@@ -1,0 +1,1 @@
+#include "../mastersystem/hash.c"
