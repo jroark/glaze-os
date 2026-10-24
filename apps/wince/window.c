@@ -19,7 +19,7 @@ static unsigned class_serial;
 static struct ce_message queue[QUEUE];
 static unsigned head, tail;
 static struct gz_mutex queue_lock = GZ_MUTEX_INIT;
-static CW focus, capture, modal;
+static CW focus, capture, modal, pressed;
 static CW window_serial;
 
 static bool quitting;
@@ -40,6 +40,7 @@ static bool is_edit(const struct ce_window *w)
 }
 static CW builtin_proc(CW, CW, CW, CW);
 static void draw_control(struct ce_window *);
+static void click_button(struct ce_window *);
 static unsigned handle_index(CW handle)
 {
     return handle - 0x70000000u;
@@ -208,6 +209,7 @@ struct ce_window *ce_new_window(const WCHAR *klass, const WCHAR *text, CW style,
                 break;
             }
     w->proc = proc ? proc : WORD(builtin_proc);
+    w->erase = true;
     if (!strcasecmp(w->klass, "msctls_updown32")) {
         w->spin_high = 100;
         if (style & 0x10)
@@ -376,6 +378,22 @@ static CW spin_proc(struct ce_window *w, CW msg, CW wp, CW lp)
         return 0;
     }
 }
+CW ce_FillRect(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
+/* WM_ERASEBKGND fills the client area with the class's hbrBackground. */
+static CW erase_background(struct ce_window *w, CW dc)
+{
+    for (unsigned j = 0; j < ARRAY_SIZE(classes); j++)
+        if (classes[j].atom && !strcasecmp(classes[j].name, w->klass)) {
+            CW brush = classes[j].info[7];
+            if (!brush)
+                return 0;
+            struct ce_rect r = {0, 0, w->rect.right - w->rect.left,
+                                MAX(0, w->rect.bottom - w->rect.top - (int)w->client_top)};
+            ce_FillRect(dc, WORD(&r), brush, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            return 1;
+        }
+    return 0;
+}
 static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
 {
     struct ce_window *w = ce_window(handle);
@@ -393,6 +411,13 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
         if (edit && message == 0x111 && lp == edit->handle) {
             unsigned code = wp >> 16;
             if (code == 0x300) set_text(w, edit->text);
+            /* As on Windows, focus selects the whole text, so typing
+             * replaces it (WorldTALK's address box). */
+            if (code == 0x100) {
+                edit->sel_start = 0;
+                edit->sel_end = edit->cursor = edit->length;
+                edit->dirty = true;
+            }
             unsigned notification = code == 0x300 ? 5 : code == 0x100 ? 3 : code == 0x200 ? 4 : 0;
             return notification ? ce_send(w->parent, 0x111, w->id | notification << 16, handle) : 0;
         }
@@ -439,6 +464,8 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
     case 0xf:
         draw_control(w);
         return 0;
+    case 0x14:
+        return erase_background(w, wp);
     case 0xc:
         return set_text(w, PTR(WCHAR, lp));
     case 0xd: {
@@ -465,6 +492,9 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
     case 0xf1: /* BM_SETCHECK */
         w->checked = MIN(wp, 2u);
         w->dirty = true;
+        return 0;
+    case 0xf5: /* BM_CLICK */
+        click_button(w);
         return 0;
     case 0xc5: /* EM_SETLIMITTEXT */
         w->text_limit = wp ? MIN(wp, 65535u) : 65535;
@@ -519,23 +549,40 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
     case 0xc2:
         replace_selection(w, PTR(WCHAR, lp));
         return 1;
-    case 0x102:
+    case 0x102: {
         if (!is_edit(w) || (w->style & 0x800))
             return 0;
+        /* ES_MULTILINE alone takes Enter and Tab; ES_NUMBER, ES_UPPERCASE and
+         * ES_LOWERCASE filter typed characters. */
+        bool multiline = (w->style & 4) != 0;
         if (wp == 8) {
             if (w->sel_start == w->sel_end && w->cursor)
                 w->sel_start = w->cursor - 1;
             static WCHAR empty[1];
             replace_selection(w, empty);
-        } else if (wp >= 32 || wp == 13 || wp == 10 || wp == 9) {
-            WCHAR text[3] = {(WCHAR)wp, 0, 0};
-            if (wp == 13) {
-                text[0] = '\r';
-                text[1] = '\n';
-            }
+        } else if (wp == 13 || wp == 10) {
+            static const WCHAR line[] = {'\r', '\n', 0};
+            if (multiline)
+                replace_selection(w, line);
+        } else if (wp == 9) {
+            static const WCHAR tab[] = {9, 0};
+            if (multiline)
+                replace_selection(w, tab);
+        } else if (wp >= 32 && wp < 65536) {
+            WCHAR ch = (WCHAR)wp;
+            if ((w->style & 0x2000) && (ch < '0' || ch > '9'))
+                return 0;
+            bool small = (ch >= 'a' && ch <= 'z') || (ch >= 0xe0 && ch <= 0xfe && ch != 0xf7);
+            bool capital = (ch >= 'A' && ch <= 'Z') || (ch >= 0xc0 && ch <= 0xde && ch != 0xd7);
+            if ((w->style & 8) && small)
+                ch -= 32;
+            else if ((w->style & 0x10) && capital)
+                ch += 32;
+            WCHAR text[2] = {ch, 0};
             replace_selection(w, text);
         }
         return 0;
+    }
     case 0x100:
         if (wp == 0x25 && w->cursor)
             w->cursor--;
@@ -631,10 +678,13 @@ static void draw_control(struct ce_window *w)
             return;
         }
         gfx_fill(&ui.surf, r, 0xc0c0c0);
-        if ((w->style & 15) == 2 || (w->style & 15) == 3) {
+        unsigned kind = w->style & 15;
+        if (kind == 2 || kind == 3 || kind == 4 || kind == 9) {
             gfx_fill(&ui.surf, gfx_r(r.x + 1, r.y + 3, 13, 13), 0xffffff);
-            if (w->checked)
+            if (w->checked && (kind == 2 || kind == 3))
                 gfx_text(&ui.surf, r.x + 2, r.y + 2, ui_font(FONT_B12), "x", 0, 255);
+            else if (w->checked)
+                gfx_fill(&ui.surf, gfx_r(r.x + 4, r.y + 6, 7, 7), 0x000000);
             struct ce_rect label = {18, 0, r.w, r.h};
             ce_draw_text(w->handle, WORD(w->text), 0xffffffffu, WORD(&label), 0x10);
         } else {
@@ -667,13 +717,19 @@ void ce_redraw_all(void)
             windows[i].dirty = true;
 }
 
-void ce_render(void)
+bool ce_screen_dirty = true;
+
+/* The idle message loop presents only when a window repainted or drew
+ * through a DC; explicit renders (UpdateWindow, popups, keyboard) always do. */
+static void render(bool force)
 {
+    bool drawn = force || ce_screen_dirty;
     for (unsigned i = 0; i < WINDOWS; i++) {
         struct ce_window *w = &windows[i];
         if (!w->handle || !ce_window_visible(w->handle) || !w->dirty)
             continue;
         w->dirty = false;
+        drawn = true;
         if (w->proc == WORD(builtin_proc) && !w->dialog_proc)
             draw_control(w);
         else
@@ -685,6 +741,8 @@ void ce_render(void)
             if (windows[j].handle && windows[j].parent == w->handle)
                 windows[j].dirty = true;
     }
+    if (!drawn)
+        return;
     if (ce_keyboard_open && !ui.hardware_keyboard)
         ui_draw_keyboard(&ui.surf, &ce_keyboard, 320 - UI_KB_H);
     if (modal) {
@@ -702,8 +760,57 @@ void ce_render(void)
     }
     ce_shell_draw();
     ce_list_popup_draw();
+    ce_screen_dirty = false;
     ui_invalidate_all();
     ui_present();
+}
+
+void ce_render(void)
+{
+    render(true);
+}
+
+static bool is_button(const struct ce_window *w)
+{
+    return !strcasecmp(w->klass, "Button") || !strcasecmp(w->klass, "CSOButton");
+}
+
+/* A completed click: auto check boxes toggle, and an auto radio button clears
+ * the others in its WS_GROUP run (creation order stands in for z-order). */
+static void click_button(struct ce_window *w)
+{
+    unsigned kind = w->style & 15;
+    if (kind == 3)
+        w->checked ^= 1;
+    if (kind == 9) {
+        unsigned self = handle_index(w->handle), start = 0;
+        for (unsigned i = 0; i <= self; i++)
+            if (windows[i].handle && windows[i].parent == w->parent && (windows[i].style & 0x20000u))
+                start = i;
+        for (unsigned i = start; i < WINDOWS; i++) {
+            struct ce_window *sibling = &windows[i];
+            if (!sibling->handle || sibling->parent != w->parent)
+                continue;
+            if (i > self && (sibling->style & 0x20000u))
+                break;
+            if ((sibling->style & 15) == 9 && is_button(sibling)) {
+                sibling->checked = sibling == w;
+                sibling->dirty = true;
+            }
+        }
+    }
+    w->dirty = true;
+    ce_post(w->parent, 0x111, w->id, w->handle);
+}
+
+/* The SIP's Enter is VK_RETURN, as on WinCE; TranslateMessage makes the
+ * WM_CHAR, so edits store CR/LF rather than a bare LF. */
+static void post_return(void)
+{
+    if (focus) {
+        ce_post(focus, 0x100, 13, 0);
+        ce_post(focus, 0x101, 13, 0);
+    }
 }
 
 bool ce_modal_allows(CW handle)
@@ -725,13 +832,28 @@ bool ce_modal_allows(CW handle)
 }
 static void input(const struct gz_input_event *e)
 {
+    /* Home: tell top-level windows before libui suspends the process (it
+     * may then be ended without warning), and repaint on return. */
+    if (e->type == GZ_EV_APP_DEACTIVATE || e->type == GZ_EV_APP_ACTIVATE) {
+        bool active = e->type == GZ_EV_APP_ACTIVATE;
+        for (unsigned i = 0; i < WINDOWS; i++)
+            if (windows[i].handle && !windows[i].parent && windows[i].visible)
+                ce_send(windows[i].handle, 6, active, 0);
+        if (active) {
+            ce_redraw_all();
+            ce_screen_dirty = true;
+        }
+        return;
+    }
     if (ce_list_popup_input(e))
         return;
     if (ce_shell_input(e)) {
         return;
     }
     if (e->type == GZ_EV_TEXT) {
-        if (focus)
+        if (e->code == '\n' || e->code == '\r')
+            post_return();
+        else if (focus)
             ce_post(focus, 0x102, e->code, 0);
         return;
     }
@@ -794,7 +916,7 @@ static void input(const struct gz_input_event *e)
         ui_keyboard_event(&ce_keyboard, e, 320 - UI_KB_H, &changed);
         if (capture)
             ce_post(capture, 0x1F, 0, 0);
-        capture = 0;
+        capture = pressed = 0;
         if (changed)
             ce_render();
         return;
@@ -804,7 +926,9 @@ static void input(const struct gz_input_event *e)
     if (ce_keyboard_open && !ui.hardware_keyboard && e->y >= 320 - UI_KB_H) {
         bool changed = false;
         int c = ui_keyboard_event(&ce_keyboard, e, 320 - UI_KB_H, &changed);
-        if (c && focus)
+        if (c == '\n')
+            post_return();
+        else if (c && focus)
             ce_post(focus, 0x102, c, 0);
         if (changed)
             ce_render();
@@ -824,6 +948,7 @@ static void input(const struct gz_input_event *e)
     gfx_rect r = ce_window_rect(w->handle);
     if (e->type == GZ_EV_TOUCH_DOWN) {
         change_focus(w->handle);
+        pressed = is_button(w) ? w->handle : 0;
         if (ce_keyboard_open && w->dialog_proc && e->y < r.y + 24) {
             ce_keyboard_open = false;
             ce_redraw_all();
@@ -836,12 +961,11 @@ static void input(const struct gz_input_event *e)
     CW msg = e->type == GZ_EV_TOUCH_DOWN ? 0x201 : e->type == GZ_EV_TOUCH_UP ? 0x202 : 0x200;
     ce_post(w->handle, msg, e->type == GZ_EV_TOUCH_UP ? 0 : 1,
             (uint16_t)(e->x - r.x) | (CW)(uint16_t)(e->y - r.y) << 16);
-    if (e->type == GZ_EV_TOUCH_UP &&
-        (!strcasecmp(w->klass, "Button") || !strcasecmp(w->klass, "CSOButton"))) {
-        if ((w->style & 15) == 3)
-            w->checked ^= 1;
-        w->dirty = true;
-        ce_post(w->parent, 0x111, w->id, w->handle);
+    /* A click needs the press and the release on the same button. */
+    if (e->type == GZ_EV_TOUCH_UP) {
+        if (pressed == w->handle && gfx_rect_contains(r, e->x, e->y))
+            click_button(w);
+        pressed = 0;
     }
 }
 
@@ -895,14 +1019,40 @@ CE_API(UnregisterClassW)
     memset(&classes[index], 0, sizeof(classes[index]));
     return 1;
 }
+/* The system control classes the runtime draws itself. */
+static bool system_class(CW name)
+{
+    static const char *const names[] = {"Button", "Edit", "Static", "ListBox", "ComboBox", "ScrollBar",
+        "msctls_updown32", "msctls_statusbar32", "SysTabControl32", "SysListView32", "SysTreeView32",
+        "SysDateTimePick32", "SysMonthCal32"};
+    char text[64];
+    if (name < 65536)
+        return false;
+    ce_narrow(text, sizeof(text), PTR(WCHAR, name));
+    for (unsigned i = 0; i < ARRAY_SIZE(names); i++)
+        if (!strcasecmp(names[i], text))
+            return true;
+    return false;
+}
+/* System classes report the built-in procedure, which subclassing
+ * controls (WorldTALK's address bar edit) call for default handling. */
 CE_API(GetClassInfoW)
 {
     int index = class_index(a1);
-    if (index < 0 || !a2) {
-        ce_error = index < 0 ? 1411 : 87;
+    bool known = index >= 0 || system_class(a1);
+    if (!known || !a2) {
+        ce_error = known ? 87 : 1411;
         return 0;
     }
-    memcpy(PTR(void, a2), classes[index].info, sizeof(classes[index].info));
+    if (index >= 0) {
+        memcpy(PTR(void, a2), classes[index].info, sizeof(classes[index].info));
+        return 1;
+    }
+    uint8_t *p = PTR(uint8_t, a2); /* WNDCLASSW */
+    memset(p, 0, 40);
+    ce_put32(p + 4, WORD(builtin_proc));
+    ce_put32(p + 16, a0);
+    ce_put32(p + 36, a1);
     return 1;
 }
 CE_API(GetClassNameW)
@@ -935,7 +1085,10 @@ CE_API(CreateWindowExW)
 {
     struct ce_window *w =
         ce_new_window(PTR(WCHAR, a1), PTR(WCHAR, a2), a3, (int)a4, (int)a5, (int)a6, (int)a7, a8, a9, 0, a11);
-    return w ? w->handle : 0;
+    if (!w)
+        return 0;
+    w->exstyle = a0;
+    return w->handle;
 }
 CE_API(DefWindowProcW)
 {
@@ -992,7 +1145,7 @@ static bool queued_message(struct ce_message *out, CW window, CW low, CW high, b
 }
 static void pump_messages(unsigned wait)
 {
-    ce_render();
+    render(false);
     CW now = gz_time_ms();
     for (unsigned i = 0; i < ARRAY_SIZE(timers); i++)
         if (timers[i].id && (int32_t)(now - timers[i].deadline) >= 0) {
@@ -1170,7 +1323,11 @@ CW ce_modal_run(CW handle)
         ce_GetMessageW(WORD(&m), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         if (quitting)
             break;
-        if (m.message == 0x100 && (m.wparam == 13 || m.wparam == 27)) {
+        /* A focused multiline ES_WANTRETURN edit keeps Enter. */
+        struct ce_window *target = ce_window(focus);
+        bool wants_return =
+            target && is_edit(target) && (target->style & 0x1004) == 0x1004;
+        if (m.message == 0x100 && ((m.wparam == 13 && !wants_return) || m.wparam == 27)) {
             ce_send(handle, 0x111, m.wparam == 13 ? 1 : 2, 0);
         } else if (m.message == 0x100 && m.wparam == 9) {
             unsigned start = handle_index(focus);
@@ -1235,6 +1392,8 @@ CE_API(InvalidateRect)
     if (!w)
         return 0;
     w->dirty = true;
+    if (a2)
+        w->erase = true;
     return 1;
 }
 CE_API(GetClientRect)
@@ -1345,12 +1504,39 @@ CE_API(GetKeyState)
 {
     return a0 < ARRAY_SIZE(key_state) && key_state[a0] ? 0xffff8000u : 0;
 }
+CE_API(keybd_event)
+{
+    /* Synthesized keys go to the focus, as typed keys do. */
+    if (a0 < ARRAY_SIZE(key_state))
+        key_state[a0] = !(a2 & 2); /* KEYEVENTF_KEYUP */
+    if (focus)
+        ce_post(focus, (a2 & 2) ? 0x101 : 0x100, a0 & 255, 0);
+    return 0;
+}
+CE_API(BringWindowToTop)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w)
+        return 0;
+    w->dirty = true;
+    return 1;
+}
+CE_API(IntersectRect)
+{
+    if (!a0 || !a1 || !a2)
+        return 0;
+    struct ce_rect a = *PTR(struct ce_rect, a1), b = *PTR(struct ce_rect, a2);
+    struct ce_rect r = {MAX(a.left, b.left), MAX(a.top, b.top), MIN(a.right, b.right), MIN(a.bottom, b.bottom)};
+    bool empty = r.left >= r.right || r.top >= r.bottom;
+    *PTR(struct ce_rect, a0) = empty ? (struct ce_rect){0, 0, 0, 0} : r;
+    return !empty;
+}
 CE_API(FindWindowW)
 {
     char klass[64];
     ce_narrow(klass, sizeof(klass), PTR(WCHAR, a0));
     for (unsigned i = 0; i < WINDOWS; i++)
-        if (windows[i].handle && (!a0 || !strcasecmp(windows[i].klass, klass)) &&
+        if (windows[i].handle && !windows[i].parent && (!a0 || !strcasecmp(windows[i].klass, klass)) &&
             (!a1 || !ce_wcmp(windows[i].text, PTR(WCHAR, a1))))
             return windows[i].handle;
     return 0;
@@ -1415,6 +1601,12 @@ CE_API(GetWindowLongW)
         return w->id;
     case -16:
         return w->style;
+    case -20:
+        return w->exstyle;
+    case -6:
+        return ce_main.base;
+    case -8:
+        return w->parent;
     case 4:
         return w->dialog_proc ? w->dialog_proc : w->extra[1];
     case 0:
@@ -1443,6 +1635,9 @@ CE_API(SetWindowLongW)
         break;
     case -16:
         p = &w->style;
+        break;
+    case -20:
+        p = &w->exstyle;
         break;
     case 4:
         p = w->dialog_proc ? &w->dialog_proc : &w->extra[1];
@@ -1664,10 +1859,24 @@ void ce_destroy_window(CW handle)
     for (unsigned i = 0; i < ARRAY_SIZE(timers); i++)
         if (timers[i].window == handle)
             timers[i].id = 0;
+    for (unsigned i = 0; i < ARRAY_SIZE(hotkeys); i++)
+        if (hotkeys[i].window == handle)
+            hotkeys[i].window = 0;
+    /* Handles are reused by slot: queued messages for this window must not
+     * reach its successor. */
+    gz_mutex_lock(&queue_lock);
+    for (unsigned i = tail; i != head; i++)
+        if (queue[i % QUEUE].window == handle)
+            queue[i % QUEUE].window = queue[i % QUEUE].message = 0;
+    gz_mutex_unlock(&queue_lock);
     if (focus == handle)
         focus = 0;
     if (capture == handle)
         capture = 0;
+    if (pressed == handle)
+        pressed = 0;
+    if (modal == handle)
+        modal = 0;
     free(w->text);
     free(w->tabs);
     ce_list_free(w);
@@ -1833,7 +2042,10 @@ CE_API(SipGetInfo)
 }
 CE_API(SipShowIM)
 {
-    ce_keyboard_open = (a0 & 1) != 0;
+    bool open = (a0 & 1) != 0;
+    if (open != ce_keyboard_open)
+        ce_redraw_all(); /* uncover or cover the keyboard area */
+    ce_keyboard_open = open;
     ui_keyboard_init(&ce_keyboard);
     for (unsigned i = 0; i < WINDOWS; i++)
         if (windows[i].handle && !windows[i].parent)
@@ -1873,7 +2085,8 @@ static const struct ce_export exports[] = {
     CE_EXPORT(GetWindowRect),
     CE_EXPORT(MoveWindow),
     CE_EXPORT(ClientToScreen),
-    CE_EXPORT(ScreenToClient), CE_EXPORT(GetKeyState),
+    CE_EXPORT(ScreenToClient), CE_EXPORT(GetKeyState), CE_EXPORT(keybd_event),
+    CE_EXPORT(BringWindowToTop), CE_EXPORT(IntersectRect),
     CE_EXPORT(SetScrollInfo), CE_EXPORT(GetScrollInfo), CE_EXPORT(SetScrollPos),
     CE_EXPORT(FindWindowW),
     CE_EXPORT(GetWindowLongW),

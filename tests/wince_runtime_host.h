@@ -1,5 +1,6 @@
 /* Host adapter: preserve the 32-bit CE ABI while translating test pointers.
  * Production runtime headers and code remain identical to the target build. */
+#define _DEFAULT_SOURCE /* glibc: recursive mutexes and timeval under -std=c11 */
 #define GLAZE_SYS_H
 #define GLAZE_THREAD_H
 #define GZ_THREAD_STACK (64u * 1024u)

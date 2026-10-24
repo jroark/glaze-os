@@ -199,6 +199,13 @@ bool ce_shell_input(const struct gz_input_event *e)
         gfx_rect r = ce_window_rect(w->handle);
         if (!gfx_rect_contains(r, e->x, e->y))
             continue;
+        /* A combo box in the bar (WorldTALK's address) takes its own input. */
+        for (unsigned j = 0; j < CE_WINDOWS; j++) {
+            struct ce_window *child = ce_window(0x70000000u + j);
+            if (child && child->list && child->parent == w->handle && ce_window_visible(child->handle) &&
+                gfx_rect_contains(ce_window_rect(child->handle), e->x, e->y))
+                return false;
+        }
         if (e->type != GZ_EV_TOUCH_UP)
             return true;
         for (unsigned j = 0; j < CE_WINDOWS; j++) {
@@ -435,6 +442,36 @@ CE_API(CSOBar_AddButtons)
     }
     return 1;
 }
+/* CSO.DLL packs hInstance, by-command flag, id or position, and one
+ * CSOBUTTON entry (as AddButtons takes) for the bar's message 0xff3.
+ * WorldTALK swaps its connect/disconnect button this way. The button keeps
+ * its place; its command, caption, state and popup change. */
+CE_API(CSOBar_ChangeButton)
+{
+    if (!ce_window(a0) || !a4)
+        return 0;
+    unsigned position = 0;
+    for (unsigned i = 0; i < CE_WINDOWS; i++) {
+        struct ce_window *child = ce_window(0x70000000u + i);
+        if (!child || child->parent != a0)
+            continue;
+        bool match = a2 ? child->id == a3 : position == a3;
+        position++;
+        if (!match)
+            continue;
+        const uint8_t *p = PTR(uint8_t, a4);
+        CW label = ce_u32(p + 20), item = ce_u32(p + 24);
+        static const WCHAR empty[] = {0};
+        child->id = ce_u32(p);
+        ce_send(child->handle, 0xc, 0, label >= 65536 && label < 0x80000000u ? label : WORD(empty));
+        child->enabled = ce_u32(p + 4) && p[8] == 1;
+        child->user = menu(item) || ce_window(item) ? item : 0;
+        child->dirty = true;
+        return 1;
+    }
+    ce_error = 87;
+    return 0;
+}
 CE_API(CSOBar_DeleteAllButtons)
 {
     struct ce_window *bar = ce_window(a0);
@@ -442,9 +479,8 @@ CE_API(CSOBar_DeleteAllButtons)
         return 0;
     for (unsigned i = 0; i < CE_WINDOWS; i++) {
         struct ce_window *child = ce_window(0x70000000u + i);
-        if (child && child->parent == bar->handle) {
+        if (child && child->parent == bar->handle)
             ce_destroy_window(child->handle);
-        }
     }
     bar->dirty = true;
     return 1;
@@ -503,6 +539,33 @@ CE_API(CSOBar_GetButtonArea)
     *r = (struct ce_rect){0, 0, bar->rect.right - bar->rect.left - (bar->style & 1 ? 24 : 0), 26};
     return 1;
 }
+/* Observed: bar, insert-after, x, y, width, height, SWP_* flags, rows
+ * (WorldTALK: 240 wide, 52 high, two rows). Combo boxes move to the second
+ * row of a two-row bar. */
+CE_API(CSOBar_SetWindowPos)
+{
+    struct ce_window *bar = ce_window(a0);
+    if (!bar)
+        return 0;
+    int rows = (int)a7 > 0 && (int)a7 <= 3 ? (int)a7 : 1;
+    int height = (int)a5 > 0 && (int)a5 <= 120 ? (int)a5 : 26 * rows, row = height / rows;
+    if (!(a6 & 2)) /* SWP_NOMOVE */
+        bar->rect = (struct ce_rect){(int)a2, (int)a3, (int)a2 + (bar->rect.right - bar->rect.left),
+                                     (int)a3 + (bar->rect.bottom - bar->rect.top)};
+    if (!(a6 & 1)) /* SWP_NOSIZE */
+        bar->rect.right = bar->rect.left + (int)MIN(a4, 240u);
+    bar->rect.bottom = bar->rect.top + height;
+    for (unsigned i = 0; rows > 1 && i < CE_WINDOWS; i++) {
+        struct ce_window *child = ce_window(0x70000000u + i);
+        if (child && child->parent == a0 && child->list) {
+            int height = child->rect.bottom - child->rect.top;
+            child->rect.top = row + 2;
+            child->rect.bottom = child->rect.top + height;
+        }
+    }
+    bar->dirty = true;
+    return 1;
+}
 CE_API(CSOBar_GetAdornmentsWidth)
 {
     struct ce_window *bar = ce_window(a0);
@@ -522,6 +585,11 @@ CE_API(CSOBar_GetButtonItem)
     }
     return 0;
 }
+/* CSO.DLL packs the arguments for the bar's message 0xfd5: hInstance,
+ * control id, style, position, a command, x, width and drop height.
+ * WorldTALK's address box is id 103 with WS_VSCROLL | CBS_AUTOHSCROLL |
+ * CBS_DROPDOWN; its WM_COMMAND switch takes 103 as the combo box and the
+ * command, 0x640, as Go. */
 CE_API(CSOBar_InsertComboBox)
 {
     struct ce_window *bar = ce_window(a0);
@@ -529,8 +597,8 @@ CE_API(CSOBar_InsertComboBox)
         return 0;
     static const WCHAR combo[] = {'C', 'o', 'm', 'b', 'o', 'B', 'o', 'x', 0};
     int y = bar->rect.bottom - bar->rect.top > 26 ? 28 : 2;
-    struct ce_window *w = ce_new_window(combo, NULL, a2 | 0x50000000u, (int)a6, y, (int)a7,
-                                       22, a0, a5, 0, 0);
+    struct ce_window *w = ce_new_window(combo, NULL, a3 | 0x50000000u, (int)a6, y, (int)a7,
+                                       22, a0, a2, 0, 0);
     return w ? w->handle : 0;
 }
 CE_API(CommandBar_AddBitmap)
@@ -599,10 +667,10 @@ CE_API(CSOBar_AddAdornments)
 }
 CE_API(CSOBar_Destroy)
 {
-    struct ce_window *w = ce_window(a0);
-    if (!w)
+    if (!ce_window(a0))
         return 0;
     ce_destroy_window(a0);
+    ce_redraw_all();
     return 1;
 }
 CE_API(CoshGetCommandLine)
@@ -692,10 +760,14 @@ CE_API(CGDFlushAlarm)
 CE_API(CSGetUserDiskName)
 {
     /* Matching CS.DLL: suffix, output, capacity in WCHARs, disk selector;
-     * returns the combined length, excluding its terminator. */
+     * returns the combined length, excluding its terminator. Selector 1 is
+     * the user's documents: Clock's \Alarm and Internet's \Internet data
+     * sit in My Documents on original images. */
     static const WCHAR disk[] = {'\\', 'N', 'a', 'n', 'd', ' ', 'D', 'i', 's', 'k', 0};
-    unsigned suffix = ce_wlen(PTR(WCHAR, a0));
-    unsigned length = ARRAY_SIZE(disk) - 1 + suffix;
+    static const WCHAR documents[] = {'\\', 'M', 'y', ' ', 'D', 'o', 'c', 'u', 'm', 'e', 'n', 't', 's', 0};
+    const WCHAR *base = a3 == 1 ? documents : disk;
+    unsigned prefix = ce_wlen(base), suffix = ce_wlen(PTR(WCHAR, a0));
+    unsigned length = prefix + suffix;
     if (suffix > 259 || a2 <= length) {
         ce_error = 122;
         return 0;
@@ -703,8 +775,8 @@ CE_API(CSGetUserDiskName)
     if (a1) {
         WCHAR *out = PTR(WCHAR, a1);
         if (suffix)
-            memmove(out + ARRAY_SIZE(disk) - 1, PTR(void, a0), suffix * 2);
-        memcpy(out, disk, sizeof(disk) - 2);
+            memmove(out + prefix, PTR(void, a0), suffix * 2);
+        memcpy(out, base, prefix * 2);
         out[length] = 0;
         /* CS.DLL also creates the resulting directory tree. pimdb relies
          * on that side effect before creating its index and record files. */
@@ -715,6 +787,17 @@ CE_API(CSGetUserDiskName)
         }
     }
     return length;
+}
+/* Matching CS.DLL: writes the temporary folder to its one argument and
+ * creates it; returns nonzero on success. */
+CE_API(CSGetTempFolder)
+{
+    static const WCHAR temp[] = {'\\', 'T', 'e', 'm', 'p', '\\', 0};
+    char path[FS_PATH_MAX];
+    if (!a0 || !ce_path(path, temp) || fs_mkdirs(path))
+        return 0;
+    memcpy(PTR(void, a0), temp, sizeof(temp));
+    return 1;
 }
 CE_API(OpenClipboard)
 {
@@ -830,23 +913,43 @@ CE_API(MessageBoxW)
     ce_narrow(message, sizeof(message), PTR(WCHAR, a1));
     printf("wince: message box from %08x: %s: %s\n", WORD(__builtin_return_address(0)), title, message);
     unsigned style = a3 & 15;
-    const char *left = "OK", *right = NULL;
-    CW left_id = 1, right_id = 2;
+    const char *left = "OK", *right = NULL, *third = NULL;
+    CW left_id = 1, right_id = 2, third_id = 2, escape_id = 0;
     if (style == 3 || style == 4) {
         left = "Yes";
         right = "No";
         left_id = 6;
         right_id = 7;
-    } else if (style == 1)
+        third = style == 3 ? "Cancel" : NULL;
+        escape_id = style == 3 ? 2 : 0;
+    } else if (style == 1) {
         right = "Cancel";
+        escape_id = 2;
+    } else if (style == 2) {
+        left = "Retry";
+        right = "Ignore";
+        third = "Abort";
+        left_id = 4;
+        right_id = 5;
+        third_id = 3;
+    } else if (style == 5) {
+        left = "Retry";
+        right = "Cancel";
+        left_id = 4;
+        escape_id = 2;
+    } else
+        escape_id = 1;
     gfx_fill(&ui.surf, gfx_r(0, 0, 240, 320), 0xc0c0c0);
     gfx_fill(&ui.surf, gfx_r(0, 0, 240, 24), 0x000080);
     gfx_text(&ui.surf, 6, 4, ui_font(FONT_B12), title, 0xffffff, 255);
     for (unsigned pos = 0, y = 42; message[pos] && y < 218; y += 16) {
         char line[35];
         unsigned n = 0;
-        while (message[pos] && message[pos] != '\n' && n < 34)
-            line[n++] = message[pos++];
+        while (message[pos] && message[pos] != '\n' && n < 34) {
+            if (message[pos] != '\r')
+                line[n++] = message[pos];
+            pos++;
+        }
         if (message[pos] == '\n')
             pos++;
         line[n] = 0;
@@ -857,8 +960,8 @@ CE_API(MessageBoxW)
     ui_draw_button(&ui.surf, l, left, false);
     if (right)
         ui_draw_button(&ui.surf, r, right, false);
-    if (style == 3)
-        ui_draw_button(&ui.surf, c, "Cancel", false);
+    if (third)
+        ui_draw_button(&ui.surf, c, third, false);
     ui_invalidate_all();
     ui_present();
     CW result = 0;
@@ -871,13 +974,13 @@ CE_API(MessageBoxW)
                 result = left_id;
             if (right && gfx_rect_contains(r, e.x, e.y))
                 result = right_id;
-            if (style == 3 && gfx_rect_contains(c, e.x, e.y))
-                result = 2;
+            if (third && gfx_rect_contains(c, e.x, e.y))
+                result = third_id;
         }
-        if (e.type == GZ_EV_KEY_DOWN && e.code == GZ_KEY_ENTER)
+        if (e.type == GZ_EV_KEY_DOWN && (e.code == GZ_KEY_ENTER || e.code == GZ_KEY_OK))
             result = left_id;
         if (e.type == GZ_EV_KEY_DOWN && e.code == GZ_KEY_ESC)
-            result = 2;
+            result = escape_id;
     }
     repaint();
     return result;
@@ -938,7 +1041,7 @@ static CW file_dialog(CW address, bool save)
                 ch = 8;
             if (e.code == GZ_KEY_ESC)
                 done = true;
-            if (e.code == GZ_KEY_ENTER)
+            if (e.code == GZ_KEY_ENTER || e.code == GZ_KEY_OK)
                 e = (struct gz_input_event){.type = GZ_EV_TOUCH_UP, .x = 180, .y = 150};
         }
         if (!ui.hardware_keyboard && e.y >= 320 - UI_KB_H &&
@@ -976,6 +1079,16 @@ static CW file_dialog(CW address, bool save)
             if (gfx_rect_contains(cancel, e.x, e.y))
                 done = true;
             if (gfx_rect_contains(ok, e.x, e.y) && name[0]) {
+                /* lpstrDefExt (OPENFILENAME+60) completes a bare save name. */
+                CW default_ext = ce_u32(ofn) >= 64 ? ce_u32(ofn + 60) : 0;
+                if (save && default_ext && !strchr(name, '.')) {
+                    char ext[16];
+                    ce_narrow(ext, sizeof(ext), PTR(WCHAR, default_ext));
+                    if (ext[0] && strlen(name) + strlen(ext) + 1 < sizeof(name)) {
+                        strlcat(name, ".", sizeof(name));
+                        strlcat(name, ext, sizeof(name));
+                    }
+                }
                 snprintf(full, sizeof(full), "/Documents/%s", name);
                 struct fs_stat st;
                 if (save || (!fs_stat(full, &st) && st.type == FS_FILE)) {
@@ -989,6 +1102,9 @@ static CW file_dialog(CW address, bool save)
                         uint16_t extension = dot ? (uint16_t)(dot - ce_name + 1) : 0;
                         ofn[58] = extension & 255;
                         ofn[59] = extension >> 8;
+                        CW title = ce_u32(ofn + 36), title_capacity = ce_u32(ofn + 40);
+                        if (title && title_capacity > strlen(name))
+                            ce_widen(PTR(WCHAR, title), title_capacity, name);
                         result = 1;
                         done = true;
                     } else {
@@ -1062,7 +1178,8 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CSOBar_DeleteAllButtons),
     CE_EXPORT(CSOBar_ChangeAllButtons), CE_EXPORT(CSOBar_SetButtonState), CE_EXPORT(CSOBar_ChangeMenu),
     CE_EXPORT(CSOBar_GetButtonArea), CE_EXPORT(CSOBar_GetAdornmentsWidth),
-    CE_EXPORT(CSOBar_GetButtonItem), CE_EXPORT(CSOBar_InsertComboBox),
+    CE_EXPORT(CSOBar_GetButtonItem), CE_EXPORT(CSOBar_InsertComboBox), CE_EXPORT(CSOBar_SetWindowPos),
+    CE_EXPORT(CSOBar_ChangeButton),
     {"CSOBar_Show", (void *)ce_CommandBar_Show},
     {"CSOBar_Height", (void *)ce_CommandBar_Height},
     CE_EXPORT(CSOBar_AddAdornments),
@@ -1076,6 +1193,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CGDFlushRegistry),
     CE_EXPORT(CGDFlushAlarm),
     CE_EXPORT(CSGetUserDiskName),
+    CE_EXPORT(CSGetTempFolder),
     CE_EXPORT(OpenClipboard),
     CE_EXPORT(EmptyClipboard),
     CE_EXPORT(CloseClipboard),
@@ -1090,8 +1208,44 @@ static const struct ce_export exports[] = {
     CE_EXPORT(SHAddToRecentDocs),
     CE_EXPORT(SHGetFileInfo),
 };
+/* COMCOMPOSER.DLL is Casio's dial-up manager. Glaze reaches the network
+ * through its card, so no dial-up connection is ever active. Matching the
+ * DLL without a running dialer: ConnectUID_Get lists active connections as
+ * 72-byte records (records, in/out bytes, out count) and returns 0;
+ * ConnectState_Get returns 18; Disconnect has nothing to end. */
+CE_API(DIALUP_ConnectUID_Get)
+{
+    if (a1)
+        *PTR(CW, a1) = 0;
+    if (a2)
+        *PTR(CW, a2) = 0;
+    return 0;
+}
+CE_API(DIALUP_ConnectState_Get)
+{
+    if (a1)
+        *PTR(CW, a1) = 0;
+    return 18;
+}
+CE_API(DIALUP_Disconnect)
+{
+    return 0;
+}
+/* No connection setup exists to read, as the DLL reports for an unknown
+ * one; WorldTALK then uses no proxy. */
+CE_API(COMMSet_Dial_Get)
+{
+    return 18;
+}
 void *ce_resolve_shell(const char *dll, const char *name)
 {
+    if (!strcasecmp(dll, "COMCOMPOSER.dll")) {
+        if (!strcmp(name, "DIALUP_ConnectUID_Get")) return (void *)ce_DIALUP_ConnectUID_Get;
+        if (!strcmp(name, "DIALUP_ConnectState_Get")) return (void *)ce_DIALUP_ConnectState_Get;
+        if (!strcmp(name, "DIALUP_Disconnect")) return (void *)ce_DIALUP_Disconnect;
+        if (!strcmp(name, "COMMSet_Dial_Get")) return (void *)ce_COMMSet_Dial_Get;
+        return NULL;
+    }
     if (!strcasecmp(dll, "Sendto.dll"))
         return !strcmp(name, "SendtoCheck") ? (void *)ce_SendtoCheck : NULL;
     if (!strcasecmp(dll, "clblib.dll")) {

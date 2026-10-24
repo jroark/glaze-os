@@ -52,6 +52,7 @@ bool ce_file_move_times(const char *, const char *);
 void ce_thread_exit(CW) __attribute__((noreturn));
 extern struct ui_keyboard ce_keyboard;
 extern bool ce_keyboard_open;
+extern bool ce_screen_dirty; /* drawn outside WM_PAINT; present on idle */
 
 struct ce_rect {
     int32_t left, top, right, bottom;
@@ -74,6 +75,7 @@ struct ce_window {
     CW dialog_proc, dialog_result;
     CW dialog_message_result;
     CW dialog_user, extra[16];
+    CW exstyle;
     bool property_page;
     CW spin_buddy;
     CW combo_edit;
@@ -83,6 +85,7 @@ struct ce_window {
     CW menu;
     unsigned client_top;
     bool nonclient;
+    bool erase; /* WM_ERASEBKGND is due at the next BeginPaint */
     struct {
         uint16_t value[8], minimum[8], maximum[8], format[64];
         unsigned range;
@@ -99,18 +102,20 @@ struct ce_tabs {
     WCHAR text[16][64];
     CW param[16], image[16], state[16];
 };
-enum { CE_OBJ_BRUSH = 1, CE_OBJ_FONT, CE_OBJ_BITMAP, CE_OBJ_MENU, CE_OBJ_IMAGE_LIST, CE_OBJ_PEN, CE_OBJ_ICON, CE_OBJ_DC, CE_OBJ_REGION };
+enum { CE_OBJ_BRUSH = 1, CE_OBJ_FONT, CE_OBJ_BITMAP, CE_OBJ_MENU, CE_OBJ_IMAGE_LIST, CE_OBJ_PEN, CE_OBJ_ICON, CE_OBJ_DC, CE_OBJ_REGION, CE_OBJ_PALETTE };
 struct ce_object {
     int kind;
     CW value;
     void *data;
     uint32_t bytes;
     int width, height;
+    bool stock; /* DeleteObject leaves stock objects alone */
 };
 
 void ce_fatal(const char *reason) __attribute__((noreturn));
 void ce_missing(const char *symbol) __attribute__((noreturn));
 void *ce_resolve_core(const char *);
+void *ce_resolve_crt(const char *);
 void *ce_resolve_time(const char *);
 void *ce_resolve_timezone(const char *);
 void *ce_resolve_window(const char *);
@@ -162,7 +167,6 @@ CW ce_new_object(int, CW, void *, uint32_t);
 gfx_rect ce_window_rect(CW);
 uint32_t ce_color(CW colorref);
 CW ce_draw_text(CW dc, CW text, CW count, CW rect, CW format);
-void ce_draw_bitmap(const struct ce_object *, int x, int y, int source_x, int width, CW mask);
 bool ce_list_init(struct ce_window *);
 void ce_list_free(struct ce_window *);
 bool ce_list_message(struct ce_window *, CW, CW, CW, CW *);

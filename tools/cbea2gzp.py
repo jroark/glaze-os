@@ -14,7 +14,8 @@ import re
 import struct
 import sys
 
-from import_wince import BAYER, corner_alpha, package, pe_icon, pe_sections, validate_runner
+from import_wince import (BAYER, RESERVED_RES, corner_alpha, package, pe_icon, pe_sections,
+                          sanitize_res_name, validate_runner)
 from wince_assets import (
     AssetError,
     CbeaArchive,
@@ -30,7 +31,6 @@ from wince_assets import (
     u32,
 )
 
-RESERVED_RES = {"icon.gzi", "program.exe", "ordinals.txt", "source.txt", "registry", "files.txt"}
 BUILTIN_CONFLICTS = {
     "calendar", "contacts", "mail", "notes", "tasks", "clock", "calculator",
     "settings", "photos", "music", "videos", "browser", "files", "appstore",
@@ -165,29 +165,6 @@ def sanitize_version(raw):
     ver = ".".join(str(int(p[:6])) for p in parts[:4])
     return ver[:15] or "1.0"
 
-
-def sanitize_res_name(filename, used):
-    """Map an arbitrary filename to a valid Glaze res/<name> entry (<= 43 chars, no spaces)."""
-    base = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip(".")
-    while ".." in safe:
-        safe = safe.replace("..", "_")
-    if not safe:
-        safe = "file"
-    if "." in safe:
-        stem, ext = safe.rsplit(".", 1)
-        ext = "." + ext[:12]
-    else:
-        stem, ext = safe, ""
-    max_stem = max(1, 43 - len(ext))
-    candidate = stem[:max_stem] + ext
-    idx = 2
-    while candidate.casefold() in used or candidate.casefold() in RESERVED_RES:
-        suffix = f"_{idx}"
-        candidate = stem[: max(1, max_stem - len(suffix))] + suffix + ext
-        idx += 1
-    used.add(candidate.casefold())
-    return candidate
 
 
 def load_rom_Support(image_path):
@@ -393,7 +370,7 @@ def convert_cbea(
             entries[f"res/{res_name}"] = item["data"]
             manifest_lines.append(f"{res_name} {item['canonical']}\n")
 
-        entries["res/files.txt"] = "".join(manifest_lines).encode("latin1")
+        entries["res/files.txt"] = "".join(manifest_lines).encode("utf-8")
         if runner is not None:
             packages[f"{pkg_id}.gzp"] = package(entries)
         package_meta.append({

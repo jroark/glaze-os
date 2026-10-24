@@ -39,12 +39,13 @@ bool ce_datetime_from_ticks(uint64_t ticks, uint16_t value[8])
     value[7] = (uint16_t)(ticks / 10000 % 1000);
     return value[0] <= 9999;
 }
+const char *const ce_month_names[12] = {"January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"};
+const char *const ce_day_names[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+    "Saturday"};
 unsigned ce_datetime_format(const uint16_t value[8], const uint16_t *format,
                             uint16_t *out, unsigned capacity)
 {
-    static const char *const months[] = {"January","February","March","April","May","June",
-        "July","August","September","October","November","December"};
-    static const char *const days[] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
     uint64_t ticks;
     uint16_t normalized[8];
     if (!value || !format || !ce_datetime_ticks(value, &ticks) ||
@@ -74,11 +75,11 @@ unsigned ce_datetime_format(const uint16_t value[8], const uint16_t *format,
         int number = -1;
         if (!quoted) switch (ch) {
         case 'd':
-            if (count >= 3) word = days[normalized[2]];
+            if (count >= 3) word = ce_day_names[normalized[2]];
             else number = value[3];
             break;
         case 'M':
-            if (count >= 3) word = months[value[1] - 1];
+            if (count >= 3) word = ce_month_names[value[1] - 1];
             else number = value[1];
             break;
         case 'y': number = count <= 2 ? value[0] % 100 : value[0]; break;

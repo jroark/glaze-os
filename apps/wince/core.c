@@ -1,6 +1,7 @@
 /* WinCE core services used by the original BE-300 applications. */
 #include "registry.h"
 #include "runtime.h"
+#include "text.h"
 #include <glaze/thread.h>
 
 
@@ -20,13 +21,20 @@ static int64_t ce_ll_div(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
         return INT64_MIN;
     return numerator / denominator;
 }
-
 static uint64_t ce_ull_div(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
 {
     uint64_t denominator = (uint64_t)bhi << 32 | blo;
     if (!denominator)
         ce_fatal("WinCE integer division by zero");
     return ((uint64_t)ahi << 32 | alo) / denominator;
+}
+static int64_t ce_ll_rem(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
+{
+    int64_t numerator = (int64_t)((uint64_t)ahi << 32 | alo);
+    int64_t denominator = (int64_t)((uint64_t)bhi << 32 | blo);
+    if (!denominator)
+        ce_fatal("WinCE integer division by zero");
+    return denominator == -1 ? 0 : numerator % denominator;
 }
 static uint64_t ce_ull_rem(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bhi)
 {
@@ -35,6 +43,20 @@ static uint64_t ce_ull_rem(uint32_t alo, uint32_t ahi, uint32_t blo, uint32_t bh
         ce_fatal("WinCE integer division by zero");
     return ((uint64_t)ahi << 32 | alo) % denominator;
 }
+/* Shift helpers take the value pair and the count in a2. */
+static uint64_t ce_ll_lshift(uint32_t lo, uint32_t hi, uint32_t count)
+{
+    return ((uint64_t)hi << 32 | lo) << (count & 63);
+}
+static int64_t ce_ll_rshift(uint32_t lo, uint32_t hi, uint32_t count)
+{
+    return (int64_t)((uint64_t)hi << 32 | lo) >> (count & 63);
+}
+static uint64_t ce_ull_rshift(uint32_t lo, uint32_t hi, uint32_t count)
+{
+    return ((uint64_t)hi << 32 | lo) >> (count & 63);
+}
+
 unsigned ce_wlen(const WCHAR *text)
 {
     unsigned n = 0;
@@ -358,10 +380,8 @@ CE_API(mbstowcs)
     const uint8_t *s = PTR(uint8_t, a1);
     unsigned n = 0;
     while (s[n] && (!a0 || n < a2)) {
-        if (s[n] >= 128)
-            return 0xffffffffu;
         if (a0)
-            PTR(WCHAR, a0)[n] = s[n];
+            PTR(WCHAR, a0)[n] = ce_cp1252_decode(s[n]);
         n++;
     }
     if (a0 && n < a2)
@@ -373,10 +393,11 @@ CE_API(wcstombs)
     const WCHAR *s = PTR(WCHAR, a1);
     unsigned n = 0;
     while (s[n] && (!a0 || n < a2)) {
-        if (s[n] >= 128)
+        int byte = ce_cp1252_encode(s[n]);
+        if (byte < 0)
             return 0xffffffffu;
         if (a0)
-            PTR(char, a0)[n] = (char)s[n];
+            PTR(char, a0)[n] = (char)byte;
         n++;
     }
     if (a0 && n < a2)
@@ -599,52 +620,18 @@ CE_API(GetModuleFileNameW)
     return length;
 }
 
-/* CE's wide printf uses 16-bit strings. Formatting is bounded internally;
- * unsupported conversions abort instead of pretending formatting succeeded. */
+/* CE's wide printf uses 16-bit strings; `limit` counts the terminator.
+ * Unsupported conversions abort instead of pretending formatting succeeded. */
 static CW wide_format(WCHAR *out, const WCHAR *fmt, const CW *args, unsigned limit, unsigned nargs)
 {
-    unsigned pos = 0, arg = 0;
-    while (*fmt && pos + 1 < limit) {
-        if (*fmt != '%') {
-            out[pos++] = *fmt++;
-            continue;
-        }
-        fmt++;
-        if (*fmt == '%') {
-            out[pos++] = *fmt++;
-            continue;
-        }
-        bool zero = *fmt == '0';
-        unsigned width = 0;
-        while (*fmt >= '0' && *fmt <= '9') {
-            unsigned digit = *fmt++ - '0';
-            width = MIN(64u, width * 10u + digit);
-        }
-        if (*fmt == 'l')
-            fmt++;
-        if (arg == nargs)
-            ce_missing("wsprintfW: too many arguments");
-        CW value = args[arg++];
-        WCHAR spec = *fmt++;
-        if (spec == 's') {
-            WCHAR *s = PTR(WCHAR, value);
-            while (s && *s && pos + 1 < limit)
-                out[pos++] = *s++;
-        } else if (spec == 'c')
-            out[pos++] = (WCHAR)value;
-        else {
-            char buffer[80], format[16];
-            if (spec != 'd' && spec != 'i' && spec != 'u' && spec != 'x' && spec != 'X')
-                ce_missing("wsprintfW conversion");
-            snprintf(format, sizeof(format), "%%%s%u%c", zero ? "0" : "", width, (char)spec);
-            snprintf(buffer, sizeof(buffer), format, value);
-            for (char *s = buffer; *s && pos + 1 < limit;)
-                out[pos++] = (WCHAR)(uint8_t)*s++;
-        }
-    }
-    if (limit)
-        out[pos] = 0;
-    return pos;
+    uintptr_t words[128];
+    nargs = MIN(nargs, ARRAY_SIZE(words));
+    for (unsigned i = 0; i < nargs; i++)
+        words[i] = args[i];
+    int n = ce_wformat(out, limit, fmt, words, nargs);
+    if (n < 0)
+        ce_missing("wsprintfW conversion");
+    return (CW)n;
 }
 
 CE_API(wsprintfW)
@@ -730,11 +717,12 @@ CE_API(OutputDebugStringW)
     printf("wince: debug: %s\n", message);
     return 0;
 }
+/* CP_ACP and CP_OEMCP are Windows-1252 on the BE-300. */
 CE_API(MultiByteToWideChar)
 {
-    const char *input = PTR(char, a2);
+    const uint8_t *input = PTR(uint8_t, a2);
     int length = (int)a3;
-    if (a0 != 0 && a0 != 1252 && a0 != 65001) {
+    if (a0 > 1 && a0 != 1252 && a0 != 65001) {
         ce_error = 87;
         return 0;
     }
@@ -743,34 +731,27 @@ CE_API(MultiByteToWideChar)
         return 0;
     }
     if (length < 0)
-        length = (int)strlen(input) + 1;
+        length = (int)strlen((const char *)input) + 1;
+    CW needed = a0 == 65001 ? ce_utf8_decode(input, (size_t)length, NULL, 0) : (CW)length;
     if (!a4)
-        return (CW)length;
-    if (a5 < (CW)length) {
+        return needed;
+    if (a5 < needed) {
         ce_error = 122;
         return 0;
     }
     WCHAR *out = PTR(WCHAR, a4);
-    if (a0 == 65001) {
-        char *copy = malloc((unsigned)length + 1);
-        if (!copy)
-            return 0;
-        memcpy(copy, input, (unsigned)length);
-        copy[length] = 0;
-        ce_widen(out, a5, copy);
-        CW count = ce_wlen(out) + (input[length - 1] == 0);
-        free(copy);
-        return count;
-    }
-    for (int i = 0; i < length; i++)
-        out[i] = (uint8_t)input[i];
-    return (CW)length;
+    if (a0 == 65001)
+        ce_utf8_decode(input, (size_t)length, out, a5);
+    else
+        for (int i = 0; i < length; i++)
+            out[i] = ce_cp1252_decode(input[i]);
+    return needed;
 }
 CE_API(WideCharToMultiByte)
 {
     const WCHAR *input = PTR(WCHAR, a2);
     int length = (int)a3;
-    if (a0 != 0 && a0 != 1252 && a0 != 65001) {
+    if (a0 > 1 && a0 != 1252 && a0 != 65001) {
         ce_error = 87;
         return 0;
     }
@@ -780,26 +761,31 @@ CE_API(WideCharToMultiByte)
     }
     if (length < 0)
         length = (int)ce_wlen(input) + 1;
+    CW needed = a0 == 65001 ? ce_utf8_encode(input, (size_t)length, NULL, 0) : (CW)length;
     if (!a4)
-        return (CW)length * (a0 == 65001 ? 3 : 1);
-    if (a0 == 65001) {
-        ce_narrow(PTR(char, a4), a5, input);
-        return (CW)strlen(PTR(char, a4)) + (input[length - 1] == 0);
-    }
-    if (a5 < (CW)length) {
+        return needed;
+    if (a5 < needed) {
         ce_error = 122;
         return 0;
     }
-    char *out = PTR(char, a4);
+    uint8_t *out = PTR(uint8_t, a4);
+    if (a0 == 65001) {
+        ce_utf8_encode(input, (size_t)length, out, a5);
+        return needed;
+    }
     bool replaced = false;
+    uint8_t fallback = a6 ? *PTR(uint8_t, a6) : '?';
     for (int i = 0; i < length; i++) {
-        if (input[i] > 255)
+        int byte = ce_cp1252_encode(input[i]);
+        if (byte < 0) {
             replaced = true;
-        out[i] = input[i] > 255 ? '?' : (char)input[i];
+            byte = fallback;
+        }
+        out[i] = (uint8_t)byte;
     }
     if (a7)
         *PTR(CW, a7) = replaced;
-    return (CW)length;
+    return needed;
 }
 CE_API(CompareStringW)
 {
@@ -1127,10 +1113,12 @@ CE_API(RegDeleteKeyW)
         return 87;
     if (snprintf(path, sizeof(path), "%s\\%s", key, name) >= (int)sizeof(path))
         return 87;
+    size_t length = strlen(path);
     for (unsigned i = 0; i < ARRAY_SIZE(reg_handles); i++)
-        if (reg_handles[i].handle && !strcasecmp(reg_handles[i].path, path))
+        if (reg_handles[i].handle && !strncasecmp(reg_handles[i].path, path, length) &&
+            (!reg_handles[i].path[length] || reg_handles[i].path[length] == '\\'))
             return 5;
-    CW error = ce_reg_delete(&registry, path);
+    CW error = ce_reg_delete_tree(&registry, path);
     return error ? error : reg_save() ? 0 : 5;
 }
 
@@ -1231,18 +1219,46 @@ static bool ce_bundled_dir(const char *canonical)
     return false;
 }
 
-static bool copy_bundled_to_drive(const char *res_path, const char *drive_path, bool copy_bytes)
+static bool make_parent(const char *path)
 {
     char dir[FS_PATH_MAX];
-    strlcpy(dir, drive_path, sizeof(dir));
+    strlcpy(dir, path, sizeof(dir));
     char *slash = strrchr(dir, '/');
     if (slash && slash != dir) {
         *slash = 0;
-        if (fs_mkdirs(dir))
-            return false;
+        return !fs_mkdirs(dir);
     }
-    if (!copy_bytes)
-        return true;
+    return true;
+}
+
+/* The CE root and its standard folders exist on a real device, so their
+ * backing directories are created on first use. */
+static bool standard_dir(const char *canonical)
+{
+    static const char *const folders[] = {"/", "/Windows", "/Program Files", "/Temp"};
+    for (unsigned i = 0; i < ARRAY_SIZE(folders); i++)
+        if (!strcasecmp(canonical, folders[i]))
+            return true;
+    return ce_bundled_dir(canonical);
+}
+static bool parent_is_standard(const char *canonical)
+{
+    char parent[FS_PATH_MAX];
+    strlcpy(parent, canonical, sizeof(parent));
+    char *slash = strrchr(parent, '/');
+    if (!slash)
+        return false;
+    if (slash == parent)
+        parent[1] = 0;
+    else
+        *slash = 0;
+    return standard_dir(parent);
+}
+
+static bool copy_bundled_to_drive(const char *res_path, const char *drive_path)
+{
+    if (!make_parent(drive_path))
+        return false;
     int in = fs_open(res_path, FS_O_READ);
     if (in < 0)
         return false;
@@ -1270,10 +1286,25 @@ static bool copy_bundled_to_drive(const char *res_path, const char *drive_path, 
 
 struct file_handle {
     int fd;
-    bool active;
+    bool active, claimed;
     char path[FS_PATH_MAX];
 };
 static struct file_handle files[32];
+/* Opening blocks in the file server, so CE threads opening at once (as
+ * WorldTALK's logger and loader do) must not take the same free slot. */
+static struct gz_mutex file_lock = GZ_MUTEX_INIT;
+static int claim_file(void)
+{
+    gz_mutex_lock(&file_lock);
+    int found = -1;
+    for (unsigned i = 0; found < 0 && i < ARRAY_SIZE(files); i++)
+        if (!files[i].active && !files[i].claimed) {
+            files[i].claimed = true;
+            found = (int)i;
+        }
+    gz_mutex_unlock(&file_lock);
+    return found;
+}
 static struct file_handle *file_handle(CW id)
 {
     return id >= 0x72000000u && id - 0x72000000u < ARRAY_SIZE(files) && files[id - 0x72000000u].active
@@ -1325,7 +1356,7 @@ static CW find_next(struct find_handle *search, CW out)
         int count = fs_list(search->path, search->index++, &entry, 1);
         if (count <= 0) {
             search->fs_done = true;
-            if (count < 0 && !ce_bundled_dir(search->canonical_dir)) {
+            if (count < 0 && !standard_dir(search->canonical_dir)) {
                 ce_error = 3;
                 return 0;
             }
@@ -1468,55 +1499,51 @@ CE_API(CreateFileW)
         ce_error = 87;
         return 0xffffffffu;
     }
-    for (unsigned i = 0; i < ARRAY_SIZE(files); i++)
-        if (!files[i].active) {
-            const char *open_path = path;
-            char res_path[FS_PATH_MAX];
-            struct fs_stat st;
-            bool absent = fs_stat(path, &st) != 0;
-            if (absent) {
-                if (ce_bundled_file(canonical, res_path)) {
-                    if (a4 == 1) {
-                        ce_error = 80;
-                        return 0xffffffffu;
-                    }
-                    if (!(flags & (FS_O_WRITE | FS_O_TRUNC))) {
-                        open_path = res_path;
-                        flags = FS_O_READ;
-                    } else if (!copy_bundled_to_drive(res_path, path, !(flags & FS_O_TRUNC))) {
-                        ce_error = 5;
-                        return 0xffffffffu;
-                    }
-                } else if (flags & FS_O_CREATE) {
-                    char parent[FS_PATH_MAX];
-                    strlcpy(parent, canonical, sizeof(parent));
-                    char *slash = strrchr(parent, '/');
-                    if (slash) {
-                        if (slash == parent)
-                            parent[1] = 0;
-                        else
-                            *slash = 0;
-                        if (ce_bundled_dir(parent))
-                            copy_bundled_to_drive("", path, false);
-                    }
-                }
-            }
-            int fd = fs_open(open_path, flags);
-            if (fd < 0) {
-                printf("wince: open failed %s: %d\n", canonical, fd);
-                file_error(fd);
+    int i = claim_file();
+    if (i < 0) {
+        ce_error = 4;
+        return 0xffffffffu;
+    }
+    const char *open_path = path;
+    char res_path[FS_PATH_MAX];
+    struct fs_stat st;
+    bool absent = fs_stat(path, &st) != 0;
+    if (absent) {
+        if (ce_bundled_file(canonical, res_path)) {
+            if (a4 == 1) {
+                ce_error = 80;
+                files[i].claimed = false;
                 return 0xffffffffu;
             }
-            files[i].fd = fd;
-            files[i].active = true;
-            strlcpy(files[i].path, open_path, sizeof(files[i].path));
-            if ((absent && (flags & FS_O_CREATE)) || (flags & FS_O_TRUNC))
-                ce_file_touch(open_path, absent);
-            ce_error = 0;
-            return 0x72000000u + i;
-        }
-    ce_error = 4;
-    return 0xffffffffu;
+            if (!(flags & (FS_O_WRITE | FS_O_TRUNC))) {
+                open_path = res_path;
+                flags = FS_O_READ;
+            } else if (!((flags & FS_O_TRUNC) ? make_parent(path)
+                                              : copy_bundled_to_drive(res_path, path))) {
+                ce_error = 5;
+                files[i].claimed = false;
+                return 0xffffffffu;
+            }
+            if (flags & FS_O_TRUNC)
+                flags |= FS_O_CREATE; /* the bundled file exists */
+        } else if ((flags & FS_O_CREATE) && parent_is_standard(canonical))
+            make_parent(path);
+    }
+    int fd = fs_open(open_path, flags);
+    if (fd < 0) {
+        printf("wince: open failed %s: %d\n", canonical, fd);
+        file_error(fd);
+        files[i].claimed = false;
+        return 0xffffffffu;
+    }
+    files[i].fd = fd;
+    files[i].active = true;
+    files[i].claimed = false;
+    strlcpy(files[i].path, open_path, sizeof(files[i].path));
+    if ((absent && (flags & FS_O_CREATE)) || (flags & FS_O_TRUNC))
+        ce_file_touch(open_path, absent);
+    ce_error = 0;
+    return 0x72000000u + (CW)i;
 }
 CE_API(CloseHandle)
 {
@@ -1617,18 +1644,20 @@ CE_API(SetFileTime)
 CE_API(GetFileSize)
 {
     struct file_handle *f = file_handle(a0);
-    struct fs_stat st;
     if (!f) {
         ce_error = 6;
         return 0xffffffffu;
     }
-    if (fs_stat(f->path, &st)) {
+    /* The handle's own end, which includes writes not yet on the volume. */
+    int position = fs_seek(f->fd, 0, FS_SEEK_CUR);
+    int end = position < 0 ? position : fs_seek(f->fd, 0, FS_SEEK_END);
+    if (position < 0 || end < 0 || fs_seek(f->fd, position, FS_SEEK_SET) < 0) {
         ce_error = 5;
         return 0xffffffffu;
     }
     if (a1)
         *PTR(CW, a1) = 0;
-    return st.size;
+    return (CW)end;
 }
 CE_API(GetFileAttributesW)
 {
@@ -1640,7 +1669,7 @@ CE_API(GetFileAttributesW)
         return st.type == FS_DIR ? 16 : 0x80;
     if (ce_bundled_file(canonical, res_path) && !fs_stat(res_path, &st))
         return 0x80;
-    if (ce_bundled_dir(canonical))
+    if (standard_dir(canonical))
         return 16;
     ce_error = 2;
     return 0xffffffffu;
@@ -1682,6 +1711,28 @@ CE_API(MoveFileW)
     if (!rv && !ce_file_move_times(src, dst))
         return file_error(GZ_ENOSPC);
     return rv < 0 ? file_error(rv) : 1;
+}
+/* Free bytes for the caller, total bytes, free bytes: the volume holding
+ * the path. */
+CE_API(GetDiskFreeSpaceExW)
+{
+    char path[FS_PATH_MAX];
+    struct fs_info info;
+    static const WCHAR root[] = {'\\', 0};
+    if (!ce_path(path, a0 ? PTR(WCHAR, a0) : root))
+        return 0;
+    int rv = fs_statvfs(path, &info);
+    if (rv < 0)
+        return file_error(rv);
+    uint32_t available = info.total > info.used ? info.total - info.used : 0;
+    const CW out[3] = {a1, a2, a3};
+    const uint32_t value[3] = {available, info.total, available};
+    for (unsigned i = 0; i < 3; i++)
+        if (out[i]) {
+            ce_put32(PTR(void, out[i]), value[i]);
+            ce_put32(PTR(uint8_t, out[i]) + 4, 0);
+        }
+    return 1;
 }
 CE_API(DeleteFileW)
 {
@@ -1731,7 +1782,10 @@ CE_API(CopyFileW)
 CE_API(SetFilePointer)
 {
     struct file_handle *f = file_handle(a0);
-    if (!f || (a2 && *PTR(CW, a2)) || a3 > 2) {
+    /* With lpDistanceToMoveHigh the distance is 64-bit; only values that
+     * fit the file server's signed 32-bit offset are accepted. */
+    CW high = a2 ? *PTR(CW, a2) : ((int32_t)a1 < 0 ? 0xffffffffu : 0);
+    if (!f || high != ((int32_t)a1 < 0 ? 0xffffffffu : 0) || a3 > 2) {
         ce_error = 87;
         return 0xffffffffu;
     }
@@ -1740,6 +1794,8 @@ CE_API(SetFilePointer)
         file_error(rv);
         return 0xffffffffu;
     }
+    if (a2)
+        *PTR(CW, a2) = 0;
     return (CW)rv;
 }
 CE_API(SetEndOfFile)
@@ -1773,22 +1829,26 @@ CE_API(LoadLibraryW)
         return 0x73000000u;
     return ce_load_library(name);
 }
+static CW proc_address(CW module, const char *name, CW ordinal)
+{
+    if (!name)
+        return ce_find_ordinal(module, (uint16_t)ordinal);
+    CW address = module == 0x73000000u ? ce_import_address("coredll.dll", name) : ce_find_symbol(module, name);
+    if (!address)
+        ce_error = 127;
+    return address;
+}
 CE_API(GetProcAddressW)
 {
     if (a1 < 65536)
-        return ce_find_ordinal(a0, (uint16_t)a1);
+        return proc_address(a0, NULL, a1);
     char name[128];
     ce_narrow(name, sizeof(name), PTR(WCHAR, a1));
-    printf("wince: lookup %08x!%s\n", a0, name);
-    return a0 == 0x73000000u ? ce_import_address("coredll.dll", name) : ce_find_symbol(a0, name);
+    return proc_address(a0, name, 0);
 }
 CE_API(GetProcAddressA)
 {
-    if (a1 < 65536)
-        return ce_find_ordinal(a0, (uint16_t)a1);
-    const char *name = PTR(char, a1);
-    printf("wince: lookup %08x!%s\n", a0, name);
-    return a0 == 0x73000000u ? ce_import_address("coredll.dll", name) : ce_find_symbol(a0, name);
+    return proc_address(a0, a1 < 65536 ? NULL : PTR(char, a1), a1);
 }
 CE_API(FreeLibrary)
 {
@@ -1832,7 +1892,12 @@ static const struct ce_export exports[] = {
     CE_EXPORT(GetSystemInfo),
     {"__ll_mul", (void *)ce_ll_mul},
     {"__ll_div", (void *)ce_ll_div},
-    {"__ull_div", (void *)ce_ull_div}, {"__ull_rem", (void *)ce_ull_rem},
+    {"__ull_div", (void *)ce_ull_div},
+    {"__ll_rem", (void *)ce_ll_rem},
+    {"__ull_rem", (void *)ce_ull_rem},
+    {"__ll_lshift", (void *)ce_ll_lshift},
+    {"__ll_rshift", (void *)ce_ll_rshift},
+    {"__ull_rshift", (void *)ce_ull_rshift},
     CE_EXPORT(GetLastError),
     CE_EXPORT(SetLastError),
     CE_EXPORT(LocalAlloc),
@@ -1905,6 +1970,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(RemoveDirectoryW),
     CE_EXPORT(MoveFileW),
     CE_EXPORT(DeleteFileW),
+    CE_EXPORT(GetDiskFreeSpaceExW),
     CE_EXPORT(CopyFileW),
     CE_EXPORT(SetFilePointer),
     CE_EXPORT(SetEndOfFile),

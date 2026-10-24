@@ -1,0 +1,9 @@
+# WorldTALK over the network (run with --net): after the home page, tap the
+# address box, type a URL served by the host and press Enter. lwIP cannot
+# reach the host's loopback through the NAT, so use the host's own address
+# (`hostname -I`) and edit the URL below to match.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+40000 tap 60 38
+41000 text http://192.0.2.2:8000/test.html
+43000 key enter

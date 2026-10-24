@@ -68,10 +68,18 @@ static void publish_bridges(void)
 
 static CW bridge(void *address, const char *missing)
 {
+    CW fn = WORD(address);
+    /* One bridge per service: repeated GetProcAddress calls must not use up
+     * the bridge page. */
+    if (!missing)
+        for (unsigned i = 0; i < bridge_count; i++) {
+            const uint32_t *p = bridges + i * CE_BRIDGE_WORDS;
+            if (!p[0] && p[2] == (0x3c190000u | (fn >> 16)) && p[3] == (0x37390000u | (fn & 65535u)))
+                return WORD(p);
+        }
     if (bridge_count >= CE_BRIDGE_BYTES / (CE_BRIDGE_WORDS * 4u))
         ce_fatal("Too many WinCE imports");
     uint32_t *p = bridges + bridge_count++ * CE_BRIDGE_WORDS;
-    CW fn = WORD(address);
     p[0] = missing ? 0x3c040000u | (WORD(missing) >> 16) : 0;
     p[1] = missing ? 0x34840000u | (WORD(missing) & 65535u) : 0;
     p[2] = 0x3c190000u | (fn >> 16);
@@ -87,6 +95,8 @@ static void *native_symbol(const char *dll, const char *name)
     if (name) {
         if (!strcasecmp(dll, "coredll.dll")) {
             fn = ce_resolve_core(name);
+            if (!fn)
+                fn = ce_resolve_crt(name);
             if (!fn)
                 fn = ce_resolve_mapping(name);
             if (!fn)
@@ -403,11 +413,6 @@ void ce_shutdown(void)
 int main(void)
 {
     ui_init(SB_STATUS_FULLSCREEN);
-    /* CE supplies a writable Temp directory independently of app setup. */
-    char temporary[FS_PATH_MAX];
-    snprintf(temporary, sizeof(temporary), "%s/data/drive/Temp", res_bundle());
-    if (fs_mkdirs(temporary))
-        ce_fatal("Cannot create WinCE temporary directory");
     ui_keyboard_init(&ce_keyboard);
     if (ui.surf.h != 320)
         ce_fatal("This Glaze build does not support full-screen compatibility apps");

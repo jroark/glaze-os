@@ -16,7 +16,10 @@ normal, unprivileged Glaze process. There is no second OS session or CPU emulato
 Calculator uses its original bitmap controls and arithmetic engine. PocketNotepad
 supports basic editing, the Glaze keyboard, and opening/saving documents. Both
 use a 240×320 surface, hiding Glaze's status bar. Home returns to Glaze and
-terminates the app, as it does for native apps: save a document before using Home.
+suspends the app like a native one. Its top-level windows first receive
+`WM_ACTIVATE(WA_INACTIVE)` and, when it is resumed, `WM_ACTIVATE(WA_ACTIVE)`
+and a repaint. A suspended app may be ended without warning, so save a
+document before using Home.
 
 Owner and OwnerInfo support the original Identification and Notes tabs, text
 entry, checkboxes, and saving through the original toolbar's close command.
@@ -64,6 +67,9 @@ undo, scrolling and touch placement of the caret are not yet supported.
 Calling an unimplemented import shows its DLL/function name and a
 "Cannot Run WinCE App" screen; Home still works. Unused unsupported imports are
 reported on the serial console without preventing supported app functions.
+`GetProcAddress` returns NULL with `ERROR_PROC_NOT_FOUND` for COREDLL names the
+runtime does not implement, so applications that probe for optional APIs can
+fall back.
 Physical-device behavior has not been validated.
 
 ## Importing your local apps
@@ -94,6 +100,26 @@ from the original executable's icon resources.
 Use `--app regedit` to build **CE RegEdit**. It is opt-in and does not change
 the four default packages.
 Use `--app tweak` to build **CE PalmTweak** with the limited page support above.
+Use `--app internet` with an eXpod-family image to build **CE Internet**, the
+Tenik WorldTALK browser, with its `IMGDECMP.DLL` image decoder.
+
+Some apps need original data files. The importer copies the FAT files and
+folders listed in `DATA` into `res/`, and `res/files.txt` serves them at
+their WinCE paths: Clock's `\Program Files\TIMEZONEINFO.txt`, and
+WorldTALK's `\My Documents\WebPage` (the Welcome page) and
+`\My Documents\Internet`. A `.cpk` file is decompressed and loses the
+suffix, as the CCFS driver presents it.
+
+An app's private registry can also start with values from `REGISTRY`. Without
+one, WorldTALK opens `file:///windows/default.htm`, which this ROM does not
+contain. The image's saved registry sets
+`HKCU\Software\Tenik\WorldTALK\Common\HomePage` to the bundled Welcome
+page, and the importer seeds it. It also seeds `Common\Connection` = 1.
+WorldTALK treats that as connected without asking COMCOMPOSER.DLL's dial-up
+state, which matches Glaze's network card. (The image's saved value, 6,
+names a dial-up setup.) The runtime answers the COMCOMPOSER calls WorldTALK
+still makes as that DLL does with no dialer running: no active dial-up
+connections and no proxy.
 
 The importer reads the source image without changing it. It validates the
 FAT16 allocation chains, decodes the Casio CPK blocks, reads the matching
@@ -117,6 +143,8 @@ The audited local executables are:
 | clock.exe | 69,120 | `e3bf037d19078e33e216ab64ab5bdd3fd9bae3a18203755cae59fe9171b3596f` |
 | RegEdit.exe | 30,208 | `5d9aa371e689835c2e212e91e2041f6ddaf4340aa651d2446b57aeefbdc2f8c2` |
 | Tweak.exe | 62,976 | `dc27793762228e105b1b42f59611e0da2c0da8fcc465e35ec89be54074c76163` |
+| Internet.exe | 980,992 | `abae1194315175af4c5eb494988125194e42c83b60795db91f3082176e4960e3` |
+| IMGDECMP.DLL | 53,856 | `3700de24b665d757ca10ef9e1061bcdd41be72629ca530bd5ee708e9a570d50c` |
 
 The importer preserves these bytes. It does not patch entry points, imports,
 or application instructions on disk. PE import resolution happens in the
@@ -155,8 +183,17 @@ their 240×304 surfaces. The compositor still owns Home, lock/unlock, transition
 and notifications. WinCE child controls share the compatibility surface and are
 repainted after their parents.
 Common-control support now includes the tab messages and notifications used by
-Owner, inherited visibility for painting and touch input, checkbox state,
-read-only/limited edit fields, and the selected OEM command-bar button layout.
+Owner, inherited visibility for painting and touch input, checkbox and radio
+button state, read-only/limited edit fields, and the selected OEM command-bar
+button layout. Edits honour `ES_MULTILINE` (only multiline edits take Enter
+and Tab), `ES_PASSWORD`, `ES_NUMBER`, `ES_UPPERCASE` and `ES_LOWERCASE`. The
+on-screen keyboard's Enter arrives as `VK_RETURN`, as on WinCE. A button
+clicks only when it is pressed and released under the finger. While a modal
+dialog runs, only its own controls receive taps. Dialogs keep separate
+`DWL_MSGRESULT`/`DWL_DLGPROC`/`DWL_USER` slots, and other windows have their
+own extra-window longs. A handled dialog message returns `DWL_MSGRESULT`, as in
+user32. The runtime repaints only when a window or DC drew, not on every
+message-loop pass.
 Clock uses pen, bitmap, text-measurement and formatted-text adapters, 64-bit
 MIPS integer helpers, Gregorian FILETIME conversion and date/time formatting.
 RegEdit adds owned heaps, registry enumeration/query/delete operations, string
@@ -171,9 +208,18 @@ tab control answers application queries while the visible selector fits long
 page names on the narrow screen. Page notifications follow Microsoft's
 [property-sheet documentation](https://learn.microsoft.com/en-us/windows/win32/controls/property-sheets)
 and [PSN_APPLY contract](https://learn.microsoft.com/en-us/windows/win32/controls/psn-apply).
+Dialog and property-page templates may come from any loaded module (the
+program, `LC.dll` or a bundled DLL).
+`RegDeleteKeyW` removes subkeys too, as
+[Windows CE's RegDeleteKey](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms891451(v=msdn.10))
+does. `wsprintfW` (`apps/wince/text.c`, host test `tests/wince_text.c`)
+supports flags, `*` widths and precisions, `%S`/`%hs`/`%ls`, `%o` and `%p`.
+The ANSI code page is Windows-1252.
 
 WinCE `\Documents`, `\My Documents` and `\Nand Disk\Documents` map to Glaze's
-`/Documents`. Other paths map beneath the app's `data/drive` directory. Typed
+`/Documents`. Other paths map beneath the app's `data/drive` directory. The
+root, `\Windows`, `\Program Files` and `\Temp` exist there as they do on a
+device; their backing directories are created on first use. Typed
 registry values are stored in `data/registry` for each app. Path traversal is
 rejected. This does not expose a shared original-OS registry or filesystem.
 Registry streams retain the `GZCE` typed-value records and append a `GZCK`
@@ -350,6 +396,31 @@ emulator binary. The test runner fails if the original executable does not
 start, or a runtime error/kernel fault occurs. `tests/t_wince_install.txt`
 separately exercises installation from a card through Files.
 
+WorldTALK takes about 40 seconds of emulator time to lay out its home page:
+
+```sh
+python3 tests/run_wince.py --image ../be300/nand/expod.bin --app internet \
+  --seconds 45 --headless
+```
+
+The screenshot should show the **Welcome to the Internet World** page and its
+images under a two-row bar holding the page's `file:` URL. The bar's own
+buttons are not drawn yet.
+
+To load a page over the network, serve one from the host on its own address
+(not 127.0.0.1, which lwIP cannot reach through the emulator's NAT). Set
+that URL in `tests/t_wince_internet_url.txt`, and run:
+
+```sh
+python3 tests/run_wince.py --image ../be300/nand/expod.bin --app internet \
+  --net --input tests/t_wince_internet_url.txt --seconds 150 --headless
+```
+
+The script taps the address box (focus selects its text, so typing replaces
+it), types the URL and presses Enter. WorldTALK writes its request to a
+temporary file and sends it over Winsock, and the screenshot shows the
+fetched page.
+
 Owner tests enter **Alex from Glaze**, switch to Notes, enter **Original app
 compatibility**, select the Notes checkbox, and save with the toolbar button. `--check-owner`
 checks both binary registry records and the checkbox; `--expect-exit 0` checks
@@ -385,7 +456,7 @@ The additional runtime services cover the supplied AIM and Casio PIM binaries:
 - Named anonymous mappings with independent handle and view lifetimes. File-backed
   mappings remain unsupported.
 - Per-app file timestamps in `data/filetimes`, including enumeration, rename and
-  copy; timestamps are buffered until close. `data/drive/Temp` is created at launch.
+  copy; timestamps are buffered until close. `data/drive/Temp` is created on first use.
 - A persistent catalog for empty CE databases in `data/databases`. Creating,
   opening, closing and querying an empty alarm catalog work. Record writing,
   database change notifications and Casio alarm export remain unsupported.
