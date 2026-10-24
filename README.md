@@ -219,6 +219,11 @@ reports "No Card" and calls fail with `GZ_ENETDOWN`.
 
 ## Audio
 
+The installable **SomaFM** app streams 51 internet-radio stations, with
+favorites, current-track metadata, and playback that continues after Home.
+It requires the updated audio service and an Ethernet card.
+See [SomaFM radio](docs/SOMAFM.md) for installation and verification.
+
 The BE-300's speaker is fed by a ping-pong DMA block in the companion chip,
 not the VRC4173's AIU; its registers come from WinCE's `wavedev.dll`, as
 documented in the emulator's `docs/BE300_AUDIO.md`. The kernel driver

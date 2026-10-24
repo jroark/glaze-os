@@ -1,0 +1,14 @@
+/* Shared code; each process supplies its own RNG/time platform callbacks. */
+{ global:
+    wc_FreeRng; wc_InitRng; wc_InitSha256; wc_RNG_GenerateBlock;
+    wc_Sha256Final; wc_Sha256Free; wc_Sha256Hash; wc_Sha256Update;
+    wolfSSL_CTX_free; wolfSSL_CTX_load_verify_buffer; wolfSSL_CTX_new;
+    wolfSSL_CTX_set_verify; wolfSSL_Init; wolfSSL_SESSION_free;
+    wolfSSL_SSLSetIORecv; wolfSSL_SSLSetIOSend; wolfSSL_SetIOReadCtx;
+    wolfSSL_SetIOWriteCtx; wolfSSL_UseSNI; wolfSSL_check_domain_name;
+    wolfSSL_check_ip_address; wolfSSL_connect; wolfSSL_free;
+    wolfSSL_get1_session; wolfSSL_get_error; wolfSSL_new; wolfSSL_read;
+    wolfSSL_set_session; wolfSSL_shutdown; wolfSSL_write;
+    wolfSSLv23_client_method;
+  local: *;
+};

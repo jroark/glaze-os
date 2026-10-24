@@ -16,7 +16,7 @@ class Generator(unittest.TestCase):
             expected={app['id'] for app in json.loads((ROOT/'store/apps.json').read_text())}
             self.assertEqual(text.count(b'[app]'),len(expected))
             self.assertEqual({line.split(b'=',1)[1].decode() for line in text.splitlines() if line.startswith(b'id=')},expected)
-            for ident in ('minesweeper','solitaire'):
+            for ident in ('minesweeper','solitaire','somafm'):
                 self.assertIn(ident,expected)
                 data,info,icon=mkstore.package(ROOT/'out/pkg'/f'{ident}.gzp')
                 self.assertEqual((out/f'apps/{ident}/{info["version"]}/app.gzp').read_bytes(),data)
