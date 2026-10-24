@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Local HTTP fixtures for scripts, CSP, frames, redirects and named targets."""
 import http.server
+import base64
 import json
 import subprocess
 import sys
 import threading
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    cookie_checked = False
     def log_message(self, *_):
         pass
 
@@ -29,6 +31,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/frameset': '<frameset cols="50%,*"><frame src=/child><frame src=/next></frameset>',
             '/csp': '''<title>initial</title><script>var forbidden=true;</script><script src=/allowed.js></script>''',
             '/allowed.js': "document.title='external allowed';",
+            '/platform': '''<script>var imageLoaded=false,imageFailed=false,pixel=new Image(1,1);
+pixel.onload=function(){imageLoaded=true};pixel.src='/pixel.gif';
+var broken=new Image();broken.onerror=function(){imageFailed=true};broken.src='/missing-image';
+document.cookie='shared=parent; Path=/';</script>
+<iframe id=cookie-child srcdoc="<script>if(document.cookie.indexOf('shared=parent')>=0)document.title='inherited cookie';</script>"></iframe>''',
             '/noscript': '''<head><noscript><meta http-equiv=refresh content="0;url=/enablejs">
 <base href="http://wrong.test/"><link rel=stylesheet href=/fallback.css>
 <script src=/fallback.js></script></noscript>
@@ -48,12 +55,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
 if(navigator.userAgent!==expected.userAgent||navigator.language!==expected.language)
   throw Error('navigator disagrees with request headers');
 document.title='navigator matches headers';</script>'''
+        if self.path == '/cookie-check':
+            cookies = self.headers.get('Cookie', '')
+            Handler.cookie_checked = 'httpOnly=preserved' in cookies and 'scriptCookie=sent' in cookies and 'overwritten' not in cookies
+        if self.path == '/platform':
+            headers['Set-Cookie'] = 'httpOnly=preserved; Path=/; HttpOnly'
         if self.path == '/csp':
             headers['Content-Security-Policy'] = "script-src 'self'"
         if self.path == '/limits' or self.path.startswith('/tree/'):
             depth = 0 if self.path == '/limits' else int(self.path.split('/')[-1])
             pages[self.path] = f'<iframe src="/tree/{depth+1}"></iframe><iframe src="/tree/{depth+2}"></iframe>'
         body = pages.get(self.path, '<p>not found</p>').encode()
+        if self.path == '/pixel.gif':
+            body = base64.b64decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7')
+            pages[self.path] = ''
         self.send_response(200 if self.path in pages else 404)
         self.send_header('Content-Type', 'application/javascript' if self.path.endswith('.js') else 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
@@ -66,5 +81,6 @@ server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
     subprocess.run([sys.argv[1], f'http://127.0.0.1:{server.server_port}'], check=True, timeout=30)
+    assert Handler.cookie_checked, 'script cookies must reach HTTP without overwriting HttpOnly cookies'
 finally:
     server.shutdown()

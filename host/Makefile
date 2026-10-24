@@ -373,3 +373,9 @@ browser-test: $(WEB_OBJS) libwolfssl.a libjerry.a ../out/host/browser-platform.o
 	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) libwolfssl.a libjerry.a -lm
 	python3 ../tests/browser_transport.py ../out/host/browser-test
 .PHONY: browser-test
+
+# Opt-in live Google Search workflow; build only, never run as part of CI.
+browser-google: $(WEB_OBJS) libwolfssl.a libjerry.a ../out/host/browser-platform.o
+	$(CC) $(WEB_CFLAGS) -o ../out/host/browser-google ../tests/browser_google.c \
+	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) libwolfssl.a libjerry.a -lm
+.PHONY: browser-google

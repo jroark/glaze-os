@@ -5,6 +5,7 @@
 #include "frames.h"
 #include "script.h"
 #include "net.h"
+#include "plat.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -24,6 +25,8 @@ struct page *page_new(const char *url)
     p->base = strdup(url);
     p->bg = 0xFFFFFF;
     p->scripting_enabled = true;
+    p->start_ms = plat_ms();
+    p->time_origin = (double)plat_time() * 1000.0;
     p->origin=strdup(url);p->serial=++page_serial;p->viewport_h=226;p->dirty=p->resources_dirty=true;
     if (!p->url || !p->base || !p->origin) {
         page_free(p);

@@ -22,6 +22,12 @@ legacy framesets. Drag inside a long frame to scroll its contents.
   there are no browser workers.
 - `window`, `self`, `globalThis`, `document`, `location`, console logging,
   `alert` (console output), function-based timers, and event listeners.
+- `performance.now()` and `timeOrigin`, binary-string `atob`/`btoa`, location
+  URL components, viewport/screen dimensions, and detached `Image` objects with load/error events and natural
+  dimensions. Function `toString()` preserves JavaScript source.
+- `document.cookie` shares the session HTTP cookie jar, with path, Secure,
+  expiry and HttpOnly handling. Script-set Domain attributes are conservatively
+  limited to the document hostname; opaque and non-HTTP origins expose no cookies.
 - A per-document [`navigator`](https://html.spec.whatwg.org/multipage/system-state.html#the-navigator-object)
   (`clientInformation`) with read-only identity,
   language, cookie-support, processor-count and touch-point properties. Its
@@ -57,9 +63,11 @@ disabled. A later script exception or VM shutdown does not change the document's
 parsing mode or activate its fallback metadata and resources.
 
 The shared VM has a 1 MiB heap and a 24 KiB MIPS stack budget (native ASan tests
-allow 128 KiB for larger C frames). Each entry has a 150 ms deadline and a
-work counter, checked at VM loop jumps, native regular-expression steps and
-promise jobs. Timers are capped at 32 per document. Heap exhaustion discards
+allow 128 KiB for larger C frames). Document startup scripts have a 20-second
+deadline to accommodate compilation on MIPS; interactive scripts, events and
+timers have a 750 ms deadline. A work counter also bounds each entry, checked
+at VM loop jumps, native regular-expression steps and promise jobs. Timers are
+capped at 32 per document. Heap exhaustion discards
 the VM and disables JavaScript in its active documents; the DOM remains
 readable and subsequent navigation can create a fresh VM. Top-level navigation
 retires the old tree's script contexts while leaving its rendered page visible
@@ -92,6 +100,13 @@ and local vendor changes are recorded in `third_party/*/UPSTREAM.md`.
 HTTP fixture server: DOM/events/timers, script order, errors and execution
 budgets, allocation failure/restart, frame navigation, origin isolation,
 sandboxing, CSP/XFO, framesets and embedding limits.
+
+`make -C host browser-google` builds an opt-in live workflow check. Run
+`(cd host && ../out/host/browser-google)` to open Google, submit the default
+`example domain` query, locate the example.com result and open it. Optional
+arguments select the query and expected result hostname. Exit code 3 means
+Google requires human verification; it does not count as a compatibility pass.
+The live check is separate from the deterministic integration tests.
 
 `make INPUT_SCRIPT=tests/t_browser_script.txt` builds the offline device smoke
 test. Run a copy of the NAND under be300 for 36 seconds and check its console

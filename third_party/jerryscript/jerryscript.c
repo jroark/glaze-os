@@ -48747,9 +48747,14 @@ scanner_append_argument (parser_context_t *context_p, /**< context */
   {
     literal_p->length = 0;
 
+    /* Parenthesized expressions are scanned as possible arrow parameters.
+     * A preceding closure may already capture this name; replacing its
+     * speculative argument must preserve the lexical-environment requirement. */
+    literal_type |= (uint8_t) (literal_p->type & SCANNER_LITERAL_NO_REG);
+
     if (literal_p->type & SCANNER_LITERAL_IS_USED)
     {
-      literal_type = SCANNER_LITERAL_IS_ARG | SCANNER_LITERAL_EARLY_CREATE;
+      literal_type |= SCANNER_LITERAL_EARLY_CREATE;
     }
   }
 

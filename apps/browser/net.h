@@ -93,5 +93,8 @@ bool ld_take(struct fetch_result *r);
 /* Bytes received and expected (0 if unknown) for one fetch. */
 void ld_progress(int id, int *got, int *total);
 void ld_free_result(struct fetch_result *r);
+/* document.cookie shares the HTTP jar; returned text is malloc'd. */
+char *ld_document_cookie(const char *url);
+void ld_set_document_cookie(const char *url, const char *value);
 
 #endif
