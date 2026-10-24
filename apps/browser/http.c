@@ -10,6 +10,7 @@
 #include "plat.h"
 #include "url.h"
 #include "web.h"
+#include "identity.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -20,7 +21,6 @@
 #define HEAD_MAX        (16 * 1024)
 #define CONNECT_MS      30000   /* including the TLS handshake */
 #define IDLE_MS         30000
-#define USER_AGENT      "Mozilla/5.0 (Glaze; BE-300) GlazeWeb/1.0"
 
 enum { H_RESOLVE, H_CONNECT, H_SEND, H_HEAD, H_BODY, H_DONE };
 enum { CH_SIZE, CH_DATA, CH_CRLF, CH_TRAILER };
@@ -144,9 +144,9 @@ struct http *http_start(const char *url, const char *post, int post_len, const c
     else
         snprintf(hostport, sizeof(hostport), "%s", u.host);
     int n = snprintf(h->req, cap,
-                     "%s %s%s%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " USER_AGENT "\r\n"
+                     "%s %s%s%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " BROWSER_USER_AGENT "\r\n"
                      "Accept: text/html,application/xhtml+xml,image/png,image/jpeg,image/gif,*/*;q=0.5\r\n"
-                     "Accept-Encoding: gzip, deflate\r\nAccept-Language: en\r\nConnection: close\r\n",
+                     "Accept-Encoding: gzip, deflate\r\nAccept-Language: " BROWSER_LANGUAGE "\r\nConnection: close\r\n",
                      post ? "POST" : "GET", u.path[0] ? u.path : "/", u.has_query ? "?" : "", u.query, hostport);
     if (cookies && *cookies)
         n += snprintf(h->req + n, cap - (size_t)n, "Cookie: %s\r\n", cookies);

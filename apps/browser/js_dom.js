@@ -111,6 +111,21 @@
     Object.defineProperty(document,'defaultView',{get:function(){return win;}});
     ['parent','top','frames','length'].forEach(function(n){Object.defineProperty(win,n,{get:function(){return dom(n,null);}});});
     win.window=win.self=win;win.document=document;win.Node=win.Element=win.HTMLElement=Node;win.Event=Event;
+    /* Per-realm identity; keep the object extensible for site polyfills. */
+    function Navigator(){throw TypeError('Illegal constructor');}
+    var nav=Object.create(Navigator.prototype), userAgent=dom('userAgent');
+    var language=dom('language'), languages=Object.freeze([language]);
+    var identity={appCodeName:'Mozilla',appName:'Netscape',
+        appVersion:userAgent.slice(userAgent.indexOf('/')+1),userAgent:userAgent,
+        platform:'BE-300',product:'Gecko',productSub:'20100101',vendor:'',vendorSub:'',
+        language:language,languages:languages,cookieEnabled:true,
+        hardwareConcurrency:1,maxTouchPoints:1};
+    Object.keys(identity).forEach(function(key){Object.defineProperty(Navigator.prototype,key,
+        {get:function(){return identity[key];},enumerable:true,configurable:true});});
+    Object.defineProperty(Navigator.prototype,Symbol.toStringTag,{value:'Navigator',configurable:true});
+    win.Navigator=Navigator;
+    ['navigator','clientInformation'].forEach(function(key){Object.defineProperty(win,key,
+        {get:function(){return nav;},enumerable:true,configurable:true});});
     win.console={log:function(){dom('log',null,Array.prototype.join.call(arguments,' '));},warn:function(){this.log.apply(this,arguments);},error:function(){this.log.apply(this,arguments);}};
     win.alert=function(s){console.log(s);};
     win.setTimeout=function(fn,delay){if(typeof fn!=='function')throw TypeError('Timer callback must be a function');if(timers.length>=32)throw Error('Too many timers');var id=nextTimer++,args=Array.prototype.slice.call(arguments,2);timers.push({id:id,fn:fn,args:args,due:dom('now')+Math.max(4,Math.min(2147483647,Number(delay)||0)),repeat:0});return id;};

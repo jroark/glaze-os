@@ -22,6 +22,11 @@ legacy framesets. Drag inside a long frame to scroll its contents.
   there are no browser workers.
 - `window`, `self`, `globalThis`, `document`, `location`, console logging,
   `alert` (console output), function-based timers, and event listeners.
+- A per-document [`navigator`](https://html.spec.whatwg.org/multipage/system-state.html#the-navigator-object)
+  (`clientInformation`) with read-only identity,
+  language, cookie-support, processor-count and touch-point properties. Its
+  user agent and language match the HTTP request headers. Unsupported methods
+  such as `sendBeacon` are absent, allowing site feature checks and polyfills.
 - Node creation, insertion/removal, traversal, attributes, selectors, IDs,
   text/HTML replacement, classes, common style properties, form values,
   checked/disabled state, form submission/reset and `document.write`.

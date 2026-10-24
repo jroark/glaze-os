@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local HTTP fixtures for scripts, CSP, frames, redirects and named targets."""
 import http.server
+import json
 import subprocess
 import sys
 import threading
@@ -40,6 +41,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         }
         if self.path == '/denied':
             headers['X-Frame-Options'] = 'DENY'
+        if self.path == '/navigator':
+            expected = json.dumps({'userAgent': self.headers.get('User-Agent'),
+                                   'language': self.headers.get('Accept-Language')})
+            pages[self.path] = '''<script>var expected=''' + expected + ''';
+if(navigator.userAgent!==expected.userAgent||navigator.language!==expected.language)
+  throw Error('navigator disagrees with request headers');
+document.title='navigator matches headers';</script>'''
         if self.path == '/csp':
             headers['Content-Security-Policy'] = "script-src 'self'"
         if self.path == '/limits' or self.path.startswith('/tree/'):

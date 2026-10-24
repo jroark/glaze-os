@@ -4,6 +4,7 @@
 #include "../apps/browser/load.h"
 #include "../apps/browser/frames.h"
 #include "../apps/browser/plat.h"
+#include "../apps/browser/identity.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -154,6 +155,36 @@ static void engine(void)
     CHECK(p->nscripts == 0);
     page_free(p);
 }
+static void navigator_identity(void)
+{
+    struct page *p = blank("http://one.test/navigator");
+    CHECK(js(p, "function check(c){if(!c)throw Error('navigator assertion');}"
+                "check(navigator===window.navigator&&navigator===clientInformation);"
+                "check(navigator instanceof Navigator);"
+                "check(Object.prototype.toString.call(navigator)==='[object Navigator]');"
+                "check(navigator.userAgent==='" BROWSER_USER_AGENT "');"
+                "check(navigator.appVersion===navigator.userAgent.slice(8));"
+                "check(navigator.platform==='BE-300'&&navigator.appName==='Netscape');"
+                "check(navigator.language==='" BROWSER_LANGUAGE "');"
+                "check(navigator.languages.length===1&&navigator.languages[0]===navigator.language);"
+                "check(Object.isFrozen(navigator.languages));"
+                "check(navigator.cookieEnabled&&navigator.hardwareConcurrency===1&&navigator.maxTouchPoints===1);"));
+    CHECK(js(p, "'use strict';var original=navigator,ua=navigator.userAgent;"
+                "var denied=false;try{navigator.userAgent='other';}catch(e){denied=e instanceof TypeError;}"
+                "check(denied&&navigator.userAgent===ua);"
+                "denied=false;try{window.navigator={};}catch(e){denied=e instanceof TypeError;}"
+                "check(denied&&navigator===original);"
+                "denied=false;try{new Navigator();}catch(e){denied=e instanceof TypeError;}check(denied);"));
+    /* Google's failing bare identifier read, followed by its feature check. */
+    CHECK(js(p, "navigator||(window.navigator={});var calls=0;"
+                "check(typeof navigator.sendBeacon==='undefined');"
+                "if(typeof navigator.sendBeacon!=='function')navigator.sendBeacon=function(){calls++;return false;};"
+                "check(navigator.sendBeacon('/collect','')===false&&calls===1);"));
+    page_free(p);
+    p = blank("http://one.test/fresh-navigator");
+    CHECK(js(p, "if(typeof navigator.sendBeacon!=='undefined')throw Error('navigator leaked across navigation');"));
+    page_free(p);
+}
 static void policies(void)
 {
     struct page *p = blank("https://one.test/index");
@@ -200,6 +231,9 @@ static void origins(void)
     CHECK(js(p, "var saved=document.getElementById('frame').contentDocument;var "
                 "savedNode=saved.getElementById('out');if(!savedNode)throw Error('same origin "
                 "denied');savedNode.textContent='parent edited';"));
+    CHECK(js(p, "var childNav=document.getElementById('frame').contentWindow.navigator;"
+                "if(childNav===navigator||childNav.userAgent!==navigator.userAgent)throw Error('navigator realm');"
+                "childNav.testMarker='child';if(navigator.testMarker!==undefined)throw Error('navigator shared');"));
     CHECK(js(f->page,
              "if(document.getElementById('out').textContent!=='parent edited')throw Error('child "
              "DOM');if(parent.document.getElementById('out').textContent!=='before')throw "
@@ -280,6 +314,18 @@ static void noscript_transport(const char *base)
             CHECK(refresh && !strcmp(refresh, i == 0 ? "/local" : "/remote") && delay == 0);
         }
     }
+    load_stop(&ld);
+    load_forget(&ld, p);
+    page_free(p);
+    free(ld.url);
+}
+static void navigator_transport(const char *base)
+{
+    char url[256];
+    struct load ld = {0};
+    snprintf(url, sizeof url, "%s/navigator", base);
+    struct page *p = fetch(&ld, url);
+    CHECK(p && p->title && !strcmp(p->title, "navigator matches headers"));
     load_stop(&ld);
     load_forget(&ld, p);
     page_free(p);
@@ -390,10 +436,12 @@ int main(int argc, char **argv)
 {
     noscript();
     engine();
+    navigator_identity();
     policies();
     origins();
     oom();
     if (argc > 1) {
+        navigator_transport(argv[1]);
         noscript_transport(argv[1]);
         transport(argv[1]);
     }
