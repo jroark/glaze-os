@@ -85,6 +85,7 @@ struct ce_window {
     CW menu;
     unsigned client_top;
     bool nonclient;
+    bool erase; /* WM_ERASEBKGND is due at the next BeginPaint */
     struct {
         uint16_t value[8], minimum[8], maximum[8], format[64];
         unsigned range;

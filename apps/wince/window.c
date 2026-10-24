@@ -209,6 +209,7 @@ struct ce_window *ce_new_window(const WCHAR *klass, const WCHAR *text, CW style,
                 break;
             }
     w->proc = proc ? proc : WORD(builtin_proc);
+    w->erase = true;
     if (!strcasecmp(w->klass, "msctls_updown32")) {
         w->spin_high = 100;
         if (style & 0x10)
@@ -377,6 +378,22 @@ static CW spin_proc(struct ce_window *w, CW msg, CW wp, CW lp)
         return 0;
     }
 }
+CW ce_FillRect(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
+/* WM_ERASEBKGND fills the client area with the class's hbrBackground. */
+static CW erase_background(struct ce_window *w, CW dc)
+{
+    for (unsigned j = 0; j < ARRAY_SIZE(classes); j++)
+        if (classes[j].atom && !strcasecmp(classes[j].name, w->klass)) {
+            CW brush = classes[j].info[7];
+            if (!brush)
+                return 0;
+            struct ce_rect r = {0, 0, w->rect.right - w->rect.left,
+                                MAX(0, w->rect.bottom - w->rect.top - (int)w->client_top)};
+            ce_FillRect(dc, WORD(&r), brush, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            return 1;
+        }
+    return 0;
+}
 static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
 {
     struct ce_window *w = ce_window(handle);
@@ -394,6 +411,13 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
         if (edit && message == 0x111 && lp == edit->handle) {
             unsigned code = wp >> 16;
             if (code == 0x300) set_text(w, edit->text);
+            /* As on Windows, focus selects the whole text, so typing
+             * replaces it (WorldTALK's address box). */
+            if (code == 0x100) {
+                edit->sel_start = 0;
+                edit->sel_end = edit->cursor = edit->length;
+                edit->dirty = true;
+            }
             unsigned notification = code == 0x300 ? 5 : code == 0x100 ? 3 : code == 0x200 ? 4 : 0;
             return notification ? ce_send(w->parent, 0x111, w->id | notification << 16, handle) : 0;
         }
@@ -440,6 +464,8 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
     case 0xf:
         draw_control(w);
         return 0;
+    case 0x14:
+        return erase_background(w, wp);
     case 0xc:
         return set_text(w, PTR(WCHAR, lp));
     case 0xd: {
@@ -1366,6 +1392,8 @@ CE_API(InvalidateRect)
     if (!w)
         return 0;
     w->dirty = true;
+    if (a2)
+        w->erase = true;
     return 1;
 }
 CE_API(GetClientRect)

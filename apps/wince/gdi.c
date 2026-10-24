@@ -509,7 +509,10 @@ CE_API(BeginPaint)
     memset(PTR(void, a1), 0, 64);
     CW *p = PTR(CW, a1);
     p[0] = hdc;
-    p[1] = 1;
+    /* fErase: the window did not erase on WM_ERASEBKGND. */
+    bool erase = w->erase;
+    w->erase = false;
+    p[1] = erase && !ce_send(a0, 0x14, hdc, 0);
     *PTR(struct ce_rect, a1 + 8) =
         (struct ce_rect){0, 0, w->rect.right - w->rect.left, w->rect.bottom - w->rect.top};
     w->dirty = false;
