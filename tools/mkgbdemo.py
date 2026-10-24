@@ -86,7 +86,9 @@ def main():
     d.rectangle((20,13,37,28),fill='#9bb58b')
     d.rectangle((21,35,25,46),fill='#273246'); d.rectangle((17,39,29,42),fill='#273246')
     d.ellipse((34,35,39,40),fill='#b82764'); d.ellipse((29,41,34,46),fill='#b82764')
-    raw=bytearray(b'GZI1'+struct.pack('<HHHH',57,57,0,0))
+    # Drawn at 57x57, stored at SpringBoard's and the App Store's 44x44.
+    im=im.resize((44,44),Image.LANCZOS)
+    raw=bytearray(b'GZI1'+struct.pack('<HHHH',44,44,0,0))
     rgb=im.tobytes()
     for i in range(0,len(rgb),3):
         r,g,b=rgb[i:i+3]

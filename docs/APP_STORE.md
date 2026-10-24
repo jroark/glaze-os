@@ -3,7 +3,9 @@
 The built-in App Store has Search and Updates tabs. Search lists every app
 before a query is entered and matches names, developers, summaries and descriptions.
 Apps are free and curated in `store/apps.json`; there are no accounts or payments.
-The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manager, AIM and Gmail.
+The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manager, AIM, Gmail,
+and the NES, Game Boy, Master System, Genesis, Game Gear and TurboGrafx-16 emulators. The
+emulators include only original demo cartridges; players supply their own ROMs.
 
 In the web emulator, use network bridge helper version `20261021a` or later
 (printed when it starts). Older helpers can stall icon and package downloads

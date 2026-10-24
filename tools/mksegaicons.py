@@ -23,7 +23,9 @@ for app,bg in [('mastersystem','#c43b34'),('genesis','#4257a0'),('gamegear','#34
     d.rounded_rectangle((9,38,47,51),radius=5,fill='#1c2027',outline='#b7becc')
     d.rectangle((16,40,19,48),fill='#c1c6d2');d.rectangle((13,43,22,46),fill='#c1c6d2')
     for x,y in [(33,43),(39,41)]+([(27,45)] if app=='genesis' else []):d.ellipse((x,y,x+3,y+3),fill='#c52b3c')
-    data=bytearray(b'GZI1'+struct.pack('<HHHH',57,57,0,0));rgb=im.tobytes()
+    # Drawn at 57x57, stored at SpringBoard's and the App Store's 44x44.
+    im=im.resize((44,44),Image.LANCZOS)
+    data=bytearray(b'GZI1'+struct.pack('<HHHH',44,44,0,0));rgb=im.tobytes()
     for i in range(0,len(rgb),3):
         r,g,b=rgb[i:i+3];data+=struct.pack('<H',(r>>3)<<11|(g>>2)<<5|(b>>3))
     (root/f'packages/{app}/icon.gzi').write_bytes(data)
