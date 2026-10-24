@@ -66,8 +66,7 @@ void mm_init(void)
 
 static void *try_page_alloc(void)
 {
-    for (uint32_t n = 0; n < NPAGES; n++) {
-        uint32_t i = (alloc_hint + n) % NPAGES;
+    for (uint32_t n = 0, i = alloc_hint; n < NPAGES; n++, i = i + 1 < NPAGES ? i + 1 : 0) {
         if (!page_used[i]) {
             page_used[i] = 1;
             free_count--;
@@ -93,23 +92,31 @@ void *page_alloc(void)
  * Keep the extra index bit (VA bit 12) identical to KSEG0's physical alias. */
 static void *try_page_alloc_colour(uint32_t va)
 {
-    for (uint32_t n = 0; n < NPAGES; n++) {
-        uint32_t i = (alloc_hint + n) % NPAGES;
+    for (uint32_t n = 0, i = alloc_hint; n < NPAGES; n++, i = i + 1 < NPAGES ? i + 1 : 0) {
         if (!page_used[i] && !((i * PAGE_SIZE ^ va) & 0x1000u)) {
             page_used[i] = 1; free_count--; alloc_hint = i + 1;
-            void *page = (void *)KSEG0(i * PAGE_SIZE);
-            memset(page, 0, PAGE_SIZE); return page;
+            return (void *)KSEG0(i * PAGE_SIZE);
         }
     }
     return NULL;
 }
 
-void *page_alloc_colour(uint32_t va)
+/* Not zeroed: for frames the caller fills completely at once. */
+void *page_alloc_colour_raw(uint32_t va)
 {
     void *page;
 
     while (!(page = try_page_alloc_colour(va)) && romfs_reclaim(RECLAIM_BATCH))
         ;
+    return page;
+}
+
+void *page_alloc_colour(uint32_t va)
+{
+    void *page = page_alloc_colour_raw(va);
+
+    if (page)
+        memset(page, 0, PAGE_SIZE);
     return page;
 }
 
@@ -276,7 +283,8 @@ void as_prune_tables(struct addrspace *as)
     tlb_flush_all();
 }
 
-/* Existing thread-stack slots may be reused, but partial overlaps are invalid. */
+/* Pages already mapped over the whole range are reused; partial overlaps,
+ * and any overlap with a stack, are invalid. */
 int as_alloc_region(struct addrspace *as, uint32_t va, uint32_t len, int kind)
 {
     if (!len || va >= USER_TOP || len > USER_TOP - va || va + len > USER_TOP - PAGE_SIZE + 1)
@@ -284,6 +292,13 @@ int as_alloc_region(struct addrspace *as, uint32_t va, uint32_t len, int kind)
     uint32_t start = va & ~(PAGE_SIZE - 1), end = ALIGN_UP(va + len, PAGE_SIZE), mapped = 0;
     for (uint32_t a = start; a < end; a += PAGE_SIZE) mapped += (as_lookup(as, a) & PTE_V) != 0;
     if (mapped) return mapped == (end - start) / PAGE_SIZE ? 0 : GZ_EINVAL;
+    /* A stack's pages come and go by fault, so look for its region too. */
+    for (struct region_page *p = as->regions; p; p = p->next)
+        for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) {
+            struct region *q = &p->entry[i];
+            if (q->kind == REGION_STACK && q->va < end && q->va + q->npages * PAGE_SIZE > start)
+                return GZ_EINVAL;
+        }
     struct region *r = as_region_add(as, start, 0, kind, -1);
     if (!r) return GZ_ENOMEM;
     for (uint32_t a = start; a < end; a += PAGE_SIZE) {
@@ -299,14 +314,60 @@ int as_alloc_region(struct addrspace *as, uint32_t va, uint32_t len, int kind)
     return 0;
 }
 
+static uint32_t mmap_reuse(struct addrspace *as, uint32_t len);
+static struct region *region_at(struct addrspace *as, uint32_t va);
+
+/* Committed at once, so running out of memory fails here rather than at a
+ * later fault. Reuses ranges freed by as_munmap_anon and shm unmaps. */
 uint32_t as_mmap_anon(struct addrspace *as, uint32_t len)
 {
-    uint32_t va = as->mmap_top;
-    if (!len || len > GZ_DSO_BASE - va - PAGE_SIZE) return 0;
+    if (!len || len > GZ_DSO_BASE - USER_MMAP_BASE - PAGE_SIZE) return 0;
     len = ALIGN_UP(len, PAGE_SIZE);
+    uint32_t va = mmap_reuse(as, len);
+    if (len > GZ_DSO_BASE - va - PAGE_SIZE) return 0;
     if (as_alloc_region(as, va, len, REGION_OWNED)) return 0;
-    as->mmap_top += len + PAGE_SIZE;
+    if (va == as->mmap_top)
+        as->mmap_top += len + PAGE_SIZE;
     return va;
+}
+
+/* Frees a whole as_mmap_anon allocation that starts at va. */
+int as_munmap_anon(struct addrspace *as, uint32_t va)
+{
+    struct region *r = region_at(as, va);
+    if (!r || r->kind != REGION_OWNED || r->va != va || va < USER_MMAP_BASE || va >= GZ_DSO_BASE)
+        return GZ_EINVAL;
+    for (uint32_t i = 0; i < r->npages; i++) as_unmap_page(as, va + i * PAGE_SIZE, true);
+    as_region_drop(as, r);
+    as_prune_tables(as);
+    return 0;
+}
+
+/* A stack's region, with no pages yet. A thread slot's region outlives its
+ * thread and is reused as it stands; any other overlap is invalid. */
+int as_stack_region(struct addrspace *as, uint32_t va, uint32_t len)
+{
+    if (!len || (va | len) & (PAGE_SIZE - 1) || va >= USER_TOP || len > USER_TOP - PAGE_SIZE - va)
+        return GZ_EINVAL;
+    for (struct region_page *p = as->regions; p; p = p->next)
+        for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) {
+            struct region *r = &p->entry[i];
+            if (!r->kind || r->va >= va + len || r->va + r->npages * PAGE_SIZE <= va) continue;
+            return r->kind == REGION_STACK && r->va == va && r->npages == len / PAGE_SIZE ? 0 : GZ_EINVAL;
+        }
+    return as_region_add(as, va, len / PAGE_SIZE, REGION_STACK, -1) ? 0 : GZ_ENOMEM;
+}
+
+static int stack_fault(struct addrspace *as, uint32_t va)
+{
+    va &= ~(PAGE_SIZE - 1);
+    void *page = page_alloc_colour(va);
+    if (!page) return GZ_ENOMEM;
+    if (as_map_page(as, va, PHYS(page), PTE_CACHED | PTE_D | PTE_V)) {
+        page_free(page);
+        return GZ_ENOMEM;
+    }
+    return 0;
 }
 
 uint32_t as_map_phys(struct addrspace *as, uint32_t pa, uint32_t len, uint32_t cache)
@@ -353,7 +414,9 @@ int as_fault(struct addrspace *as, uint32_t va, bool write)
 {
     struct region *r = va < USER_TOP ? region_at(as, va) : NULL;
 
-    if (!r || write || (as_lookup(as, va) & PTE_V)) return GZ_EINVAL;     /* demand pages are read-only */
+    if (!r || (as_lookup(as, va) & PTE_V)) return GZ_EINVAL;
+    if (r->kind == REGION_STACK) return stack_fault(as, va);
+    if (write) return GZ_EINVAL;        /* other demand pages are read-only */
     if (r->kind == REGION_ROMFS) return romfs_fault(as, r, va);
     if (r->kind == REGION_IMAGE) return image_fault(as, r, va);
     return GZ_EINVAL;
@@ -457,7 +520,7 @@ void as_destroy(struct addrspace *as)
         for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) {
             struct region *r = &p->entry[i];
             if (r->kind == REGION_IMAGE) image_release_region(as, r);
-            else if (r->kind == REGION_OWNED || r->kind == REGION_LOADER) {
+            else if (r->kind == REGION_OWNED || r->kind == REGION_LOADER || r->kind == REGION_STACK) {
                 for (uint32_t j = 0; j < r->npages; j++) as_unmap_page(as, r->va + j * PAGE_SIZE, true);
             } else if (r->kind == REGION_SHM) shm_unref(r->shm_id);
             else if (r->kind == REGION_ROMFS) {

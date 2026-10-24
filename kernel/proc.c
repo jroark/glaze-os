@@ -59,7 +59,8 @@ int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size)
         for (struct region_page *rp = p->as.regions; rp; rp = rp->next)
             for (unsigned j = 0; j < ARRAY_SIZE(rp->entry); j++) {
                 struct region *r = &rp->entry[j];
-                if (r->kind != REGION_OWNED && r->kind != REGION_IMAGE && r->kind != REGION_SHM) continue;
+                if (r->kind != REGION_OWNED && r->kind != REGION_STACK && r->kind != REGION_IMAGE &&
+                    r->kind != REGION_SHM) continue;
                 for (uint32_t n = 0; n < r->npages; n++)
                     t->mapped_pages += (as_lookup(&p->as, r->va + n * PAGE_SIZE) & PTE_V) != 0;
             }
@@ -133,7 +134,7 @@ static struct proc *spawn(const char *name, struct addrspace *src_as, const stru
     if (!load_error && !rom && !start.abi)
         load_error = GZ_EINVAL;     /* installed apps run on the dynamic linker */
     if (load_error) { kprintf("proc: cannot load %s (%d)\n", name, load_error); goto fail; }
-    if (as_alloc_region(&p->as, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE, REGION_OWNED))
+    if (as_stack_region(&p->as, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE))
         goto fail;
 
     uint32_t sp = USER_STACK_TOP - 16, boot = 0;
@@ -214,8 +215,9 @@ void proc_reap(void)
 /*
  * Extra threads. Each gets a 64 KiB stack in a slot below the main stack,
  * with a 64 KiB unmapped guard above it; slots are 64 KiB aligned, which
- * libc relies on to find its per-thread block. Nothing is ever unmapped,
- * so a slot's pages are reused by the next thread that gets it.
+ * libc relies on to find its per-thread block. Pages are faulted in as the
+ * stack grows. Nothing is ever unmapped, so a slot's pages are reused by the
+ * next thread that gets it.
  */
 static uint32_t stack_base(int slot)
 {
@@ -232,7 +234,7 @@ int thread_spawn(uint32_t entry, uint32_t arg)
     if (slot == MAX_STACK_SLOTS)
         return GZ_EFULL;
     uint32_t base = stack_base(slot);
-    if (as_alloc_region(&p->as, base, USER_STACK_SIZE, REGION_OWNED))
+    if (as_stack_region(&p->as, base, USER_STACK_SIZE))
         return GZ_ENOMEM;
     struct thread *t = thread_create_user(p, entry, base + USER_STACK_SIZE - 16, arg, cur->prio);
     if (!t)

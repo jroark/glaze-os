@@ -3,6 +3,7 @@
 #include <glaze/gfx.h>
 #include <stdlib.h>
 #include <string.h>
+#include "blend.h"
 
 /* Two RGB565 pixels written as one word. may_alias tells the compiler the
  * store can change the uint16_t pixels around it, so it doesn't reorder or
@@ -59,12 +60,7 @@ void gfx_reset_clip(gfx_surface *s)
 
 uint16_t gfx_blend565(uint16_t dst, uint16_t src, int alpha)
 {
-    uint32_t a = ((uint32_t)alpha + 4) >> 3;      /* 0..32 */
-    uint32_t d = (dst | ((uint32_t)dst << 16)) & 0x07E0F81Fu;
-    uint32_t s = (src | ((uint32_t)src << 16)) & 0x07E0F81Fu;
-    uint32_t r = (d + (((s - d) * a) >> 5)) & 0x07E0F81Fu;
-
-    return (uint16_t)(r | (r >> 16));
+    return blend565(dst, src, alpha);
 }
 
 static inline uint16_t dither565(uint32_t r, uint32_t g, uint32_t b, int x, int y)
@@ -119,7 +115,7 @@ void gfx_fill_alpha(gfx_surface *s, gfx_rect r, uint32_t rgb, int alpha)
     for (int y = r.y; y < r.y + r.h; y++) {
         uint16_t *p = s->px + y * s->stride + r.x;
         for (int x = 0; x < r.w; x++)
-            p[x] = gfx_blend565(p[x], c, alpha);
+            p[x] = blend565(p[x], c, alpha);
     }
 }
 
@@ -158,7 +154,7 @@ void gfx_hgradient(gfx_surface *s, gfx_rect r, uint32_t left, uint32_t right, in
             uint16_t px = dither565(lerp8(left >> 16 & 0xFF, right >> 16 & 0xFF, t, den),
                                     lerp8(left >> 8 & 0xFF, right >> 8 & 0xFF, t, den),
                                     lerp8(left & 0xFF, right & 0xFF, t, den), x, y);
-            p[x] = alpha >= 255 ? px : gfx_blend565(p[x], px, alpha);
+            p[x] = alpha >= 255 ? px : blend565(p[x], px, alpha);
         }
     }
 }
@@ -242,7 +238,7 @@ static void shade_span(uint16_t *p, int x, int end, const uint16_t row[4], int a
             p[x] = row[x & 3];
     } else {
         for (; x < end; x++)
-            p[x] = gfx_blend565(p[x], row[x & 3], alpha);
+            p[x] = blend565(p[x], row[x & 3], alpha);
     }
 }
 
@@ -253,7 +249,7 @@ static void shade_corners(uint16_t *p, int x, int end, int y, gfx_rect r, int ra
         int cov = rr_coverage(r, rad, x, y);
         if (cov) {
             int a = cov * alpha / 255;
-            p[x] = a >= 255 ? row[x & 3] : gfx_blend565(p[x], row[x & 3], a);
+            p[x] = a >= 255 ? row[x & 3] : blend565(p[x], row[x & 3], a);
         }
     }
 }
@@ -318,7 +314,7 @@ void gfx_circle(gfx_surface *s, int cx, int cy, int radius, uint32_t rgb, int al
             int cov = disc_coverage(x, y, cx * 16, cy * 16, radius * 16);
             if (cov) {
                 int a = cov * alpha / 255;
-                p[x] = gfx_blend565(p[x], col, a);
+                p[x] = blend565(p[x], col, a);
             }
         }
     }
@@ -333,7 +329,7 @@ void gfx_line(gfx_surface *s, int x0, int y0, int x1, int y1, uint32_t rgb, int 
     for (;;) {
         if (gfx_rect_contains(s->clip, x0, y0)) {
             uint16_t *p = &s->px[y0 * s->stride + x0];
-            *p = alpha >= 255 ? c : gfx_blend565(*p, c, alpha);
+            *p = alpha >= 255 ? c : blend565(*p, c, alpha);
         }
         if (x0 == x1 && y0 == y1)
             break;
@@ -379,7 +375,7 @@ void gfx_line_aa(gfx_surface *s, int x0, int y0, int x1, int y1, int width16, ui
             if (cov > 255)
                 cov = 255;
             uint16_t *p = &s->px[y * s->stride + x];
-            *p = gfx_blend565(*p, c, cov * alpha / 255);
+            *p = blend565(*p, c, cov * alpha / 255);
         }
     }
 }

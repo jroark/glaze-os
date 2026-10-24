@@ -73,7 +73,7 @@ def boot(be300, image, secs, until=None):
         dst.write(src.read())
     env = dict(os.environ, SDL_VIDEODRIVER="dummy")
     t0 = time.monotonic()
-    p = subprocess.Popen(["stdbuf", "-oL", be300, "--nand", nand, "--rtc-host-time"], cwd=work, env=env,
+    p = subprocess.Popen([be300, "--nand", nand, "--rtc-host-time"], cwd=work, env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace")
     lines = []
     try:

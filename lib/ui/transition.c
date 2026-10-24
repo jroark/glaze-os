@@ -3,6 +3,7 @@
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdlib.h>
+#include "transition.h"
 
 #define TRANSITION_MS 300
 
@@ -10,11 +11,20 @@ static gfx_surface old_s, new_s;
 
 static bool ensure_buffers(void)
 {
-    if (!old_s.px) {
+    if (!old_s.px)
         gfx_surface_init(&old_s, malloc(UI_W * UI_H * 2), UI_W, UI_H, UI_W);
+    if (!new_s.px)
         gfx_surface_init(&new_s, malloc(UI_W * UI_H * 2), UI_W, UI_H, UI_W);
-    }
     return old_s.px && new_s.px;
+}
+
+/* 2 x 146 KB: each its own mapping (malloc.c), so the pages go back to the
+ * kernel while the app sits in the background. */
+void uitr_release(void)
+{
+    free(old_s.px);
+    free(new_s.px);
+    old_s.px = new_s.px = NULL;
 }
 
 void ui_transition(void (*draw_new)(gfx_surface *s), bool forward)

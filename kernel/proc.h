@@ -34,6 +34,7 @@ extern const struct gz_bootinfo *ram_boot;
 
 void mm_init(void);                 /* reserves a RAM boot's romfs and RAM disk */
 void *page_alloc_colour(uint32_t va);
+void *page_alloc_colour_raw(uint32_t va);    /* not zeroed */
 void mm_sync_code(void *kva, uint32_t len);
 void *page_alloc(void);             /* zeroed KSEG0 page, or NULL */
 void *page_alloc_n(uint32_t n);      /* contiguous */
@@ -41,8 +42,10 @@ void page_free(void *kva);
 uint32_t mm_free_pages(void);
 uint32_t mm_total_pages(void);
 
-/* REGION_ROMFS: a romfs file (shm_id is its entry index), faulted in. */
-enum region_kind { REGION_OWNED = 1, REGION_SHM, REGION_DEVICE, REGION_IMAGE, REGION_ROMFS, REGION_LOADER };
+/* REGION_ROMFS: a romfs file (shm_id is its entry index), faulted in.
+ * REGION_STACK: a thread stack, zero-filled a page at a time on first touch. */
+enum region_kind { REGION_OWNED = 1, REGION_SHM, REGION_DEVICE, REGION_IMAGE, REGION_ROMFS, REGION_LOADER,
+                   REGION_STACK };
 
 struct region {
     uint32_t va, npages;
@@ -87,6 +90,8 @@ int as_map_page(struct addrspace *as, uint32_t va, uint32_t pa, uint32_t flags);
 pte_t as_lookup(struct addrspace *as, uint32_t va);
 int as_alloc_region(struct addrspace *as, uint32_t va, uint32_t len, int kind);
 uint32_t as_mmap_anon(struct addrspace *as, uint32_t len);
+int as_munmap_anon(struct addrspace *as, uint32_t va);
+int as_stack_region(struct addrspace *as, uint32_t va, uint32_t len);
 int as_loader_map(struct addrspace *, uint32_t, uint32_t);
 int as_loader_publish(struct addrspace *, uint32_t, uint32_t, uint32_t);
 int as_loader_release(struct addrspace *, uint32_t);

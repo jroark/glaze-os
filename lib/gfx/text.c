@@ -2,6 +2,7 @@
 
 #include <glaze/gfx.h>
 #include <string.h>
+#include "blend.h"
 
 bool gfx_font_parse(gfx_font *f, const void *data, size_t size)
 {
@@ -63,13 +64,20 @@ int gfx_text_n(gfx_surface *s, int x, int y, const gfx_font *f, const char *str,
         for (int yy = cr.y; yy < cr.y + cr.h; yy++) {
             const uint8_t *a = bm + (yy - gy) * g->w + (cr.x - gx);
             uint16_t *d = s->px + yy * s->stride + cr.x;
+            if (alpha >= 255) {
+                for (int xx = 0; xx < cr.w; xx++) {
+                    int pa = a[xx];
+                    if (pa)
+                        d[xx] = pa >= 250 ? c : blend565(d[xx], c, pa);
+                }
+                continue;
+            }
             for (int xx = 0; xx < cr.w; xx++) {
                 int pa = a[xx];
                 if (!pa)
                     continue;
-                if (alpha < 255)
-                    pa = pa * alpha / 255;
-                d[xx] = pa >= 250 ? c : gfx_blend565(d[xx], c, pa);
+                pa = pa * alpha / 255;
+                d[xx] = pa >= 250 ? c : blend565(d[xx], c, pa);
             }
         }
     }

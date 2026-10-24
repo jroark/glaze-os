@@ -74,10 +74,21 @@ static struct bbt bbt;
 static struct { uint32_t page; uint8_t slot[ECC_SLOT]; } ecc_cache[CACHE_N];
 static unsigned cache_next;
 
-/* The last checkpoint page read, corrected; UINT32_MAX = none. */
-static uint32_t cp_page = UINT32_MAX;
-static bool cp_erased;
-static uint8_t cp_buf[PAGE];
+/* Checkpoint pages read lately, corrected; page UINT32_MAX = empty. A sector
+ * lookup (dhara_map_find) reads the metadata of one checkpoint per radix
+ * level, and the upper levels are the same for every lookup, so keeping
+ * several saves most of a lookup's raw reads and ECC checks. */
+#define CP_N        16
+
+static struct { uint32_t page, used; uint8_t buf[PAGE]; } cp_cache[CP_N];
+static uint32_t cp_clock;
+
+/* Recent sector -> page lookups, direct-mapped. Any program or erase may
+ * move a sector, so both bump sec_gen, which empties the table. */
+#define SEC_N       64
+
+static struct { dhara_sector_t sector; dhara_page_t page; uint32_t gen; } sec_cache[SEC_N];
+static uint32_t sec_gen = 1;
 
 static void make_slot(const uint8_t *data, size_t len, uint8_t *slot)
 {
@@ -168,8 +179,27 @@ static void cache_drop_block(uint32_t block)
         if (ecc_cache[i].page != UINT32_MAX && ecc_cache[i].page / PPB == block)
             ecc_cache[i].page = UINT32_MAX;
     }
-    if (cp_page != UINT32_MAX && cp_page / PPB == block)
-        cp_page = UINT32_MAX;
+    for (unsigned i = 0; i < CP_N; i++) {
+        if (cp_cache[i].page != UINT32_MAX && cp_cache[i].page / PPB == block)
+            cp_cache[i].page = UINT32_MAX;
+    }
+}
+
+static void cp_drop(uint32_t page)
+{
+    for (unsigned i = 0; i < CP_N; i++) {
+        if (cp_cache[i].page == page)
+            cp_cache[i].page = UINT32_MAX;
+    }
+}
+
+static void caches_reset(void)
+{
+    for (unsigned i = 0; i < CACHE_N; i++)
+        ecc_cache[i].page = UINT32_MAX;
+    for (unsigned i = 0; i < CP_N; i++)
+        cp_cache[i].page = UINT32_MAX;
+    sec_gen++;
 }
 
 /* ---- raw access (Dhara page numbers) -------------------------------------- */
@@ -236,29 +266,46 @@ static bool reads_erased(const uint8_t *buf)
     return zero_bits_within(buf, PAGE, ERASED_SLACK);
 }
 
-/* Reads and corrects checkpoint page `p` into cp_buf. A checkpoint whose
+/* Reads and corrects checkpoint page `p` into the cache and returns its
+ * contents, or NULL on error. A checkpoint whose
  * code never reached flash was cut off by a power loss (pages program from
  * the first byte to the last, the code's marker last); like an erased one
  * it reads as all 0xFF, which keeps it out of resume and lets garbage
  * collection discard its group. A complete one that fails ECC is an error. */
-static int load_checkpoint(dhara_page_t p, dhara_error_t *err)
+static const uint8_t *load_checkpoint(dhara_page_t p, dhara_error_t *err)
 {
-    if (cp_page == p)
-        return 0;
-    cp_page = UINT32_MAX;
-    if (raw_read(p, cp_buf)) {
-        dhara_set_error(err, DHARA_E_ECC);
-        return -1;
+    unsigned victim = 0;
+
+    for (unsigned i = 0; i < CP_N; i++) {
+        if (cp_cache[i].page == p) {
+            cp_cache[i].used = ++cp_clock;
+            return cp_cache[i].buf;
+        }
     }
-    cp_erased = reads_erased(cp_buf) || !has_code(cp_buf + CP_COVER);
-    if (cp_erased) {
-        memset(cp_buf, 0xFF, PAGE);
-    } else if (ecc_check(cp_buf, CP_COVER, cp_buf + CP_COVER, true)) {
-        dhara_set_error(err, DHARA_E_ECC);
-        return -1;
+    /* An empty entry, else the least recently used. */
+    for (unsigned i = 0; i < CP_N; i++) {
+        if (cp_cache[i].page == UINT32_MAX) {
+            victim = i;
+            break;
+        }
+        if (cp_cache[i].used < cp_cache[victim].used)
+            victim = i;
     }
-    cp_page = p;
-    return 0;
+    uint8_t *buf = cp_cache[victim].buf;
+    cp_cache[victim].page = UINT32_MAX;
+    if (raw_read(p, buf)) {
+        dhara_set_error(err, DHARA_E_ECC);
+        return NULL;
+    }
+    if (reads_erased(buf) || !has_code(buf + CP_COVER)) {
+        memset(buf, 0xFF, PAGE);
+    } else if (ecc_check(buf, CP_COVER, buf + CP_COVER, true)) {
+        dhara_set_error(err, DHARA_E_ECC);
+        return NULL;
+    }
+    cp_cache[victim].page = p;
+    cp_cache[victim].used = ++cp_clock;
+    return buf;
 }
 
 /* The stored code for user page `p`, or an all-0xFF slot if it has none. */
@@ -266,9 +313,10 @@ static int user_slot(dhara_page_t p, uint8_t *slot, dhara_error_t *err)
 {
     if (cache_get(p, slot))
         return 0;
-    if (load_checkpoint(p | GROUP_MASK, err))
+    const uint8_t *cp = load_checkpoint(p | GROUP_MASK, err);
+    if (!cp)
         return -1;
-    memcpy(slot, cp_buf + ECC_BASE + (p & GROUP_MASK) * ECC_SLOT, ECC_SLOT);
+    memcpy(slot, cp + ECC_BASE + (p & GROUP_MASK) * ECC_SLOT, ECC_SLOT);
     return 0;
 }
 
@@ -298,6 +346,7 @@ void dhara_nand_mark_bad(const struct dhara_nand *n, dhara_block_t b)
 int dhara_nand_erase(const struct dhara_nand *n, dhara_block_t b, dhara_error_t *err)
 {
     cache_drop_block(b);
+    sec_gen++;
     if (raw_erase_verify(b + BBT_BLOCKS)) {
         dhara_set_error(err, DHARA_E_BAD_BLOCK);
         return -1;
@@ -311,6 +360,7 @@ int dhara_nand_prog(const struct dhara_nand *n, dhara_page_t p, const uint8_t *d
     uint8_t buf[PAGE], slot[ECC_SLOT];
 
     memcpy(buf, data, PAGE);
+    sec_gen++;
     if ((p & GROUP_MASK) == GROUP_MASK) {
         /* Checkpoint: add the group's user-page codes, then its own. */
         for (dhara_page_t k = 0; k < GROUP_MASK; k++) {
@@ -327,8 +377,7 @@ int dhara_nand_prog(const struct dhara_nand *n, dhara_page_t p, const uint8_t *d
             memcpy(buf + ECC_BASE + k * ECC_SLOT, slot, ECC_SLOT);
         }
         make_slot(buf, CP_COVER, buf + CP_COVER);
-        if (cp_page == p)
-            cp_page = UINT32_MAX;
+        cp_drop(p);
     } else {
         make_slot(buf, PAGE, slot);
         cache_put(p, slot);
@@ -353,9 +402,10 @@ int dhara_nand_read(const struct dhara_nand *n, dhara_page_t p, size_t offset, s
     uint8_t buf[PAGE], slot[ECC_SLOT];
 
     if ((p & GROUP_MASK) == GROUP_MASK) {
-        if (load_checkpoint(p, err))
+        const uint8_t *cp = load_checkpoint(p, err);
+        if (!cp)
             return -1;
-        memcpy(data, cp_buf + offset, length);
+        memcpy(data, cp + offset, length);
         return 0;
     }
     if (raw_read(p, buf) || user_slot(p, slot, err))
@@ -444,7 +494,22 @@ static int bd_read(const struct lfs_config *c, lfs_block_t block, lfs_off_t off,
     dhara_error_t err;
 
     for (uint8_t *p = buffer; size; size -= PAGE, p += PAGE, s++) {
-        if (dhara_map_read(&map, s, p, &err))
+        /* dhara_map_read, with the lookup cached. */
+        unsigned i = s % SEC_N;
+        dhara_page_t page;
+        if (sec_cache[i].gen == sec_gen && sec_cache[i].sector == s) {
+            page = sec_cache[i].page;
+        } else if (dhara_map_find(&map, s, &page, &err)) {
+            if (err != DHARA_E_NOT_FOUND)
+                return lfs_err(err);
+            memset(p, 0xFF, PAGE);
+            continue;
+        } else {
+            sec_cache[i].sector = s;
+            sec_cache[i].page = page;
+            sec_cache[i].gen = sec_gen;
+        }
+        if (dhara_nand_read(&nand, page, 0, PAGE, p, &err))
             return lfs_err(err);
     }
     return 0;
@@ -509,9 +574,7 @@ int ftl_mount(lfs_t *lfs, uint32_t blocks)
 
     if (blocks > MAX_BLOCKS || blocks <= BBT_BLOCKS)
         return LFS_ERR_INVAL;
-    for (unsigned i = 0; i < CACHE_N; i++)
-        ecc_cache[i].page = UINT32_MAX;
-    cp_page = UINT32_MAX;
+    caches_reset();
     memset(&stats, 0, sizeof(stats));
     stats.blocks = blocks;
 
@@ -552,6 +615,7 @@ int ftl_format(lfs_t *lfs)
 {
     /* Drop every mapped sector so the old contents stop taking space. */
     dhara_map_clear(&map);
+    sec_gen++;
     int rv = lfs_format(lfs, &cfg);
 
     return rv ? rv : lfs_mount(lfs, &cfg);

@@ -2,6 +2,11 @@
 #include <strings.h>
 #include <glaze/types.h>
 
+/* Word accesses that may alias the bytes around them (the build has no
+ * -fno-strict-aliasing). */
+typedef uint32_t __attribute__((may_alias)) word_t;
+typedef uint16_t __attribute__((may_alias)) half_t;
+
 void *memset(void *d, int c, size_t n)
 {
     uint8_t *p = d;
@@ -11,21 +16,67 @@ void *memset(void *d, int c, size_t n)
         *p++ = (uint8_t)c;
         n--;
     }
-    for (; n >= 4; n -= 4, p += 4)
-        *(uint32_t *)p = w;
+    word_t *wp = (word_t *)p;
+    for (; n >= 16; n -= 16, wp += 4) {
+        wp[0] = w;
+        wp[1] = w;
+        wp[2] = w;
+        wp[3] = w;
+    }
+    for (; n >= 4; n -= 4)
+        *wp++ = w;
+    p = (uint8_t *)wp;
     while (n--)
         *p++ = (uint8_t)c;
     return d;
 }
 
+/* Copies whole words once the destination is word aligned. A source that is
+ * only halfword aligned (RGB565 rows at odd x) is read as halfword pairs, so
+ * every store, including those to the uncached framebuffer, is a word.
+ * Pointers an odd byte apart are copied bytewise. */
 void *memcpy(void *d, const void *s, size_t n)
 {
     uint8_t *dp = d;
     const uint8_t *sp = s;
+    uintptr_t diff = (uintptr_t)dp ^ (uintptr_t)sp;
 
-    if ((((uintptr_t)dp | (uintptr_t)sp) & 3) == 0) {
-        for (; n >= 4; n -= 4, dp += 4, sp += 4)
-            *(uint32_t *)dp = *(const uint32_t *)sp;
+    if (n >= 8 && !(diff & 1)) {
+        if ((uintptr_t)dp & 1) {
+            *dp++ = *sp++;
+            n--;
+        }
+        if ((uintptr_t)dp & 2) {
+            *(half_t *)dp = *(const half_t *)sp;
+            dp += 2;
+            sp += 2;
+            n -= 2;
+        }
+        word_t *dw = (word_t *)dp;
+        if (!(diff & 2)) {
+            const word_t *sw = (const word_t *)sp;
+            for (; n >= 16; n -= 16, dw += 4, sw += 4) {
+                uint32_t a = sw[0], b = sw[1], c = sw[2], e = sw[3];
+                dw[0] = a;
+                dw[1] = b;
+                dw[2] = c;
+                dw[3] = e;
+            }
+            for (; n >= 4; n -= 4)
+                *dw++ = *sw++;
+            sp = (const uint8_t *)sw;
+        } else {
+            const half_t *sh = (const half_t *)sp;
+            for (; n >= 4; n -= 4, sh += 2) {
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+                *dw++ = sh[0] | (uint32_t)sh[1] << 16;
+#else
+                *dw++ = (uint32_t)sh[0] << 16 | sh[1];
+#endif
+            }
+            sp = (const uint8_t *)sh;
+        }
+        dp = (uint8_t *)dw;
     }
     while (n--)
         *dp++ = *sp++;
@@ -86,10 +137,25 @@ void *memmove(void *d, const void *s, size_t n)
     uint8_t *dp = d;
     const uint8_t *sp = s;
 
+    /* Forward copies only read ahead of what they have written. */
     if (dp <= sp || dp >= sp + n)
         return memcpy(d, s, n);
+    dp += n;
+    sp += n;
+    if (!(((uintptr_t)dp ^ (uintptr_t)sp) & 3)) {
+        while (n && ((uintptr_t)dp & 3)) {
+            *--dp = *--sp;
+            n--;
+        }
+        word_t *dw = (word_t *)dp;
+        const word_t *sw = (const word_t *)sp;
+        for (; n >= 4; n -= 4)
+            *--dw = *--sw;
+        dp = (uint8_t *)dw;
+        sp = (const uint8_t *)sw;
+    }
     while (n--)
-        dp[n] = sp[n];
+        *--dp = *--sp;
     return d;
 }
 

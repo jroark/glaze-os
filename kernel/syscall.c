@@ -221,6 +221,7 @@ void syscall_dispatch(struct trapframe *tf)
                  ? proc_set_bg((int)a0, (int)a1) : GZ_EPERM;
         break;
     case SYS_SHM_UNMAP:     rv = as_unmap_shm(AS, a0); break;
+    case SYS_MUNMAP_ANON:   rv = as_munmap_anon(AS, a0); break;
     case SYS_CHILD_NOTIFY:  rv = proc_child_notify((int)a0); break;
     case SYS_GETPID:        rv = cur->proc->pid; break;
     case SYS_ROMFS_MAP:     rv = sys_romfs_map(a0, a1); break;
