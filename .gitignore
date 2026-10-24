@@ -18,3 +18,8 @@ __pycache__/
 *.[sS][mM][dD]
 *.[pP][cC][eE]
 *.[sS][gG][xX]
+
+# Browser native objects and private JavaScript archive.
+host/browser.o/
+host/jerry.o
+host/libjerry.a

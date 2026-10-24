@@ -21,7 +21,7 @@ static const char ua_css[] =
     " figcaption, figure, footer, form, h1, h2, h3, h4, h5, h6, header, hgroup, hr, legend,"
     " listing, main, menu, nav, ol, p, plaintext, pre, section, article, aside, summary, ul, xmp,"
     " optgroup, frameset, frame { display: block }\n"
-    "head, script, style, title, meta, link, base, template, area, map, datalist, param, iframe,"
+    "head, script, style, title, meta, link, base, template, area, map, datalist, param, noframes, noscript,"
     " object, embed, svg, canvas, video, audio, source, track, noembed, math, dialog,"
     " select option, select optgroup, input[type=hidden], col, colgroup { display: none }\n"
     "li { display: list-item }\n"
@@ -30,7 +30,7 @@ static const char ua_css[] =
     "tr { display: table-row }\n"
     "td, th { display: table-cell; padding: 1px }\n"
     "caption { display: table-caption; text-align: center }\n"
-    "input, select, textarea, button, img { display: inline-block }\n"
+    "input, select, textarea, button, img, iframe { display: inline-block }\n"
     "body { margin: 8px }\n"
     "h1 { font-size: 2em; margin: .67em 0; font-weight: bold }\n"
     "h2 { font-size: 1.5em; margin: .83em 0; font-weight: bold }\n"
@@ -220,6 +220,11 @@ static bool match_from(const struct css_selector *s, int i, const struct node *n
                 return true;
         return false;
     }
+}
+
+bool css_node_matches(const struct css_selector *s,const struct node *n)
+{
+    return s && s->nparts>0 && n && n->type==N_ELEM && match_from(s,s->nparts-1,n);
 }
 
 struct match {

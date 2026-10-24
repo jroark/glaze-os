@@ -230,6 +230,7 @@ static struct node *new_node(struct parser *P, int type)
     }
     n->type = (uint8_t)type;
     n->img = -1;
+    n->frame = -1;
     n->nsdecl = -1;
     P->nodes++;
     return n;
@@ -579,30 +580,8 @@ static void start_tag(struct parser *P, int tag, const char *name, struct attr *
         enter_body(P);
         return;
     }
-    if (tag == T_HEAD || tag == T_FRAMESET || tag == T_NOFRAMES)
+    if (tag == T_HEAD)
         return;
-    if (tag == T_FRAME) {
-        /* No frames: offer each frame as a link instead. */
-        const char *src = NULL;
-        for (struct attr *a = attrs; a; a = a->next)
-            if (!strcmp(a->name, "src"))
-                src = a->value;
-        if (!src)
-            return;
-        enter_body(P);
-        struct node *p = new_elem(P, T_P, NULL), *a = new_elem(P, T_A, NULL);
-        struct attr *href = arena_alloc(P->a, sizeof(*href));
-        if (!p || !a || !href)
-            return;
-        href->name = "href";
-        href->value = src;
-        a->attrs = href;
-        append(cur(P), p);
-        append(p, a);
-        add_text(P, a, "Frame: ", 7, false);
-        add_text(P, a, src, (int)strlen(src), false);
-        return;
-    }
 
     struct node *parent;
     if (!P->in_body && is_head_tag(tag)) {
@@ -645,7 +624,7 @@ static void start_tag(struct parser *P, int tag, const char *name, struct attr *
         int start = P->pos;
         if (tag == T_TEXTAREA && start < end && P->s[start] == '\n')
             start++;
-        if (tag != T_SCRIPT && tag != T_IFRAME)
+        if (tag != T_IFRAME)
             add_text(P, n, P->s + start, end - start, rcdata);
         P->pos = end;
         if (P->pos < P->len)

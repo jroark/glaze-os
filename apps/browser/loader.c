@@ -25,7 +25,7 @@
 #define CACHE_ENTRIES   48
 #define MAX_COOKIES     64
 
-static const int max_body[] = { [F_DOC] = 1024 * 1024, [F_CSS] = 384 * 1024, [F_IMG] = 768 * 1024 };
+static const int max_body[] = { [F_DOC] = 1024 * 1024, [F_FRAME]=64*1024, [F_SCRIPT]=128*1024, [F_CSS] = 384 * 1024, [F_IMG] = 768 * 1024 };
 
 struct fetch {
     bool used, active, done, reload;
@@ -256,6 +256,8 @@ static const char *type_of(const char *path)
         return "text/plain";
     if (!strcasecmp(dot, ".html") || !strcasecmp(dot, ".htm"))
         return "text/html";
+    if (!strcasecmp(dot, ".js"))
+        return "application/javascript";
     if (!strcasecmp(dot, ".css"))
         return "text/css";
     if (!strcasecmp(dot, ".png"))
@@ -400,7 +402,7 @@ static void begin(struct fetch *f)
         finish(f, WE_SCHEME);
         return;
     }
-    if (!f->post && !f->reload) {
+    if (!f->post && !f->reload && f->kind!=F_DOC && f->kind!=F_FRAME) {
         struct centry *e = cache_find(f->url);
         if (e) {
             e->used = ++cache_clock;
@@ -438,6 +440,9 @@ static void response(struct fetch *f)
             finish(f, WE_BADURL);
             return;
         }
+        if(strncasecmp(next,"http://",7) && strncasecmp(next,"https://",8)) {
+            free(next);finish(f,WE_SCHEME);return;
+        }
         if (++f->redirects > MAX_REDIRECTS) {
             free(next);
             finish(f, WE_REDIRECTS);
@@ -459,16 +464,28 @@ static void response(struct fetch *f)
     f->r.data = http_take_body(f->h, &f->r.len);
     v = http_header(f->h, "content-type", 0);
     f->r.ctype = v ? strdup(v) : NULL;
+    v=http_header(f->h,"x-frame-options",0);f->r.xfo=v ? strdup(v) : NULL;
+    if(http_header(f->h,"x-frame-options",1)) { free(f->r.xfo);f->r.xfo=strdup("DENY"); }
+    v=http_header(f->h,"content-security-policy",0);f->r.csp=v ? strdup(v) : NULL;
+    if(http_header(f->h,"content-security-policy",1)) {
+        free(f->r.csp);f->r.csp=strdup("script-src 'none'; frame-ancestors 'none'");
+    }
     v = http_header(f->h, "cache-control", 0);
-    if (status == 200 && !f->post && f->r.data && !(v && strstr(v, "no-store")))
+    if (status == 200 && !f->post && f->r.data && f->kind!=F_DOC && f->kind!=F_FRAME && !(v && strstr(v, "no-store")))
         cache_put(f->url, f->r.data, f->r.len, f->r.ctype);
     finish(f, f->r.data ? 0 : WE_NOMEM);
+}
+
+bool ld_can_start(void) {
+    for(int i=0;i<MAX_FETCHES;i++)if(!fetches[i].used)return true;
+    return false;
 }
 
 int ld_start(const char *url, int kind, int tag, const char *post, const char *post_type, bool reload)
 {
     struct fetch *f = NULL;
 
+    if (kind < F_DOC || kind > F_IMG) return WE_BADURL;
     for (int i = 0; i < MAX_FETCHES && !f; i++)
         if (!fetches[i].used)
             f = &fetches[i];
@@ -611,6 +628,9 @@ void ld_free_result(struct fetch_result *r)
     free(r->data);
     free(r->ctype);
     free(r->url);
+    free(r->xfo);
+    free(r->csp);
+    r->xfo = r->csp = NULL;
     r->data = NULL;
     r->ctype = NULL;
     r->url = NULL;

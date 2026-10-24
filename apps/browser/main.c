@@ -25,6 +25,8 @@
 
 #include "load.h"
 #include "plat.h"
+#include "script.h"
+#include "frames.h"
 #include "url.h"
 
 #define BAR_H       44
@@ -63,7 +65,8 @@ static enum view view = V_PAGE;
 static enum mode mode = M_BROWSE;
 static struct load ld;
 static struct page *page;
-static struct ui_scroll sc;
+static struct ui_scroll sc, frame_sc;
+static struct frame_slot *drag_frame;
 static struct entry history[MAX_HISTORY];
 static int nhist, hpos = -1;
 static int pending_hist = -1;       /* history index the load is for, -2 push, -1 none */
@@ -299,6 +302,7 @@ static void go(const char *url, const char *post, bool reload, int hist)
     pending_scroll = -1;
     if (hist >= 0)
         pending_scroll = history[hist].scroll;
+    drag_frame = NULL;
     load_begin(&ld, url, post, post ? "application/x-www-form-urlencoded" : NULL, reload, UI_W);
 }
 
@@ -337,6 +341,7 @@ static void go_history(int delta)
 /* A new page is up. */
 static void show_page(struct page *p)
 {
+    drag_frame = NULL;
     if (page) {
         load_forget(&ld, page);
         page_free(page);
@@ -698,14 +703,18 @@ static void close_list(void)
 
 static void submit(struct node *form, struct ctl *submitter)
 {
-    char *post;
-    char *url = page ? forms_submit(page, form, submitter, &post) : NULL;
+    if (!form || (form->owner->host && form->owner->host->sandboxed) ||
+        !script_event(form->owner, form, "submit"))
+        return;
+    char *post = NULL;
+    struct page *owner = form->owner;
+    char *url = owner ? forms_submit(owner, form, submitter, &post) : NULL;
 
     if (!url)
         return;
     mode = M_BROWSE;
     focus = NULL;
-    go(url, post, false, -2);
+    page_navigate(owner, url, node_attr(form, "target"), post);
     free(url);
     free(post);
 }
@@ -713,10 +722,16 @@ static void submit(struct node *form, struct ctl *submitter)
 /* Scrolls so the focused field sits in the space above the keyboard. */
 static void reveal_focus(void)
 {
-    for (int i = 0; focus && page && i < page->nitems; i++) {
-        struct ditem *d = &page->items[i];
+    struct page *owner = focus ? focus->node->owner : NULL;
+    for (int i = 0; owner && i < owner->nitems; i++) {
+        struct ditem *d = &owner->items[i];
         if (d->kind != DI_CTL || d->u.ctl != focus)
             continue;
+        if (owner->host) {
+            struct frame_slot *f = owner->host;
+            f->scroll = MAX(0, MIN(d->y - 12, owner->content_h - f->h));
+            return;
+        }
         sc.view_h = view_h();
         int want = d->y - 20;
         if (d->y < sc.offset || d->y + d->h > sc.offset + sc.view_h)
@@ -743,14 +758,15 @@ static void activate_ctl(struct ctl *c)
         break;
     case C_CHECKBOX:
     case C_RADIO:
-        ctl_toggle(page, c);
+        ctl_toggle(c->node->owner, c);
+        script_event(c->node->owner, c->node, "change");
         break;
     case C_SUBMIT:
     case C_IMAGE:
         submit(c->form, c);
         break;
     case C_RESET:
-        forms_reset(page, c->form);
+        if (script_event(c->node->owner, c->form, "reset")) forms_reset(c->node->owner, c->form);
         break;
     case C_SELECT:
         focus = c;
@@ -781,6 +797,7 @@ static void field_input(const struct gz_input_event *e)
     }
     ui_edit_input(c->value, c->cap, &c->cursor, e, c->type == C_TEXTAREA);
     c->len = (int)strlen(c->value);
+    script_event(c->node->owner, c->node, "input");
 }
 
 static void field_key(int ch)
@@ -914,17 +931,32 @@ static void bar_action(enum press p)
 static void content_tap(int x, int y)
 {
     struct ditem *d = page ? page_hit(page, x, y + sc.offset - VIEW_Y) : NULL;
-
-    if (!d)
+    if (!d) return;
+    struct node *target = d->node ? d->node : d->link;
+    if (target && target->type == N_TEXT) target = target->parent;
+    struct page *owner = target ? target->owner : page;
+    struct ctl *control = d->kind == DI_CTL ? d->u.ctl : NULL;
+    for (struct node *n = target; n && !control; n = n->parent)
+        control = n->ctl;
+    if (control && control->disabled)
         return;
-    if (d->kind == DI_CTL) {
-        activate_ctl(d->u.ctl);
+    if (target && !script_event(owner, target, "click"))
+        return;
+    if (control) {
+        activate_ctl(control);
         return;
     }
     if (d->link) {
-        char *url = page_link_url(page, d->link);
-        if (url && strncasecmp(url, "javascript:", 11))
-            navigate(url);
+        owner = d->link->owner;
+        const char *href = node_attr(d->link, "href");
+        if (href && !strncasecmp(href, "javascript:", 11)) {
+            if (script_allowed(owner, NULL, NULL))
+                script_eval(owner, href + 11, (int)strlen(href + 11), NULL);
+            return;
+        }
+        char *url = page_link_url(owner, d->link);
+        if (url)
+            page_navigate(owner, url, node_attr(d->link, "target"), NULL);
         free(url);
     }
 }
@@ -932,7 +964,8 @@ static void content_tap(int x, int y)
 static void browser_event(const struct gz_input_event *e)
 {
     /* The keyboard, when up, owns its area. */
-    if (!ui_has_hardware_keyboard() && mode != M_BROWSE && (e->y >= KB_Y || in_keyboard) && pressed == P_NONE) {
+    if (!ui_has_hardware_keyboard() && mode != M_BROWSE && (e->y >= KB_Y || in_keyboard) &&
+        pressed == P_NONE) {
         bool changed;
         if (e->type == GZ_EV_TOUCH_DOWN)
             in_keyboard = true;
@@ -955,8 +988,15 @@ static void browser_event(const struct gz_input_event *e)
             return;
         if (e->y >= VIEW_Y && e->y < VIEW_Y + view_h()) {
             pressed = P_CONTENT;
-            ui_scroll_event(&sc, e, e->y - VIEW_Y);
-            struct ditem *d = page && !sc.moved ? page_hit(page, e->x, e->y + sc.offset - VIEW_Y) : NULL;
+            drag_frame = page ? page_frame_at(page, e->x, e->y + sc.offset - VIEW_Y) : NULL;
+            if (drag_frame && (!drag_frame->page || drag_frame->page->content_h <= drag_frame->h)) drag_frame = NULL;
+            if (drag_frame) {
+                ui_scroll_reset(&frame_sc, drag_frame->page->content_h, drag_frame->h);
+                frame_sc.offset = drag_frame->scroll;
+            }
+            struct ui_scroll *active = drag_frame ? &frame_sc : &sc;
+            ui_scroll_event(active, e, e->y - VIEW_Y);
+            struct ditem *d = page && !active->moved ? page_hit(page, e->x, e->y + sc.offset - VIEW_Y) : NULL;
             if (d && d->link)
                 press_link = d->link;
             else if (d && d->kind == DI_CTL)
@@ -965,14 +1005,17 @@ static void browser_event(const struct gz_input_event *e)
         return;
     }
     if (pressed == P_CONTENT) {
-        if (ui_scroll_event(&sc, e, e->y - VIEW_Y) || sc.moved) {
+        struct ui_scroll *active = drag_frame ? &frame_sc : &sc;
+        bool changed = ui_scroll_event(active, e, e->y - VIEW_Y);
+        if (drag_frame) drag_frame->scroll = MAX(0, MIN(active->offset, ui_scroll_max(active)));
+        if (changed || active->moved) {
             press_link = NULL;
             press_ctl = NULL;
             scroll_changed = gz_time_ms();
         }
         if (e->type == GZ_EV_TOUCH_UP) {
             pressed = P_NONE;
-            bool tap = !sc.moved;
+            bool tap = !active->moved;
             press_link = NULL;
             press_ctl = NULL;
             if (tap) {
@@ -986,7 +1029,7 @@ static void browser_event(const struct gz_input_event *e)
                         sc.offset = MIN(sc.offset, ui_scroll_max(&sc));
                     }
                     if (d && d->kind == DI_CTL && d->u.ctl != focus)
-                        activate_ctl(d->u.ctl);
+                        content_tap(e->x, e->y);
                     return;
                 }
                 if (mode == M_URL) {
@@ -1053,6 +1096,7 @@ static void list_event(const struct gz_input_event *e)
     } else if (row >= 0) {
         if (view == V_PICKER) {
             focus->sel = row;
+            script_event(focus->node->owner, focus->node, "change");
             focus = NULL;
             close_list();
         } else if (confirm_mark >= 0) {
@@ -1172,8 +1216,8 @@ int main(void)
     for (;;) {
         struct gz_input_event ev;
         bool busy = ld.state != LS_IDLE;
-        struct ui_scroll *s = view == V_PAGE ? &sc : &list.sc;
-        int timeout = s->animating ? 16 : busy ? 30 : toast[0] || refresh_url ? 100 : scroll_changed ? 300 : -1;
+        struct ui_scroll *s = view == V_PAGE ? (drag_frame ? &frame_sc : &sc) : &list.sc;
+        int timeout = s->animating ? 16 : busy || ld.shown ? 30 : toast[0] || refresh_url ? 100 : scroll_changed ? 300 : -1;
         bool dirty = false;
 
         if (ui_next_event(&ev, timeout)) {
@@ -1190,6 +1234,8 @@ int main(void)
                     press_ctl = NULL;
                     in_keyboard = false;
                     ui_scroll_event(&sc, &ev, 0);
+                    ui_scroll_event(&frame_sc, &ev, 0);
+                    drag_frame = NULL;
                     ui_list_event(&list, &ev, &changed);
                     ui_keyboard_event(&kb, &ev, 0, &changed);
                 } else if (ev.type == GZ_EV_APP_DEACTIVATE) {
@@ -1204,15 +1250,45 @@ int main(void)
             } while (ui_next_event(&ev, 0));
             dirty = true;
         }
-        if (ld.state != LS_IDLE) {
+        /* The old page stays visible during a top-level fetch. A new click
+         * there should replace that request too. */
+        if(page && page!=ld.shown && page->navigate_url) {
+            char *url=page->navigate_url,*post=page->navigate_post;
+            page->navigate_url=page->navigate_post=NULL;
+            if(post)go(url,post,false,-2);else navigate(url);
+            free(url);free(post);
+        }
+        if (ld.state != LS_IDLE || ld.shown) {
             int f = load_step(&ld);
+            if (f & LF_CONTEXT) {
+                pressed = P_NONE;
+                focus = NULL;
+                press_ctl = NULL;
+                press_link = NULL;
+                drag_frame = NULL;
+                mode = M_BROWSE;
+            }
             if (f & LF_NEW_PAGE)
                 show_page(ld.shown);
             else if (f & LF_LAYOUT)
                 relayout();
+            if ((f & LF_NAVIGATE) && ld.shown && ld.shown->navigate_url) {
+                char *url = ld.shown->navigate_url, *post = ld.shown->navigate_post;
+                ld.shown->navigate_url = ld.shown->navigate_post = NULL;
+                if (post)
+                    go(url, post, false, -2);
+                else
+                    navigate(url);
+                free(url);
+                free(post);
+                drag_frame = NULL;
+            }
             dirty |= f != 0 || busy;
         }
+        s = view == V_PAGE ? (drag_frame ? &frame_sc : &sc) : &list.sc;
         if (ui_scroll_step(s)) {
+            if (drag_frame && s == &frame_sc)
+                drag_frame->scroll = MAX(0, MIN(s->offset, ui_scroll_max(s)));
             dirty = true;
             if (s == &sc)
                 scroll_changed = gz_time_ms();

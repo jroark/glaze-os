@@ -67,7 +67,7 @@ uint8_t *web_inflate(const uint8_t *in, int len, bool zlib_header, int *out_len)
 
 /* ---- loader ------------------------------------------------------------------ */
 
-enum { F_DOC, F_CSS, F_IMG };
+enum { F_DOC, F_FRAME, F_SCRIPT, F_CSS, F_IMG };
 
 struct fetch_result {
     int id, kind, tag;
@@ -77,10 +77,12 @@ struct fetch_result {
     int len;
     char *ctype;                /* malloc'd or NULL */
     char *url;                  /* final URL after redirects, malloc'd */
+    char *xfo, *csp;            /* embedding and script policy headers */
 };
 
 /* Queues a fetch; tag is the caller's (image slot, sheet index). */
 int ld_start(const char *url, int kind, int tag, const char *post, const char *post_type, bool reload);
+bool ld_can_start(void);
 void ld_cancel(int id);
 void ld_cancel_all(void);
 bool ld_busy(void);

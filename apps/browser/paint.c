@@ -209,6 +209,23 @@ void paint_page(struct page *p, gfx_surface *s, gfx_rect view, int scroll, gfx_r
         case DI_IMAGE:
             paint_image(p, s, r, d->u.img);
             break;
+        case DI_FRAME: {
+            struct frame_slot *f = d->u.frame;
+            gfx_fill(s, r, 0xf3f4f6);
+            frame(s, r, 0xa0a6af, 1);
+            if (f && f->page) {
+                gfx_rect inner = gfx_r(dx + f->x, dy + f->y, f->w, f->h);
+                paint_page(f->page, s, inner, f->scroll, area, hilite, focus);
+                if (f->page->content_h > f->h && f->h > 12) {
+                    int height = f->h * f->h / f->page->content_h;
+                    if (height < 8)
+                        height = 8;
+                    int y = inner.y + (f->h - height) * f->scroll / (f->page->content_h - f->h);
+                    gfx_fill(s, gfx_r(inner.x + inner.w - 3, y, 2, height), 0x80868f);
+                }
+            }
+            break;
+        }
         case DI_BULLET:
             if (d->u.bullet == LS_SQUARE) {
                 gfx_fill(s, r, d->color);

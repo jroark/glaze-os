@@ -8,6 +8,7 @@
  */
 #include "hostres.h"
 #include "../apps/browser/load.h"
+#include "../apps/browser/script.h"
 #include "../apps/browser/net.h"
 #include "../apps/browser/plat.h"
 
@@ -58,6 +59,20 @@ int plat_read_file(const char *path, uint8_t **data, int *len)
     return read_all(path, data, len);
 }
 
+/* Match the device's immutable resource lifetime, then release backing files
+ * on exit so frame previews also run cleanly under LeakSanitizer. */
+static struct resource_buffer {
+    struct resource_buffer *next;
+    uint8_t *data;
+} *resource_buffers;
+static void free_resources(void)
+{
+    while(resource_buffers){
+        struct resource_buffer *r=resource_buffers;
+        resource_buffers=r->next;free(r->data);free(r);
+    }
+}
+
 const void *plat_res(const char *name, uint32_t *size)
 {
     char path[256];
@@ -67,8 +82,12 @@ const void *plat_res(const char *name, uint32_t *size)
     snprintf(path, sizeof(path), "../assets/web/%s", name);
     if (read_all(path, &d, &n))
         return NULL;
+    struct resource_buffer *r=malloc(sizeof *r);
+    if(!r){free(d);return NULL;}
+    if(!resource_buffers && atexit(free_resources)){free(r);free(d);return NULL;}
+    r->data=d;r->next=resource_buffers;resource_buffers=r;
     *size = (uint32_t)n;
-    return d;                   /* leaked: the host tool is short-lived */
+    return d;
 }
 
 /* Synchronous lookups: the answer waits in a slot for the poll. */
@@ -226,5 +245,6 @@ int main(int argc, char **argv)
            page->oom ? " (out of memory)" : "");
     load_forget(&ld, page);
     page_free(page);
+    script_shutdown();
     return 0;
 }

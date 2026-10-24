@@ -94,6 +94,16 @@ WOLFSSL_SRCS := $(addprefix third_party/wolfssl/,src/ssl.c src/internal.c src/tl
     sp_int.c wolfmath.c asn.c coding.c memory.c wc_port.c wc_encrypt.c error.c logging.c))
 WOLFSSL_OBJS := $(patsubst %.c,$(OUT)/%.o,$(WOLFSSL_SRCS))
 
+# Browser-private JavaScript engine, math and software floating-point builtins.
+JERRY_SRCS := third_party/jerryscript/jerryscript.c third_party/jerryscript/jerryscript-math.c $(wildcard third_party/compiler-rt/*.c)
+JERRY_INC := -I$(OUT)/include -Ithird_party/jerryscript -Iapps/browser/js_platform -include apps/browser/js_config.h -Os -fvisibility=hidden
+JERRY_OBJS := $(patsubst %.c,$(OUT)/%.o,$(JERRY_SRCS))
+$(JERRY_OBJS): TP_INC := $(JERRY_INC)
+$(OUT)/lib/libjerry.a: $(JERRY_OBJS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
+
 $(FSSTACK_OBJS): TP_INC := $(FS_INC)
 $(NETSTACK_OBJS): TP_INC := $(NET_INC)
 $(HELIX_OBJS): TP_INC := $(HELIX_INC)
@@ -122,7 +132,7 @@ $(OUT)/lib/libmedia.a: $(patsubst lib/%.c,$(OUT)/lib/%.o,$(LIBMEDIA_SRCS)) $(HEL
 $(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
 $(OUT)/servers/net/%.o: USER_CFLAGS += $(NET_INC)
 $(OUT)/servers/audio/%.o: USER_CFLAGS += $(HELIX_INC)
-$(OUT)/apps/browser/%.o: USER_CFLAGS += -Ithird_party/stb $(WOLFSSL_INC)
+$(OUT)/apps/browser/%.o: USER_CFLAGS += -Ithird_party/stb $(WOLFSSL_INC) $(JERRY_INC)
 $(OUT)/apps/video/%.o: USER_CFLAGS += -Ithird_party/stb
 
 # Per-program additions for dynamic links: compile flags, link inputs (built
@@ -138,15 +148,17 @@ $(OUT)/apps/appstore/%.o: USER_CFLAGS += -DAPPSTORE_URL='"$(APPSTORE_URL)"' -Iap
 $(OUT)/apps/appstore/main.o $(OUT)/dyn/apps/appstore/main.o: FORCE
 
 
-PROG_CFLAGS_browser := -Ithird_party/stb $(WOLFSSL_INC)
+PROG_CFLAGS_browser := -Ithird_party/stb $(WOLFSSL_INC) $(JERRY_INC)
 PROG_CFLAGS_video := -Ithird_party/stb
 PROG_CFLAGS_audio := $(HELIX_INC)
 PROG_DEPS_video := $(OUT)/shared/libmedia.so.1
 PROG_LDLIBS_video := -l:libmedia.so.1
 PROG_DEPS_audio := $(OUT)/pic/libhelix.a $(OUT)/shared/libmedia.so.1
 PROG_LDLIBS_audio := $(OUT)/pic/libhelix.a -l:libmedia.so.1
-PROG_DEPS_browser := $(OUT)/pic/libwolfssl.a
-PROG_LDLIBS_browser := $(OUT)/pic/libwolfssl.a
+PROG_DEPS_browser := $(OUT)/pic/libwolfssl.a $(OUT)/pic/libjerry.a
+PROG_LDLIBS_browser := $(OUT)/pic/libwolfssl.a $(OUT)/pic/libjerry.a
+PROG_STATIC_DEPS_browser := $(OUT)/lib/libjerry.a
+PROG_LDFLAGS_browser := --exclude-libs ALL
 PROG_CFLAGS_gmail := $(WOLFSSL_INC)
 PROG_DEPS_gmail := $(OUT)/pic/libwolfssl.a
 PROG_LDLIBS_gmail := $(OUT)/pic/libwolfssl.a
@@ -185,11 +197,11 @@ $(OUT)/servers/%.o: servers/%.c
 STATIC_PROGS := fs net
 
 define STATIC_template
-$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/lib/crt0.o $(USER_LIBS) lib/user.lds
+$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/lib/crt0.o $(USER_LIBS) $$(PROG_STATIC_DEPS_$(notdir $(1))) lib/user.lds
 	@mkdir -p $$(dir $$@)
 	$(LD) -m elf32ltsmip -T lib/user.lds --gc-sections -o $$@ $(OUT)/lib/crt0.o \
 	    $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) \
-	    --start-group $(USER_LIBS) --end-group
+	    --start-group $(USER_LIBS) $$(PROG_STATIC_DEPS_$(notdir $(1))) --end-group
 endef
 
 define DYNAMIC_template
@@ -199,7 +211,7 @@ $(OUT)/dyn/$(1)/%.o: $(1)/%.c
 $(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/pic/crt0.o $(OUT)/pic/start.o $(SHARED_LIBS) \
     $(PROG_DEPS_$(notdir $(1)))
 	@mkdir -p $$(dir $$@)
-	$(LD) $(DYN_LDFLAGS) -pie -e _start --export-dynamic --gc-sections \
+	$(LD) $(DYN_LDFLAGS) $(PROG_LDFLAGS_$(notdir $(1))) -pie -e _start --export-dynamic --gc-sections \
 	    --dynamic-linker /lib/ld-glaze.so.1 -o $$@ $(OUT)/pic/crt0.o $(OUT)/pic/start.o \
 	    $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) \
 	    -L$(OUT)/shared --as-needed $(PROG_LDLIBS_$(notdir $(1))) -l:libui.so.1 -l:libgfx.so.1 -l:libc.so.1
@@ -243,6 +255,13 @@ $(OUT)/pic/libhelix.a: $(HELIX_PIC_OBJS)
 	$(AR) rcs $@ $^
 # The browser's alone, like libhelix.a.
 $(OUT)/pic/libwolfssl.a: $(WOLFSSL_PIC_OBJS)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+JERRY_PIC_OBJS := $(patsubst %.c,$(OUT)/pic/%.o,$(JERRY_SRCS))
+$(JERRY_PIC_OBJS): TP_INC := $(JERRY_INC)
+$(OUT)/pic/libjerry.a: $(JERRY_PIC_OBJS)
+	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
 
@@ -445,3 +464,7 @@ FORCE:
 store: packages
 	$(PYTHON) tools/mkstore.py --packages $(OUT)/pkg --output $(OUT)/store
 .PHONY: store
+
+$(OUT)/include/js_bootstrap.h: apps/browser/js_dom.js tools/mkjsbootstrap.py
+	python3 tools/mkjsbootstrap.py $< $@
+$(OUT)/apps/browser/script.o $(OUT)/dyn/apps/browser/script.o: $(OUT)/include/js_bootstrap.h

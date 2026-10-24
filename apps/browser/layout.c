@@ -14,12 +14,13 @@
  */
 
 #include "web.h"
+#include "frames.h"
 
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { A_TEXT, A_IMG, A_CTL, A_BOX };
+enum { A_TEXT, A_IMG, A_CTL, A_BOX, A_FRAME };
 
 struct atom {
     uint8_t kind, deco, valign;
@@ -29,6 +30,8 @@ struct atom {
     int16_t shift;              /* text: baseline offset (sub/sup) */
     uint32_t color, bg;
     struct node *link;
+    struct node *node;
+    struct frame_slot *frame;
     const struct style *st;
     const char *s;
     int n;
@@ -66,6 +69,7 @@ struct box_info {
 
 struct lay {
     struct page *p;
+    struct node *event_node;
     struct flow *pool[MAX_FLOWS];
     int depth;
     int carry_margin;           /* bottom margin escaping the last box */
@@ -309,13 +313,14 @@ static void line_flush_n(struct lay *L, struct flow *F, int n, bool force)
         }
         if (a->hidden)
             continue;
-        int k = add_item(L, a->kind == A_TEXT ? DI_TEXT : a->kind == A_IMG ? DI_IMAGE : DI_CTL);
+        int k = add_item(L, a->kind == A_TEXT ? DI_TEXT : a->kind == A_IMG ? DI_IMAGE : a->kind==A_FRAME ? DI_FRAME : DI_CTL);
         if (k < 0)
             return;
         struct ditem *d = &L->p->items[k];
         d->x = (int16_t)x;
         d->w = a->w;
         d->link = a->link;
+        d->node = a->node;
         d->color = a->color;
         d->deco = a->deco;
         if (a->kind == A_TEXT) {
@@ -330,6 +335,8 @@ static void line_flush_n(struct lay *L, struct flow *F, int n, bool force)
             d->h = a->h;
             if (a->kind == A_IMG)
                 d->u.img = a->img;
+            else if(a->kind==A_FRAME)
+                d->u.frame=a->frame;
             else
                 d->u.ctl = a->ctl;
         }
@@ -369,6 +376,7 @@ static struct atom *new_atom(struct lay *L, struct flow *F, int w)
     a->x = (int16_t)F->lx;
     a->w = (int16_t)w;
     a->link = F->link;
+    a->node = L->event_node;
     a->bg = F->bg;
     F->lx += w;
     return a;
@@ -1077,8 +1085,41 @@ static void flow_inline_block(struct lay *L, struct flow *F, struct node *n)
     F->lx += mr;
 }
 
+static void flow_frame(struct lay *L, struct flow *F, struct node *n)
+{
+    if (n->frame < 0 || n->frame >= L->p->nframes)
+        return;
+    int w = n->st->width.unit != L_AUTO ? resolve(&n->st->width, F->w) : CSS_TO_DEV(300);
+    int h = n->st->height.unit == L_PX ? n->st->height.v : CSS_TO_DEV(150);
+    const char *v = node_attr(n, "width");
+    if (v && n->st->width.unit == L_AUTO)
+        w = strchr(v, '%') ? F->w * atoi(v) / 100 : CSS_TO_DEV(atoi(v));
+    v = node_attr(n, "height");
+    if (v && n->st->height.unit != L_PX)
+        h = CSS_TO_DEV(atoi(v));
+    if (w > F->w)
+        w = F->w;
+    if (w < 4)
+        w = 4;
+    if (h < 4)
+        h = 4;
+    if (h > 2048)
+        h = 2048;
+    bool block = block_level(n->st);
+    if (block)
+        line_flush(L, F, false);
+    struct atom *a = new_atom(L, F, w);
+    a->kind = A_FRAME;
+    a->frame = &L->p->frames[n->frame];
+    a->h = a->asc = (int16_t)h;
+    a->valign = n->st->valign;
+    if (block)
+        line_flush(L, F, false);
+}
+
 static void flow_node(struct lay *L, struct flow *F, struct node *n, int depth)
 {
+    L->event_node = n;
     if (n->type == N_TEXT) {
         if (n->st && n->len)
             flow_text(L, F, n);
@@ -1087,6 +1128,7 @@ static void flow_node(struct lay *L, struct flow *F, struct node *n, int depth)
     if (n->type != N_ELEM || !n->st || n->st->display == D_NONE)
         return;
     const struct style *st = n->st;
+    if(n->tag==T_IFRAME || n->tag==T_FRAME) { flow_frame(L,F,n);return; }
     if (block_level(st)) {
         layout_block(L, F, n);
         return;
@@ -1162,6 +1204,7 @@ static int layout_box(struct lay *L, struct node *n, int x, int y, int bw, int c
         bg = add_item(L, DI_RECT);
         if (bg >= 0)
             L->p->items[bg].color = st->bg & 0xFFFFFF;
+        if(bg>=0)L->p->items[bg].node=n;
     }
     int cx = x + bl + pl, cy = y + bt + pt;
     int cw = bw - bl - br - pl - pr;
@@ -1504,6 +1547,7 @@ static int layout_table(struct lay *L, struct node *t, int x, int y, int w)
 
 void page_layout(struct page *p, int width)
 {
+    if(frameset_layout(p,width))return;
     struct lay *L = calloc(1, sizeof(*L));
 
     p->nitems = 0;
@@ -1525,6 +1569,9 @@ void page_layout(struct page *p, int width)
     for (int i = 0; i < MAX_FLOWS; i++)
         free(L->pool[i]);
     free(L);
+    for(int i=0;i<p->nitems;i++)if(p->items[i].kind==DI_FRAME) {
+        struct ditem *d=&p->items[i];frame_geometry(d->u.frame,d->x+1,d->y+1,d->w>2 ? d->w-2 : 1,d->h>2 ? d->h-2 : 1);
+    }
 }
 
 int page_anchor_y(struct page *p, const char *frag)
@@ -1546,13 +1593,21 @@ struct ditem *page_hit(struct page *p, int x, int y)
 
     for (int i = p->nitems - 1; i >= 0; i--) {
         struct ditem *d = &p->items[i];
-        if (!d->link && d->kind != DI_CTL)
+        if(d->kind==DI_FRAME) {
+            struct frame_slot *f=d->u.frame;
+            if(f && f->page && x>=f->x && y>=f->y && x<f->x+f->w && y<f->y+f->h) {
+                struct ditem *inside=page_hit(f->page,x-f->x,y-f->y+f->scroll);
+                if(inside)return inside;
+            }
+        }
+        if (!d->link && d->kind != DI_CTL && !d->node)
             continue;
         int dx = x < d->x ? d->x - x : x >= d->x + d->w ? x - (d->x + d->w - 1) : 0;
         int dy = y < d->y ? d->y - y : y >= d->y + d->h ? y - (d->y + d->h - 1) : 0;
         int dist = dx > dy ? dx : dy;
         if (dist == 0)
             return d;
+        if(!d->link && d->kind!=DI_CTL)continue;
         if (dist < best_d) {
             best_d = dist;
             best = d;

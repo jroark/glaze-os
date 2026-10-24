@@ -1,0 +1,7 @@
+<!doctype html><html><head><title>JavaScript limits test</title></head><body>
+<h1>Runtime limits</h1><p>This text stays readable after a script times out or exhausts its heap.</p>
+<p><a href="script.html">Open a fresh JavaScript demo</a></p>
+<script>while(true){}</script>
+<script>console.log('browser limits: loop recovery PASS');try{Function('var = ;');}catch(e){console.log('browser limits: parser jump PASS');}</script>
+<script>var allocations=[];while(true){allocations.push(new Array(4096).fill('bounded'));}</script>
+</body></html>

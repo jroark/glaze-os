@@ -2,12 +2,17 @@
 
 #include "url.h"
 #include "web.h"
+#include "frames.h"
+#include "script.h"
+#include "net.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+
+static unsigned page_serial;
 
 struct page *page_new(const char *url)
 {
@@ -18,7 +23,8 @@ struct page *page_new(const char *url)
     p->url = strdup(url);
     p->base = strdup(url);
     p->bg = 0xFFFFFF;
-    if (!p->url || !p->base) {
+    p->origin=strdup(url);p->serial=++page_serial;p->viewport_h=226;p->dirty=p->resources_dirty=true;
+    if (!p->url || !p->base || !p->origin) {
         page_free(p);
         return NULL;
     }
@@ -29,6 +35,10 @@ void page_free(struct page *p)
 {
     if (!p)
         return;
+    script_free(p);
+    for(int i=0;i<p->nscripts;i++) { free(p->scripts[i].url);free(p->scripts[i].source); }
+    for(int i=0;i<p->nframes;i++) { frame_cancel(&p->frames[i]);free(p->frames[i].url);free(p->frames[i].post); }
+    free(p->origin);free(p->navigate_url);free(p->navigate_post);free(p->csp);
     for (int i = 0; i < p->nimgs; i++) {
         image_release(&p->imgs[i]);
         free(p->imgs[i].url);
@@ -52,6 +62,7 @@ int page_add_image(struct page *p, const char *url)
     for (int i = 0; i < p->nimgs; i++)
         if (!strcmp(p->imgs[i].url, url))
             return i;
+    if(p->nimgs>=128)return -1;
     if (p->nimgs == p->img_cap) {
         int cap = p->img_cap ? p->img_cap * 2 : 16;
         struct image_slot *n = realloc(p->imgs, sizeof(*n) * (size_t)cap);
@@ -97,86 +108,144 @@ static bool rel_has(const char *rel, const char *word)
     return false;
 }
 
-/* After parsing: title, base, stylesheets, images and controls. */
-static void collect(struct page *p)
+/* Idempotent resource discovery after parsing or a DOM mutation. */
+void page_collect(struct page *p)
 {
     p->html = node_first_elem(p->doc);
     p->body = NULL;
+    p->title = NULL;
     for (struct node *c = p->html ? p->html->first : NULL; c; c = c->next)
-        if (c->type == N_ELEM && c->tag == T_BODY)
+        if (c->tag == T_BODY)
             p->body = c;
-
     for (struct node *n = p->doc; n; n = node_next(n, p->doc, false)) {
+        if (!n->owner) {
+            n->owner = p;
+            p->dom_nodes++;
+        }
         if (n->type != N_ELEM)
             continue;
-        switch (n->tag) {
-        case T_TITLE:
-            if (!p->title)
-                p->title = node_text(&p->arena, n);
-            break;
-        case T_BASE: {
-            const char *href = node_attr(n, "href");
-            char *b = href ? url_resolve(p->url, href) : NULL;
+        if (n->tag == T_TITLE && !p->title)
+            p->title = node_text(&p->arena, n);
+        if (n->tag == T_BASE && !(n->collected & 1)) {
+            char *b = url_resolve(p->url, node_attr(n, "href") ? node_attr(n, "href") : "");
             if (b) {
                 free(p->base);
                 p->base = b;
             }
-            break;
+            n->collected |= 1;
         }
-        case T_STYLE: {
+        if ((n->tag == T_STYLE || n->tag == T_LINK) && !(n->collected & 1)) {
+            n->collected |= 1;
             const char *media = node_attr(n, "media");
-            if (p->nsheets >= PAGE_MAX_SHEETS || (media && strstr(media, "print") && !strstr(media, "screen")))
-                break;
-            struct sheet_slot *sl = &p->sheets[p->nsheets++];
-            memset(sl, 0, sizeof(*sl));
-            if (n->first && n->first->type == N_TEXT)
-                css_parse_sheet(&p->arena, &sl->ss, n->first->text, n->first->len);
-            sl->ss.loaded = true;
-            break;
-        }
-        case T_LINK: {
-            const char *rel = node_attr(n, "rel"), *href = node_attr(n, "href");
-            const char *media = node_attr(n, "media");
-            if (!rel_has(rel, "stylesheet") || rel_has(rel, "alternate") || !href ||
-                p->nsheets >= PAGE_MAX_SHEETS || (media && strstr(media, "print") && !strstr(media, "screen")))
-                break;
-            struct sheet_slot *sl = &p->sheets[p->nsheets];
-            memset(sl, 0, sizeof(*sl));
-            sl->url = url_resolve(p->base, href);
-            if (sl->url) {
-                sl->pending = true;
+            if (media && strstr(media, "print") && !strstr(media, "screen"))
+                continue;
+            if (n->tag == T_LINK &&
+                (!rel_has(node_attr(n, "rel"), "stylesheet") ||
+                 rel_has(node_attr(n, "rel"), "alternate") || !node_attr(n, "href")))
+                continue;
+            int i = 0;
+            for (; i < p->nsheets; i++)
+                if (p->sheets[i].node == n)
+                    break;
+            if (i == PAGE_MAX_SHEETS)
+                continue;
+            if (i == p->nsheets)
                 p->nsheets++;
+            struct sheet_slot *sl = &p->sheets[i];
+            if (sl->fetch > 0)
+                ld_cancel(sl->fetch);
+            css_free_sheet(&sl->ss);
+            free(sl->url);
+            memset(sl, 0, sizeof *sl);
+            sl->node = n;
+            if (n->tag == T_STYLE) {
+                if (n->first && n->first->type == N_TEXT)
+                    css_parse_sheet(&p->arena, &sl->ss, n->first->text, n->first->len);
+                sl->ss.loaded = true;
+            } else {
+                sl->url = url_resolve(p->base, node_attr(n, "href"));
+                sl->pending = sl->url != NULL;
             }
-            break;
         }
-        case T_BODY: {
+        if (n->tag == T_BODY) {
             uint32_t c;
             const char *v = node_attr(n, "link");
             if (v && css_parse_color(v, (int)strlen(v), &c) && c)
-                p->link_color = c & 0xFFFFFF;
-            break;
+                p->link_color = c & 0xffffff;
         }
-        case T_IMG: {
-            /* Lazy loaders keep the real address in data-src. */
-            const char *src = node_attr(n, "data-src");
+        if (n->tag == T_IMG && !(n->collected & 2)) {
+            n->collected |= 2;
+            const char *src = node_attr(n, "src");
             if (!src || !*src)
-                src = node_attr(n, "src");
+                src = node_attr(n, "data-src");
             if (!src || !*src)
-                break;
+                continue;
             char *url = url_resolve(p->base, src);
             if (url) {
                 n->img = page_add_image(p, url);
-                if (n->img >= 0 && !p->imgs[n->img].want_w) {
+                if (n->img >= 0) {
                     p->imgs[n->img].want_w = attr_px(node_attr(n, "width"));
                     p->imgs[n->img].want_h = attr_px(node_attr(n, "height"));
                 }
                 free(url);
             }
-            break;
         }
+        if (n->tag == T_SCRIPT && !(n->collected & 4)) {
+            n->collected |= 4;
+            bool exists = false;
+            for (int i = 0; i < p->nscripts; i++)
+                if (p->scripts[i].node == n)
+                    exists = true;
+            const char *type = node_attr(n, "type");
+            if (exists || p->nscripts == PAGE_MAX_SCRIPTS ||
+                (type && *type && strcasecmp(type, "text/javascript") &&
+                 strcasecmp(type, "application/javascript") && strcasecmp(type, "text/ecmascript")))
+                continue;
+            struct script_slot *sl = &p->scripts[p->nscripts++];
+            sl->node = n;
+            const char *src = node_attr(n, "src");
+            sl->url = src ? url_resolve(p->base, src) : NULL;
+            sl->state = src ? RES_WAIT : RES_READY;
+            if ((src && !sl->url) || !script_allowed(p, sl->url, n))
+                sl->state = RES_DONE;
+        }
+        if ((n->tag == T_IFRAME || n->tag == T_FRAME) && !(n->collected & 8)) {
+            n->collected |= 8;
+            if (n->frame < 0) {
+                int depth = 0;
+                for (struct page *a = p; a->parent; a = a->parent)
+                    depth++;
+                if (p->nframes == PAGE_MAX_FRAMES ||
+                    frame_count_tree(page_root(p)) >= PAGE_MAX_FRAMES || depth >= FRAME_MAX_DEPTH)
+                    continue;
+                n->frame = p->nframes++;
+                p->frames[n->frame].owner = p;
+                p->frames[n->frame].node = n;
+            }
+            struct frame_slot *f = &p->frames[n->frame];
+            const char *src = node_attr(n, "src");
+            char *url = url_resolve(p->base, src && *src ? src : "about:blank");
+            if (!f->url || !url || strcmp(f->url, url) || node_attr(n, "srcdoc") ||
+                f->sandboxed != (node_attr(n, "sandbox") != NULL)) {
+                frame_cancel(f);
+                free(f->url);
+                free(f->post);
+                f->post = NULL;
+                f->url = url;
+                url = NULL;
+                f->state = RES_WAIT;
+                f->inline_document = node_attr(n, "srcdoc") != NULL;
+            }
+            f->sandboxed = node_attr(n, "sandbox") != NULL;
+            free(url);
         }
     }
+    for (int i = 0; i < p->nsheets; i++)
+        if (p->sheets[i].node && !node_connected(p->sheets[i].node))
+            p->sheets[i].ss.loaded = false;
     forms_collect(p);
+    p->resources_dirty = false;
+    p->dirty = true;
     if (p->arena.failed)
         p->oom = true;
 }
@@ -195,7 +264,7 @@ void page_set_html(struct page *p, const char *html)
         p->oom = true;
         return;
     }
-    collect(p);
+    page_collect(p);
 }
 
 /* Plain text shown as preformatted, escaped. */
@@ -255,7 +324,7 @@ void page_set_document(struct page *p, const uint8_t *data, int len, const char 
         p->oom = true;
         return;
     }
-    collect(p);
+    page_collect(p);
 }
 
 bool image_document(struct page *p, const uint8_t *data, int len)
