@@ -62,7 +62,8 @@ static unsigned resolved;
 static uint32_t direct_target;
 static uint32_t resolve_direct(const char *dll, const char *name, uint16_t ordinal, void *arg)
 {
-    assert(!strcmp(dll, "coredll.dll") && !strcmp(name, "TerminateProcess") && !ordinal && !arg);
+    assert(!strcmp(dll, "coredll.dll") && (!strcmp(name, "TerminateProcess") || !strcmp(name, "GetLastError") ||
+        !strcmp(name, "SetLastError") || !strcmp(name, "TlsCall") || !strcmp(name, "CreateThread")) && !ordinal && !arg);
     return direct_target;
 }
 static void direct_calls(void)
@@ -100,6 +101,36 @@ static void direct_calls(void)
     ce_put32(image + 4104, 0x0300f809);
     assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL));
     assert(ce_u32(image + 4104) == 0x0300f809);
+    p.section[0].size = 512;
+    for (unsigned i = 0; i < 3; i++) {
+        static const unsigned trap[] = {0xfa9e, 0xfaa2, 0xfbc6};
+        ce_pe_copy(&p, image);
+        ce_put32(image + 4096, 0x240e0000u | trap[i]);
+        ce_put32(image + 4100, 0x01c0f809); /* matching jalr t6 */
+        ce_put32(image + 4104, 0x8c025808); /* KData read in delay slot */
+        direct_target = 0x0e000020;
+        p.base = 0x02000000; /* relocated DLL, same JAL region as bridges */
+        assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL));
+        assert(ce_u32(image + 4100) == (0x0c000000u | (direct_target >> 2)));
+        assert(ce_u32(image + 4104) == 0x001d1402); /* srl v0,sp,16 */
+        assert(ce_u32(file + 520) == 0x0300f809);
+    }
+    ce_pe_copy(&p, image);
+    ce_put32(image + 4096, 0x2409fb2a); /* li t1, CreateThread trap */
+    ce_put32(image + 4100, 0x24c65360); /* argument setup may be scheduled here */
+    ce_put32(image + 4104, 0x8fa5002c);
+    ce_put32(image + 4108, 0xafa80014);
+    ce_put32(image + 4112, 0x0120f809);
+    ce_put32(image + 4116, 0xafb90010);
+    assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL));
+    assert(ce_u32(image + 4112) == (0x0c000000u | direct_target >> 2));
+    assert(ce_u32(image + 4116) == 0xafb90010);
+    for (unsigned i = 0; i < 3; i++) {
+        ce_put32(image + 4100, i == 0 ? 0x00004825 : i == 1 ? 0x10000000 : 0x0c000000);
+        ce_put32(image + 4112, 0x0120f809);
+        assert(!ce_pe_direct_calls(&p, image, resolve_direct, NULL));
+        assert(ce_u32(image + 4112) == 0x0120f809);
+    }
     free(image);
 }
 static uint32_t resolve(const char *dll, const char *name, uint16_t ordinal, void *arg)

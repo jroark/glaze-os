@@ -1,0 +1,7 @@
+# Original Tasks: create a local task.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+15000 tap 26 12
+19000 tap 100 91
+20000 text Compatibility task
+23000 tap 20 12

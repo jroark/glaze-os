@@ -1,0 +1,17 @@
+# Original AIM: sign on to a package-configured local server, send an IM.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+25000 tap 182 82
+26000 text Glaze User
+29000 tap 182 109
+30000 text secret
+32500 tap 120 40
+34000 tap 205 184
+80000 tap 55 12
+82000 tap 80 37
+90000 tap 60 65
+91000 text GlazeBob
+94000 tap 100 120
+95000 text Compatibility ping
+98000 tap 120 40
+99000 tap 231 185

@@ -29,7 +29,8 @@ int flash_raw_erase(uint32_t block)
 void ftl_log(const char *message) { fprintf(stderr, "wince-fs-read: %s\n", message); }
 int main(int argc, char **argv)
 {
-    if (argc != 3) return 2;
+    bool listing = argc == 4 && !strcmp(argv[2], "--list");
+    if (argc != 3 && !listing) return 2;
     FILE *source = fopen(argv[1], "rb");
     if (!source || fseek(source, 0, SEEK_END)) return 2;
     long end = ftell(source);
@@ -41,6 +42,17 @@ int main(int argc, char **argv)
     pages = (uint32_t)(size / FTL_PAGE_SIZE); blocks = pages / FTL_PAGES_PER_BLOCK;
     lfs_t lfs;
     if (ftl_mount(&lfs, blocks) != 0) return 2;
+    if (listing) {
+        lfs_dir_t dir;
+        if (lfs_dir_open(&lfs, &dir, argv[3])) return 1;
+        struct lfs_info info;
+        int count;
+        while ((count = lfs_dir_read(&lfs, &dir, &info)) > 0)
+            if (strcmp(info.name, ".") && strcmp(info.name, ".."))
+                printf("%c %u %s\n", info.type == LFS_TYPE_DIR ? 'd' : 'f', info.size, info.name);
+        lfs_dir_close(&lfs, &dir); lfs_unmount(&lfs); free(flash);
+        return count < 0 ? 2 : 0;
+    }
     lfs_file_t file;
     int err = lfs_file_open(&lfs, &file, argv[2], LFS_O_RDONLY);
     if (err) { fprintf(stderr, "wince-fs-read: %s: %d\n", argv[2], err); return 1; }
