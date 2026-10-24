@@ -8,6 +8,8 @@
 #include "jerryscript.h"
 #include "js_bootstrap.h"
 #include "identity.h"
+#include "net.h"
+#include <glaze/sb.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +36,7 @@ static const jerry_object_native_info_t node_info = {0}, fn_info = {0};
 static bool running, live;
 extern void glaze_js_stack_base(uintptr_t base);
 static uint32_t deadline, checks;
+static const char *budget_reason;
 static uintptr_t next_handle = 1;
 /* Only buffers crossing an allocating engine API need this cleanup list. */
 static void *temps[64];
@@ -72,10 +75,15 @@ bool glaze_js_budget_expired(void)
 {
     if (!running)
         return false;
-    if (!checks || --checks == 0)
+    if (!checks)
         return true;
+    if (--checks == 0) {
+        budget_reason = "instruction limit exceeded";
+        return true;
+    }
     if ((checks & 63u) == 0 && (int32_t)(plat_ms() - deadline) >= 0) {
         checks = 0;
+        budget_reason = "execution deadline exceeded";
         return true;
     }
     return false;
@@ -85,12 +93,13 @@ static jerry_value_t halt(void *unused)
     (void)unused;
     return glaze_js_budget_expired() ? jerry_boolean(true) : jerry_undefined();
 }
-static void budget(void *base)
+static void budget(void *base, bool startup)
 {
     if (live)
         glaze_js_stack_base((uintptr_t)base);
-    deadline = plat_ms() + 150;
-    checks = 12000;
+    deadline = plat_ms() + (startup ? 20000 : 750);
+    checks = 1000000;
+    budget_reason = NULL;
     running = true;
 }
 static struct runtime *by_serial(uintptr_t id)
@@ -335,13 +344,65 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
         TEXT(BROWSER_USER_AGENT);
     else if (IS("language"))
         TEXT(BROWSER_LANGUAGE);
+    else if (IS("performanceNow"))
+        result = jerry_number((uint32_t)(plat_ms() - p->start_ms));
+    else if (IS("timeOrigin"))
+        result = jerry_number(p->time_origin);
+    else if (IS("innerWidth"))
+        result = jerry_number((p->width > 0 ? p->width : SB_APP_W) * 4 / 3);
+    else if (IS("innerHeight"))
+        result = jerry_number(p->viewport_h * 4 / 3);
+    else if (IS("screenWidth"))
+        result = jerry_number(SB_APP_W * 4 / 3);
+    else if (IS("screenHeight"))
+        result = jerry_number(GZ_FB_HEIGHT * 4 / 3);
+    else if (IS("availableHeight"))
+        result = jerry_number(SB_APP_H * 4 / 3);
     else if (IS("log")) {
         str = string_arg(a);
         if (str)
             printf("browser JS: %s\n", str);
     } else if (IS("URL"))
         TEXT(owner->url);
-    else if (IS("navigate")) {
+    else if (IS("locationPart")) {
+        str = string_arg(a);
+        struct url *u = temporary(malloc(sizeof *u));
+        if (str && u && url_parse(p->url, u)) {
+            const size_t part_cap = URL_PART_MAX + URL_HOST_MAX + 32;
+            char *part = temporary(malloc(part_cap));
+            if (!part) return jerry_undefined();
+            part[0] = 0;
+            if (!strcmp(str, "protocol")) snprintf(part, part_cap, "%s:", u->scheme);
+            else if (!strcmp(str, "hostname")) snprintf(part, part_cap, "%s", u->host);
+            else if (!strcmp(str, "host")) {
+                if (u->port >= 0 && u->port != url_default_port(u->scheme))
+                    snprintf(part, part_cap, "%s:%d", u->host, u->port);
+                else snprintf(part, part_cap, "%s", u->host);
+            } else if (!strcmp(str, "port") && u->port >= 0 && u->port != url_default_port(u->scheme))
+                snprintf(part, part_cap, "%d", u->port);
+            else if (!strcmp(str, "pathname")) snprintf(part, part_cap, "%s", u->path);
+            else if (!strcmp(str, "search") && u->has_query && *u->query)
+                snprintf(part, part_cap, "?%s", u->query);
+            else if (!strcmp(str, "hash") && u->has_frag && *u->frag)
+                snprintf(part, part_cap, "#%s", u->frag);
+            else if (!strcmp(str, "origin")) {
+                if (strcmp(u->scheme, "http") && strcmp(u->scheme, "https"))
+                    snprintf(part, part_cap, "null");
+                else if (u->port >= 0 && u->port != url_default_port(u->scheme))
+                    snprintf(part, part_cap, "%s://%s:%d", u->scheme, u->host, u->port);
+                else snprintf(part, part_cap, "%s://%s", u->scheme, u->host);
+            }
+            TEXT(part);
+        }
+    } else if (IS("cookie")) {
+        const char *url = !strncasecmp(owner->url, "about:", 6) ? owner->origin : owner->url;
+        char *cookie = owner->opaque_origin ? NULL : temporary(ld_document_cookie(url));
+        TEXT(cookie ? cookie : "");
+    } else if (IS("cookie=")) {
+        str = string_arg(a);
+        if (str && !owner->opaque_origin)
+            ld_set_document_cookie(!strncasecmp(owner->url, "about:", 6) ? owner->origin : owner->url, str);
+    } else if (IS("navigate")) {
         str = string_arg(a);
         if (str)
             page_navigate(p, str, "_self", NULL);
@@ -362,7 +423,14 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
             jerry_value_free(w);
         }
     } else if (n) {
-        if (IS("type"))
+        if (IS("complete") || IS("naturalWidth") || IS("naturalHeight")) {
+            struct image_slot *image = n->img >= 0 && n->img < owner->nimgs ? &owner->imgs[n->img] : NULL;
+            if (IS("complete"))
+                result = jerry_boolean(!image || image->state == IMG_OK || image->state == IMG_FAILED);
+            else
+                result = jerry_number(image && image->state == IMG_OK ?
+                                      (IS("naturalWidth") ? image->w : image->h) : 0);
+        } else if (IS("type"))
             result = jerry_number(n->type == N_DOC ? 9 : n->type == N_TEXT ? 3 : 1);
         else if (IS("name")) {
             char name[64];
@@ -560,7 +628,7 @@ static void report(jerry_value_t v)
     if (jerry_value_is_exception(v)) {
         jerry_value_t e = jerry_exception_value(v, false);
         char *message = string_arg(e);
-        printf("browser JS: %s\n", message ? message : "script interrupted");
+        printf("browser JS: %s\n", budget_reason ? budget_reason : message ? message : "script interrupted");
         jerry_value_free(e);
     }
     jerry_value_free(v);
@@ -579,7 +647,7 @@ bool script_init(struct page *p)
         p->script_disabled = true;
         return false;
     }
-    budget(__builtin_frame_address(0));
+    budget(__builtin_frame_address(0), !p->ready_event);
     if (!live) {
         jerry_init(JERRY_INIT_EMPTY);
         live = true;
@@ -656,7 +724,7 @@ bool script_eval(struct page *p, const char *code, int len, struct node *current
         failed();
         return false;
     }
-    budget(__builtin_frame_address(0));
+    budget(__builtin_frame_address(0), !p->ready_event);
     struct runtime *s = p->js;
     s->current = current;
     s->write_after = NULL;
@@ -682,7 +750,7 @@ bool script_event(struct page *p, struct node *target, const char *type)
         failed();
         return true;
     }
-    budget(__builtin_frame_address(0));
+    budget(__builtin_frame_address(0), false);
     struct runtime *s = p->js;
     jerry_value_t old = jerry_set_realm(s->realm);
     jerry_value_t args[2] = {target ? wrap(target) : jerry_value_copy(s->realm), text_value(type)};
@@ -701,6 +769,22 @@ void script_tick(struct page *p)
 {
     if (!p || !p->js || p->script_disabled)
         return;
+    /* Detached Image objects load too. Mark before dispatch: handlers may
+     * replace src, mutate the document, or exhaust the VM. */
+    int delivered = 0;
+    for (int i = 0; delivered < 4 && p->js && i < ((struct runtime *)p->js)->nnodes; i++) {
+        struct node *n = ((struct runtime *)p->js)->nodes[i].node;
+        if (!n || n->tag != T_IMG || n->image_event || n->img < 0 || n->img >= p->nimgs)
+            continue;
+        int state = p->imgs[n->img].state;
+        if (state == IMG_OK || state == IMG_FAILED) {
+            n->image_event = true;
+            delivered++;
+            script_event(p, n, state == IMG_OK ? "load" : "error");
+        }
+    }
+    if (!p->js || p->script_disabled)
+        return;
     struct runtime *s = p->js;
     uint32_t now = plat_ms();
     if ((int32_t)(now - s->next_tick) < 0)
@@ -711,7 +795,7 @@ void script_tick(struct page *p)
         failed();
         return;
     }
-    budget(__builtin_frame_address(0));
+    budget(__builtin_frame_address(0), false);
     jerry_value_t old = jerry_set_realm(s->realm);
     report(jerry_call(s->tick, s->realm, NULL, 0));
     report(jerry_run_jobs());

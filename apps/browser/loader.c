@@ -44,7 +44,8 @@ static int next_id = 1;
 
 struct cookie {
     char *name, *value, *domain, *path;
-    bool host_only, secure;
+    bool host_only, secure, http_only;
+    long long expires;
 };
 
 static struct cookie jar[MAX_COOKIES];
@@ -69,12 +70,53 @@ static char *strndup_trim(const char *s, size_t n)
     return strndup(s, n);
 }
 
-static void set_cookie(const struct url *u, const char *v)
+/* The common HTTP-date form emitted by Date.toUTCString and Set-Cookie. */
+static long long cookie_date(const char *s)
 {
+    const char *comma = strchr(s, ',');
+    if (!comma)
+        return 0;
+    s = comma + 1;
+    while (*s == ' ') s++;
+    char *end;
+    int day = (int)strtol(s, &end, 10);
+    s = end; while (*s == ' ') s++;
+    if (strlen(s) < 4)
+        return 0;
+    char month[4] = {s[0], s[1], s[2], 0};
+    s += 3;
+    int year = (int)strtol(s, &end, 10);
+    s = end;
+    int hour = (int)strtol(s, &end, 10);
+    if (*end != ':') return 0;
+    int minute = (int)strtol(end + 1, &end, 10);
+    if (*end != ':') return 0;
+    int second = (int)strtol(end + 1, &end, 10);
+    static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    int m;
+    for (m = 0; m < 12 && strncasecmp(month, months + m * 3, 3); m++) {}
+    if (m == 12 || year < 1601 || year > 9999 || day < 1 || day > 31 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59)
+        return 0;
+    long long days = 0;
+    for (int y = 1970; y < year; y++)
+        days += 365 + (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+    for (int y = year; y < 1970; y++)
+        days -= 365 + (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+    static const int mdays[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    for (int i = 0; i < m; i++)
+        days += mdays[i] + (i == 1 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+    long long stamp = ((days + day - 1) * 24 + hour) * 3600 + minute * 60 + second;
+    return stamp ? stamp : 1; /* zero is reserved for session/invalid dates */
+}
+static void set_cookie(const struct url *u, const char *v, bool script)
+{
+    if (!v || strlen(v) > 4096 || v[strcspn(v, "\r\n")])
+        return;
     struct cookie c;
     const char *semi = strchr(v, ';'), *eq = strchr(v, '=');
     size_t pair = semi ? (size_t)(semi - v) : strlen(v);
-    bool remove = false;
+    bool remove = false, has_max_age = false;
 
     memset(&c, 0, sizeof(c));
     if (!eq || (size_t)(eq - v) >= pair)
@@ -99,21 +141,35 @@ static void set_cookie(const struct url *u, const char *v)
         } else if (kn == 4 && !strncasecmp(a, "path", 4) && vn) {
             free(c.path);
             c.path = strndup_trim(av + 1, vn);
-        } else if (kn == 7 && !strncasecmp(a, "max-age", 7) && vn && atoi(av + 1) <= 0) {
-            remove = true;
+        } else if (kn == 7 && !strncasecmp(a, "max-age", 7) && vn) {
+            char *age = strndup_trim(av + 1, vn), *end;
+            if (age) {
+                long seconds = strtol(age, &end, 10);
+                if (end != age && !*end && (isdigit((unsigned char)*age) || *age == '-')) {
+                    remove = seconds <= 0;
+                    c.expires = plat_time() + seconds;
+                    has_max_age = true;
+                }
+                free(age);
+            }
+        } else if (kn == 7 && !strncasecmp(a, "expires", 7) && vn && !has_max_age) {
+            c.expires = cookie_date(av + 1);
         } else if (kn == 6 && !strncasecmp(a, "secure", 6)) {
             c.secure = true;
+        } else if (kn == 8 && !strncasecmp(a, "httponly", 8)) {
+            c.http_only = true;
         }
         a = end;
     }
     if (!c.domain)
         c.domain = strdup(u->host);
-    if (!c.path) {
+    if (!c.path || *c.path != '/') {
+        free(c.path);
         /* Default path: the request path up to its last slash. */
         const char *slash = strrchr(u->path, '/');
         c.path = slash && slash != u->path ? strndup(u->path, (size_t)(slash - u->path)) : strdup("/");
     }
-    if (!c.name || !c.value || !c.domain || !c.path) {
+    if (!c.name || !*c.name || c.name[strcspn(c.name, " \t,;=")] || !c.value || !c.domain || !c.path) {
         cookie_free(&c);
         return;
     }
@@ -121,7 +177,10 @@ static void set_cookie(const struct url *u, const char *v)
      * may set a secure one. */
     size_t hl = strlen(u->host), dl = strlen(c.domain);
     if (dl > hl || strcasecmp(u->host + hl - dl, c.domain) || (dl < hl && u->host[hl - dl - 1] != '.') ||
-        (c.secure && strcmp(u->scheme, "https"))) {
+        (c.secure && strcmp(u->scheme, "https")) || (script && c.http_only) ||
+        (script && strcasecmp(c.domain, u->host)) ||
+        (!strncmp(c.name, "__Secure-", 9) && !c.secure) ||
+        (!strncmp(c.name, "__Host-", 7) && (!c.secure || !c.host_only || strcmp(c.path, "/")))) {
         cookie_free(&c);
         return;
     }
@@ -135,6 +194,13 @@ static void set_cookie(const struct url *u, const char *v)
             slot = i;
         }
     }
+    if (slot >= 0 && script && (jar[slot].http_only ||
+        (jar[slot].secure && strcmp(u->scheme, "https")))) {
+        cookie_free(&c);
+        return;
+    }
+    if (c.expires && c.expires <= plat_time())
+        remove = true;
     if (slot >= 0)
         cookie_free(&jar[slot]);
     else
@@ -147,7 +213,7 @@ static void set_cookie(const struct url *u, const char *v)
         jar[slot] = c;
 }
 
-static char *cookies_for(const struct url *u)
+static char *cookies_for(const struct url *u, bool script)
 {
     char *out = NULL;
     size_t len = 0;
@@ -155,7 +221,8 @@ static char *cookies_for(const struct url *u)
 
     for (int i = 0; i < MAX_COOKIES; i++) {
         const struct cookie *c = &jar[i];
-        if (!c->name || (c->secure && strcmp(u->scheme, "https")))
+        if (!c->name || (script && c->http_only) ||
+            (c->expires && c->expires <= plat_time()) || (c->secure && strcmp(u->scheme, "https")))
             continue;
         size_t dl = strlen(c->domain);
         bool dom = c->host_only ? !strcasecmp(u->host, c->domain)
@@ -174,6 +241,20 @@ static char *cookies_for(const struct url *u)
         len += (size_t)snprintf(out + len, add + 1, "%s%s=%s", len ? "; " : "", c->name, c->value);
     }
     return out;
+}
+char *ld_document_cookie(const char *url)
+{
+    struct url u;
+    if (!url_parse(url, &u) || (strcmp(u.scheme, "http") && strcmp(u.scheme, "https")))
+        return strdup("");
+    char *text = cookies_for(&u, true);
+    return text ? text : strdup("");
+}
+void ld_set_document_cookie(const char *url, const char *value)
+{
+    struct url u;
+    if (url_parse(url, &u) && (!strcmp(u.scheme, "http") || !strcmp(u.scheme, "https")))
+        set_cookie(&u, value, true);
 }
 
 /* ---- cache ---------------------------------------------------------------------- */
@@ -416,7 +497,7 @@ static void begin(struct fetch *f)
             }
         }
     }
-    char *cookies = cookies_for(&u);
+    char *cookies = cookies_for(&u, false);
     f->h = http_start(f->url, f->post, f->post_len, f->post_type, cookies, max_body[f->kind]);
     free(cookies);
     if (!f->h)
@@ -432,7 +513,7 @@ static void response(struct fetch *f)
 
     if (url_parse(f->url, &u))
         for (int i = 0; (v = http_header(f->h, "set-cookie", i)); i++)
-            set_cookie(&u, v);
+            set_cookie(&u, v, false);
     const char *loc = http_header(f->h, "location", 0);
     if (status >= 300 && status < 400 && status != 304 && loc) {
         char *next = url_resolve(f->url, loc);

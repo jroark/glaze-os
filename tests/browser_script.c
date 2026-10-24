@@ -5,6 +5,7 @@
 #include "../apps/browser/frames.h"
 #include "../apps/browser/plat.h"
 #include "../apps/browser/identity.h"
+#include "../apps/browser/net.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -107,6 +108,15 @@ static void engine(void)
     CHECK(js(p, "function check(c){if(!c)throw Error('assertion');} "
                 "check(6*7===42);check(Math.sqrt(81)===9);check(Math.abs(Math.sin(Math.PI/"
                 "2)-1)<1e-12);check(JSON.parse('{\"x\":3}').x===3);"));
+    /* Speculative arrow-parameter scanning must retain captured bindings. */
+    CHECK(js(p, "function capture(U,H){true?(H=function(){return U[1]},U=[0,42]):null;return H();}"
+                "check(capture()===42);"
+                "function captureLocal(){var x,f;true?(f=function(){return x},x=42):null;return f;}"
+                "check(captureLocal()()===42);"
+                "function captureFalse(x,f){false?null:(f=function(){return x},x=42);return f;}"
+                "check(captureFalse()()===42);"
+                "var arrow=(f=function(){return x},x=42)=>f();check(arrow()===42);"
+                "function sourceExample(){return 42;}check(sourceExample.toString().indexOf('return 42')>=0);"));
     CHECK(js(p, "var "
                 "out=document.getElementById('out');check(out===document.querySelector('#out'));"
                 "out.textContent='after';check(out.firstChild.nodeValue==='after');check(out."
@@ -135,6 +145,7 @@ static void engine(void)
     usleep(12000);
     script_tick(p);
     CHECK(js(p, "check(done);check(out.textContent==='timer');"));
+    p->ready_event = true; /* Exercise the interactive execution budget. */
     uint32_t start = plat_ms();
     CHECK(!js(p, "while(true){}"));
     CHECK(plat_ms() - start < 1000);
@@ -183,6 +194,43 @@ static void navigator_identity(void)
     page_free(p);
     p = blank("http://one.test/fresh-navigator");
     CHECK(js(p, "if(typeof navigator.sendBeacon!=='undefined')throw Error('navigator leaked across navigation');"));
+    page_free(p);
+}
+static void web_platform(void)
+{
+    struct page *p = blank("https://cookies.test/a/page?q=one#two");
+    CHECK(js(p, "function check(c){if(!c)throw Error('platform assertion');}"
+                "check(performance===window.performance&&performance.now()>=0);"
+                "check(Math.abs(Date.now()-performance.timeOrigin-performance.now())<2000);"
+                "check(performance.toJSON().timeOrigin===performance.timeOrigin);var before=performance.now();"
+                "check(innerWidth===320&&innerHeight>0&&outerWidth===screen.width);"
+                "check(screen.colorDepth===16&&screen.pixelDepth===16&&devicePixelRatio===0.75);"
+                "check(location.search==='?q=one'&&location.hash==='#two'&&location.pathname==='/a/page');"
+                "check(location.protocol==='https:'&&location.hostname==='cookies.test'&&location.port==='');"
+                "check(location.origin==='https://cookies.test');"
+                "check(btoa('hello')==='aGVsbG8='&&atob('aGVsbG8=')==='hello');"
+                "check(atob(' Y Q = = \\n')==='a'&&atob('YQ')==='a');"
+                "var bytes='';for(var i=0;i<256;i++)bytes+=String.fromCharCode(i);check(atob(btoa(bytes))===bytes);"
+                "['a','YQ=','====','Y!Q=','YQ\\v'].forEach(function(v){var bad=false;try{atob(v)}catch(e){bad=e.name==='InvalidCharacterError'}check(bad)});"
+                "var bad=false;try{btoa('\\u0100')}catch(e){bad=e.name==='InvalidCharacterError'}check(bad);"
+                "document.cookie='visible=value; Path=/; Secure';check(document.cookie.indexOf('visible=value')>=0);"
+                "document.cookie='gone=value';document.cookie='gone=; Expires=Thu, 01 Jan 1970 00:00:00 GMT';"
+                "check(document.cookie.indexOf('gone=')<0);"
+                "document.cookie='kept=yes; Max-Age=60; Expires=Thu, 01 Jan 1970 00:00:00 GMT';"
+                "check(document.cookie.indexOf('kept=yes')>=0);"
+                "document.cookie='bad=no; Domain=other.test';check(document.cookie.indexOf('bad=')<0);"
+                "document.cookie='hidden=no; HttpOnly';check(document.cookie.indexOf('hidden=')<0);"
+                "document.cookie='__Secure-bad=no';document.cookie='__Host-bad=no; Secure';"
+                "check(document.cookie.indexOf('__Secure-bad=')<0&&document.cookie.indexOf('__Host-bad=')<0);"
+                "document.cookie='scoped=no; Path=/other';check(document.cookie.indexOf('scoped=')<0);"
+                "document.cookie='relative=yes; Path= ';check(document.cookie.indexOf('relative=yes')>=0);"));
+    usleep(12000);
+    CHECK(js(p, "check(performance.now()>=before+2);"));
+    char *cookies = ld_document_cookie("http://cookies.test/a/page");
+    CHECK(cookies && !strstr(cookies, "visible="));
+    free(cookies);
+    p->opaque_origin = true;
+    CHECK(js(p, "check(document.cookie==='');document.cookie='opaque=no';check(document.cookie==='');"));
     page_free(p);
 }
 static void policies(void)
@@ -331,6 +379,32 @@ static void navigator_transport(const char *base)
     page_free(p);
     free(ld.url);
 }
+static void platform_transport(const char *base)
+{
+    char url[256];
+    struct load ld = {0};
+    snprintf(url, sizeof url, "%s/platform", base);
+    struct page *p = fetch(&ld, url);
+    CHECK(p != NULL);
+    if (p) {
+        CHECK(js(p, "if(document.cookie.indexOf('httpOnly=')>=0)throw Error('HttpOnly exposed');"
+                    "document.cookie='httpOnly=overwritten; Path=/';"
+                    "document.cookie='scriptCookie=sent; Path=/';"
+                    "if(document.getElementById('cookie-child').contentDocument.title!=='inherited cookie')throw Error('inherited cookie');"
+                    "if(!imageLoaded||!imageFailed||!pixel.complete||pixel.naturalWidth!==1)throw Error('detached images');"
+                    "if(document.querySelector('img'))throw Error('detached image attached');"
+                    "var ping=new Image();ping.src='/cookie-check';"));
+        uint32_t start = plat_ms();
+        while (plat_ms() - start < 2000) {
+            load_step(&ld);
+            usleep(1000);
+        }
+    }
+    load_stop(&ld);
+    load_forget(&ld, p);
+    page_free(p);
+    free(ld.url);
+}
 static void transport(const char *base)
 {
     char url[256];
@@ -437,11 +511,13 @@ int main(int argc, char **argv)
     noscript();
     engine();
     navigator_identity();
+    web_platform();
     policies();
     origins();
     oom();
     if (argc > 1) {
         navigator_transport(argv[1]);
+        platform_transport(argv[1]);
         noscript_transport(argv[1]);
         transport(argv[1]);
     }

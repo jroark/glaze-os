@@ -142,6 +142,7 @@ struct node {
     int16_t nsdecl;             /* -1 until parsed */
     struct ctl *ctl;            /* form controls */
     int img;                    /* <img>: image slot, or -1 */
+    bool image_event;
     struct page *owner;
     int frame;                  /* child browsing context slot, or -1 */
     uint8_t collected;
@@ -477,6 +478,8 @@ struct page {
     int nscripts,nframes,script_next,dom_nodes;
     int viewport_h;
     unsigned serial;
+    uint32_t start_ms;
+    double time_origin;
     void *js;
     char *origin, *navigate_url, *navigate_post, *csp;
     bool scripting_enabled;    /* document parsing mode; survives runtime failures */

@@ -1,5 +1,6 @@
 /* DOM edits share the page arena, preserving native node identity until unload. */
 #include "web.h"
+#include "url.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,6 +122,15 @@ bool dom_attr(struct page *p, struct node *n, const char *name, const char *valu
     if (!strcmp(lower, "src") || !strcmp(lower, "href") || !strcmp(lower, "srcdoc") ||
         !strcmp(lower, "sandbox"))
         n->collected = 0;
+    if (n->tag == T_IMG && !strcmp(lower, "src")) {
+        n->img = -1;
+        n->image_event = false;
+        char *url = value && *value ? url_resolve(p->base, value) : NULL;
+        if (url && page_resource_allowed(p, url))
+            n->img = page_add_image(p, url);
+        free(url);
+        n->collected |= 2;
+    }
     if (n->ctl) {
         if (!strcmp(lower, "disabled"))
             n->ctl->disabled = value != NULL;

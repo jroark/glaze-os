@@ -11,6 +11,10 @@ Glaze supplies its own port and MIPS soft-float compiler helpers.
 
 Local changes in `jerryscript.c`:
 
+- Preserve `SCANNER_LITERAL_NO_REG` when speculative arrow-parameter scanning
+  replaces an earlier reference to the same name. Otherwise a closure followed
+  by assignment in a parenthesized comma expression can lose its captured
+  binding, e.g. `true ? (f = () => x, x = 42) : null`.
 - Make the two `ecma_uint128_shift_*` always-inline definitions explicitly
   `inline`, as required by GCC.
 - Replace `rand()`/`RAND_MAX` in Math.random with the browser's private PRNG.
