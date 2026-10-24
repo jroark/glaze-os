@@ -28,6 +28,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/frameset': '<frameset cols="50%,*"><frame src=/child><frame src=/next></frameset>',
             '/csp': '''<title>initial</title><script>var forbidden=true;</script><script src=/allowed.js></script>''',
             '/allowed.js': "document.title='external allowed';",
+            '/noscript': '''<head><noscript><meta http-equiv=refresh content="0;url=/enablejs">
+<base href="http://wrong.test/"><link rel=stylesheet href=/fallback.css>
+<script src=/fallback.js></script></noscript>
+<script>document.title='neighbor ran';document.write('<noscript><meta http-equiv=refresh content="0;url=/written"><script>throw Error("inert");<'+ '/script></noscript>');</script></head>
+<body><noscript><img src=/fallback.png></noscript>
+<iframe id=local sandbox srcdoc="<noscript><meta http-equiv=refresh content='0;url=/local'><p id=fallback>fallback</p></noscript>"></iframe>
+<iframe id=remote sandbox src=/noscript-child></iframe></body>''',
+            '/noscript-child': '''<head><noscript><meta http-equiv=refresh content="0;url=/remote"></noscript></head>
+<body><noscript><p id=fallback>fallback</p></noscript><script>throw Error('sandbox');</script></body>''',
         }
         if self.path == '/denied':
             headers['X-Frame-Options'] = 'DENY'

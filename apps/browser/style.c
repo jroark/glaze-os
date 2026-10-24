@@ -21,7 +21,7 @@ static const char ua_css[] =
     " figcaption, figure, footer, form, h1, h2, h3, h4, h5, h6, header, hgroup, hr, legend,"
     " listing, main, menu, nav, ol, p, plaintext, pre, section, article, aside, summary, ul, xmp,"
     " optgroup, frameset, frame { display: block }\n"
-    "head, script, style, title, meta, link, base, template, area, map, datalist, param, noframes, noscript,"
+    "head, script, style, title, meta, link, base, template, area, map, datalist, param, noframes,"
     " object, embed, svg, canvas, video, audio, source, track, noembed, math, dialog,"
     " select option, select optgroup, input[type=hidden], col, colgroup { display: none }\n"
     "li { display: list-item }\n"
@@ -952,6 +952,8 @@ static void compute(struct style_ctx *S, struct node *n, const struct style *ps)
             if (M->m[i].rule->decls[k].prop == P_FONT_SIZE)
                 apply(&C, &M->m[i].rule->decls[k]);
     apply_matches(&C, M, 0, false);
+    if (n->tag == T_NOSCRIPT && S->p->scripting_enabled)
+        C.display_kw = K_NONE_;
     hints(&C, n);
 
     int author = M->n;

@@ -171,8 +171,8 @@ bool css_node_matches(const struct css_selector *selector,const struct node *n);
 #define HTML_MAX_NODES  30000
 
 /* Parses engine text into a tree under a N_DOC node, which always holds
- * html > head, body. */
-struct node *html_parse(struct arena *a, const char *src, int len);
+ * html > head, body. Scripting mode controls noscript tokenization. */
+struct node *html_parse(struct arena *a, const char *src, int len, bool scripting_enabled);
 /* Decodes character references in [s, s+n) into out (at most n bytes, as
  * they never grow); returns the length. */
 int html_unescape(const char *s, int n, char *out, bool in_attr);
@@ -479,6 +479,7 @@ struct page {
     unsigned serial;
     void *js;
     char *origin, *navigate_url, *navigate_post, *csp;
+    bool scripting_enabled;    /* document parsing mode; survives runtime failures */
     bool dirty,resources_dirty,ready_event,load_event,script_disabled,opaque_origin;
 };
 

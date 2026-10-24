@@ -31,6 +31,75 @@ static struct page *blank(const char *url)
                          "id='form'><input id='field' name='q' value='old'></form>");
     return p;
 }
+static void noscript(void)
+{
+    const char *fallback = "<meta http-equiv=refresh content='0;url=/enablejs'>"
+        "<base href='https://wrong.test/'><link rel=stylesheet href='/fallback.css'>"
+        "<style>body{color:red}</style><img src='/fallback.png'>"
+        "<script src='/fallback.js'></script><b id=fallback>&amp;</b>";
+    for (int enabled = 0; enabled < 2; enabled++) {
+        for (int head = 0; head < 2; head++) {
+            struct page *p = page_new("http://one.test/noscript");
+            CHECK(p != NULL);
+            if (!p)
+                continue;
+            p->scripting_enabled = enabled;
+            char html[1024];
+            snprintf(html, sizeof html, "<html><head>%s<noscript id=ns>%s</NoScRiPt>"
+                     "<script>var neighbor=true;</script></head><body></body></html>",
+                     head ? "" : "</head><body>", fallback);
+            /* Exercise both the fetched-document and generated-HTML paths. */
+            if (head)
+                page_set_document(p, (const uint8_t *)html, (int)strlen(html), "text/html");
+            else
+                page_set_html(p, html);
+            int delay = -1;
+            const char *refresh = page_refresh(p, &delay);
+            struct node *ns = dom_query(p, p->doc, "#ns", NULL);
+            CHECK(ns != NULL);
+            if (enabled) {
+                CHECK(!refresh);
+                CHECK(!strcmp(p->base, p->url));
+                CHECK(p->nsheets == 0 && p->nimgs == 0 && p->nscripts == 1);
+                CHECK(!dom_query(p, p->doc, "#fallback", NULL));
+                CHECK(ns && ns->first && ns->first->type == N_TEXT && !ns->first->next);
+                CHECK(ns && !strcmp(node_text(&p->arena, ns), fallback));
+                char *serialized = ns ? dom_serialize(p, ns, false) : NULL;
+                CHECK(serialized && !strcmp(serialized, fallback));
+                free(serialized);
+                CHECK(js(p, "document.title='neighbor ran';"));
+                CHECK(p->title && !strcmp(p->title, "neighbor ran"));
+            } else {
+                CHECK(refresh && !strcmp(refresh, "/enablejs") && delay == 0);
+                CHECK(dom_query(p, p->doc, "#fallback", NULL));
+                CHECK(!script_init(p));
+            }
+            page_style(p);
+            if (!head && ns && ns->st)
+                CHECK((ns->st->display == D_NONE) == !!enabled);
+            page_free(p);
+        }
+    }
+    struct page *p = blank("http://one.test/fragments");
+    CHECK(js(p, "var out=document.getElementById('out');"
+                "out.innerHTML='<noscript id=ns><meta http-equiv=refresh "
+                "content=\"0;url=/bad\"><b id=hidden>fallback</b></noscript>';"
+                "var ns=document.getElementById('ns');"
+                "if(document.getElementById('hidden'))throw Error('fragment fallback');"
+                "ns.innerHTML='<meta http-equiv=refresh content=\"0;url=/bad\">&amp;';"
+                "if(ns.firstChild.nodeType!==3||ns.childNodes.length!==1||"
+                "ns.textContent!==ns.innerHTML)throw Error('noscript context');"));
+    page_collect(p);
+    int delay;
+    CHECK(!page_refresh(p, &delay));
+    page_free(p);
+    p = page_new("http://one.test/slash");
+    page_set_html(p, "<noscript/><meta http-equiv=refresh content='0;url=/bad'></noscript>"
+                     "<meta http-equiv=refresh content='3;url=/normal'>");
+    const char *refresh = page_refresh(p, &delay);
+    CHECK(refresh && !strcmp(refresh, "/normal") && delay == 3);
+    page_free(p);
+}
 static void engine(void)
 {
     struct page *p = blank("http://one.test/index");
@@ -150,10 +219,22 @@ static void origins(void)
 static void oom(void)
 {
     struct page *p = blank("http://one.test/oom");
+    CHECK(js(p, "document.getElementById('out').innerHTML='<noscript id=ns><meta http-equiv=refresh "
+                "content=\"0;url=/bad\"></noscript>';"));
     CHECK(!js(p, "var leak=[];while(true){leak.push(new Array(4096).fill('xxxxxxxxxxxxxxxx'));}"));
     CHECK(p->script_disabled);
+    CHECK(p->scripting_enabled);
+    int delay;
+    CHECK(!page_refresh(p, &delay));
+    /* Later fragment parsing must retain the original document mode too. */
+    CHECK(dom_content(p, p->body, "<noscript id=late><meta http-equiv=refresh "
+                      "content='0;url=/bad'></noscript><p>still readable</p>", true));
+    page_collect(p);
+    CHECK(!page_refresh(p, &delay));
     CHECK(p->doc != NULL);
     page_style(p);
+    struct node *late = dom_query(p, p->doc, "#late", NULL);
+    CHECK(late && late->st && late->st->display == D_NONE);
     page_layout(p, 240);
     CHECK(p->nitems > 0);
     page_free(p);
@@ -173,6 +254,36 @@ static struct page *fetch(struct load *ld, const char *url)
     }
     CHECK(0 && "load timeout");
     return ld->shown;
+}
+static void noscript_transport(const char *base)
+{
+    char url[256];
+    struct load ld = {0};
+    snprintf(url, sizeof url, "%s/noscript", base);
+    struct page *p = fetch(&ld, url);
+    CHECK(p != NULL);
+    if (p) {
+        int delay;
+        CHECK(p->title && !strcmp(p->title, "neighbor ran"));
+        CHECK(!page_refresh(p, &delay));
+        CHECK(!strcmp(p->base, url));
+        CHECK(p->nsheets == 0 && p->nimgs == 0 && p->nscripts == 1);
+        CHECK(p->nframes == 2);
+        for (int i = 0; i < p->nframes; i++) {
+            struct page *child = p->frames[i].page;
+            CHECK(child && !child->scripting_enabled && child->script_disabled && !child->js);
+            if (!child)
+                continue;
+            struct node *fallback = dom_query(child, child->doc, "#fallback", NULL);
+            CHECK(fallback && fallback->st && fallback->st->display != D_NONE);
+            const char *refresh = page_refresh(child, &delay);
+            CHECK(refresh && !strcmp(refresh, i == 0 ? "/local" : "/remote") && delay == 0);
+        }
+    }
+    load_stop(&ld);
+    load_forget(&ld, p);
+    page_free(p);
+    free(ld.url);
 }
 static void transport(const char *base)
 {
@@ -277,12 +388,15 @@ static void transport(const char *base)
 }
 int main(int argc, char **argv)
 {
+    noscript();
     engine();
     policies();
     origins();
     oom();
-    if (argc > 1)
+    if (argc > 1) {
+        noscript_transport(argv[1]);
         transport(argv[1]);
+    }
     script_shutdown();
     printf("browser scripts/frames: %s (%d failures)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;

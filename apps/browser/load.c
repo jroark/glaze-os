@@ -168,6 +168,7 @@ static void attach(struct frame_slot *f, struct page *p, bool inherit)
     p->parent = f->owner;
     p->host = f;
     p->script_disabled = f->sandboxed;
+    p->scripting_enabled = !f->sandboxed;
     p->opaque_origin = f->sandboxed || !strncasecmp(p->url, "data:", 5);
     if (inherit) {
         free(p->origin);

@@ -287,7 +287,8 @@ static bool policy_allows(struct page *p, const char *source, const struct node 
 }
 bool script_allowed(struct page *p, const char *source, const struct node *node)
 {
-    return p && !p->script_disabled && (!source || page_resource_allowed(p, source)) &&
+    return p && p->scripting_enabled && !p->script_disabled &&
+           (!source || page_resource_allowed(p, source)) &&
            policy_allows(p, source, node, NULL);
 }
 static jerry_value_t window_value(struct page *caller, struct page *target)
@@ -561,7 +562,7 @@ static void report(jerry_value_t v)
 }
 bool script_init(struct page *p)
 {
-    if (!p || p->script_disabled)
+    if (!p || !p->scripting_enabled || p->script_disabled)
         return false;
     if (p->js)
         return true;
