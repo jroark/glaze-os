@@ -199,6 +199,13 @@ bool ce_shell_input(const struct gz_input_event *e)
         gfx_rect r = ce_window_rect(w->handle);
         if (!gfx_rect_contains(r, e->x, e->y))
             continue;
+        /* A combo box in the bar (WorldTALK's address) takes its own input. */
+        for (unsigned j = 0; j < CE_WINDOWS; j++) {
+            struct ce_window *child = ce_window(0x70000000u + j);
+            if (child && child->list && child->parent == w->handle && ce_window_visible(child->handle) &&
+                gfx_rect_contains(ce_window_rect(child->handle), e->x, e->y))
+                return false;
+        }
         if (e->type != GZ_EV_TOUCH_UP)
             return true;
         for (unsigned j = 0; j < CE_WINDOWS; j++) {
@@ -435,6 +442,36 @@ CE_API(CSOBar_AddButtons)
     }
     return 1;
 }
+/* CSO.DLL packs hInstance, by-command flag, id or position, and one
+ * CSOBUTTON entry (as AddButtons takes) for the bar's message 0xff3.
+ * WorldTALK swaps its connect/disconnect button this way. The button keeps
+ * its place; its command, caption, state and popup change. */
+CE_API(CSOBar_ChangeButton)
+{
+    if (!ce_window(a0) || !a4)
+        return 0;
+    unsigned position = 0;
+    for (unsigned i = 0; i < CE_WINDOWS; i++) {
+        struct ce_window *child = ce_window(0x70000000u + i);
+        if (!child || child->parent != a0)
+            continue;
+        bool match = a2 ? child->id == a3 : position == a3;
+        position++;
+        if (!match)
+            continue;
+        const uint8_t *p = PTR(uint8_t, a4);
+        CW label = ce_u32(p + 20), item = ce_u32(p + 24);
+        static const WCHAR empty[] = {0};
+        child->id = ce_u32(p);
+        ce_send(child->handle, 0xc, 0, label >= 65536 && label < 0x80000000u ? label : WORD(empty));
+        child->enabled = ce_u32(p + 4) && p[8] == 1;
+        child->user = menu(item) || ce_window(item) ? item : 0;
+        child->dirty = true;
+        return 1;
+    }
+    ce_error = 87;
+    return 0;
+}
 CE_API(CSOBar_DeleteAllButtons)
 {
     struct ce_window *bar = ce_window(a0);
@@ -548,10 +585,11 @@ CE_API(CSOBar_GetButtonItem)
     }
     return 0;
 }
-/* CSO.DLL packs the arguments for the bar's message 0xfd5: hInstance, a2,
- * style, position, command id, x, width and drop height. WorldTALK passes
- * WS_VSCROLL | CBS_AUTOHSCROLL | CBS_DROPDOWN as the style and toggles the
- * button by command id 0x640 (a5). */
+/* CSO.DLL packs the arguments for the bar's message 0xfd5: hInstance,
+ * control id, style, position, a command, x, width and drop height.
+ * WorldTALK's address box is id 103 with WS_VSCROLL | CBS_AUTOHSCROLL |
+ * CBS_DROPDOWN; its WM_COMMAND switch takes 103 as the combo box and the
+ * command, 0x640, as Go. */
 CE_API(CSOBar_InsertComboBox)
 {
     struct ce_window *bar = ce_window(a0);
@@ -560,7 +598,7 @@ CE_API(CSOBar_InsertComboBox)
     static const WCHAR combo[] = {'C', 'o', 'm', 'b', 'o', 'B', 'o', 'x', 0};
     int y = bar->rect.bottom - bar->rect.top > 26 ? 28 : 2;
     struct ce_window *w = ce_new_window(combo, NULL, a3 | 0x50000000u, (int)a6, y, (int)a7,
-                                       22, a0, a5, 0, 0);
+                                       22, a0, a2, 0, 0);
     return w ? w->handle : 0;
 }
 CE_API(CommandBar_AddBitmap)
@@ -1141,6 +1179,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CSOBar_ChangeAllButtons), CE_EXPORT(CSOBar_SetButtonState), CE_EXPORT(CSOBar_ChangeMenu),
     CE_EXPORT(CSOBar_GetButtonArea), CE_EXPORT(CSOBar_GetAdornmentsWidth),
     CE_EXPORT(CSOBar_GetButtonItem), CE_EXPORT(CSOBar_InsertComboBox), CE_EXPORT(CSOBar_SetWindowPos),
+    CE_EXPORT(CSOBar_ChangeButton),
     {"CSOBar_Show", (void *)ce_CommandBar_Show},
     {"CSOBar_Height", (void *)ce_CommandBar_Height},
     CE_EXPORT(CSOBar_AddAdornments),
@@ -1169,8 +1208,44 @@ static const struct ce_export exports[] = {
     CE_EXPORT(SHAddToRecentDocs),
     CE_EXPORT(SHGetFileInfo),
 };
+/* COMCOMPOSER.DLL is Casio's dial-up manager. Glaze reaches the network
+ * through its card, so no dial-up connection is ever active. Matching the
+ * DLL without a running dialer: ConnectUID_Get lists active connections as
+ * 72-byte records (records, in/out bytes, out count) and returns 0;
+ * ConnectState_Get returns 18; Disconnect has nothing to end. */
+CE_API(DIALUP_ConnectUID_Get)
+{
+    if (a1)
+        *PTR(CW, a1) = 0;
+    if (a2)
+        *PTR(CW, a2) = 0;
+    return 0;
+}
+CE_API(DIALUP_ConnectState_Get)
+{
+    if (a1)
+        *PTR(CW, a1) = 0;
+    return 18;
+}
+CE_API(DIALUP_Disconnect)
+{
+    return 0;
+}
+/* No connection setup exists to read, as the DLL reports for an unknown
+ * one; WorldTALK then uses no proxy. */
+CE_API(COMMSet_Dial_Get)
+{
+    return 18;
+}
 void *ce_resolve_shell(const char *dll, const char *name)
 {
+    if (!strcasecmp(dll, "COMCOMPOSER.dll")) {
+        if (!strcmp(name, "DIALUP_ConnectUID_Get")) return (void *)ce_DIALUP_ConnectUID_Get;
+        if (!strcmp(name, "DIALUP_ConnectState_Get")) return (void *)ce_DIALUP_ConnectState_Get;
+        if (!strcmp(name, "DIALUP_Disconnect")) return (void *)ce_DIALUP_Disconnect;
+        if (!strcmp(name, "COMMSet_Dial_Get")) return (void *)ce_COMMSet_Dial_Get;
+        return NULL;
+    }
     if (!strcasecmp(dll, "Sendto.dll"))
         return !strcmp(name, "SendtoCheck") ? (void *)ce_SendtoCheck : NULL;
     if (!strcasecmp(dll, "clblib.dll")) {

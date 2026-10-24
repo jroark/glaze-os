@@ -32,12 +32,18 @@ DATA = {
     "clock": ("Program Files/TIMEZONEINFO.txt",),
     "internet": ("My Documents/WebPage", "My Documents/Internet"),
 }
-# Registry values an app's private registry starts with (key, name, REG_SZ
-# text). WorldTALK otherwise opens file:///windows/default.htm, which is not
-# in this ROM; the image's saved registry holds this HomePage.
+# Registry values an app's private registry starts with: (key, name, text
+# for REG_SZ or an integer for REG_DWORD).
+# - WorldTALK otherwise opens file:///windows/default.htm, which is not in
+#   this ROM; the image's saved registry holds this HomePage.
+# - Its Connection names a Connections setup. 1 counts as connected without
+#   asking COMCOMPOSER's dial-up state (Internet.exe at VA 0x1c7d0), which
+#   matches Glaze's always-present network card; the image's saved 6 is a
+#   dial-up setup.
 REGISTRY = {
     "internet": ((r"HKCU\Software\Tenik\WorldTALK\Common", "HomePage",
-                  "file:///Nand Disk/My Documents/WebPage/Welcome to the Internet.html"),),
+                  "file:///Nand Disk/My Documents/WebPage/Welcome to the Internet.html"),
+                 (r"HKCU\Software\Tenik\WorldTALK\Common", "Connection", 1)),
 }
 BAYER = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
 RESERVED_RES = {"icon.gzi", "program.exe", "ordinals.txt", "source.txt", "registry", "files.txt"}
@@ -424,8 +430,9 @@ def main():
             entries["res/files.txt"] = "".join(manifest).encode("utf-8")
         if stem in REGISTRY:
             entries["res/registry"] = encode_gzce_registry(
-                [{"key": key, "name": name, "type": 1, "data": (text + "\0").encode("utf-16le")}
-                 for key, name, text in REGISTRY[stem]])
+                [{"key": key, "name": name, "type": 4, "data": struct.pack("<I", value)} if isinstance(value, int)
+                 else {"key": key, "name": name, "type": 1, "data": (value + "\0").encode("utf-16le")}
+                 for key, name, value in REGISTRY[stem]])
         outputs[f"wince.{stem}.gzp"] = package(entries)
     args.output.mkdir(parents=True, exist_ok=True)
     for name, data in outputs.items():

@@ -114,7 +114,12 @@ An app's private registry can also start with values from `REGISTRY`. Without
 one, WorldTALK opens `file:///windows/default.htm`, which this ROM does not
 contain. The image's saved registry sets
 `HKCU\Software\Tenik\WorldTALK\Common\HomePage` to the bundled Welcome
-page, and the importer seeds that one value.
+page, and the importer seeds it. It also seeds `Common\Connection` = 1.
+WorldTALK treats that as connected without asking COMCOMPOSER.DLL's dial-up
+state, which matches Glaze's network card. (The image's saved value, 6,
+names a dial-up setup.) The runtime answers the COMCOMPOSER calls WorldTALK
+still makes as that DLL does with no dialer running: no active dial-up
+connections and no proxy.
 
 The importer reads the source image without changing it. It validates the
 FAT16 allocation chains, decodes the Casio CPK blocks, reads the matching
@@ -401,6 +406,20 @@ python3 tests/run_wince.py --image ../be300/nand/expod.bin --app internet \
 The screenshot should show the **Welcome to the Internet World** page and its
 images under a two-row bar holding the page's `file:` URL. The bar's own
 buttons are not drawn yet.
+
+To load a page over the network, serve one from the host on its own address
+(not 127.0.0.1, which lwIP cannot reach through the emulator's NAT). Set
+that URL in `tests/t_wince_internet_url.txt`, and run:
+
+```sh
+python3 tests/run_wince.py --image ../be300/nand/expod.bin --app internet \
+  --net --input tests/t_wince_internet_url.txt --seconds 150 --headless
+```
+
+The script taps the address box (focus selects its text, so typing replaces
+it), types the URL and presses Enter. WorldTALK writes its request to a
+temporary file and sends it over Winsock, and the screenshot shows the
+fetched page.
 
 Owner tests enter **Alex from Glaze**, switch to Notes, enter **Original app
 compatibility**, select the Notes checkbox, and save with the toolbar button. `--check-owner`
