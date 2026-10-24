@@ -23,6 +23,7 @@ struct page *page_new(const char *url)
     p->url = strdup(url);
     p->base = strdup(url);
     p->bg = 0xFFFFFF;
+    p->scripting_enabled = true;
     p->origin=strdup(url);p->serial=++page_serial;p->viewport_h=226;p->dirty=p->resources_dirty=true;
     if (!p->url || !p->base || !p->origin) {
         page_free(p);
@@ -259,7 +260,7 @@ void page_set_html(struct page *p, const char *html)
         return;
     }
     p->src_len = (int)strlen(p->src);
-    p->doc = html_parse(&p->arena, p->src, p->src_len);
+    p->doc = html_parse(&p->arena, p->src, p->src_len, p->scripting_enabled);
     if (!p->doc) {
         p->oom = true;
         return;
@@ -319,7 +320,7 @@ void page_set_document(struct page *p, const uint8_t *data, int len, const char 
     free(p->src);
     p->src = text;
     p->src_len = n;
-    p->doc = html_parse(&p->arena, p->src, p->src_len);
+    p->doc = html_parse(&p->arena, p->src, p->src_len, p->scripting_enabled);
     if (!p->doc) {
         p->oom = true;
         return;

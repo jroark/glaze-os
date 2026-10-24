@@ -166,7 +166,7 @@ struct parser {
     struct node *stack[HTML_MAX_DEPTH];
     int depth;
     int nodes;
-    bool in_body, full;
+    bool in_body, full, scripting_enabled;
 };
 
 static bool is_void(int tag)
@@ -604,6 +604,7 @@ static void start_tag(struct parser *P, int tag, const char *name, struct attr *
     case T_STYLE: raw = "style"; break;
     case T_XMP: raw = "xmp"; break;
     case T_IFRAME: raw = "iframe"; break;
+    case T_NOSCRIPT: if (P->scripting_enabled) raw = "noscript"; break;
     default: break;
     }
     if (tag == T_TITLE) {
@@ -618,7 +619,8 @@ static void start_tag(struct parser *P, int tag, const char *name, struct attr *
         P->pos = P->len;
         return;
     }
-    if (raw && !self_close) {
+    /* HTML's self-closing slash cannot activate a noscript fallback. */
+    if (raw && (!self_close || tag == T_NOSCRIPT)) {
         append(parent, n);
         int end = raw_end(P, raw);
         int start = P->pos;
@@ -680,7 +682,7 @@ static void end_tag(struct parser *P, int tag, const char *name)
         pop_to(P, i);
 }
 
-struct node *html_parse(struct arena *a, const char *src, int len)
+struct node *html_parse(struct arena *a, const char *src, int len, bool scripting_enabled)
 {
     struct parser *P = arena_alloc(a, sizeof(*P));
 
@@ -689,6 +691,7 @@ struct node *html_parse(struct arena *a, const char *src, int len)
     P->a = a;
     P->s = src;
     P->len = len;
+    P->scripting_enabled = scripting_enabled;
     P->doc = new_node(P, N_DOC);
     P->html = new_elem(P, T_HTML, NULL);
     P->head = new_elem(P, T_HEAD, NULL);

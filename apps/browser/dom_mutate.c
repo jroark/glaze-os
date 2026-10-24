@@ -145,6 +145,8 @@ bool dom_content(struct page *p, struct node *n, const char *text, bool html)
 {
     if (!n || n->owner != p || !room(p, text ? strlen(text) : 0))
         return false;
+    if (n->tag == T_NOSCRIPT && p->scripting_enabled)
+        html = false; /* Fragment parsing in a noscript context is raw text. */
     if (n->tag == T_STYLE)
         n->collected = 0;
     if (n->parent && n->parent->tag == T_STYLE)
@@ -166,7 +168,7 @@ bool dom_content(struct page *p, struct node *n, const char *text, bool html)
     }
     n->last = NULL;
     if (html && text && *text) {
-        struct node *doc = html_parse(&p->arena, text, (int)strlen(text));
+        struct node *doc = html_parse(&p->arena, text, (int)strlen(text), p->scripting_enabled);
         if (!doc)
             return false;
         struct node *h = node_first_elem(doc), *head = NULL, *body = NULL;
@@ -241,7 +243,10 @@ static void serialize(struct out *o, struct node *n, int depth)
     if (depth > HTML_MAX_DEPTH)
         return;
     if (n->type == N_TEXT) {
-        escaped(o, n->text, false);
+        if (n->parent && n->parent->tag == T_NOSCRIPT && n->owner->scripting_enabled)
+            put(o, n->text, (size_t)n->len);
+        else
+            escaped(o, n->text, false);
         return;
     }
     if (n->type == N_ELEM) {

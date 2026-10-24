@@ -45,6 +45,12 @@ Fetch/XHR, canvas scripting, WebAssembly, storage API or full browser history
 API. Child navigation does not create top-level history entries. Unicode
 text entering the rendered DOM uses Glaze's existing font/charset mappings.
 
+With scripting enabled, `noscript` contents are inert raw text in both the head
+and body, including HTML inserted through DOM edits or `document.write`.
+Sandboxed child documents parse and display fallback HTML with scripting
+disabled. A later script exception or VM shutdown does not change the document's
+parsing mode or activate its fallback metadata and resources.
+
 The shared VM has a 1 MiB heap and a 24 KiB MIPS stack budget (native ASan tests
 allow 128 KiB for larger C frames). Each entry has a 150 ms deadline and a
 work counter, checked at VM loop jumps, native regular-expression steps and
