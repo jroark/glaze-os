@@ -101,7 +101,41 @@ static void draw_padlock(gfx_surface *s, int cx, int y, uint32_t fg)
     gfx_fill(s, gfx_r(cx - 2, y - 1, 5, 1), fg);
 }
 
-void sb_draw_status(gfx_surface *s, const struct sb_clock *c, int style, bool padlock)
+static void draw_card(gfx_surface *s, int x, int y, uint32_t fg)
+{
+    /* CF outline, with a recessed label and contacts along the bottom. */
+    gfx_fill(s, gfx_r(x, y, 12, 10), fg);
+    gfx_fill(s, gfx_r(x + 2, y + 2, 8, 4), 0x637080);
+    for (int i = 0; i < 4; i++)
+        gfx_fill(s, gfx_r(x + 2 + i * 2, y + 8, 1, 2), 0x637080);
+}
+
+gfx_rect sb_card_icon_rect(void)
+{
+    return gfx_r(SCREEN_W - 48, 0, 22, SB_STATUS_H);
+}
+
+gfx_rect sb_draw_card_details(gfx_surface *s, const struct sb_card_details *d, bool pressed)
+{
+    int n = MIN(d->num_lines, 8);
+    int h = 80 + n * 20, y = (SCREEN_H - h) / 2;
+    gfx_rect panel = gfx_r(10, y, SCREEN_W - 20, h);
+    gfx_rect button = gfx_r(22, y + h - 42, SCREEN_W - 44, 30);
+
+    gfx_fill_alpha(s, gfx_r(0, 0, SCREEN_W, SCREEN_H), 0x000000, 130);
+    gfx_round_rect(s, panel, 12, 0xC8D3E1, 255);
+    gfx_round_rect_vgradient(s, gfx_r(12, y + 2, SCREEN_W - 24, h - 4), 10,
+                            0x344B70, 0x172A49, 255);
+    gfx_text_center(s, panel.x, y + 12, panel.w, ui_font(FONT_B13), d->title, 0xFFFFFF, 255);
+    for (int i = 0; i < n; i++)
+        gfx_text(s, 24, y + 38 + i * 20, ui_font(FONT_R11), d->lines[i], 0xFFFFFF, 255);
+    gfx_round_rect_vgradient(s, button, 6, pressed ? 0x193B66 : 0x7185A1,
+                            pressed ? 0x31537C : 0x334E74, 255);
+    gfx_text_center(s, button.x, button.y + 5, button.w, ui_font(FONT_B13), "OK", 0xFFFFFF, 255);
+    return button;
+}
+
+void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool padlock)
 {
     gfx_rect r = gfx_r(0, 0, SCREEN_W, SB_STATUS_H);
     uint32_t fg;
@@ -116,12 +150,14 @@ void sb_draw_status(gfx_surface *s, const struct sb_clock *c, int style, bool pa
         gfx_vgradient(s, gfx_r(0, 0, SCREEN_W, SB_STATUS_H / 2), 0xFFFFFF, 0xFFFFFF, 18);
         fg = 0xFFFFFF;
     }
-    /* No radios on the BE-300: show the device name, like iPod touch did. */
+    /* Show the device name, like iPod touch did. */
     gfx_text(s, 5, 2, f, "BE-300", fg, 255);
     if (padlock)
         draw_padlock(s, SCREEN_W / 2, 3, fg);
     else
-        gfx_text_center(s, 0, 2, SCREEN_W, f, c->status, fg, 255);
+        gfx_text_center(s, 0, 2, SCREEN_W, f, v->clk.status, fg, 255);
+    if (v->card_mounted)
+        draw_card(s, SCREEN_W - 43, 3, fg);
     draw_battery(s, SCREEN_W - 26, 3, fg);
 }
 
@@ -269,7 +305,7 @@ void sb_draw_lock(gfx_surface *s, const struct sb_view *v, int open)
         gfx_surface sh = *s;
         sh.px -= open * s->stride;      /* draw shifted up */
         sh.clip.y += open;
-        sb_draw_status(&sh, &v->clk, -1, true);
+        sb_draw_status(&sh, v, -1, true);
         glass_panel(&sh, gfx_r(0, SB_STATUS_H, SCREEN_W, LOCK_TOP_H));
         gfx_text_center(&sh, 0, SB_STATUS_H + 6, SCREEN_W, ui_font(FONT_R44), v->clk.big, 0xFFFFFF, 255);
         gfx_text_center(&sh, 0, SB_STATUS_H + 58, SCREEN_W, ui_font(FONT_R13), v->clk.date, 0xFFFFFF, 255);
@@ -296,7 +332,7 @@ void sb_draw_passcode(gfx_surface *s, const struct sb_view *v)
 {
     sb_draw_wallpaper(s, v, gfx_r(0, 0, SCREEN_W, SCREEN_H));
     gfx_fill_alpha(s, gfx_r(0, 0, SCREEN_W, SCREEN_H), 0x000000, 150);
-    sb_draw_status(s, &v->clk, -1, true);
+    sb_draw_status(s, v, -1, true);
     ui_draw_passcode(s, sb_passcode_area(), &v->pin);
 }
 
@@ -565,7 +601,7 @@ void sb_draw_home(gfx_surface *s, const struct sb_view *v)
     gfx_rect saved = s->clip, grid;
 
     sb_draw_wallpaper(s, v, gfx_r(0, 0, SCREEN_W, SCREEN_H));
-    sb_draw_status(s, &v->clk, -1, false);
+    sb_draw_status(s, v, -1, false);
     if (gfx_rect_intersect(gfx_r(0, SB_STATUS_H, SCREEN_W, DOCK_Y - SB_STATUS_H), saved, &grid)) {
         s->clip = grid;
         for (int i = 0; i < sb_num_apps; i++) {

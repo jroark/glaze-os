@@ -868,6 +868,20 @@ static void test_sounds(void)
     audio_sound_reload();
 }
 
+struct net_status_probe {
+    int socket, ready, done, result;
+};
+
+static void net_status_waiter(void *arg)
+{
+    struct net_status_probe *p = arg;
+    char byte;
+
+    gz_sem_post(p->ready);
+    p->result = net_recvfrom(p->socket, &byte, 1, NULL, NULL, 1000);
+    gz_sem_post(p->done);
+}
+
 static void test_net(void)
 {
     static uint8_t frame[64], data[20000], back[20000];
@@ -943,6 +957,20 @@ static void test_net(void)
     rv = net_recvfrom(u1, dg, sizeof(dg), &peer, &peer_port, 1000);
     CHECK(rv == 5 && !memcmp(dg, "hello", 5) && peer == st.addr, "udp recvfrom");
     CHECK(net_recvfrom(u1, dg, sizeof(dg), NULL, NULL, 50) == GZ_ETIMEDOUT, "udp recv timeout");
+    /* SpringBoard reads card details while its NTP thread waits for data. */
+    struct net_status_probe probe = { .socket = u1, .ready = gz_sem_create(0), .done = gz_sem_create(0) };
+    int tid = gz_thread_create(net_status_waiter, &probe);
+    CHECK(tid > 0 && gz_sem_wait(probe.ready, 1000) == 0, "net status probe starts");
+    if (tid > 0) {
+        gz_sleep_ms(50);                /* let the worker enter its blocking receive */
+        t1 = gz_time_ms();
+        rv = net_status(&st);
+        CHECK(rv == 0 && st.addr && gz_time_ms() - t1 < 400, "net status does not wait for receive");
+        CHECK(gz_sem_wait(probe.done, 2000) == 0 && probe.result == GZ_ETIMEDOUT,
+              "net status preserves pending receive");
+    }
+    gz_sem_destroy(probe.ready);
+    gz_sem_destroy(probe.done);
     net_close(u1);
     net_close(u2);
 

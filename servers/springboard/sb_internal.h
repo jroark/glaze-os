@@ -81,6 +81,7 @@ struct sb_clock {
 
 struct sb_view {
     struct sb_clock clk;
+    bool card_mounted;         /* mounted CF storage or an initialized network card */
     int wallpaper;              /* index into sb_wallpapers */
     int knob_x;                 /* 0..KNOB_TRAVEL */
     int shimmer_x;              /* centre of the slide-to-unlock highlight */
@@ -108,7 +109,15 @@ void sb_draw_init(void);
 /* An installed app's icon (NULL for the generic one); data must stay alive. */
 void sb_set_icon(int app, const gfx_image *img);
 void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt);
-void sb_draw_status(gfx_surface *s, const struct sb_clock *c, int style, bool padlock);
+void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool padlock);
+gfx_rect sb_card_icon_rect(void);
+struct sb_card_details {
+    char title[32];
+    char lines[8][48];
+    int num_lines;
+};
+/* Draws the card details over the current screen; returns the OK button. */
+gfx_rect sb_draw_card_details(gfx_surface *s, const struct sb_card_details *d, bool pressed);
 void sb_draw_wallpaper(gfx_surface *s, const struct sb_view *v, gfx_rect r);
 /* Lock UI: top and bottom bars shifted apart by `open` pixels. */
 void sb_draw_lock(gfx_surface *s, const struct sb_view *v, int open);

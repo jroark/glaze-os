@@ -69,12 +69,24 @@ static int call(uint32_t op, uint32_t a, uint32_t b, uint32_t c, uint32_t d, str
 
 int net_status(struct net_status *st)
 {
-    SESSION_LOCKED();
-    int rv = call(NET_STATUS, 0, 0, 0, 0, NULL);
+    struct gz_msg m = {0}, r;
+    int peer;
 
-    if (rv < 0)
-        return rv;
-    memcpy(st, buf, sizeof(*st));
+    /* A status read must not wait behind this process's DNS or NTP calls.
+     * Return the snapshot in the reply, without a shared-buffer session. */
+    _Static_assert(sizeof(*st) <= sizeof(r.w) - sizeof(r.w[0]), "status must fit in reply");
+    for (int tries = 0; (peer = gz_port_lookup(NET_PORT_NAME)) <= 0; tries++) {
+        if (tries == 100)
+            return GZ_ENETDOWN;
+        gz_sleep_ms(50);
+    }
+    m.w[0] = NET_STATUS;
+    m.w[1] = (uint32_t)-1;
+    if (gz_send(peer, &m, &r) < 0)
+        return GZ_EIO;
+    if ((int)r.w[0] < 0)
+        return (int)r.w[0];
+    memcpy(st, &r.w[1], sizeof(*st));
     return 0;
 }
 
