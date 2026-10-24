@@ -2,6 +2,7 @@
 
 #include <glaze/gfx.h>
 #include <string.h>
+#include "blend.h"
 
 /* Clip a destination rect at (x, y) of size w x h, adjusting the source
  * origin to match. Returns false when nothing is visible. */
@@ -55,7 +56,7 @@ void gfx_blit_alpha(gfx_surface *dst, int x, int y, const gfx_surface *src, gfx_
         uint16_t *d = dst->px + (y + row) * dst->stride + x;
         const uint16_t *sp = src->px + (sy + row) * src->stride + sx;
         for (int i = 0; i < w; i++)
-            d[i] = gfx_blend565(d[i], sp[i], alpha);
+            d[i] = blend565(d[i], sp[i], alpha);
     }
 }
 
@@ -82,7 +83,7 @@ void gfx_blit_scaled(gfx_surface *dst, gfx_rect dr, const gfx_surface *src, gfx_
                 d[x] = srow[fx >> 16];
         } else {
             for (int x = c.x; x < c.x + c.w; x++, fx += stepx)
-                d[x] = gfx_blend565(d[x], srow[fx >> 16], alpha);
+                d[x] = blend565(d[x], srow[fx >> 16], alpha);
         }
     }
 }
@@ -118,7 +119,7 @@ void gfx_draw_image(gfx_surface *dst, int x, int y, const gfx_image *img, int al
                 memcpy(d, s, (size_t)w * 2);
             } else {
                 for (int i = 0; i < w; i++)
-                    d[i] = gfx_blend565(d[i], s[i], alpha);
+                    d[i] = blend565(d[i], s[i], alpha);
             }
             continue;
         }
@@ -129,7 +130,7 @@ void gfx_draw_image(gfx_surface *dst, int x, int y, const gfx_image *img, int al
                 continue;
             if (alpha < 255)
                 pa = pa * alpha / 255;
-            d[i] = pa >= 255 ? s[i] : gfx_blend565(d[i], s[i], pa);
+            d[i] = pa >= 255 ? s[i] : blend565(d[i], s[i], pa);
         }
     }
 }
@@ -153,7 +154,7 @@ void gfx_draw_image_scaled(gfx_surface *dst, gfx_rect dr, const gfx_image *img, 
             if (!pa)
                 continue;
             pa = pa * alpha / 255;
-            d[x] = pa >= 255 ? img->px[si] : gfx_blend565(d[x], img->px[si], pa);
+            d[x] = pa >= 255 ? img->px[si] : blend565(d[x], img->px[si], pa);
         }
     }
 }
@@ -170,7 +171,7 @@ void gfx_draw_mask(gfx_surface *dst, int x, int y, const gfx_image *img, uint32_
         const uint8_t *a = img->alpha + (sy + row) * img->w + sx;
         for (int i = 0; i < w; i++) {
             if (a[i])
-                d[i] = gfx_blend565(d[i], c, a[i] * alpha / 255);
+                d[i] = blend565(d[i], c, a[i] * alpha / 255);
         }
     }
 }
@@ -210,7 +211,7 @@ void gfx_draw_3slice(gfx_surface *dst, gfx_rect dr, const gfx_image *img, int ca
                 uint16_t px = img->px[si];
                 uint16_t *d = dst->px + y * dst->stride;
                 for (int x = c.x; x < c.x + c.w; x++)
-                    d[x] = a >= 255 ? px : gfx_blend565(d[x], px, a);
+                    d[x] = a >= 255 ? px : blend565(d[x], px, a);
             }
         } else {
             gfx_draw_image(dst, dx - sx, dr.y, img, alpha);
