@@ -290,3 +290,7 @@ iNES 1.0/NES 2.0 ROM browsing, physical controls, audio and battery saves. See
 Game Boy and Game Boy Color are available as the installable `gameboy.gzp` package,
 with hardware controls, audio, battery saves and cartridge clocks. See
 [Game Boy](docs/GAMEBOY.md) for installation, compatibility and tests.
+
+Master System and Genesis are available as separate `mastersystem.gzp` and
+`genesis.gzp` packages, with hardware controls, audio and cartridge RAM saves.
+See [Sega emulators](docs/SEGA.md) for installation, controls, limits and tests.
