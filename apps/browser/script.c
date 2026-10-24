@@ -7,6 +7,7 @@
 #include "js_platform/port.h"
 #include "jerryscript.h"
 #include "js_bootstrap.h"
+#include "identity.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -330,6 +331,10 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
         result = jerry_number(plat_ms());
     else if (IS("evalAllowed"))
         result = jerry_boolean(policy_allows(p, NULL, NULL, "'unsafe-eval'"));
+    else if (IS("userAgent"))
+        TEXT(BROWSER_USER_AGENT);
+    else if (IS("language"))
+        TEXT(BROWSER_LANGUAGE);
     else if (IS("log")) {
         str = string_arg(a);
         if (str)
