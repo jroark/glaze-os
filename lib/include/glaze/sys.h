@@ -81,6 +81,11 @@ static inline int gz_input_read(struct gz_input_event *ev, uint32_t max) { retur
 static inline int gz_flash_read(uint32_t page, void *buf) { return GZ_SC2(SYS_FLASH_READ, page, buf); }
 static inline int gz_flash_prog(uint32_t page, const void *buf) { return GZ_SC2(SYS_FLASH_PROG, page, buf); }
 static inline int gz_flash_erase(uint32_t block) { return GZ_SC1(SYS_FLASH_ERASE, block); }
+static inline int gz_flash_info(struct gz_flash_info *info) { return GZ_SC1(SYS_FLASH_INFO, info); }
+/* The whole NAND, in a RAM boot (glaze/bootinfo.h); pages are 512 bytes. */
+static inline int gz_nand_read(uint32_t page, void *buf) { return GZ_SC2(SYS_NAND_READ, page, buf); }
+static inline int gz_nand_prog(uint32_t page, const void *buf) { return GZ_SC2(SYS_NAND_PROG, page, buf); }
+static inline int gz_nand_erase(uint32_t block) { return GZ_SC1(SYS_NAND_ERASE, block); }
 
 /* CompactFlash, file server only. lba and count are in GZ_CF_SECTOR units,
  * at most GZ_CF_IO_MAX bytes per call. */

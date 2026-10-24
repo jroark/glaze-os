@@ -463,6 +463,92 @@ $(OUT)/glaze.bin: $(OUT)/spl.elf $(OUT)/kernel.elf $(OUT)/romfs.img $(OUT)/fs.im
 
 all: $(OUT)/glaze.bin $(PKG_FILES)
 
+# ---- GlazeBoot: boot from RAM out of Windows CE (docs/GLAZEBOOT.md) -----------
+
+# The loader is a Windows CE program built with eMbedded Visual C++ 3.0
+# from wince/glazeboot/evc. This builds what it needs from GCC and stages a
+# self-contained project in out/glazeboot/evc (CRLF): the trampoline as
+# bytes (tramp_blob.h, since eVC has no inline MIPS assembly) and the
+# layouts it shares with the kernel (glazeboot_abi.h). Build GlazeBoot.exe
+# there and put it in out/glazeboot for tools/mkceboot.sh.
+GB_DIR := $(OUT)/glazeboot
+GB_EVC := $(GB_DIR)/evc
+GB_CFLAGS := $(ARCHFLAGS) -std=gnu11 -ffreestanding -fno-builtin -nostdlib \
+    -fno-stack-protector -fno-tree-loop-distribute-patterns -Os -Wall -Wextra -Ilib/include -MMD
+
+$(GB_DIR)/tramp.o: wince/glazeboot/tramp.c
+	@mkdir -p $(dir $@)
+	$(CC) $(GB_CFLAGS) -c -o $@ $<
+
+# The trampoline runs from a copy at another address, so it may only use
+# PC-relative branches: no absolute relocations in its sections.
+$(GB_DIR)/tramp.checked: $(GB_DIR)/tramp.o
+	@if $(CROSS)objdump -r -j .tramp -j .tramp.entry $< | grep -E 'R_MIPS_(26|HI16|LO16|32|GOT)'; then \
+	    echo "tramp.o: the trampoline must be position independent" >&2; exit 1; fi
+	@touch $@
+
+$(GB_DIR)/tramp.elf: $(GB_DIR)/tramp.o $(GB_DIR)/tramp.checked wince/glazeboot/tramp.lds
+	$(LD) -m elf32ltsmip -T wince/glazeboot/tramp.lds -o $@ $<
+
+$(GB_EVC)/tramp_blob.h: $(GB_DIR)/tramp.elf tools/mktrampblob.py
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary -j .text $< $(GB_DIR)/tramp.bin
+	$(CROSS)nm $< > $(GB_DIR)/tramp.sym
+	$(PYTHON) tools/mktrampblob.py $(GB_DIR)/tramp.bin $(GB_DIR)/tramp.sym $@
+
+$(GB_DIR)/mkabi: wince/glazeboot/mkabi.c wince/glazeboot/plan.h lib/include/glaze/bootinfo.h lib/include/glaze/abi.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) -std=gnu11 -Wall -Wextra -Ilib/include -o $@ $<
+
+$(GB_EVC)/glazeboot_abi.h: $(GB_DIR)/mkabi
+	@mkdir -p $(dir $@)
+	$< > $@
+
+$(GB_EVC)/%: wince/glazeboot/evc/%
+	@mkdir -p $(dir $@)
+	sed 's/$$/\r/' $< > $@
+
+$(GB_DIR)/kernel.bin: $(OUT)/kernel.elf tools/mkkernelbin.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/mkkernelbin.py $< $@
+
+$(GB_DIR)/romfs.img: $(OUT)/romfs.img
+	cp $< $@
+
+$(GB_DIR)/glaze.cfg: wince/glazeboot/glaze.cfg
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+GB_FILES := $(GB_DIR)/kernel.bin $(GB_DIR)/romfs.img $(GB_DIR)/glaze.cfg \
+    $(GB_EVC)/tramp_blob.h $(GB_EVC)/glazeboot_abi.h $(GB_EVC)/GlazeBoot.cpp $(GB_EVC)/GlazeBoot.vcp
+
+glazeboot: $(GB_FILES)
+.PHONY: glazeboot
+
+# RAM-boot test image (tests/run_ramboot.sh): an SPL that hands over the way
+# GlazeBoot does, through its trampoline, and optionally a FAT volume
+# (RAMBOOT_FS) in the NAND's file-system partition for /NAND.
+RB_DIR := $(OUT)/ramboot
+RAMBOOT_FS ?=
+
+$(RB_DIR)/%.o: boot/%.S $(OUT)/kernel_consts.flags
+	@mkdir -p $(dir $@)
+	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
+
+$(RB_DIR)/%.o: boot/%.c $(OUT)/kernel_consts.flags
+	@mkdir -p $(dir $@)
+	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
+
+$(RB_DIR)/spl.elf: $(RB_DIR)/spl_start.o $(RB_DIR)/spl.o $(GB_DIR)/tramp.o $(GB_DIR)/tramp.checked boot/spl.lds
+	$(LD) -m elf32ltsmip -T boot/spl.lds -o $@ $(RB_DIR)/spl_start.o $(RB_DIR)/spl.o $(GB_DIR)/tramp.o
+
+$(OUT)/glaze-ramboot.bin: $(RB_DIR)/spl.elf $(OUT)/kernel.elf $(OUT)/romfs.img $(RAMBOOT_FS) tools/mk_nand.py
+	$(PYTHON) tools/mk_nand.py --kernel $(OUT)/kernel.elf --spl $(RB_DIR)/spl.elf \
+	    --romfs $(OUT)/romfs.img $(if $(RAMBOOT_FS),--fs-image $(RAMBOOT_FS)) --out $@
+
+ramboot: $(OUT)/glaze-ramboot.bin
+.PHONY: ramboot
+
 clean:
 	rm -rf $(OUT)
 

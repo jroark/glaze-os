@@ -70,6 +70,10 @@ enum {
     SYS_PROC_BG,            /* a managed app's GZ_PROC_* state (priority, suspension) */
     SYS_SHM_UNMAP,          /* release the caller's mapping at a0 */
     SYS_CHILD_NOTIFY,       /* a0 = own port: GZ_NOTIFY_CHILD when a child exits, 0 = none */
+    SYS_FLASH_INFO,         /* struct gz_flash_info: the SYS_FLASH_* region */
+    SYS_NAND_READ,          /* the whole NAND, in a RAM boot only */
+    SYS_NAND_PROG,
+    SYS_NAND_ERASE,
     SYS_COUNT
 };
 
@@ -200,10 +204,32 @@ struct gz_task_snapshot {
     struct gz_task_info tasks[GZ_TASK_MAX];
 };
 
-/* SYS_FLASH_*: the file server's NAND region (11 MiB from 0x500000). */
+/* SYS_FLASH_*: the file server's NAND region (11 MiB from 0x500000), or in
+ * a RAM boot (glaze/bootinfo.h) a RAM disk of info.blocks blocks with the
+ * same page semantics. GZ_FLASH_BLOCKS is the NAND region's size and the
+ * largest RAM disk. */
 #define GZ_FLASH_PAGE_SIZE      512
 #define GZ_FLASH_PAGES_PER_BLOCK 32
 #define GZ_FLASH_BLOCKS         704
+
+/* SYS_NAND_*: in a RAM boot, the file server may read every page of the
+ * NAND, which still holds Windows CE, and program or erase it if the loader
+ * allowed (GZ_FLASH_NAND_RW). Blocks below GZ_NAND_FIRST_WRITABLE (the
+ * partition table and the boot loader the boot ROM runs) are never
+ * written. */
+#define GZ_NAND_BLOCKS          1024
+#define GZ_NAND_FIRST_WRITABLE  2
+
+#define GZ_FLASH_RAM            (1u << 0)   /* SYS_FLASH_* is a RAM disk */
+#define GZ_FLASH_NAND           (1u << 1)   /* SYS_NAND_READ works */
+#define GZ_FLASH_NAND_RW        (1u << 2)   /* SYS_NAND_PROG/ERASE too */
+
+struct gz_flash_info {
+    uint32_t blocks;            /* SYS_FLASH_* blocks */
+    uint32_t flags;
+    uint32_t nand_blocks;       /* SYS_NAND_* blocks, 0 without GZ_FLASH_NAND */
+    uint32_t reserved;
+};
 
 /* SYS_NET_*: raw Ethernet frames for the network server (PROC_NET). */
 #define GZ_ETH_FRAME_MAX    1514    /* without the CRC */

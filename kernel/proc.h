@@ -28,7 +28,11 @@
 
 typedef uint32_t pte_t;
 
-void mm_init(void);
+/* main.c: a RAM boot's parameters (glaze/bootinfo.h), or NULL from NAND. */
+struct gz_bootinfo;
+extern const struct gz_bootinfo *ram_boot;
+
+void mm_init(void);                 /* reserves a RAM boot's romfs and RAM disk */
 void *page_alloc_colour(uint32_t va);
 void mm_sync_code(void *kva, uint32_t len);
 void *page_alloc(void);             /* zeroed KSEG0 page, or NULL */

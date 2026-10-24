@@ -1,6 +1,7 @@
 /* Glaze: copied from FatFs's template; changed FF_CODE_PAGE (437),
  * FF_USE_LFN (1, static buffer: the file server is single-threaded),
- * FF_LFN_UNICODE (2, UTF-8) and FF_FS_LOCK (16, the server's MAX_FILES). */
+ * FF_LFN_UNICODE (2, UTF-8), FF_FS_LOCK (16, the server's MAX_FILES) and
+ * FF_VOLUMES (2: the card, and Windows CE's NAND volume in a RAM boot). */
 /*---------------------------------------------------------------------------/
 /  Configurations of FatFs Module
 /---------------------------------------------------------------------------*/
@@ -181,7 +182,7 @@
 / Drive/Volume Configurations
 /---------------------------------------------------------------------------*/
 
-#define FF_VOLUMES		1
+#define FF_VOLUMES		2
 /* Number of volumes (logical drives) to be used. (1-10) */
 
 

@@ -15,6 +15,7 @@
 #include "hw.h"
 #include "mips.h"
 #include "proc.h"
+#include <glaze/bootinfo.h>
 
 extern uint8_t __kernel_end[];
 
@@ -36,6 +37,22 @@ void mm_init(void)
     /* Low page 0 holds the exception vectors; already below `first`. */
     total_count = free_count = NPAGES - first;
     alloc_hint = first;
+    /* A RAM boot's romfs and RAM disk (checked in main.c) are never free. */
+    if (ram_boot) {
+        uint32_t ranges[2][2] = {
+            { ram_boot->romfs_pa, ALIGN_UP(ram_boot->romfs_size, PAGE_SIZE) },
+            { ram_boot->ramfs_pa, ram_boot->ramfs_blocks * GZ_FLASH_PAGES_PER_BLOCK * GZ_FLASH_PAGE_SIZE },
+        };
+        for (int r = 0; r < 2; r++) {
+            for (uint32_t i = ranges[r][0] / PAGE_SIZE; i < (ranges[r][0] + ranges[r][1]) / PAGE_SIZE; i++) {
+                if (!page_used[i]) {
+                    page_used[i] = 1;
+                    total_count--;
+                    free_count--;
+                }
+            }
+        }
+    }
 
     empty_pt = page_alloc();
     KASSERT(empty_pt);

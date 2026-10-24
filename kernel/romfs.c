@@ -15,6 +15,11 @@
  * Frames that no process maps are dropped when memory runs low
  * (romfs_reclaim, called by the page allocator); mapped ones are pinned by a
  * per-frame map count.
+ *
+ * In a RAM boot (glaze/bootinfo.h) the loader has put the whole archive in
+ * reserved RAM at an 8 KiB-aligned address, so every page already has a
+ * frame of the right colour: page_pa returns it, and nothing is cached,
+ * counted or reclaimed.
  */
 
 #include "kernel.h"
@@ -22,6 +27,7 @@
 #include "mips.h"
 #include "proc.h"
 #include "drivers/nand.h"
+#include <glaze/bootinfo.h>
 
 #define NPAGES          (SDRAM_SIZE / PAGE_SIZE)
 #define NAND_PER_PAGE   (PAGE_SIZE / NAND_PAGE_DATA)
@@ -35,23 +41,37 @@ static uint16_t cache[MAX_PAGES];       /* archive page -> frame + 1 */
 static uint16_t owner[NPAGES];          /* frame -> archive page + 1 */
 static uint16_t maps[NPAGES];           /* frame -> mappings in address spaces */
 static uint32_t cached, hand;
+static uint32_t ram_pa;                 /* the archive in RAM; 0 from NAND */
+
+/* A 512-byte block of the archive. */
+static void read_block(uint32_t n, uint8_t *buf)
+{
+    if (ram_pa)
+        memcpy(buf, (const uint8_t *)KSEG0(ram_pa) + n * NAND_PAGE_DATA, NAND_PAGE_DATA);
+    else
+        nand_read_page(FIRST_NAND_PAGE + n, buf);
+}
 
 void romfs_init(void)
 {
     static uint8_t buf[NAND_PAGE_DATA] __attribute__((aligned(4)));
-    uint32_t count, len;
+    uint32_t count, len, limit = MAX_PAGES;
 
-    nand_read_page(FIRST_NAND_PAGE, buf);
+    if (ram_boot) {
+        ram_pa = ram_boot->romfs_pa;
+        limit = MIN(limit, ALIGN_UP(ram_boot->romfs_size, PAGE_SIZE) / PAGE_SIZE);
+    }
+    read_block(0, buf);
     memcpy(&count, buf + 4, 4);
-    if (memcmp(buf, "GZRF", 4) || count > MAX_FILES) {
-        kputs("romfs: no archive in NAND\n");
+    len = count * sizeof(struct romfs_entry);
+    if (memcmp(buf, "GZRF", 4) || count > MAX_FILES || 8 + len > limit * PAGE_SIZE) {
+        kprintf("romfs: no archive in %s\n", ram_pa ? "RAM" : "NAND");
         return;
     }
-    len = count * sizeof(struct romfs_entry);
-    /* The table follows the 8-byte header; the first page is in buf. */
+    /* The table follows the 8-byte header; the first block is in buf. */
     for (uint32_t pos = 0; pos < 8 + len; pos += NAND_PAGE_DATA) {
         if (pos)
-            nand_read_page(FIRST_NAND_PAGE + pos / NAND_PAGE_DATA, buf);
+            read_block(pos / NAND_PAGE_DATA, buf);
         uint32_t from = MAX(pos, 8u), to = MIN(pos + NAND_PAGE_DATA, 8 + len);
         if (to > from)
             memcpy((uint8_t *)table + from - 8, buf + from - pos, to - from);
@@ -60,7 +80,7 @@ void romfs_init(void)
         struct romfs_entry *e = &table[i];
         e->name[sizeof(e->name) - 1] = 0;
         uint32_t end = ALIGN_UP(e->offset + e->size, PAGE_SIZE) / PAGE_SIZE;
-        if (e->offset % PAGE_SIZE || e->offset + e->size < e->offset || end > MAX_PAGES) {
+        if (e->offset % PAGE_SIZE || e->offset + e->size < e->offset || end > limit) {
             kprintf("romfs: bad entry %s\n", e->name);
             return;
         }
@@ -95,6 +115,8 @@ static uint32_t page_pa(uint32_t idx)
 {
     if (idx >= npages)
         return 0;
+    if (ram_pa)
+        return ram_pa + idx * PAGE_SIZE;
     if (cache[idx])
         return (uint32_t)(cache[idx] - 1) * PAGE_SIZE;
     uint8_t *page = page_alloc_colour(idx * PAGE_SIZE);
@@ -119,6 +141,8 @@ uint32_t romfs_cached_frame(const struct romfs_entry *e, uint32_t off)
 {
     uint32_t idx = (e->offset + off) / PAGE_SIZE;
 
+    if (ram_pa)
+        return page_pa(idx);
     return idx < npages && cache[idx] ? (uint32_t)(cache[idx] - 1) * PAGE_SIZE : 0;
 }
 
@@ -220,5 +244,5 @@ int romfs_fault(struct addrspace *as, struct region *r, uint32_t va)
 
 void romfs_list(void)
 {
-    kprintf("romfs: %u files, %u KiB in NAND\n", nfiles, npages * 4);
+    kprintf("romfs: %u files, %u KiB in %s\n", nfiles, npages * 4, ram_pa ? "RAM" : "NAND");
 }

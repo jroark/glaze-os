@@ -322,6 +322,15 @@ static void test_threads(void)
           "exit with blocked threads");
 }
 
+/* Booted from RAM by GlazeBoot (glaze/bootinfo.h): / is a RAM disk smaller
+ * than the NAND region, with none of the factory volume's files. */
+static bool ram_boot(void)
+{
+    struct fs_info info;
+
+    return fs_statfs(&info) == 0 && info.flash_blocks && info.flash_blocks < GZ_FLASH_BLOCKS;
+}
+
 static void test_fs(void)
 {
     static uint8_t data[20000], back[20000];
@@ -330,7 +339,8 @@ static void test_fs(void)
     struct fs_info info;
 
     CHECK(fs_raw_denied(), "flash syscalls denied to apps");
-    CHECK(fs_statfs(&info) == 0 && info.mounted == 0 && info.total > 4u << 20, "fs mounted");
+    CHECK(fs_statfs(&info) == 0 && info.mounted == 0 && info.total > (ram_boot() ? 1u : 4u) << 20,
+          "fs mounted");
     printf("ktest: fs %u KiB used of %u, %u bad blocks\n", info.used / 1024, info.total / 1024,
            info.bad_blocks);
 
@@ -479,6 +489,11 @@ static void test_romfs_cache(void)
         fs_remove("/ktest-romfs.bin");
     }
     gz_sysinfo(&a);
+    if (ram_boot()) {
+        /* The whole archive is in reserved RAM; nothing is cached. */
+        CHECK(a.cache_pages == 0 && a.reclaimable_pages == 0, "romfs in RAM, no cache");
+        return;
+    }
     CHECK(a.cache_pages > 0 && a.reclaimable_pages <= a.cache_pages && a.free_pages >= a.reclaimable_pages,
           "romfs cache accounted");
     if (a.reclaimable_pages < 16) {
@@ -556,6 +571,53 @@ static void test_card(void)
     fs_remove("/Card/ktest.bin");
     printf("ktest: card wrote 20000 bytes in %u ms, read in %u ms\n", t1 - t0, t2 - t1);
     CHECK(fs_write_file("/Card/KTEST.TXT", "written by ktest\n", 17) == 17, "card leave KTEST.TXT");
+}
+
+/* RAM boot: Windows CE's FAT volume in the NAND as /NAND (servers/fs/
+ * nanddisk.c), read/write when GlazeBoot allows it. */
+static void test_nand(void)
+{
+    static uint8_t data[40000], back[40000];
+    struct fs_dirent ents[16];
+    struct fs_stat st;
+    struct fs_info info;
+
+    if (!ram_boot()) {
+        CHECK(fs_stat("/NAND", &st) < 0, "no /NAND outside a RAM boot");
+        return;
+    }
+    if (fs_stat("/NAND", &st) < 0) {
+        printf("ktest: SKIP NAND (no FAT volume in the NAND)\n");
+        return;
+    }
+    CHECK(st.type == FS_DIR, "NAND stat /NAND");
+    int n = fs_list("/", 0, ents, 16), found = 0;
+    for (int i = 0; i < n; i++)
+        found |= ents[i].type == FS_DIR && !strcmp(ents[i].name, "NAND");
+    CHECK(found, "NAND listed in /");
+    CHECK(fs_statvfs("/NAND", &info) == 0 && info.mounted == 0 && info.total > 0 && info.used <= info.total,
+          "NAND statvfs");
+    printf("ktest: NAND %u KiB used of %u\n", info.used / 1024, info.total / 1024);
+    CHECK(fs_remove("/NAND") == GZ_EPERM && fs_mkdir("/NAND") == GZ_EEXIST, "NAND mount point protected");
+
+    for (unsigned i = 0; i < sizeof(data); i++)
+        data[i] = (uint8_t)(i * 11 + i / 701);
+    fs_remove("/NAND/ktest/data.bin");
+    fs_remove("/NAND/ktest");
+    int rv = fs_mkdir("/NAND/ktest");
+    if (rv == GZ_EPERM) {
+        printf("ktest: NAND is read-only (nand=ro)\n");
+        return;
+    }
+    CHECK(rv == 0, "NAND mkdir");
+    CHECK(fs_write_file("/NAND/ktest/data.bin", data, sizeof(data)) == (int)sizeof(data) &&
+          fs_read_file("/NAND/ktest/data.bin", back, sizeof(back)) == (int)sizeof(back) &&
+          !memcmp(data, back, sizeof(data)), "NAND write/read 40000 bytes");
+    CHECK(fs_rename("/NAND/ktest/data.bin", "/NAND/ktest/moved.bin") == 0 &&
+          fs_stat("/NAND/ktest/moved.bin", &st) == 0 && st.size == sizeof(data), "NAND rename");
+    CHECK(fs_rename("/NAND/ktest/moved.bin", "/moved.bin") == GZ_EINVAL, "NAND no cross-volume rename");
+    CHECK(fs_remove("/NAND/ktest/moved.bin") == 0 && fs_remove("/NAND/ktest") == 0, "NAND remove");
+    CHECK(fs_write_file("/NAND/KTEST.TXT", "written by ktest\n", 17) == 17, "NAND leave KTEST.TXT");
 }
 
 static char *first_line(char *s)
@@ -785,6 +847,11 @@ static void test_audio(void)
     CHECK(audio_stream_close() == 0, "audio stream close");
 
     /* Player mode on the factory MP3. */
+    struct fs_stat fst;
+    if (ram_boot() && fs_stat("/Music/Demo.mp3", &fst) < 0) {
+        printf("ktest: SKIP audio player (RAM boot: no factory /Music)\n");
+        return;
+    }
     int rv = audio_play("/Music/Demo.mp3");
     CHECK(rv == 0, "audio play mp3");
     gz_sleep_ms(2000);
@@ -1138,6 +1205,7 @@ int main(void)
     test_fs();
     test_set_end("/Documents/loader-truncate-test");
     test_card();
+    test_nand();
     test_packages();
     test_prefs();
     test_time();

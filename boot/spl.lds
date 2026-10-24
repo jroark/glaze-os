@@ -12,6 +12,11 @@ SECTIONS {
         *(.text._start)
         *(.text)
         *(.text.*)
+        /* GlazeBoot's trampoline, in the RAM-boot test build only. */
+        . = ALIGN(16);
+        *(.tramp.entry)
+        *(.tramp)
+        __tramp_end = .;
     }
     .rodata : {
         *(.rodata)

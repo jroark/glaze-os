@@ -1,6 +1,8 @@
 /*
  * Glaze kernel entry. The SPL copies the flat kernel image to its link
- * address (KSEG0 0x80010000) and jumps here with interrupts disabled.
+ * address (KSEG0 0x80010000) and jumps here with interrupts disabled and
+ * a0 = 0. GlazeBoot (a RAM boot from Windows CE) passes a0 = its
+ * struct gz_bootinfo (glaze/bootinfo.h), which kmain gets.
  */
 
 	.set	noreorder
@@ -9,6 +11,7 @@
 	.section .text.start, "ax"
 	.globl	_start
 _start:
+	move	$s0, $a0
 	la	$sp, kstack_top
 	move	$gp, $zero
 
@@ -22,7 +25,7 @@ _start:
 	addiu	$t0, $t0, 4
 
 2:	jal	kmain
-	nop
+	move	$a0, $s0
 3:	b	3b
 	nop
 

@@ -2,6 +2,10 @@
  * File server: littlefs on Dhara on the flash region the kernel grants
  * (SYS_FLASH_*), served over IPC to apps (see glaze/fs.h and ftl.c), plus
  * a CompactFlash card's FAT volume as /Card (card.c).
+ *
+ * In a RAM boot (glaze/bootinfo.h) the region is a RAM disk the kernel
+ * sizes (SYS_FLASH_INFO), and Windows CE's FAT volume in the NAND is
+ * /NAND (nanddisk.c on SYS_NAND_*).
  */
 
 #include <glaze/fs.h>
@@ -76,6 +80,21 @@ int card_raw_read(uint32_t lba, uint32_t count, void *buf)
 int card_raw_write(uint32_t lba, uint32_t count, const void *buf)
 {
     return gz_cf_write(lba, count, buf);
+}
+
+int nand_raw_read(uint32_t page, void *buf)
+{
+    return gz_nand_read(page, buf);
+}
+
+int nand_raw_prog(uint32_t page, const void *buf)
+{
+    return gz_nand_prog(page, buf);
+}
+
+int nand_raw_erase(uint32_t block)
+{
+    return gz_nand_erase(block);
 }
 
 void card_log(const char *msg)
@@ -194,23 +213,27 @@ static int op_list(struct session *s, const char *path, uint32_t skip, struct gz
     rv = lfs_dir_open(&lfs, &dir, path);
     if (rv)
         return gz_err(rv);
-    /* A mounted card is the root's first entry (written only now: the path
-     * shares the buffer with the entries). */
-    if (root && !card_status()) {
+    /* A mounted card, then a mounted NAND volume, are the root's first
+     * entries (written only now: the path shares the buffer with the
+     * entries). */
+    const char *mounts[2] = { card_status() ? NULL : CARD_NAME, nand_status() ? NULL : NAND_NAME };
+    for (int i = 0; root && i < 2; i++) {
+        if (!mounts[i])
+            continue;
         if (skip) {
             skip--;
-        } else {
-            memset(&out[0], 0, sizeof(out[0]));
-            out[0].type = FS_DIR;
-            strlcpy(out[0].name, CARD_NAME, sizeof(out[0].name));
-            out[0].name_len = (uint8_t)strlen(out[0].name);
-            n = 1;
+            continue;
         }
+        memset(&out[n], 0, sizeof(out[n]));
+        out[n].type = FS_DIR;
+        strlcpy(out[n].name, mounts[i], sizeof(out[n].name));
+        out[n].name_len = (uint8_t)strlen(out[n].name);
+        n++;
     }
     while ((rv = lfs_dir_read(&lfs, &dir, &info)) > 0) {
         if (!strcmp(info.name, ".") || !strcmp(info.name, ".."))
             continue;
-        if (root && !strcmp(info.name, CARD_NAME))
+        if (root && (!strcmp(info.name, CARD_NAME) || !strcmp(info.name, NAND_NAME)))
             continue;           /* never made by this server; see op_mkdir */
         if (skip) {
             skip--;
@@ -304,8 +327,9 @@ static int op_statfs(struct session *s, uint32_t by_path)
 
     if (!path)
         return GZ_EINVAL;
-    if (card_path(path)) {
-        int rv = card_statfs(&info);
+    const char *cpath = card_path(path);
+    if (cpath) {
+        int rv = card_statfs(cpath, &info);
         memcpy(s->buf, &info, sizeof(info));
         return rv;
     }
@@ -410,8 +434,8 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
     case FS_REMOVE:
         if (!path)
             return GZ_EINVAL;
-        /* /Card itself is the mount point, on the card or not. */
-        if (cpath && !cpath[0])
+        /* /Card and /NAND are mount points, mounted or not. */
+        if (cpath && card_is_root(cpath))
             return op == FS_MKDIR ? GZ_EEXIST : GZ_EPERM;
         if (cpath)
             return op == FS_MKDIR ? card_mkdir(cpath) : card_remove(cpath);
@@ -423,9 +447,9 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
         if (!path || !to)
             return GZ_EINVAL;
         const char *cto = card_path(to);
-        if ((cpath && !cpath[0]) || (cto && !cto[0]))
+        if ((cpath && card_is_root(cpath)) || (cto && card_is_root(cto)))
             return GZ_EPERM;
-        if (!cpath != !cto)
+        if (!cpath != !cto || (cpath && card_volume(cpath) != card_volume(cto)))
             return GZ_EINVAL;   /* no moves between volumes */
         if (cpath)
             return card_rename(cpath, cto);
@@ -452,16 +476,21 @@ static void make_folders(void)
 int main(void)
 {
     struct gz_msg m, r;
+    struct gz_flash_info fi = { .blocks = GZ_FLASH_BLOCKS };
     uint32_t t0 = gz_time_ms();
-    int rv = ftl_mount(&lfs, GZ_FLASH_BLOCKS);
     char line[96];
 
+    gz_flash_info(&fi);
+    int rv = ftl_mount(&lfs, fi.blocks);
     mount_err = rv < 0 ? gz_err(rv) : 0;
     if (rv == 1)
         make_folders();
-    snprintf(line, sizeof(line), "fs: %s in %u ms\n",
-             rv < 0 ? "mount failed" : rv ? "formatted" : "mounted", gz_time_ms() - t0);
+    snprintf(line, sizeof(line), "fs: %s %s in %u ms\n",
+             rv < 0 ? "mount failed" : rv ? "formatted" : "mounted",
+             fi.flags & GZ_FLASH_RAM ? "RAM disk" : "flash", gz_time_ms() - t0);
     gz_log(line, (uint32_t)strlen(line));
+    if (fi.flags & GZ_FLASH_NAND)
+        card_mount_nand((fi.flags & GZ_FLASH_NAND_RW) != 0);
 
     int port = gz_port_create();
     if (port < 0 || gz_port_register(port, FS_PORT_NAME) < 0)
@@ -472,6 +501,7 @@ int main(void)
             continue;
         memset(&r, 0, sizeof(r));
         r.w[0] = (uint32_t)dispatch(&m, &r);
+        card_sync();            /* NAND writes are on the flash before the reply */
         gz_reply(token, &r);
     }
 }

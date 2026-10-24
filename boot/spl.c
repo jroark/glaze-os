@@ -104,6 +104,106 @@ static void nand_read_page(uint32_t page, uint32_t *dest)
     (void)STREAM_DATA;
 }
 
+#ifdef SPL_RAMBOOT
+/*
+ * Test build (make ramboot): hands over to the kernel the way GlazeBoot does
+ * from Windows CE (wince/glazeboot), so the emulator can test the RAM boot
+ * and the trampoline. The kernel and romfs pages are read into frames
+ * scattered over 3-15 MiB (many inside the romfs's own destination), a
+ * plan (plan.h) is built in frames 0x200 on, and GlazeBoot's trampoline
+ * puts everything in place and starts the kernel with a gz_bootinfo.
+ */
+#include <glaze/bootinfo.h>
+#include "../wince/glazeboot/plan.h"
+
+extern char tramp_entry[], __tramp_end[];
+
+#define RB_POOL_FIRST   0x300u      /* source frames: 3 MiB ... */
+#define RB_POOL_FRAMES  0xC00u      /* ... to 15 MiB, below the SPL */
+#define RB_PLAN_FIRST   0x200u      /* control, code, moves, who */
+#define RB_RAMFS_LEN    (2u << 20)
+#define RB_ROMFS_SECTOR (0x40000u / NAND_PAGE_DATA)
+#define RB_SDRAM        (16u << 20)
+
+static uint32_t rb_src(uint32_t i)
+{
+    return RB_POOL_FIRST + i * 997u % RB_POOL_FRAMES;   /* 997 is prime: no repeats */
+}
+
+static void rb_read(uint32_t frame, uint32_t nand_offset)
+{
+    for (uint32_t i = 0; i < GB_PAGE / NAND_PAGE_DATA; i++)
+        nand_read_page(nand_offset / NAND_PAGE_DATA + i, GB_PAGE_PTR(frame) + i * NAND_PAGE_DATA / 4);
+}
+
+static void __attribute__((noreturn)) ramboot(void)
+{
+    static uint32_t table[NAND_PAGE_DATA / 4];
+    uint32_t romfs_sectors = 0;
+
+    nand_read_page(0, table);
+    for (uint32_t i = 0; i < 32; i++)
+        if (table[i * 4 + 2] == RB_ROMFS_SECTOR)
+            romfs_sectors = table[i * 4 + 3];
+    if (!romfs_sectors) {
+        uart_puts("ramboot: no romfs partition\n");
+        for (;;)
+            ;
+    }
+    uint32_t romfs_size = romfs_sectors * NAND_PAGE_DATA;
+    uint32_t romfs_pages = (romfs_size + GB_PAGE - 1) / GB_PAGE;
+    uint32_t kernel_pages = (KERNEL_SIZE + GB_PAGE - 1) / GB_PAGE;
+    uint32_t romfs_pa = (RB_SDRAM - romfs_pages * GB_PAGE) & ~0x1FFFu;
+
+    struct gb_control *c = (struct gb_control *)GB_PAGE_PTR(RB_PLAN_FIRST);
+    for (uint32_t i = 0; i < GB_PAGE / 4; i++)
+        ((uint32_t *)c)[i] = 0;
+    c->magic = GB_CONTROL_MAGIC;
+    for (uint32_t i = 0; i < GB_MAX_MOVE_PAGES; i++)
+        c->move_frames[i] = RB_PLAN_FIRST + 2 + i;
+    for (uint32_t i = 0; i < GB_WHO_PAGES; i++)
+        c->who_frames[i] = RB_PLAN_FIRST + 2 + GB_MAX_MOVE_PAGES + i;
+
+    uint32_t n = 0;
+    struct gz_bootinfo *bi = (struct gz_bootinfo *)GB_PAGE_PTR(rb_src(n));
+    bi->magic = GZ_BOOTINFO_MAGIC;
+    bi->version = GZ_BOOTINFO_VERSION;
+    bi->flags = GZ_BOOT_NAND_RW;
+    bi->romfs_pa = romfs_pa;
+    bi->romfs_size = romfs_size;
+    bi->ramfs_pa = romfs_pa - RB_RAMFS_LEN;
+    bi->ramfs_blocks = RB_RAMFS_LEN / (16u * 1024);
+    bi->reserved = 0;
+    *gb_move_at(c, n) = (struct gb_move){ (uint16_t)rb_src(n), GZ_BOOTINFO_PA / GB_PAGE, 0, 0 };
+    n++;
+    for (uint32_t i = 0; i < kernel_pages; i++, n++) {
+        rb_read(rb_src(n), KERNEL_NAND_OFFSET + i * GB_PAGE);
+        *gb_move_at(c, n) = (struct gb_move){ (uint16_t)rb_src(n),
+            (uint16_t)(((KERNEL_LOAD_VA & 0x1FFFFFFFu) >> 12) + i), 0, 0 };
+    }
+    for (uint32_t i = 0; i < romfs_pages; i++, n++) {
+        rb_read(rb_src(n), RB_ROMFS_SECTOR * NAND_PAGE_DATA + i * GB_PAGE);
+        *gb_move_at(c, n) = (struct gb_move){ (uint16_t)rb_src(n), (uint16_t)((romfs_pa >> 12) + i), 0, 0 };
+    }
+    c->count = n;
+    c->entry = KERNEL_ENTRY_VA;
+    c->arg = 0x80000000u | GZ_BOOTINFO_PA;
+
+    /* Through KSEG1: the trampoline runs before it flushes the D-cache. */
+    uint32_t *code = (uint32_t *)(0xA0000000u | (RB_PLAN_FIRST + 1) << 12);
+    for (uint32_t i = 0; i < (uint32_t)(__tramp_end - tramp_entry + 3) / 4; i++)
+        code[i] = ((const uint32_t *)tramp_entry)[i];
+    uart_puts("ramboot: ");
+    uart_puthex32(n);
+    uart_puts(" pages scattered; romfs to 0x");
+    uart_puthex32(romfs_pa);
+    uart_puts("; trampoline\n");
+    ((void (*)(uint32_t))(0x80000000u | (RB_PLAN_FIRST + 1) << 12))((uint32_t)c);
+    for (;;)
+        ;
+}
+#endif
+
 uint32_t spl_main(void)
 {
     uart_puts("\nGlaze SPL\n");
@@ -114,6 +214,9 @@ uint32_t spl_main(void)
     uart_puts(", size = 0x");
     uart_puthex32(KERNEL_SIZE);
     uart_puts("\n");
+#ifdef SPL_RAMBOOT
+    ramboot();
+#endif
 
     uint32_t pages = (KERNEL_SIZE + NAND_PAGE_DATA - 1u) / NAND_PAGE_DATA;
     uint32_t start_page = KERNEL_NAND_OFFSET / NAND_PAGE_DATA;

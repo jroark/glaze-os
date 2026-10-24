@@ -14,6 +14,9 @@ make -j8 INPUT_SCRIPT=tests/x.txt # replay scripted input (see Testing)
 make -C host fstest               # native build of the file-system stack test
 make -C host fat-test             # CF/FAT volume test on FAT12/16/32 images, then fsck.fat
 make -C host ui-events-test       # libui's touch cancel, suspension and resume, natively
+make glazeboot                    # GlazeBoot, booting Glaze from RAM out of Windows CE (docs/GLAZEBOOT.md)
+make -C host glazeboot-test       # its page hand-over plan on random layouts
+tests/run_ramboot.sh 90 INIT=bin/ktest  # RAM boot through GlazeBoot's trampoline in the emulator
 ```
 
 There is no linter; the build uses `-Wall -Wextra` and should stay warning-free. `compile_flags.txt` is for clangd.
@@ -138,6 +141,18 @@ and shared text editor.
 - `res:` URLs are the bundled pages in `assets/web` (romfs `web/`); the start page is `res:start.html`. State persists in `/Browser/state` and `/Browser/bookmarks`.
 - JavaScript and frame support, runtime bounds and native/device tests are documented in `docs/BROWSER.md`. JerryScript, its DOM facade and soft-float helpers are private to Browser.
 - Images go through vendored `stb_image.h` (PNG, JPEG, GIF), downscaled at decode time; a document tree's decoded images are capped at 3 MiB.
+
+**RAM boot** (`wince/glazeboot`, `glaze/bootinfo.h`, `docs/GLAZEBOOT.md`):
+- GlazeBoot is a Windows CE program, not a Glaze one, and lives outside `apps/`. The loader (`evc/GlazeBoot.cpp`, `GlazeBoot.vcp`) is built with eMbedded Visual C++ 3.0 from the folder `make glazeboot` stages in `out/glazeboot/evc`. The GCC build supplies that folder's generated headers:
+  - `tramp_blob.h`: the trampoline (`tramp.c`, position independent) as bytes, since eVC has no inline MIPS assembly;
+  - `glazeboot_abi.h`: shared layouts from `wince/glazeboot/mkabi.c`.
+- It loads `kernel.bin` (`tools/mkkernelbin.py`) and `romfs.img` from a CF card. The trampoline runs the page plan in `plan.h`.
+- The kernel gets a0 = `struct gz_bootinfo` (the SPL passes 0). `ram_boot` is then set:
+  - romfs pages come straight from reserved RAM, with no cache;
+  - `SYS_FLASH_*` are a RAM disk (`SYS_FLASH_INFO` gives its size);
+  - `SYS_NAND_*` open the whole NAND to the file server, never writing blocks 0-1.
+- The file server mounts Windows CE's FAT partition as `/NAND` (`servers/fs/nanddisk.c`, FatFs drive 1; the card is drive 0, and card paths go to FatFs unprefixed). Windows CE's spare-area ECC and block replacement aren't handled yet, so NAND writes are opt-in (`nand=rw`).
+- `make ramboot` (`boot/spl.c` with `-DSPL_RAMBOOT`) hands over the same way from the SPL, so the emulator can test it.
 
 ## Hardware notes
 

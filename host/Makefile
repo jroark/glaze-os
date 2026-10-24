@@ -12,7 +12,7 @@ FS_CFLAGS := -std=gnu11 -O2 -g -Wall -I../servers/fs -I../third_party/littlefs -
     -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR
 
 # The file server's CompactFlash volume (FatFs), against an image file.
-FAT := ../servers/fs/card.c ../third_party/fatfs/ff.c ../third_party/fatfs/ffunicode.c
+FAT := ../servers/fs/card.c ../servers/fs/nanddisk.c ../third_party/fatfs/ff.c ../third_party/fatfs/ffunicode.c
 FAT_CFLAGS := $(CFLAGS) -I../servers/fs -I../third_party/fatfs -fsanitize=address,undefined
 
 # The browser engine, rendering pages to BMPs, with wolfSSL for https.
@@ -51,13 +51,17 @@ fattest: fattest.c $(FAT) ../servers/fs/card.h
 	$(CC) $(FAT_CFLAGS) -o $@ fattest.c $(FAT)
 
 # fattest on fresh FAT12, FAT16 and FAT32 images, each checked with fsck.fat
-# afterwards (needs dosfstools and mtools).
+# afterwards (needs dosfstools and mtools). The FAT16 run also uses a 10 MiB
+# FAT16 volume (mkfs.fat's FAT16 needs 9) as /NAND, in Windows CE's NAND
+# layout (nanddisk.c).
 fat-test: fattest
 	set -e; for f in "12 4" "16 16" "32 64"; do set -- $$f; \
 	    ../tools/mkcfimg.sh fat$$1.img $$2 $$1 ../userdata/Documents >/dev/null; \
-	    ./fattest fat$$1.img >fat$$1.log || { grep FAIL fat$$1.log; exit 1; }; \
-	    fsck.fat -n fat$$1.img >/dev/null; echo "FAT$$1: fattest and fsck.fat pass"; \
-	    rm -f fat$$1.img fat$$1.log; done
+	    nand=; [ $$1 = 16 ] && { ../tools/mkcfimg.sh nand16.img 10 16 ../userdata/Documents >/dev/null; nand=nand16.img; }; \
+	    ./fattest fat$$1.img $$nand >fat$$1.log || { grep FAIL fat$$1.log; exit 1; }; \
+	    fsck.fat -n fat$$1.img >/dev/null; [ -z "$$nand" ] || fsck.fat -n $$nand >/dev/null; \
+	    echo "FAT$$1: fattest and fsck.fat pass$${nand:+ (with /NAND)}"; \
+	    rm -f fat$$1.img fat$$1.log $$nand; done
 .PHONY: fat-test
 
 # The top-level Makefile builds its own copy into out/host for the image.
@@ -235,6 +239,14 @@ wince-test: ../apps/wince/database.c ../tests/wince_database.c
 	python3 ../tests/wince_assets_test.py
 	python3 ../tests/wince_runner_test.py
 .PHONY: wince-test
+
+# GlazeBoot's hand-over plan (wince/glazeboot/plan.h) on a RAM model.
+glazeboot-test: ../tests/glazeboot_plan.c ../wince/glazeboot/plan.h
+	@mkdir -p ../out/host
+	$(CC) -std=gnu11 -O2 -g -Wall -Wextra -fsanitize=address,undefined \
+	    -o ../out/host/glazeboot-plan-test ../tests/glazeboot_plan.c
+	../out/host/glazeboot-plan-test
+.PHONY: glazeboot-test
 
 ../out/host/wince-fs-read: ../tests/wince_fs_read.c $(FS)
 	@mkdir -p ../out/host

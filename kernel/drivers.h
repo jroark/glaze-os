@@ -32,6 +32,10 @@ int input_read(struct addrspace *as, uint32_t uevents, uint32_t max);
 int sys_flash_read(struct proc *p, uint32_t page, uint32_t ubuf);
 int sys_flash_prog(struct proc *p, uint32_t page, uint32_t ubuf);
 int sys_flash_erase(struct proc *p, uint32_t block);
+int sys_flash_info(struct proc *p, uint32_t uout);
+int sys_nand_read(struct proc *p, uint32_t page, uint32_t ubuf);
+int sys_nand_prog(struct proc *p, uint32_t page, uint32_t ubuf);
+int sys_nand_erase(struct proc *p, uint32_t block);
 
 /* cf.c: CompactFlash ATA card for the file server. */
 void cf_init(void);
