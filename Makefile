@@ -107,7 +107,7 @@ $(OUT)/lib/libjerry.a: $(JERRY_OBJS)
 $(FSSTACK_OBJS): TP_INC := $(FS_INC)
 $(NETSTACK_OBJS): TP_INC := $(NET_INC)
 $(HELIX_OBJS): TP_INC := $(HELIX_INC)
-$(WOLFSSL_OBJS): TP_INC := $(WOLFSSL_INC)
+$(WOLFSSL_OBJS): TP_INC := $(WOLFSSL_INC) -Os
 
 $(OUT)/lib/libfsstack.a: $(FSSTACK_OBJS)
 	@mkdir -p $(dir $@)
@@ -190,6 +190,10 @@ endif
 ifneq ($(MEM_TESTS),1)
 PROG_DIRS := $(filter-out apps/ldmem,$(PROG_DIRS))
 endif
+# The self-test only goes in images that boot it, to leave romfs room.
+ifneq ($(INIT),bin/ktest)
+PROG_DIRS := $(filter-out apps/ktest apps/ktest_pong,$(PROG_DIRS))
+endif
 PROGS := $(notdir $(PROG_DIRS))
 
 $(OUT)/apps/%.o: apps/%.c
@@ -251,7 +255,7 @@ $(OUT)/shared/libmedia.so.1: $(patsubst lib/%.c,$(OUT)/pic/%.o,$(LIBMEDIA_SRCS))
 HELIX_PIC_OBJS := $(patsubst %.c,$(OUT)/pic/%.o,$(HELIX_SRCS))
 WOLFSSL_PIC_OBJS := $(patsubst %.c,$(OUT)/pic/%.o,$(WOLFSSL_SRCS))
 $(HELIX_PIC_OBJS): TP_INC := $(HELIX_INC)
-$(WOLFSSL_PIC_OBJS): TP_INC := $(WOLFSSL_INC)
+$(WOLFSSL_PIC_OBJS): TP_INC := $(WOLFSSL_INC) -Os
 $(OUT)/pic/third_party/%.o: third_party/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(filter-out -mno-abicalls -fno-pic,$(ARCHFLAGS)) -mabicalls -fPIC -std=gnu11 -ffreestanding \
