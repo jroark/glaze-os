@@ -1286,10 +1286,25 @@ static bool copy_bundled_to_drive(const char *res_path, const char *drive_path)
 
 struct file_handle {
     int fd;
-    bool active;
+    bool active, claimed;
     char path[FS_PATH_MAX];
 };
 static struct file_handle files[32];
+/* Opening blocks in the file server, so CE threads opening at once (as
+ * WorldTALK's logger and loader do) must not take the same free slot. */
+static struct gz_mutex file_lock = GZ_MUTEX_INIT;
+static int claim_file(void)
+{
+    gz_mutex_lock(&file_lock);
+    int found = -1;
+    for (unsigned i = 0; found < 0 && i < ARRAY_SIZE(files); i++)
+        if (!files[i].active && !files[i].claimed) {
+            files[i].claimed = true;
+            found = (int)i;
+        }
+    gz_mutex_unlock(&file_lock);
+    return found;
+}
 static struct file_handle *file_handle(CW id)
 {
     return id >= 0x72000000u && id - 0x72000000u < ARRAY_SIZE(files) && files[id - 0x72000000u].active
@@ -1484,47 +1499,51 @@ CE_API(CreateFileW)
         ce_error = 87;
         return 0xffffffffu;
     }
-    for (unsigned i = 0; i < ARRAY_SIZE(files); i++)
-        if (!files[i].active) {
-            const char *open_path = path;
-            char res_path[FS_PATH_MAX];
-            struct fs_stat st;
-            bool absent = fs_stat(path, &st) != 0;
-            if (absent) {
-                if (ce_bundled_file(canonical, res_path)) {
-                    if (a4 == 1) {
-                        ce_error = 80;
-                        return 0xffffffffu;
-                    }
-                    if (!(flags & (FS_O_WRITE | FS_O_TRUNC))) {
-                        open_path = res_path;
-                        flags = FS_O_READ;
-                    } else if (!((flags & FS_O_TRUNC) ? make_parent(path)
-                                                      : copy_bundled_to_drive(res_path, path))) {
-                        ce_error = 5;
-                        return 0xffffffffu;
-                    }
-                    if (flags & FS_O_TRUNC)
-                        flags |= FS_O_CREATE; /* the bundled file exists */
-                } else if ((flags & FS_O_CREATE) && parent_is_standard(canonical))
-                    make_parent(path);
-            }
-            int fd = fs_open(open_path, flags);
-            if (fd < 0) {
-                printf("wince: open failed %s: %d\n", canonical, fd);
-                file_error(fd);
+    int i = claim_file();
+    if (i < 0) {
+        ce_error = 4;
+        return 0xffffffffu;
+    }
+    const char *open_path = path;
+    char res_path[FS_PATH_MAX];
+    struct fs_stat st;
+    bool absent = fs_stat(path, &st) != 0;
+    if (absent) {
+        if (ce_bundled_file(canonical, res_path)) {
+            if (a4 == 1) {
+                ce_error = 80;
+                files[i].claimed = false;
                 return 0xffffffffu;
             }
-            files[i].fd = fd;
-            files[i].active = true;
-            strlcpy(files[i].path, open_path, sizeof(files[i].path));
-            if ((absent && (flags & FS_O_CREATE)) || (flags & FS_O_TRUNC))
-                ce_file_touch(open_path, absent);
-            ce_error = 0;
-            return 0x72000000u + i;
-        }
-    ce_error = 4;
-    return 0xffffffffu;
+            if (!(flags & (FS_O_WRITE | FS_O_TRUNC))) {
+                open_path = res_path;
+                flags = FS_O_READ;
+            } else if (!((flags & FS_O_TRUNC) ? make_parent(path)
+                                              : copy_bundled_to_drive(res_path, path))) {
+                ce_error = 5;
+                files[i].claimed = false;
+                return 0xffffffffu;
+            }
+            if (flags & FS_O_TRUNC)
+                flags |= FS_O_CREATE; /* the bundled file exists */
+        } else if ((flags & FS_O_CREATE) && parent_is_standard(canonical))
+            make_parent(path);
+    }
+    int fd = fs_open(open_path, flags);
+    if (fd < 0) {
+        printf("wince: open failed %s: %d\n", canonical, fd);
+        file_error(fd);
+        files[i].claimed = false;
+        return 0xffffffffu;
+    }
+    files[i].fd = fd;
+    files[i].active = true;
+    files[i].claimed = false;
+    strlcpy(files[i].path, open_path, sizeof(files[i].path));
+    if ((absent && (flags & FS_O_CREATE)) || (flags & FS_O_TRUNC))
+        ce_file_touch(open_path, absent);
+    ce_error = 0;
+    return 0x72000000u + (CW)i;
 }
 CE_API(CloseHandle)
 {
