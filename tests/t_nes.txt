@@ -1,0 +1,26 @@
+# A card containing nes.gzp and the original demo renamed test.nes. Install on flash, launch the demo, move,
+# pause/resume, return to library, reload from Card, and reset.
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+6500 tap 120 64
+8500 tap 120 64
+10500 tap 120 242
+15000 tap 120 203
+16000 key home
+18000 tap 90 192
+20000 tap 100 65
+22000 key right
+23000 key ok
+24500 tap 210 31
+25000 tap 65 248
+25500 tap 210 31
+26000 tap 175 248
+27000 tap 210 31
+29000 tap 210 31
+32000 tap 25 31
+34000 tap 100 132
+36000 tap 100 70
+38000 tap 210 31
+39000 tap 120 164
+40000 key home
+42000 tap 90 192

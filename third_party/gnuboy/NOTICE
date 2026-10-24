@@ -1,0 +1,6 @@
+gnuboy, Copyright (C) 2000-2001 Laguna and Gilgamesh.
+Portions contributed by other authors.
+Licensed under GNU GPL version 2 or, at your option, any later version.
+The version election is in upstream main.c, copyright(), lines 75-96.
+https://github.com/rofl0r/gnuboy
+Glaze adaptations are documented in UPSTREAM.md.

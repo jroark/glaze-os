@@ -158,6 +158,10 @@ PROG_CFLAGS_gmail := $(WOLFSSL_INC)
 PROG_DEPS_gmail := $(OUT)/pic/libwolfssl.a
 PROG_LDLIBS_gmail := $(OUT)/pic/libwolfssl.a
 
+# InfoNES is portable C despite upstream's historical .cpp filenames.
+PROG_CFLAGS_nes := -fno-strict-aliasing
+PROG_CFLAGS_gameboy := -fno-strict-aliasing -DIS_LITTLE_ENDIAN
+
 USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libwolfssl.a \
     $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a $(OUT)/lib/libnetstack.a
 
@@ -373,7 +377,17 @@ PKG_FILES :=
 endif
 
 # Files in packages/<name>/res/ go in as res/<file>, next to the icon.
-PKG_RES = $(wildcard packages/$(1)/res/*)
+# ROM binaries are generated into ignored build output, never source directories.
+PKG_GENERATED_nes := $(OUT)/pkg-res/nes/demo.nes
+PKG_GENERATED_gameboy := $(OUT)/pkg-res/gameboy/demo.gb $(OUT)/pkg-res/gameboy/demo.gbc
+PKG_RES = $(wildcard packages/$(1)/res/*) $(PKG_GENERATED_$(1))
+
+$(OUT)/pkg-res/nes/demo.nes: tools/mknesdemo.py
+	$(PYTHON) $< --output $@
+$(OUT)/pkg-res/gameboy/demo.gb: tools/mkgbdemo.py
+	$(PYTHON) $< --output-dir $(dir $@) --mode dmg
+$(OUT)/pkg-res/gameboy/demo.gbc: tools/mkgbdemo.py
+	$(PYTHON) $< --output-dir $(dir $@) --mode cgb
 
 .SECONDEXPANSION:
 $(OUT)/pkg/%.gzp: $(OUT)/bin/%.elf packages/%/Info packages/%/icon.gzi $$(call PKG_RES,$$*) tools/mkromfs.py

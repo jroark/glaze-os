@@ -4,3 +4,11 @@ host/stowaway-test
 host/elf-test
 
 __pycache__/
+
+# ROM binaries stay external or in ignored build/test output.
+*.[nN][eE][sS]
+*.[gG][bB]
+*.[gG][bB][cC]
+*.[gG][bB][aA]
+*.[rR][oO][mM]
+*.[bB][iI][nN]
