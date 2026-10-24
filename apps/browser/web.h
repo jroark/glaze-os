@@ -122,6 +122,9 @@ enum { N_DOC, N_ELEM, N_TEXT };
 
 struct style;
 struct ctl;
+struct page;
+struct frame_slot;
+struct css_selector;
 
 struct node {
     uint8_t type;
@@ -139,6 +142,9 @@ struct node {
     int16_t nsdecl;             /* -1 until parsed */
     struct ctl *ctl;            /* form controls */
     int img;                    /* <img>: image slot, or -1 */
+    struct page *owner;
+    int frame;                  /* child browsing context slot, or -1 */
+    uint8_t collected;
 };
 
 const char *node_attr(const struct node *n, const char *name);
@@ -149,6 +155,15 @@ struct node *node_first_elem(const struct node *n);
 struct node *node_next(const struct node *n, const struct node *root, bool skip_children);
 /* Concatenated text of the subtree (arena), for <title>, <option>, ... */
 char *node_text(struct arena *a, const struct node *n);
+struct node *dom_create(struct page *p, int type, const char *name, const char *text);
+bool dom_insert(struct page *p, struct node *parent, struct node *child, struct node *before);
+void dom_remove(struct page *p, struct node *n);
+bool dom_attr(struct page *p, struct node *n, const char *name, const char *value);
+bool dom_content(struct page *p, struct node *n, const char *text, bool html);
+char *dom_serialize(struct page *p, struct node *n, bool outer);
+struct node *dom_query(struct page *p, struct node *root, const char *selector, struct node *after);
+int dom_select(struct page *p,struct node *root,const char *selector,struct node **out,int max);
+bool css_node_matches(const struct css_selector *selector,const struct node *n);
 
 /* ---- HTML ----------------------------------------------------------------- */
 
@@ -365,7 +380,7 @@ void ctl_toggle(struct page *p, struct ctl *c);
 
 /* ---- page, layout and painting ----------------------------------------------- */
 
-enum { DI_RECT, DI_TEXT, DI_IMAGE, DI_CTL, DI_BULLET };
+enum { DI_RECT, DI_TEXT, DI_IMAGE, DI_CTL, DI_BULLET, DI_FRAME };
 
 struct ditem {
     uint8_t kind, deco;
@@ -373,6 +388,7 @@ struct ditem {
     int32_t y;
     uint32_t color;
     struct node *link;          /* enclosing <a href>, or NULL */
+    struct node *node;          /* DOM event target */
     union {
         struct {
             const gfx_font *f;
@@ -382,6 +398,7 @@ struct ditem {
         int img;
         struct ctl *ctl;
         uint8_t bullet;         /* LS_DISC ... */
+        struct frame_slot *frame;
     } u;
 };
 
@@ -398,9 +415,29 @@ struct image_slot {
 };
 
 #define PAGE_MAX_SHEETS 24
+#define PAGE_MAX_SCRIPTS 32
+#define PAGE_MAX_FRAMES 8
+#define FRAME_MAX_DEPTH 3
+
+enum { RES_WAIT, RES_LOADING, RES_READY, RES_FAILED, RES_DONE };
+struct script_slot {
+    struct node *node;
+    char *url, *source;
+    int fetch, len;
+    uint8_t state;
+};
+struct frame_slot {
+    struct page *owner, *page;
+    struct node *node;
+    char *url, *post;
+    int fetch, x,y,w,h,scroll;
+    uint8_t state;
+    bool sandboxed, loaded_event, inline_document;
+};
 
 struct sheet_slot {
     struct stylesheet ss;
+    struct node *node;
     char *url;                  /* <link>: absolute URL, malloc'd */
     int fetch;                  /* loader id while loading */
     bool pending;
@@ -433,6 +470,16 @@ struct page {
     uint32_t link_color;        /* <body link=...> or 0 */
     bool oom;                   /* something didn't fit in memory */
     bool is_error;              /* load_error_page's */
+    struct page *parent;
+    struct frame_slot *host;
+    struct script_slot scripts[PAGE_MAX_SCRIPTS];
+    struct frame_slot frames[PAGE_MAX_FRAMES];
+    int nscripts,nframes,script_next,dom_nodes;
+    int viewport_h;
+    unsigned serial;
+    void *js;
+    char *origin, *navigate_url, *navigate_post, *csp;
+    bool dirty,resources_dirty,ready_event,load_event,script_disabled,opaque_origin;
 };
 
 struct page *page_new(const char *url);
@@ -442,11 +489,18 @@ void page_set_document(struct page *p, const uint8_t *data, int len, const char 
 /* Engine text (already decoded), e.g. generated error pages. */
 void page_set_html(struct page *p, const char *html);
 void page_style(struct page *p);
+void page_collect(struct page *p);
 void page_layout(struct page *p, int width);
 /* Position of the element with this id / anchor name, or -1. */
 int page_anchor_y(struct page *p, const char *frag);
 /* Display item at content coordinates, preferring links and controls. */
 struct ditem *page_hit(struct page *p, int x, int y);
+struct frame_slot *page_frame_at(struct page *p, int x, int y);
+struct page *page_root(struct page *p);
+bool page_same_origin(const struct page *a,const struct page *b);
+bool page_resource_allowed(const struct page *p,const char *url);
+bool page_navigate(struct page *p,const char *url,const char *target,const char *post);
+bool frame_response_allowed(struct page *parent,const char *url,const char *xfo,const char *csp);
 /* The <a href> element's resolved URL (malloc'd) or NULL. */
 char *page_link_url(struct page *p, struct node *a);
 const char *page_refresh(struct page *p, int *delay_s);

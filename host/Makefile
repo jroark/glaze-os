@@ -18,7 +18,8 @@ FAT_CFLAGS := $(CFLAGS) -I../servers/fs -I../third_party/fatfs -fsanitize=addres
 # The browser engine, rendering pages to BMPs, with wolfSSL for https.
 WEB := $(filter-out ../apps/browser/main.c,$(wildcard ../apps/browser/*.c))
 WEB_CFLAGS := $(CFLAGS) -I../third_party/stb -I../third_party/wolfssl -I../apps/browser/tls \
-    -DWOLFSSL_USER_SETTINGS -fsanitize=address,undefined
+    -DWOLFSSL_USER_SETTINGS -I../third_party/jerryscript -I../apps/browser/js_platform -I../out/include \
+    -include ../apps/browser/js_config.h -fsanitize=address,undefined
 WOLFSSL := $(addprefix ../third_party/wolfssl/,src/ssl.c src/internal.c src/tls.c src/tls13.c src/keys.c \
     src/wolfio.c $(addprefix wolfcrypt/src/,aes.c sha.c sha256.c sha512.c hmac.c hash.c kdf.c random.c \
     rsa.c ecc.c curve25519.c fe_low_mem.c chacha.c poly1305.c chacha20_poly1305.c sp_int.c wolfmath.c \
@@ -72,14 +73,22 @@ libwolfssl.a: $(WOLFSSL_OBJS)
 	rm -f $@
 	ar rcs $@ $^
 
-browse: browse.c hostres.c $(GFX) $(WEB) ../apps/browser/web.h libwolfssl.a
-	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB) libwolfssl.a
+WEB_OBJS := $(patsubst ../apps/browser/%.c,browser.o/%.o,$(WEB))
+browser.o/%.o: ../apps/browser/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(WEB_CFLAGS) -MMD -MP -c -o $@ $<
+browser.o/script.o: ../out/include/js_bootstrap.h
+-include $(WEB_OBJS:.o=.d)
+
+browse: browse.c hostres.c $(GFX) $(WEB_OBJS) $(wildcard ../apps/browser/*.h ../apps/browser/js_platform/*) libwolfssl.a libjerry.a ../out/include/js_bootstrap.h
+	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB_OBJS) libwolfssl.a libjerry.a -lm
 
 mediatest: mediatest.c $(MEDIA)
 	$(CC) $(MEDIA_CFLAGS) -o $@ $^ -lm
 
 clean:
-	rm -rf wolfssl.o
+	rm -rf wolfssl.o browser.o
+	rm -f jerry.o libjerry.a
 	rm -f sheet preview fstest fattest mkfsimg browse libwolfssl.a mediatest stowaway-test elf-test *.bmp *.png
 
 # Byte decoder and shared text editing, with ASan/UBSan.
@@ -335,3 +344,20 @@ pce-hardware-test:
 	$(CC) $(SEGA_TEST_FLAGS) -fno-strict-aliasing -o ../out/host/pce-hardware ../tests/pce_hardware.c $(PCE_CORE)
 	../out/host/pce-hardware
 .PHONY: gamegear-hardware-test pce-hardware-test
+
+# Keep the engine private to Browser. Native tests use the same feature profile.
+jerry.o: ../third_party/jerryscript/jerryscript.c ../third_party/jerryscript/jerryscript.h ../apps/browser/js_config.h
+	$(CC) -std=c99 -O2 -g -I../third_party/jerryscript -include ../apps/browser/js_config.h -c -o $@ $<
+libjerry.a: jerry.o
+	ar rcs $@ $^
+../out/include/js_bootstrap.h: ../apps/browser/js_dom.js ../tools/mkjsbootstrap.py
+	python3 ../tools/mkjsbootstrap.py $< $@
+
+../out/host/browser-platform.o: browse.c
+	@mkdir -p ../out/host
+	$(CC) $(WEB_CFLAGS) -Dmain=browser_preview_main -c -o $@ $<
+browser-test: $(WEB_OBJS) libwolfssl.a libjerry.a ../out/host/browser-platform.o
+	$(CC) $(WEB_CFLAGS) -o ../out/host/browser-test ../tests/browser_script.c \
+	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) libwolfssl.a libjerry.a -lm
+	python3 ../tests/browser_transport.py ../out/host/browser-test
+.PHONY: browser-test

@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><title>JavaScript &amp; Frames</title>
+<style>body{margin:12px;background:#eef2f7;color:#26384d;font-size:16px}h1{font-size:22px;margin:0 0 8px}p{margin:8px 0}button{font-size:18px}iframe{width:286px;height:100px;background:white}a{color:#245ba0}.ok{color:#246a40}</style></head>
+<body><h1>JavaScript &amp; Frames</h1><p id=status>Starting JavaScript...</p>
+<button id=counter>Tap count: 0</button><p id=clock>Waiting for timer...</p>
+<iframe name=demo id=child src="script-frame.html"></iframe>
+<p><a href="script-frame.html" target=demo>Reload just the frame</a></p>
+<p><a href="frames.html">Try a classic frameset</a> · <a href="start.html">Home</a></p>
+<script>
+var count=0;
+var status=document.getElementById('status');
+if(6*7===42 && Math.sqrt(81)===9 && Math.abs(Math.sin(Math.PI/2)-1)<0.000001 && JSON.parse('{"ok":true}').ok) {
+    status.textContent='JavaScript is running.';status.className='ok';
+    console.log('browser demo: numbers/math/JSON PASS');
+}
+document.getElementById('counter').onclick=function(){this.textContent='Tap count: '+(++count);console.log('browser demo: click '+count);};
+setTimeout(function(){document.getElementById('clock').textContent='Timer fired.';console.log('browser demo: timer PASS');},500);
+document.getElementById('child').addEventListener('load',function(){
+    var doc=this.contentDocument;if(doc&&doc.getElementById('message')){doc.getElementById('message').textContent='Parent can read this frame.';console.log('browser demo: same-origin frame PASS');}
+});
+</script></body></html>

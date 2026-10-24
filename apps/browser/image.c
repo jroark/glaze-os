@@ -38,8 +38,16 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 
 #define MAX_SOURCE_PIXELS   (1600u * 1200u)     /* decoded RGBA must fit in RAM */
-#define IMAGE_BUDGET        (3u << 20)          /* per page, decoded */
+#define IMAGE_BUDGET        (3u << 20)          /* document plus frames, decoded */
 #define MAX_W               240
+
+static uint32_t tree_image_bytes(struct page *p)
+{
+    uint32_t bytes = p->img_bytes;
+    for (int i = 0; i < p->nframes; i++)
+        if (p->frames[i].page) bytes += tree_image_bytes(p->frames[i].page);
+    return bytes;
+}
 
 bool image_decode(struct page *p, struct image_slot *s, const uint8_t *data, int len)
 {
@@ -73,7 +81,7 @@ bool image_decode(struct page *p, struct image_slot *s, const uint8_t *data, int
         th = 4 * 320;
 
     uint32_t need = (uint32_t)tw * (uint32_t)th * 3;
-    if (p->img_bytes + need > IMAGE_BUDGET)
+    if (tree_image_bytes(page_root(p)) + need > IMAGE_BUDGET)
         return false;
     uint8_t *rgba = stbi_load_from_memory(data, len, &w, &h, &comp, 4);
     if (!rgba)

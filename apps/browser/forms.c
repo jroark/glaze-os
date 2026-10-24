@@ -90,6 +90,16 @@ void forms_collect(struct page *p)
             type = t && !strcasecmp(t, "reset") ? C_RESET : t && !strcasecmp(t, "button") ? C_BUTTON : C_SUBMIT;
         } else
             continue;
+        if (n->ctl) {
+            struct ctl *c = n->ctl;
+            c->form = form_of(n);
+            c->next = NULL;
+            if (n->tag == T_BUTTON)
+                n->ctext = node_text(&p->arena, n);
+            *tail = c;
+            tail = &c->next;
+            continue;
+        }
         struct ctl *c = arena_alloc(&p->arena, sizeof(*c));
         if (!c)
             return;
@@ -129,6 +139,7 @@ void forms_collect(struct page *p)
         *tail = c;
         tail = &c->next;
     }
+    *tail=NULL;
 }
 
 const char *ctl_label(const struct ctl *c)
