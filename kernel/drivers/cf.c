@@ -11,14 +11,17 @@
  *
  * There is no hot-plug interrupt: SYS_CF_INFO samples the socket status
  * and re-identifies the card when it changes, bumping a generation count
- * the file server compares to notice a swapped card. As for the NE2000,
- * the card is assumed to decode its I/O window without a configuration
- * option register write (TODO: real cards need one, through the CIS).
+ * the file server compares to notice a swapped card. At boot the card is
+ * the one GlazeBoot came from, configured by Windows CE (or decoded by the
+ * emulator without configuration); a card inserted later gets the socket
+ * power-up and configuration register writes Windows CE's pcmcia.dll does,
+ * with the COR value Windows CE gave the boot card.
  */
 
 #include "../kernel.h"
 #include "../hw.h"
 #include "../drivers.h"
+#include "../proc.h"
 
 /* Taskfile registers (offsets from CF_ATA_BASE). */
 #define ATA_ERROR       1       /* read */
@@ -62,6 +65,7 @@ static struct gz_cf_info info;
 static bool socket_full;         /* the socket status at the last probe */
 static bool booted;              /* cf_init has run: later insertions are hot */
 static uint16_t io_buf[GZ_CF_IO_MAX / 2];
+static int boot_cor = -1;        /* the COR Windows CE set, if it was readable */
 
 static bool wait_status(uint8_t mask, uint8_t want)
 {
@@ -186,10 +190,28 @@ static void delay_ms(uint32_t ms)
  * the boot ROM has done this. Enough for the emulator; a real BE-300's card
  * still reads 0 afterwards, presumably until its configuration register is
  * set through a mapped attribute window, which isn't done yet. */
+/* The register state Windows CE left, and the boot card's COR when the
+ * configuration window is mapped (A020 bit 3, as pcmcia.dll leaves it). */
+static void note_boot_state(void)
+{
+    uint32_t a020 = PCMCIA_A020;
+
+    kprintf("cf: socket CTRL %x RESET %x STATUS %x BRIDGE %x A020 %x A024 %x A034 %x\n",
+            PCMCIA_CTRL, PCMCIA_RESET, PCMCIA_STATUS, PCMCIA_BRIDGE, a020, PCMCIA_A024,
+            PCMCIA_A034);
+    if ((a020 & 0x0Cu) == PCMCIA_A020_CONFIG) {
+        boot_cor = CF_COR;
+        kprintf("cf: COR %x CCSR %x\n", (unsigned)boot_cor, CF_CCSR);
+    }
+}
+
 static void socket_power_up(void)
 {
-    PCMCIA_A020 = 0;
-    PCMCIA_A024 = 0;
+    /* 0x0198C2F8 then 0x0198C318: Vcc, presumably. */
+    PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
+    PCMCIA_A034 = (PCMCIA_A034 | 0x08u) & ~0x30u;
+    PCMCIA_A024 = PCMCIA_A024 & ~0x0Cu;
+    PCMCIA_A020 = PCMCIA_A020 & ~0x0Cu;
     PCMCIA_CTRL = 0;
     PCMCIA_RESET = PCMCIA_RESET | 1u;
     PCMCIA_CTRL = 8;
@@ -202,14 +224,52 @@ static void socket_power_up(void)
     PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
 }
 
+/* The configuration writes pcmcia.dll makes before atadisk.dll's first
+ * command (traced in the emulator, the store at 0x0198A468): A034 bit 2,
+ * A024 bits 2-3 clear, A020 bit 3 mapping the registers, then CCSR, COR,
+ * CCSR. The COR is the boot card's; 0x43 (I/O at the secondary IDE ports,
+ * level interrupts; CF spec 4.3.2) if it couldn't be read. A card still
+ * settling in the socket can drop the write, so it is read back. */
+static bool configure(void)
+{
+    uint8_t cor = boot_cor >= 0 ? (uint8_t)boot_cor : 0x43u;
+
+    PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
+    PCMCIA_A024 = PCMCIA_A024 & ~0x0Cu;
+    PCMCIA_A020 = (PCMCIA_A020 & ~0x04u) | PCMCIA_A020_CONFIG;
+    for (int i = 0; i < 5; i++) {
+        CF_CCSR = 0xFD;
+        CF_COR = cor;
+        CF_CCSR = 0x01;
+        delay_ms(10);
+        if (CF_COR == cor)
+            return true;
+        delay_ms(100);
+    }
+    kprintf("cf: inserted card ignores COR %x (reads %x), A020 %x A034 %x\n",
+            cor, CF_COR, PCMCIA_A020, PCMCIA_A034);
+    return false;
+}
+
 static void probe(void)
 {
     bool was = info.present, had = socket_full;
 
     socket_full = card_inserted();
-    if (socket_full && !had && booted)
-        socket_power_up();
-    info.present = identify();
+    if (socket_full && !had && booted) {
+        /* Up to three power-ups: a card pushed in slowly may not take the
+         * first. The emulator's card ignores the COR and always answers. */
+        for (int attempt = 0; attempt < 3; attempt++) {
+            socket_power_up();
+            configure();
+            if ((info.present = identify()))
+                break;
+            kprintf("cf: inserted card not ready (status %x), powering up again\n",
+                    CF_ATA(ATA_STATUS));
+        }
+    } else {
+        info.present = identify();
+    }
     if (info.present || was)
         info.generation++;
     if (info.present)
@@ -222,6 +282,8 @@ static void probe(void)
 
 void cf_init(void)
 {
+    if (ram_boot && !ne2000_present())
+        note_boot_state();
     if (!ne2000_present() && card_inserted()) {
         PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
         probe();
