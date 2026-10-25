@@ -51,6 +51,17 @@ int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 int sys_cf_write(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 
 /* Network device dispatch and shared frame API (net.c). */
+void xi825_init(void);
+void xi825_irq(void);
+void xi825_removed(void);
+bool xi825_present(void);
+int xi825_info(struct proc *, uint32_t);
+int xi825_bind(struct proc *, int);
+int xi825_send(struct proc *, uint32_t, uint32_t);
+int xi825_recv(struct proc *, uint32_t, uint32_t);
+int xi825_control(struct proc *, uint32_t, uint32_t);
+int sys_wifi_ctl(struct proc *, uint32_t, uint32_t);
+int wl54cf_control(uint32_t, void *);
 void net_init(void);
 void net_irq(void);
 bool net_present(void);
@@ -61,6 +72,7 @@ void net_overrun(void);
 /* Backend drivers: identify before touching device registers. */
 bool wl54cf_init(void);
 void wl54cf_irq(void);
+void wl54cf_removed(void);
 int wl54cf_send(const uint8_t *frame, uint32_t len);
 int ne2000_send(const uint8_t *frame, uint32_t len);
 void ne2000_init(void);

@@ -2,7 +2,7 @@
 # Build Glaze with a scripted input file, boot it, and save the final screen.
 # usage: tests/run.sh tests/t_x.txt [seconds]
 # CF=<image> boots with a copy of that CompactFlash image (tools/mkcfimg.sh);
-# NET=1 (or ne2000) inserts Ethernet; NET=wl54cf selects WL54-CF.
+# NET=1 (or ne2000) inserts Ethernet; NET=wl54cf or xi825 selects Wi-Fi.
 # FS_FROM=<nand image> boots with that image's file system (from 0x500000),
 # e.g. a previous run's out/shots/<name>/glaze.bin with apps installed.
 set -e
@@ -37,6 +37,7 @@ elif [ -n "$NET" ]; then
     case "$NET" in
         1|ne2000) cf=--ne2000 ;;
         wl54cf) cf=--wl54cf ;;
+        xi825) cf=--xi825 ;;
         *) echo "unknown NET=$NET" >&2; exit 1 ;;
     esac
 fi

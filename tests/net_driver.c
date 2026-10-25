@@ -13,6 +13,7 @@ static uint8_t cis[256];
 #define PCMCIA_STATUS_MASK 12
 #define PCMCIA_CARD_IN 4
 #define CF_CIS(i) cis[i]
+#define NETDRV_TEST
 #include "../kernel/drivers/net.c"
 
 static unsigned ne_probes, wl_probes, ne_irqs, wl_irqs, notices;
@@ -102,7 +103,7 @@ int main(void)
     assert(wl_probes == 1 && ne_probes == 0); /* recognized failed Wi-Fi is never ATA/NE2000 */
     for (int wireless = 0; wireless < 2; wireless++) {
         reset(wireless);
-        ne_ok = wl_ok = true;
+        ne_ok = wl_ok = true; socket_status = PCMCIA_CARD_IN;
         net_init();
         assert(info.present && !memcmp(info.mac, address, 6));
         assert(ne_probes == (unsigned)!wireless && wl_probes == (unsigned)wireless);
@@ -137,6 +138,25 @@ int main(void)
         net_receive(frame, 13);
         assert(info.rx_dropped == 2);
     }
-    puts("net driver: OK");
+    socket_status=0;
+    net_irq();
+    assert(!info.present && !claimed && head==tail);
+    assert(sys_net_send(&p,0,60)==GZ_ENOENT);
+    assert(sys_wifi_ctl(&p,WIFI_STATUS,0)==GZ_ENOENT);
+    p.flags=0;assert(sys_wifi_ctl(&p,WIFI_SCAN,0)==GZ_EPERM);
+    puts("net driver: dispatch, queues, permissions and removal PASS");
     return 0;
 }
+
+void xi825_init(void) {}
+void xi825_irq(void) {}
+bool xi825_present(void) { return false; }
+int xi825_info(struct proc *p, uint32_t a) { return GZ_ENOENT; }
+int xi825_bind(struct proc *p, int a) { return GZ_ENOENT; }
+int xi825_send(struct proc *p, uint32_t a, uint32_t n) { return GZ_ENOENT; }
+int xi825_recv(struct proc *p, uint32_t a, uint32_t n) { return GZ_ENOENT; }
+int xi825_control(struct proc *p, uint32_t op, uint32_t a) { return GZ_ENOENT; }
+int wl54cf_control(uint32_t op, void *data) { return GZ_ENOENT; }
+
+void xi825_removed(void) {}
+void wl54cf_removed(void) {}

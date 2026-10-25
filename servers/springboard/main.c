@@ -12,6 +12,7 @@
 #include <glaze/audio.h>
 #include <glaze/fs.h>
 #include <glaze/net.h>
+#include <glaze/wifi.h>
 #include <glaze/notify.h>
 #include <glaze/passcode.h>
 #include <glaze/prefs.h>
@@ -125,7 +126,7 @@ static struct {
 } alert = { .app = -1, .pressed = -1 };
 static uint32_t down_ms, jiggle_next, card_poll_next;
 static uint32_t card_status_next;
-static bool network_card;
+static bool network_card, wireless_card;
 static struct {
     bool open, touching, pressed;
     gfx_rect button;
@@ -438,7 +439,7 @@ static void show_card_details(void)
             const char *status = st.state == NET_UP ? "Connected (DHCP)"
                                : st.state == NET_UP_STATIC ? "Connected (static)"
                                : st.state == NET_CONFIGURING ? "Configuring address..." : "Not connected";
-            strlcpy(line[0], "NE2000 Ethernet", sizeof(line[0]));
+            strlcpy(line[0], wireless_card ? "XI-825 Wi-Fi" : "NE2000 Ethernet", sizeof(line[0]));
             strlcpy(line[1], status, sizeof(line[1]));
             snprintf(line[2], sizeof(line[2]), "MAC: %02X:%02X:%02X:%02X:%02X:%02X",
                      st.mac[0], st.mac[1], st.mac[2], st.mac[3], st.mac[4], st.mac[5]);
@@ -1953,9 +1954,13 @@ int main(void)
     gz_input_bind(sb_port);
 
     update_clock(true);
-    /* The NE2000 owns the socket for the whole boot; storage can hot-plug. */
+    /* A network card owns the socket for the whole boot; storage can hot-plug. */
     struct net_status net;
     network_card = net_status(&net) == 0 && net.state != NET_NO_CARD;
+    /* Cache the boot-time card kind before the NTP worker starts sharing
+     * libc's network session; opening details must not wait behind DNS. */
+    struct wifi_status ws;
+    wireless_card = network_card && net_wifi_status(&ws) == 0;
     update_card_status();
     state = ST_LOCK;
     render_lock();

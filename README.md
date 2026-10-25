@@ -12,7 +12,7 @@ boot ROM from NAND. The project site is [glaze-os.com](https://glaze-os.com)
 | --- | --- |
 | `boot/` | Stage-1 SPL loaded by the boot ROM; it streams the kernel from NAND |
 | `kernel/` | Exceptions, TLB/page tables, scheduler, IPC, shared memory, ELF loader, romfs, syscalls |
-| `kernel/drivers/` | ICU/GIU interrupt cascade, PIU touch, buttons, RTC, NAND, raw flash for the file server, NE2000 Ethernet |
+| `kernel/drivers/` | ICU/GIU interrupt cascade, PIU touch, buttons, RTC, NAND, raw flash for the file server, NE2000 Ethernet, XI-825 and WL54-CF Wi-Fi |
 | `lib/` | Minimal libc, `libgfx` (RGB565 software renderer), `libui` (widgets, keyboard, transitions) |
 | `servers/springboard/` | Compositor, lock screen, home screen, app launching |
 | `servers/fs/` | File server: littlefs on Dhara on raw NAND, with ECC and bad-block handling (see below) |
@@ -210,6 +210,10 @@ termination of managed apps. CPU and process monitoring need the current kernel;
 older OS builds still show memory and uptime. See [Task Manager](docs/TASK_MANAGER.md).
 
 ## Networking
+
+Wi-Fi network selection and WEP/WPA Personal support for XI-825 and WL54-CF
+are described in [Wi-Fi security](docs/WIFI.md), including the per-card
+capability matrix and emulator validation commands.
 
 With an NE2000 PCMCIA card (`--ne2000` on the emulator), Glaze gets an
 address by DHCP and can reach the network. The kernel driver

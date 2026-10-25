@@ -168,7 +168,7 @@ settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/settings_sys.h \
 	    -o ../out/host/settings-test ../tests/settings.c hostres.c $(GFX) \
-	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c
+	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/wifi.c ../lib/ui/input.c ../lib/ui/keyboard.c
 	../out/host/settings-test
 .PHONY: settings-test
 
@@ -441,5 +441,25 @@ BE300_SOURCE ?= ../../be300
 wl54cf-driver-test: ../tests/wl54cf_driver.c ../kernel/drivers/wl54cf.c ../kernel/drivers/wl54cf_io.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -I$(BE300_SOURCE)/src -Dwl54cf_init=wl54cf_model_init -c $(BE300_SOURCE)/src/hw/wl54cf.c -o ../out/host/wl54cf-model.o
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -I$(BE300_SOURCE)/src ../tests/wl54cf_driver.c ../out/host/wl54cf-model.o -o ../out/host/wl54cf-driver-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -I$(BE300_SOURCE)/src ../tests/wl54cf_driver.c ../out/host/wl54cf-model.o $(BE300_SOURCE)/src/hw/wifi_security.c -o ../out/host/wl54cf-driver-test
 	../out/host/wl54cf-driver-test
+
+OPENSSL_FLAGS ?= -I/opt/homebrew/opt/openssl@3/include
+OPENSSL_LIBS ?= -L/opt/homebrew/opt/openssl@3/lib -lcrypto
+HOSTAP := $(shell find ../third_party/hostap/src -name '*.c')
+HOSTAP_FLAGS := $(CFLAGS) -O2 -include ../servers/net/wpa/config.h -I../third_party/hostap/src -I../third_party/hostap/src/utils -I../servers/net
+.PHONY: wifi-supplicant-test xi825-test
+wifi-supplicant-test:
+	@mkdir -p ../out/host
+	$(CC) $(HOSTAP_FLAGS) -DBE300_WIFI_OPENSSL -I$(BE300_SOURCE)/src $(OPENSSL_FLAGS) -fsanitize=address,undefined -o ../out/host/wifi-supplicant-test ../tests/wifi_supplicant.c ../servers/net/wifi_supplicant.c ../lib/libc/wifi.c $(HOSTAP) $(BE300_SOURCE)/src/hw/wifi_security.c $(OPENSSL_LIBS)
+	../out/host/wifi-supplicant-test
+xi825-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -Dxi825_init=prism_init -c $(BE300_SOURCE)/src/hw/xi825.c -o ../out/host/xi825-model.o
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -I$(BE300_SOURCE)/src/hw -o ../out/host/xi825-test ../tests/xi825.c ../out/host/xi825-model.o $(BE300_SOURCE)/src/hw/wifi_security.c
+	../out/host/xi825-test
+
+.PHONY: wifi-mkfs
+wifi-mkfs:
+	@mkdir -p ../out/host
+	$(CC) $(FS_CFLAGS) -o ../out/host/wifi-mkfs ../host/mkfsimg.c $(FS)

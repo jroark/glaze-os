@@ -8,6 +8,7 @@
 #include <glaze/audio.h>
 #include <glaze/fs.h>
 #include <glaze/net.h>
+#include <glaze/wifi.h>
 #include <glaze/notify.h>
 #include <glaze/ntp.h>
 #include <glaze/pkg.h>
@@ -965,6 +966,13 @@ static void test_net(void)
         return;
     }
     CHECK(net_wait_up(15000) == 0 && net_status(&st) == 0 && st.addr, "net address");
+    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF) {
+        struct wifi_status wireless;
+        CHECK(net_wifi_status(&wireless) == 0 && wireless.state == WIFI_CONNECTED,
+              "wifi authenticated before DHCP");
+        printf("ktest: wifi security %u connected\n", wireless.security);
+        CHECK(gz_wifi_ctl(WIFI_SCAN, NULL) == GZ_EPERM, "wifi syscall permissions");
+    }
     printf("ktest: net %s state %u\n", net_ntoa(st.addr, a), st.state);
 
     int rtt = net_ping(st.gateway, 3000);
@@ -1043,6 +1051,12 @@ static void test_net(void)
 
     test_bsd(st.addr);
 
+    struct { uint32_t address; uint16_t port, reserved; } fixture;
+    if (pref_get("test.wifi.http", &fixture, sizeof(fixture)) == sizeof(fixture)) {
+        rv = http_get(fixture.address, fixture.port, "wifi-fixture", page, sizeof(page));
+        CHECK(rv > 0 && strstr(page, "WIFI SECURITY HTTP PASS"), "wifi local HTTP fixture");
+    }
+
     /* An HTTP/1.0 GET through the router; the wider internet may not be
      * reachable from where the emulator runs. */
     if (net_resolve("example.com", &ip, 5000) == 0) {
@@ -1063,6 +1077,24 @@ static void test_net(void)
     } else {
         printf("ktest: INFO ntp %s: %s\n", NTP_SERVER, net_strerror(rv));
     }
+    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF) {
+        struct wifi_preference choice;
+        if (pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && choice.version == 2) {
+            CHECK(net_wifi_disconnect() == 0, "wifi disconnect");
+            CHECK(net_status(&st) == 0 && st.state == NET_DISCONNECTED && !st.addr && !st.dns,
+                  "wifi disconnect clears addresses and DNS");
+            CHECK(net_wifi_connect_secure(&choice.credentials) == 0 && net_wait_up(20000) == 0,
+                  "wifi secured reconnect");
+            CHECK(net_wifi_forget() == 0, "wifi forget");
+            struct wifi_preference erased;
+            CHECK(pref_get(WIFI_PREF, &erased, sizeof(erased)) == GZ_ENOENT, "wifi forget erases preference");
+            CHECK(net_status(&st) == 0 && !st.addr && !st.dns, "wifi forget drops link");
+            CHECK(net_wifi_connect_secure(&choice.credentials) == 0 && net_wait_up(20000) == 0,
+                  "wifi reselect saves credentials for reboot");
+            memset(&choice, 0, sizeof(choice)); memset(&erased, 0, sizeof(erased));
+        }
+    }
+
 }
 
 /* ---- time zones --------------------------------------------------------- */

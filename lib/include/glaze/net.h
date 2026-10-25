@@ -52,6 +52,8 @@ enum {
     NET_SOCKOPT,        /* w2 = socket, w3 = NET_OPT_*, w4 = value -> value */
     NET_SHUTDOWN,       /* w2 = socket, w3 = NET_SHUT_* */
     NET_NAME,           /* w2 = socket, w3 = 0 local / 1 peer -> w1 = address, w2 = port */
+    NET_WIFI_STATUS, NET_WIFI_SCAN, NET_WIFI_CONNECT, NET_WIFI_DISCONNECT,
+    NET_WIFI_CONNECT_SECURE, NET_WIFI_FORGET,
 };
 
 #define NET_MSG_DONTWAIT    0x1     /* send: queue what fits, GZ_ETIMEDOUT if nothing */
@@ -82,16 +84,18 @@ enum { NET_SHUT_RD, NET_SHUT_WR, NET_SHUT_RDWR };
 enum { NET_TCP = 1, NET_UDP = 2 };
 
 enum {
-    NET_NO_CARD = 0,    /* no NE2000 inserted */
+    NET_NO_CARD = 0,    /* no supported network card */
     NET_CONFIGURING,    /* waiting for DHCP */
     NET_UP,             /* address from DHCP */
     NET_UP_STATIC,      /* no DHCP answer; using the fallback address */
+    NET_DISCONNECTED,   /* wireless card, no association */
+    NET_ASSOCIATING,    /* wireless association pending */
 };
 
 struct net_status {
     uint32_t state;
     uint8_t mac[6];
-    uint16_t reserved;
+    uint16_t kind;
     uint32_t addr, mask, gateway, dns;
     uint32_t rx_frames, tx_frames, rx_dropped;
 };

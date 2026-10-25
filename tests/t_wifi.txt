@@ -1,0 +1,8 @@
+# First-use open Wi-Fi selection, then router diagnostics. Boot with NET=xi825.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 102
+8500 tap 120 146
+11000 tap 30 31
+12500 tap 120 72
+15000 tap 120 280

@@ -121,6 +121,25 @@ int net_status(struct net_status *st)
     memset(st, 0, sizeof(*st));
     return 0;
 }
+static struct wifi_status test_wifi;
+static int test_wifi_error = GZ_ENOENT;
+static int test_wifi_connects, test_wifi_disconnects, test_wifi_scans;
+int net_wifi_status(struct wifi_status *st) { *st = test_wifi; return test_wifi_error; }
+int net_wifi_scan(void) { test_wifi_scans++; return test_wifi_error; }
+int net_wifi_connect(const void *ssid, uint32_t length)
+{
+    test_wifi_connects++;
+    test_wifi.state = WIFI_CONNECTING;
+    return test_wifi_error;
+}
+int net_wifi_forget(void) { test_wifi.state = WIFI_DISCONNECTED; return 0; }
+int net_wifi_connect_secure(const struct wifi_credentials *c) { test_wifi_connects++; return test_wifi_error; }
+int net_wifi_disconnect(void)
+{
+    test_wifi_disconnects++;
+    test_wifi.state = WIFI_DISCONNECTED;
+    return test_wifi_error;
+}
 int net_ping(uint32_t addr, int timeout)
 {
     return -1;
@@ -476,9 +495,63 @@ int main(void)
     view = V_DATETIME;
     redraw();
     host_write_bmp("../out/host/settings-datetime.bmp", &ui.surf);
+    test_wifi_error = 0;
+    test_wifi.state = WIFI_DISCONNECTED;
+    wifi_available = true;
+    view = V_ROOT;
+    redraw();
+    press(R_DISPLAY); compare_full();
+    press(R_NONE); compare_full();
+    test_wifi.count = 1;
+    test_wifi.aps[0].ssid_len = 5;
+    memcpy(test_wifi.aps[0].ssid, "BE300", 5);
+    activate(R_WIFI);
+    require(view == V_WIFI && test_wifi_scans == 1, "Wi-Fi page did not scan");
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-wifi.bmp", &ui.surf);
+    activate(R_WIFI_AP0);
+    require(test_wifi_connects == 1 && wireless_status.state == WIFI_CONNECTING, "Wi-Fi connect");
+    test_wifi.state = WIFI_CONNECTED;
+    test_wifi.current = test_wifi.aps[0];
+    test_wifi.current.channel = 3; test_wifi.current.signal = 100; test_wifi.current.rate = 22;
+    net_wifi_status(&wireless_status);
+    redraw(); compare_full();
+    zone_scroll.offset = ui_scroll_max(&zone_scroll);
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-wifi-details.bmp", &ui.surf);
+    gfx_rect disconnect = hit_rect(R_WIFI_DISCONNECT);
+    struct gz_input_event tap = { .type = GZ_EV_TOUCH_DOWN,
+        .x = disconnect.x + 20, .y = disconnect.y + 15 };
+    require(zone_touch(&tap), "Wi-Fi disconnect touch down");
+    tap.type = GZ_EV_TOUCH_UP;
+    require(zone_touch(&tap), "Wi-Fi disconnect touch up");
+    compare_full();
+    require(zone_scroll.offset == 0, "Wi-Fi shorter page must clamp scroll");
+    require(test_wifi_disconnects == 1 && wireless_status.state == WIFI_DISCONNECTED, "Wi-Fi disconnect");
+    test_wifi.aps[0].privacy = 1;
+    net_wifi_status(&wireless_status);
+    activate(R_WIFI_AP0);
+    require(test_wifi_connects == 1 && view == V_WIFI_CREDENTIALS, "secured network must prompt for credentials");
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-wifi-password.bmp", &ui.surf);
+    activate(R_WIFI_DONE); redraw(); compare_full();
+    strcpy(wifi_password, "bad"); activate(R_WIFI_JOIN);
+    require(wifi_error == GZ_EINVAL && test_wifi_connects == 1, "invalid WEP key submitted");
+    activate(R_WIFI_SHOW); redraw(); compare_full();
+    activate(R_BACK);
+    require(view == V_WIFI && !wifi_password[0], "cancel must erase credentials");
+    test_wifi_error = GZ_EIO;
+    activate(R_WIFI_SCAN);
+    redraw(); compare_full();
+    activate(R_BACK);
+    require(view == V_ROOT, "Wi-Fi back navigation");
+    test_wifi_error = GZ_ENOENT;
+    wifi_available = false;
     calibration_tests();
     display_tests();
     timeout_tests();
     puts("settings: rendering, navigation, scrolling, sliders, calibration and display PASS");
     return 0;
 }
+
+void uisnd_sounded(void) {}

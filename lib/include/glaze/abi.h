@@ -77,6 +77,7 @@ enum {
     SYS_MUNMAP_ANON,        /* free a whole SYS_MMAP_ANON allocation at a0 */
     SYS_DISPLAY_SET,        /* privileged: a0 = native brightness, a1 = contrast */
     SYS_DISPLAY_POWER,      /* privileged: a0 = backlight on (0 or 1), CPU/input remain active */
+    SYS_WIFI_CTL,
     SYS_COUNT
 };
 
@@ -240,7 +241,7 @@ struct gz_flash_info {
 struct gz_netif_info {
     uint32_t present;           /* a network card initialized successfully */
     uint8_t mac[6];
-    uint16_t reserved;
+    uint16_t kind;
     uint32_t rx_frames, tx_frames;
     uint32_t rx_dropped;        /* kernel queue full or bad frames */
     uint32_t overruns;          /* card ring overflows */
@@ -284,5 +285,8 @@ struct gz_cf_info {
 #define GZ_FB_WIDTH     240
 #define GZ_FB_HEIGHT    320
 #define GZ_FB_STRIDE    256     /* pixels */
+
+/* Network device identity, in gz_netif_info.kind. */
+enum { GZ_NET_NONE, GZ_NET_NE2000, GZ_NET_XI825, GZ_NET_WL54CF };
 
 #endif
