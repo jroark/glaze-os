@@ -1,6 +1,6 @@
 /* Kernel self-test: IPC round trips, notifications, sleep, shm, malloc, faults,
  * threads and semaphores, the key/value store, the file server, the audio
- * server and, with an NE2000, the network. */
+ * server and, with a network card, the network. */
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -977,7 +977,7 @@ static void test_net(void)
         CHECK(net_wifi_connect("BE300", 5) == 0, "wifi association starts");
     } else CHECK(net_wifi_scan() == GZ_ENOENT, "wifi unsupported without XI825");
     if (st.state == NET_NO_CARD) {
-        printf("ktest: SKIP network (no card; boot with --ne2000 or --xi825)\n");
+        printf("ktest: SKIP network (no network card; boot with --ne2000, --xi825 or --wl54cf)\n");
         CHECK(net_socket(NET_TCP) == GZ_ENETDOWN, "net down without a card");
         return;
     }

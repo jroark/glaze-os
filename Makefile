@@ -348,6 +348,14 @@ SSL_FILES := $(wildcard assets/ssl/*)
 # System sounds, romfs "sounds/", synthesized by tools/mksounds.py and checked in.
 SOUND_FILES := $(wildcard assets/sounds/*)
 
+# Local Marvell firmware (never checked in). See docs/WL54CF.md.
+WL54CF ?= 0
+WL54CF_FW_DIR ?= firmware/wl54cf
+WL54CF_FW :=
+ifeq ($(WL54CF),1)
+WL54CF_FW := $(WL54CF_FW_DIR)/cf8385_helper.bin $(WL54CF_FW_DIR)/cf8385.bin
+endif
+
 # ---- romfs ------------------------------------------------------------------
 
 ROMFS_BINS := $(foreach p,$(PROGS),$(OUT)/romfs/bin/$(p))
@@ -359,9 +367,10 @@ ROMFS_ARGS = $(foreach p,$(1),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
 	    $(foreach w,$(WEB_FILES),web/$(notdir $(w))=$(w)) \
 	    $(foreach c,$(SSL_FILES),ssl/$(notdir $(c))=$(c)) \
 	    $(foreach s,$(SOUND_FILES),sounds/$(notdir $(s))=$(s)) \
+	    $(foreach f,$(WL54CF_FW),firmware/$(notdir $(f))=$(f)) \
 	    $(if $(INPUT_SCRIPT),test/input.txt=$(INPUT_SCRIPT))
 
-$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) tools/mkromfs.py
+$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py
 	$(PYTHON) tools/mkromfs.py $@ $(call ROMFS_ARGS,$(PROGS),$(ASSET_FILES))
 
 # ---- kernel -----------------------------------------------------------------
@@ -547,7 +556,7 @@ GB_PROGS := $(filter-out $(GB_DROP),$(PROGS))
 GB_ASSETS := $(filter-out $(foreach a,$(GB_DROP),assets/gen/icon_$(a).gzi) \
     $(if $(filter clock,$(GB_DROP)),assets/gen/tab_%.gzi),$(ASSET_FILES))
 
-$(GB_DIR)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) tools/mkromfs.py FORCE
+$(GB_DIR)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py FORCE
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/mkromfs.py $@ $(call ROMFS_ARGS,$(GB_PROGS),$(GB_ASSETS))
 

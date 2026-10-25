@@ -2,7 +2,7 @@
  * CompactFlash storage card: ATA in the PCMCIA card window, for the file
  * server (servers/fs), which runs FatFs on it as /Card.
  *
- * The card shares the socket with network cards; only one of them is ever
+ * The card shares the socket with network cards; only one is ever
  * present. Transfers are polled PIO with READ/WRITE SECTORS in LBA28 mode
  * (CF+ and CompactFlash spec 6.2, ATA-4 commands 20h, 30h, ECh). The
  * emulator raises no interrupt when a command completes (be300
@@ -425,9 +425,9 @@ static void insert(void)
             if (c.function != FUNCID_NETWORK)
                 continue;       /* its CIS didn't read this time */
             configure_network(&c);
-            if (netdev_insert(c.manufacturer, c.product))
+            if (net_insert(c.manufacturer, c.product))
                 return;
-            netdev_removed();
+            net_removed();
             kputs("cf: network card didn't come up, powering up again\n");
             continue;
         }
@@ -449,14 +449,14 @@ static void probe(void)
 
     socket_full = card_inserted();
     if (!socket_full) {
-        if (netdev_claimed()) {
-            netdev_removed();
+        if (net_present()) {
+            net_removed();
             kputs("cf: network card removed\n");
         }
         info.present = false;
     } else if (!had && booted) {
         insert();
-    } else if (!netdev_claimed()) {
+    } else if (!net_present()) {
         info.present = identify();
     }
     if (info.present || was)
@@ -465,15 +465,15 @@ static void probe(void)
         kprintf("cf: %s, %u sectors\n", info.model, info.sectors);
     else if (was)
         kputs("cf: card removed\n");
-    else if (socket_full && !netdev_claimed())
+    else if (socket_full && !net_present())
         kprintf("cf: card not ready (status %x)\n", CF_ATA(ATA_STATUS));
 }
 
 void cf_init(void)
 {
-    if (ram_boot && !netdev_claimed())
+    if (ram_boot && !net_present())
         note_boot_state();
-    if (!netdev_claimed() && card_inserted()) {
+    if (!net_present() && card_inserted()) {
         PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
         probe();
         if (!info.present)

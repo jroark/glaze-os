@@ -126,7 +126,8 @@ static struct {
 } alert = { .app = -1, .pressed = -1 };
 static uint32_t down_ms, jiggle_next, card_poll_next;
 static uint32_t card_status_next;
-static bool network_card, wireless_card;
+static bool network_card;
+static uint16_t network_kind;           /* GZ_NET_*, for the card details */
 static struct {
     bool open, touching, pressed;
     gfx_rect button;
@@ -233,7 +234,7 @@ static bool update_card_status(void)
     /* A network card can be inserted or pulled too (cf.c's pcmcia_poll);
      * net_status is answered at once, without this process's session. */
     network_card = net_status(&net) == 0 && net.state != NET_NO_CARD;
-    wireless_card = network_card && net.kind == GZ_NET_XI825;
+    network_kind = network_card ? net.kind : GZ_NET_NONE;
     bool mounted = network_card || fs_stat("/Card", &st) == 0;
     bool changed = mounted != view.card_mounted;
 
@@ -453,7 +454,9 @@ static void show_card_details(void)
             const char *status = st.state == NET_UP ? "Connected (DHCP)"
                                : st.state == NET_UP_STATIC ? "Connected (static)"
                                : st.state == NET_CONFIGURING ? "Configuring address..." : "Not connected";
-            strlcpy(line[0], wireless_card ? "XI-825 Wi-Fi" : "NE2000 Ethernet", sizeof(line[0]));
+            strlcpy(line[0], network_kind == GZ_NET_XI825 ? "XI-825 Wi-Fi"
+                             : network_kind == GZ_NET_WL54CF ? "WL54-CF Wi-Fi" : "NE2000 Ethernet",
+                    sizeof(line[0]));
             strlcpy(line[1], status, sizeof(line[1]));
             snprintf(line[2], sizeof(line[2]), "MAC: %02X:%02X:%02X:%02X:%02X:%02X",
                      st.mac[0], st.mac[1], st.mac[2], st.mac[3], st.mac[4], st.mac[5]);

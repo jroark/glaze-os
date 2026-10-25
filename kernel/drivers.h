@@ -52,19 +52,36 @@ void pcmcia_poll(void);
 int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 int sys_cf_write(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 
-/* net.c: select one boot-time card and dispatch privileged raw frame I/O. */
-void netdev_init(void);
-void netdev_irq(void);
-bool netdev_present(void);
-bool netdev_claimed(void); /* keep ATA off a detected NIC even if its init failed */
-bool netdev_insert(unsigned manufacturer, unsigned product); /* hot: true if up */
-void netdev_removed(void);
+/* Network card dispatch and the shared frame API (net.c). One card owns the
+ * socket until it is pulled: found at boot, or inserted later (cf.c's
+ * pcmcia_poll(), which powers and configures it first). */
+void net_init(void);
+void net_irq(void);
+bool net_present(void);     /* claimed: keep ATA off it even if it failed */
+bool net_up(void);          /* claimed and its driver running */
+bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up */
+void net_removed(void);
+void net_set_mac(const uint8_t mac[6]);
+void net_receive(const uint8_t *frame, uint32_t len);
+void net_rx_drop(void);
+void net_overrun(void);
 int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t buf);
-/* ne2000.c and xi825.c: hardware backends. */
+int sys_net_info(struct proc *p, uint32_t uout);
+int sys_net_bind(struct proc *p, int port);
+int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len);
+int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max);
+/* Backends: identified by the CIS before their registers are touched. The
+ * NE2000 and WL54-CF move frames through net.c's queue; the XI-825 keeps its
+ * own (xi825.c). */
 void ne2000_init(void);
-void ne2000_removed(void);
 void ne2000_irq(void);
 bool ne2000_present(void);
+void ne2000_removed(void);
+int ne2000_send(const uint8_t *frame, uint32_t len);
+bool wl54cf_init(void);
+void wl54cf_irq(void);
+void wl54cf_removed(void);
+int wl54cf_send(const uint8_t *frame, uint32_t len);
 void xi825_init(void);
 void xi825_removed(void);
 void xi825_irq(void);
@@ -74,14 +91,6 @@ int xi825_bind(struct proc *p, int port);
 int xi825_send(struct proc *p, uint32_t buf, uint32_t len);
 int xi825_recv(struct proc *p, uint32_t buf, uint32_t len);
 int xi825_control(struct proc *p, uint32_t op, uint32_t buf);
-int ne2000_info(struct proc *p, uint32_t out);
-int ne2000_bind(struct proc *p, int port);
-int ne2000_send(struct proc *p, uint32_t buf, uint32_t len);
-int ne2000_recv(struct proc *p, uint32_t buf, uint32_t len);
-int sys_net_info(struct proc *p, uint32_t uout);
-int sys_net_bind(struct proc *p, int port);
-int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len);
-int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max);
 
 /* audio.c: wave-output DMA for the audio server. */
 void audio_init(void);

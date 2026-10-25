@@ -238,10 +238,10 @@ struct gz_flash_info {
 /* SYS_NET_*: raw Ethernet frames for the network server (PROC_NET). */
 #define GZ_ETH_FRAME_MAX    1514    /* without the CRC */
 
-enum { GZ_NET_NONE, GZ_NET_NE2000, GZ_NET_XI825 };
+enum { GZ_NET_NONE, GZ_NET_NE2000, GZ_NET_XI825, GZ_NET_WL54CF };
 
 struct gz_netif_info {
-    uint32_t present;           /* a supported network card answered the probe */
+    uint32_t present;           /* a network card initialized successfully */
     uint8_t mac[6];
     uint16_t kind;              /* GZ_NET_* */
     uint32_t rx_frames, tx_frames;

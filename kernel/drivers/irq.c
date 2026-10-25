@@ -53,9 +53,9 @@ void irq_dispatch_ip2(void)
 
         /* As the OAL does: mask the PCMCIA source while it is handled, after
          * reading the cause register, which clears CF state changes (doc:
-         * CF; Linux irq.c). The NE2000 holds the line while its own ISR has
-         * unmasked bits, which netdev_irq() clears; only then is the source
-         * enabled again, and only for it. */
+         * CF; Linux irq.c). The network card holds the line while its own ISR has
+         * unmasked bits, which net_irq() clears; only then is the source
+         * enabled again for a claimed network socket. */
         if (pending & KJ_INT_CF) {
             (void)KJ_CF_CAUSE;
             KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
@@ -79,8 +79,8 @@ void irq_dispatch_ip2(void)
          * take the interrupt forever, before pcmcia_poll() can see the
          * removal. The next card's driver enables it. */
         if (pending & KJ_INT_CF) {
-            netdev_irq();
-            if (netdev_present() &&
+            net_irq();
+            if (net_up() &&
                 (PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) == PCMCIA_CARD_IN)
                 KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
         }

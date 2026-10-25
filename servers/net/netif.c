@@ -1,5 +1,5 @@
 /*
- * The lwIP network interface over the kernel's selected network driver, address
+ * The lwIP network interface over the kernel's network card driver, address
  * configuration, and the platform hooks lwIP calls (arch/cc.h).
  *
  * lwIP runs in its tcpip thread. The server's main thread hands it the
