@@ -121,6 +121,20 @@ void nand_read_page(uint32_t page, void *buf)
     deselect();
 }
 
+void nand_read_raw(uint32_t page, uint8_t buf[528])
+{
+    select();
+    command(CMD_READ0);
+    address_page(page);
+    NAND_XFER_KICK = 1;
+    NAND_XFER_MODE = MODE_READ;
+    wait_ready();
+    for (uint32_t i = 0; i < 528 / 4; i++)
+        ((uint32_t *)buf)[i] = NAND_STREAM32;
+    NAND_XFER_MODE = MODE_RESET;
+    deselect();
+}
+
 void nand_program_page(uint32_t page, const void *buf)
 {
     const uint8_t *src = buf;

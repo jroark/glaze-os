@@ -17,6 +17,7 @@ make -C host ui-events-test       # libui's touch cancel, suspension and resume,
 make glazeboot                    # GlazeBoot's GCC parts, booting Glaze from RAM out of Windows CE (docs/GLAZEBOOT.md)
 make glazeboot-exe                # the GlazeBoot.exe loader, natively with ../be300-dev (BE300_DEV)
 make -C host glazeboot-test       # its page hand-over plan on random layouts
+make -C host nand-ecc-test        # Windows CE's NAND ECC (kernel/drivers/nand_ecc.c), natively
 tests/run_ramboot.sh 90 INIT=bin/ktest  # RAM boot through GlazeBoot's trampoline in the emulator
 tests/run_ceboot.sh 90            # GlazeBoot from a CF card under the emulator's stock Windows CE
 ```
@@ -153,7 +154,7 @@ and shared text editor.
   - romfs pages come straight from reserved RAM, with no cache;
   - `SYS_FLASH_*` are a RAM disk (`SYS_FLASH_INFO` gives its size);
   - `SYS_NAND_*` open the whole NAND to the file server, never writing blocks 0-1.
-- The file server mounts Windows CE's FAT partition as `/NAND` (`servers/fs/nanddisk.c`, FatFs drive 1; the card is drive 0, and card paths go to FatFs unprefixed). Windows CE's spare-area ECC and block replacement aren't handled yet, so NAND writes are opt-in (`nand=rw`). On a real BE-300 the first raw NAND read after Windows CE freezes the machine, so `glaze.cfg` ships `nand=off` (`GZ_BOOT_NAND_OFF`; `tests/run_ceboot.sh` passes `nand=ro`).
+- The file server mounts Windows CE's FAT partition as `/NAND` (`servers/fs/nanddisk.c`, FatFs drive 1; the card is drive 0, and card paths go to FatFs unprefixed). The kernel maps NAND pages through Windows CE's block table (built from the spare tags as nanddisk.dll does) and corrects them with its spare-area Reed-Solomon ECC (`kernel/drivers/nand_ecc.c`, `make -C host nand-ecc-test`); erased-parity pages, as in the emulator, pass unchecked. Writes don't keep the tags or ECC, so `glaze.cfg` ships `nand=ro` and writes are opt-in (`nand=rw`); `nand=off` is `GZ_BOOT_NAND_OFF`.
 - `make ramboot` (`boot/spl.c` with `-DSPL_RAMBOOT`) hands over the same way from the SPL, so the emulator can test it.
 
 ## Hardware notes

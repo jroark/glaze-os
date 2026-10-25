@@ -2,6 +2,7 @@ out/
 .DS_Store
 host/stowaway-test
 host/elf-test
+host/nand-ecc-test
 
 __pycache__/
 

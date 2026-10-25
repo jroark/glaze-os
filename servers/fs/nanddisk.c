@@ -5,7 +5,9 @@
  * The stock image starts with a table of 16-byte entries in page 0, the
  * start and length in pages at +8 and +12 (0xFFFFFFFF entries unused):
  * the SPL, NK, then a FAT16 volume (tools/wince_assets.py reads the same
- * table). A FAT sector is a NAND page, mapped one to one.
+ * table). A FAT sector is a NAND page, mapped one to one; the kernel maps
+ * those logical pages through Windows CE's block table and corrects them
+ * with its spare-area ECC (kernel/drivers/flash.c, nand_ecc.c).
  *
  * NAND pages can only be programmed after their block is erased, so writes
  * go into a copy of one 16 KiB erase block, written back when FatFs syncs,
@@ -13,10 +15,9 @@
  * block whose changed pages were all still erased is only programmed;
  * otherwise it is erased and every non-blank page programmed again.
  *
- * Not handled yet (docs/GLAZEBOOT.md): Windows CE's own block replacement
- * and spare-area ECC. Pages are read and written at their logical number
- * with blank spare bytes, which suits the emulator's NAND; on a device,
- * writes stay off (the loader's nand=ro) until those are understood.
+ * Not handled yet (docs/GLAZEBOOT.md): writes keep neither Windows CE's
+ * block tags nor its ECC, which suits the emulator's NAND; on a device,
+ * writes stay off (the loader's nand=ro) until they do.
  */
 
 #include <string.h>

@@ -96,6 +96,12 @@ clean:
 	rm -f sheet preview fstest fattest mkfsimg browse libwolfssl.a mediatest stowaway-test elf-test *.bmp *.png
 
 # Byte decoder and shared text editing, with ASan/UBSan.
+# The NAND ECC decoder ported from Windows CE's nanddisk.dll (RAM boot /NAND).
+nand-ecc-test: ../tests/nand_ecc.c ../kernel/drivers/nand_ecc.c ../kernel/drivers/nand_ecc.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $(filter %.c,$^)
+	./$@
+.PHONY: nand-ecc-test
+
 stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $^
 	./$@
