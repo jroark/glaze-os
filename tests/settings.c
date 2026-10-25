@@ -15,6 +15,8 @@ static int touch_error;
 static struct touch_calibration preview_calibration;
 static struct display_settings display_actual = DISPLAY_DEFAULTS, display_saved = DISPLAY_DEFAULTS;
 static int display_error, display_saves;
+static int32_t timeout_disk;
+static int timeout_len = GZ_ENOENT, timeout_error, timeout_notifications;
 static gfx_rect last_present;
 static struct gz_datetime rtc = {.year = 2026, .month = 10, .day = 19, .hour = 12, .minute = 34};
 
@@ -45,10 +47,13 @@ int gz_sysinfo(struct gz_sysinfo *si)
 }
 int gz_port_lookup(const char *name)
 {
-    return -1;
+    return !strcmp(name, SB_PORT_NAME) ? 11 : -1;
 }
 int gz_notify(int port, uint32_t bits)
 {
+    if (bits == SB_NOTIFY_DISPLAY) {
+        timeout_notifications++;
+    }
     return 0;
 }
 int gz_getpid(void) { return 7; }
@@ -80,10 +85,21 @@ int gz_send(int port, const struct gz_msg *msg, struct gz_msg *reply)
 }
 int pref_get(const char *key, void *buf, uint32_t len)
 {
+    if (!strcmp(key, DISPLAY_TIMEOUT_PREF)) {
+        if (timeout_len > 0)
+            memcpy(buf, &timeout_disk, MIN(len, sizeof(timeout_disk)));
+        return timeout_len;
+    }
     return -1;
 }
 int pref_put(const char *key, const void *buf, uint32_t len)
 {
+    if (!strcmp(key, DISPLAY_TIMEOUT_PREF)) {
+        if (timeout_error)
+            return timeout_error;
+        memcpy(&timeout_disk, buf, sizeof(timeout_disk));
+        timeout_len = len;
+    }
     return 0;
 }
 bool passcode_enabled(void)
@@ -323,6 +339,57 @@ static void display_tests(void)
     require(view == V_ROOT, "Display back did not return to Settings");
 }
 
+static void timeout_tests(void)
+{
+    load();
+    require(s_timeout == 60, "missing timeout did not default to one minute");
+    activate(R_DISPLAY);
+    activate(R_WALLPAPER);
+    require(view == V_WALLPAPER, "Display did not open Wallpaper");
+    activate(R_BACK);
+    require(view == V_DISPLAY, "Wallpaper did not return to Display");
+    for (unsigned i = 0; i < ARRAY_SIZE(timeout_seconds); i++) {
+        activate(R_TIMEOUT);
+        require(view == V_TIMEOUT, "Display did not open Screen Timeout");
+        compare_full();
+        activate(R_TIMEOUT0 + i);
+        require(view == V_DISPLAY && s_timeout == timeout_seconds[i], "timeout selection not applied");
+        require(timeout_disk == timeout_seconds[i] && timeout_len == 4, "timeout was not persisted");
+        require(timeout_notifications == (int)i + 1, "timeout did not notify SpringBoard");
+        s_timeout = -1;
+        load();
+        require(s_timeout == timeout_seconds[i], "saved timeout not loaded");
+        redraw();
+        compare_full();
+    }
+    activate(R_TIMEOUT);
+    timeout_error = GZ_ENOSPC;
+    activate(R_TIMEOUT0);
+    require(view == V_TIMEOUT && s_timeout == 0 && display_msg, "failed write changed timeout");
+    require(timeout_notifications == 6 && timeout_disk == 0, "failed write notified or changed disk");
+    timeout_error = 0;
+    activate(R_BACK);
+    require(view == V_DISPLAY, "timeout Back did not return to Display");
+    const int32_t invalid[] = {-1, 1, 31, 601, 2147483647};
+    for (unsigned i = 0; i < ARRAY_SIZE(invalid); i++) {
+        timeout_disk = invalid[i];
+        load();
+        require(s_timeout == 60, "invalid timeout did not default");
+    }
+    timeout_disk = 30;
+    for (int len = 0; len <= 8; len++) {
+        timeout_len = len;
+        load();
+        require(s_timeout == (len == 4 ? 30 : 60), "wrong-size timeout accepted");
+    }
+    display_msg = NULL;
+    s_timeout = 30;                 /* longest picker label, compact row summary */
+    redraw();
+    host_write_bmp("../out/host/settings-display.bmp", &ui.surf);
+    activate(R_TIMEOUT);
+    host_write_bmp("../out/host/settings-timeout.bmp", &ui.surf);
+}
+
 int main(void)
 {
     gfx_surface_init(&ui.surf, screen, UI_W, UI_H, UI_W);
@@ -335,7 +402,7 @@ int main(void)
     press(R_DATETIME);
     require(!network_queries && !passcode_queries, "row press queried unrelated services");
     require(last_present.w * last_present.h == CELL_W * UI_ROW_H, "row press presented the whole view");
-    for (int v = V_ROOT; v <= V_ZONE; v++) {
+    for (int v = V_ROOT; v <= V_TIMEOUT; v++) {
         view = (enum view)v;
         pressed = R_NONE;
         redraw();
@@ -411,6 +478,7 @@ int main(void)
     host_write_bmp("../out/host/settings-datetime.bmp", &ui.surf);
     calibration_tests();
     display_tests();
+    timeout_tests();
     puts("settings: rendering, navigation, scrolling, sliders, calibration and display PASS");
     return 0;
 }

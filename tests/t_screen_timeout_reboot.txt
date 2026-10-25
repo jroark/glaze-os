@@ -1,0 +1,5 @@
+# Reuse t_screen_timeout's filesystem. Check at 40 seconds: the display
+# must be black, with a 30-second timeout loaded rather than the 60s default.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 147

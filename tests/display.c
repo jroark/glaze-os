@@ -11,8 +11,12 @@
 
 #define GLAZE_HW_H
 static volatile uint32_t backlight, panel = 0xA5A50000;
+static volatile uint32_t bl_control = 1, bl_config = 0x202, bl_gate = 0xA5A50001;
 #define DISP_BACKLIGHT backlight
 #define DISP_CONTRAST panel
+#define DISP_BL_CONTROL bl_control
+#define DISP_BL_CONFIG bl_config
+#define DISP_BL_GATE bl_gate
 #include "../kernel/drivers/display.c"
 
 static uint64_t us;
@@ -98,6 +102,25 @@ static void driver_tests(void)
     assert(display_set(3, -1) == GZ_EINVAL);
     assert(display_set(3, 10) == GZ_EINVAL);
     assert(backlight == duty && us == start);
+    for (int b = 1; b <= 5; b++) {
+        assert(!display_set(b, 5));
+        uint32_t saved_duty = backlight;
+        assert(!display_power(0));
+        assert(!bl_control && !bl_config && bl_gate == 0xA5A50000);
+        assert(backlight == saved_duty);  /* zero duty must never mean off */
+        assert(!display_power(0));       /* repeated calls preserve the snapshot */
+        bl_gate |= 0x10;                 /* another peripheral changed while dark */
+        assert(!display_power(1));
+        assert(bl_control == 1 && bl_config == 0x202 && bl_gate == 0xA5A50011);
+        assert(backlight == saved_duty);
+        bl_gate &= ~0x10u;
+        assert(!display_power(1));
+    }
+    assert(display_power(2) == GZ_EINVAL && display_power(-1) == GZ_EINVAL);
+    /* Settings changes and preview rollback must not enable a dark display. */
+    assert(!display_power(0));
+    assert(!display_set(4, 5) && !bl_control && !bl_config);
+    assert(!display_power(1) && backlight == 981 && bl_config == 0x202);
 }
 
 static void service_tests(void)

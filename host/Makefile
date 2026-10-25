@@ -179,6 +179,12 @@ display-test: ../tests/display.c ../tests/display_sys.h ../kernel/drivers/displa
 	../out/host/display-test
 .PHONY: display-test
 
+idle-test: ../tests/idle.c ../servers/springboard/idle.c ../servers/springboard/idle.h ../lib/include/glaze/display.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/idle-test ../tests/idle.c ../servers/springboard/idle.c
+	../out/host/idle-test
+.PHONY: idle-test
+
 taskmanager-test: ../tests/taskmanager.c ../tests/taskmanager_sys.h ../packages/taskmanager/main.c ../packages/taskmanager/monitor.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/taskmanager_sys.h \

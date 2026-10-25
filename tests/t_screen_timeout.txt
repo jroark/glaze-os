@@ -1,0 +1,11 @@
+# Settings > Display > Screen Timeout > 30 seconds. At 42 seconds a
+# full swipe wakes the display but must not unlock; at 46 seconds a second
+# swipe unlocks and returns to Display. Check at 41 s (black), 44 s (lock),
+# and 51 s (Display), using a clean image for each run.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 147
+8000 tap 120 267
+9500 tap 120 73
+42000 drag 40 280 235 280 500
+46000 drag 40 280 235 280 500

@@ -168,6 +168,9 @@
 /* Stock ddi.dll 0x01A56BB0/BD0 (backlight), 0x01A56A5C (contrast).
  * See docs/DISPLAY.md for the register trace and native level tables. */
 #define DISP_BACKLIGHT      REG32(0x0A00098Cu)
+#define DISP_BL_CONTROL     REG32(0x0A000980u)
+#define DISP_BL_CONFIG      REG32(0x0A000984u)
+#define DISP_BL_GATE        REG32(0x0A001128u)
 #define DISP_CONTRAST       REG32(0x0A000C4Cu)
 
 #define FB_PA               0x0A200000u

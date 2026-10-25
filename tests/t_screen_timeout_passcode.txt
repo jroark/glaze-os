@@ -1,0 +1,22 @@
+# Boot with t_screen_timeout's filesystem (30 seconds). Set passcode 1234,
+# enter one digit, and let the keypad time out. Home wakes at 50 seconds;
+# unlock and enter 1234. At 58 seconds the home screen must be visible.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 207
+8000 tap 120 73
+9500 tap 40 176
+9800 tap 120 176
+10100 tap 200 176
+10400 tap 40 217
+11500 tap 40 176
+11800 tap 120 176
+12100 tap 200 176
+12400 tap 40 217
+14000 key home
+15500 key power
+16500 drag 40 280 235 280 500
+18000 tap 40 166
+50000 key home
+52000 drag 40 280 235 280 500
+54000 text 1234
