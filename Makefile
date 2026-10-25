@@ -21,7 +21,13 @@ BUILD_ID ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 # Test builds: replay this input script (see kernel/drivers/input.c).
 INPUT_SCRIPT ?=
 
-ARCHFLAGS := -march=mips2 -mabi=32 -mno-abicalls -fno-pic -G 0 -msoft-float
+# GCC's VR41xx errata workarounds, off by default as in Linux's VR41xx
+# builds: VR_FIX="-mfix-vr4130 -mfix-vr4120" pads mflo/mfhi and keeps GCC
+# off DIV, calling the helpers in lib/libc/divdi3.c. Tried while chasing
+# corruption on a real BE-300 that turned out to be shared-memory cache
+# colours (kernel/shm.c); kept for testing.
+VR_FIX ?=
+ARCHFLAGS := -march=mips2 -mabi=32 -mno-abicalls -fno-pic -G 0 -msoft-float $(VR_FIX)
 CFLAGS_COMMON := $(ARCHFLAGS) -std=gnu11 -ffreestanding -fno-builtin -nostdlib \
     -fno-stack-protector -Wall -Wextra -Wno-unused-parameter -g -Ilib/include -Ilib/libc/include
 
@@ -298,7 +304,10 @@ $(OUT)/ldso/%.o: lib/ldso/%.S
 $(OUT)/ldso/string.o: lib/libc/string.c
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_CFLAGS) -Os -c -o $@ $<
-$(OUT)/shared/ld-glaze.so.1: $(OUT)/ldso/entry.o $(OUT)/ldso/ldso.o $(OUT)/ldso/string.o lib/ldso/ldso.lds
+$(OUT)/ldso/divdi3.o: lib/libc/divdi3.c
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -Os -c -o $@ $<
+$(OUT)/shared/ld-glaze.so.1: $(OUT)/ldso/entry.o $(OUT)/ldso/ldso.o $(OUT)/ldso/string.o $(OUT)/ldso/divdi3.o lib/ldso/ldso.lds
 	@mkdir -p $(dir $@)
 	$(LD) -m elf32ltsmip -z max-page-size=4096 -T lib/ldso/ldso.lds --gc-sections -o $@ $(filter %.o,$^)
 
@@ -351,16 +360,18 @@ endif
 
 ROMFS_BINS := $(foreach p,$(PROGS),$(OUT)/romfs/bin/$(p))
 
-$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py
-	$(PYTHON) tools/mkromfs.py $@ \
-	    $(foreach p,$(PROGS),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
+# mkromfs arguments for programs $(1) and assets $(2).
+ROMFS_ARGS = $(foreach p,$(1),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
 	    $(foreach l,$(ROMFS_LIBRARY_FILES),lib/$(notdir $(l))=$(l)) \
-	    $(foreach a,$(ASSET_FILES),res/$(notdir $(a))=$(a)) \
+	    $(foreach a,$(2),res/$(notdir $(a))=$(a)) \
 	    $(foreach w,$(WEB_FILES),web/$(notdir $(w))=$(w)) \
 	    $(foreach c,$(SSL_FILES),ssl/$(notdir $(c))=$(c)) \
 	    $(foreach s,$(SOUND_FILES),sounds/$(notdir $(s))=$(s)) \
 	    $(foreach f,$(WL54CF_FW),firmware/$(notdir $(f))=$(f)) \
 	    $(if $(INPUT_SCRIPT),test/input.txt=$(INPUT_SCRIPT))
+
+$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py
+	$(PYTHON) tools/mkromfs.py $@ $(call ROMFS_ARGS,$(PROGS),$(ASSET_FILES))
 
 # ---- kernel -----------------------------------------------------------------
 
@@ -531,8 +542,23 @@ $(GB_DIR)/kernel.bin: $(OUT)/kernel.elf tools/mkkernelbin.py
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/mkkernelbin.py $< $@
 
-$(GB_DIR)/romfs.img: $(OUT)/romfs.img
-	cp $< $@
+# A RAM boot holds all of romfs in RAM, so GlazeBoot's carries only the apps
+# in GB_APPS (SpringBoard shows the built-ins it finds), with their icons;
+# servers and test programs always go in. GB_APPS=all keeps every app.
+GB_APPS ?= appstore browser settings
+GB_TEST_PROGS := ktest ktest_pong ldtest ldtest_peer ldtest_ro ldtest_oom ldmem
+ifeq ($(GB_APPS),all)
+GB_DROP :=
+else
+GB_DROP := $(filter-out $(GB_APPS) $(GB_TEST_PROGS),$(notdir $(wildcard apps/*)))
+endif
+GB_PROGS := $(filter-out $(GB_DROP),$(PROGS))
+GB_ASSETS := $(filter-out $(foreach a,$(GB_DROP),assets/gen/icon_$(a).gzi) \
+    $(if $(filter clock,$(GB_DROP)),assets/gen/tab_%.gzi),$(ASSET_FILES))
+
+$(GB_DIR)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py FORCE
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/mkromfs.py $@ $(call ROMFS_ARGS,$(GB_PROGS),$(GB_ASSETS))
 
 $(GB_DIR)/glaze.cfg: wince/glazeboot/glaze.cfg
 	@mkdir -p $(dir $@)

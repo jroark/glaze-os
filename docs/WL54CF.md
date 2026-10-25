@@ -73,8 +73,11 @@ NAND direct I/O on this board. The minimal CIS/B1 revision are model choices,
 not a captured physical card EEPROM. This is not yet a claim that the driver
 operates a real WL54-CF.
 
-SSID selection, Wi-Fi UI/signal icons, WEP/WPA, reassociation/hot removal and
-physical network access are deferred. The emulator's station implementation
+SSID selection, Wi-Fi UI/signal icons, WEP/WPA, reassociation and physical
+network access are deferred. The card can be inserted and pulled at run time
+(`kernel/drivers/cf.c`'s `pcmcia_poll`, `net.c`); a GlazeBoot boot swaps it in
+for the CF card (`EMU_ARGS="--cf-eject-after 40 --wl54cf --net-insert-after 45"
+tests/run_ceboot.sh 85 WL54CF=1`). The emulator's station implementation
 provides the virtual AP and existing NAT backend.
 
 ## Tests

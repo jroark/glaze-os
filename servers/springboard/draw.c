@@ -46,11 +46,16 @@ static const char *const months[12] = {
 
 void sb_draw_init(void)
 {
-    sb_num_apps = (int)(sizeof(builtin_apps) / sizeof(builtin_apps[0]));
-    for (int i = 0; i < sb_num_apps; i++) {
-        sb_apps[i] = builtin_apps[i];
-        sb_apps[i].present = true;
-        icon_ok[i] = res_image(&icons[i], sb_apps[i].icon);
+    sb_num_apps = 0;
+    for (unsigned i = 0; i < sizeof(builtin_apps) / sizeof(builtin_apps[0]); i++) {
+        /* GlazeBoot's romfs carries only some apps (the Makefile's GB_APPS):
+         * it all sits in RAM in a RAM boot. */
+        if (!sb_has_program(builtin_apps[i].path))
+            continue;
+        int n = sb_num_apps++;
+        sb_apps[n] = builtin_apps[i];
+        sb_apps[n].present = true;
+        icon_ok[n] = res_image(&icons[n], sb_apps[n].icon);
     }
     for (int i = 0; i < sb_num_wallpapers; i++)
         walls_ok[i] = res_image(&walls[i], sb_wallpapers[i]);

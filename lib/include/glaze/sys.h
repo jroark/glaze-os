@@ -97,6 +97,7 @@ static inline int gz_cf_read(uint32_t lba, uint32_t count, void *buf) { return G
 static inline int gz_cf_write(uint32_t lba, uint32_t count, const void *buf) { return GZ_SC3(SYS_CF_WRITE, lba, count, buf); }
 
 /* Network server only (see servers/net). */
+static inline int gz_wifi_ctl(uint32_t op, void *buf) { return GZ_SC2(SYS_WIFI_CTL, op, buf); }
 static inline int gz_net_info(struct gz_netif_info *info) { return GZ_SC1(SYS_NET_INFO, info); }
 static inline int gz_net_bind(int port) { return GZ_SC1(SYS_NET_BIND, port); }
 static inline int gz_net_send(const void *frame, uint32_t len) { return GZ_SC2(SYS_NET_SEND, frame, len); }

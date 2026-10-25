@@ -6,6 +6,7 @@
     snprintf; vsnprintf; printf; puts;
     __assert_fail; __glaze_ld_init; __glaze_ld_finish; __gz_errno; __gz_threaded;
     __divdi3; __moddi3; __udivdi3; __umoddi3;
+    __udivsi3; __umodsi3; __divsi3; __modsi3; __vr4120_divsi3; __vr4120_modsi3;
     __popcountsi2; __ctzsi2; __clzsi2; __bswapsi2;
     touch_identity; touch_valid; touch_apply; touch_fit;
     gz_thread_create; gz_thread_id; gz_mutex_init; gz_mutex_lock; gz_mutex_unlock; gz_mutex_destroy;

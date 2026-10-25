@@ -290,6 +290,12 @@ void wl54cf_irq(void)
         wl_write16(0x22, cause & (RX | EVENT));
     }
 }
+/* The card was pulled: stop using it; a card inserted later starts over. */
+void wl54cf_removed(void)
+{
+    KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
+    online = false;
+}
 int wl54cf_send(const uint8_t *frame, uint32_t len)
 {
     if (!online || len < 14 || len > GZ_ETH_FRAME_MAX || !wait_bits(0x20, TX))

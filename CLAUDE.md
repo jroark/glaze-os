@@ -149,6 +149,7 @@ and shared text editor.
 - GlazeBoot is a Windows CE program, not a Glaze one, and lives outside `apps/`. The loader (`wince/glazeboot/GlazeBoot.c`) is C built with the be300-dev toolchain (clang and the Casio SDK; `make glazeboot-exe`, natively, since `./build.sh` runs in a container). `make glazeboot` supplies its generated headers in `out/glazeboot/gen`:
   - `tramp_blob.h`: the trampoline (`tramp.c`, position independent) as bytes;
   - `glazeboot_abi.h`: shared layouts from `wince/glazeboot/mkabi.c`.
+- Its `romfs.img` is GlazeBoot's own: a RAM boot holds all of romfs in RAM, so it carries only the apps in `GB_APPS` (default `appstore browser settings`; `GB_APPS=all` for every app) and their icons, plus servers and test programs. SpringBoard shows only the built-in apps whose program romfs holds (`sb_has_program`).
 - It loads `kernel.bin` (`tools/mkkernelbin.py`) and `romfs.img` from a CF card (`tools/mkceboot.sh --autorun` makes one that Windows CE starts on insertion). The trampoline runs the page plan in `plan.h`. Until the console works, each stage paints the boot trace (`gz_boot_trace`, `glaze/bootinfo.h`) across the top of the screen.
 - The kernel gets a0 = `struct gz_bootinfo` (the SPL passes 0). `ram_boot` is then set:
   - romfs pages come straight from reserved RAM, with no cache;
@@ -160,7 +161,7 @@ and shared text editor.
 ## Hardware notes
 
 Register addresses and bit meanings follow the VR4131 and VRC4173 user's manuals and the be300 emulator's models (the `be300` and `mipsel-cross-image` repos hold the manuals, hardware dumps and the Linux port). Cite the manual section in comments when touching hardware code. Some things are known not to match real hardware yet:
-- **D-cache colouring:** owned pages and ELF mappings match their KSEG0 cache colour, with code publication cache maintenance. Existing device/resource/shared-memory policies remain; the emulator doesn't model cache contents, so real-hardware validation is still required.
+- **D-cache colouring:** owned pages, ELF mappings and shared memory match their KSEG0 cache colour, with code publication cache maintenance (shared-memory frame i has colour i & 1 and maps at a VA with bit 12 clear, `kernel/shm.c`; before that, session buffers corrupted network and file data on a real BE-300). Device and resource mappings keep their own policy; the emulator doesn't model cache contents.
 - **Factory bad-block marks:** these sit in the spare area and are never read.
 - **PCMCIA card setup:** the NE2000 and CF drivers assume the card already decodes I/O at port 0x300, as the emulator's does, and that a CF card decodes the secondary IDE ports. A real card needs its configuration option register written through attribute memory first; 0x0A00D200/D202 is the NAND direct-I/O port, not attribute offset 0x200, so `CF_CIS` only reaches the tuples. After Windows CE the CF data register carries one byte per access, so the driver uses 8-bit transfers.
 

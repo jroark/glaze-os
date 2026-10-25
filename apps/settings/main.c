@@ -3,6 +3,7 @@
 #include <glaze/audio.h>
 #include <glaze/display.h>
 #include <glaze/net.h>
+#include <glaze/wifi.h>
 #include <glaze/notify.h>
 #include <glaze/ntp.h>
 #include <glaze/passcode.h>
@@ -15,7 +16,7 @@
 #include <string.h>
 
 enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
-            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT };
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -29,6 +30,7 @@ enum {
     R_TOUCH = R_ZONE0 + 64, R_TOUCH_START, R_TOUCH_RESET, R_TOUCH_SAVE, R_TOUCH_RETRY, R_TOUCH_CANCEL,
     R_DISPLAY, R_BRIGHTNESS, R_CONTRAST, R_DISPLAY_RESET,
     R_TIMEOUT, R_TIMEOUT0, R_TIMEOUT_LAST = R_TIMEOUT0 + 5,
+    R_WIFI, R_WIFI_SCAN, R_WIFI_DISCONNECT, R_WIFI_AP0,
 };
 
 struct hit {
@@ -42,6 +44,40 @@ static int nhits;
 static int pressed = R_NONE;
 static int preview_wall;
 static char ping_result[24];
+static struct wifi_status wireless_status;
+static bool wifi_available;
+static uint32_t root_card;              /* the card and state the root list shows */
+
+/* What the root list depends on: whether there's a card, which, and its
+ * state. Cards come and go (cf.c's pcmcia_poll); net_status is answered at
+ * once. */
+static uint32_t card_key(struct net_status *st)
+{
+    if (net_status(st) < 0) {
+        memset(st, 0, sizeof(*st));
+        st->state = NET_NO_CARD;
+    }
+    wifi_available = st->state != NET_NO_CARD && st->kind == GZ_NET_XI825;
+    return st->state | (uint32_t)st->kind << 8;
+}
+static int wifi_error;
+static const char *wifi_name(uint32_t state)
+{
+    switch (state) {
+    case WIFI_CONNECTING: return "Connecting" GFX_CH_ELLIPSIS;
+    case WIFI_CONNECTED: return "Associated";
+    case WIFI_FAILED: return "Connection failed";
+    case WIFI_DISCONNECTED: return "Disconnected";
+    default: return "No Card";
+    }
+}
+/* SSIDs need not be printable or terminated. Render a safe display label. */
+static void wifi_ssid(char out[33], const struct wifi_ap *ap)
+{
+    unsigned n = MIN(ap->ssid_len, WIFI_SSID_MAX);
+    for (unsigned i = 0; i < n; i++) out[i] = ap->ssid[i] >= 32 && ap->ssid[i] < 127 ? ap->ssid[i] : '?';
+    out[n] = 0;
+}
 
 static const struct touch_point touch_targets[TOUCH_POINTS] = {
     { UI_W / 2, UI_H / 2 + SB_STATUS_H },
@@ -106,6 +142,10 @@ static int volume_before;           /* restored if the drag is cancelled */
 
 static void load(void)
 {
+    struct net_status st;
+    card_key(&st);
+    if (wifi_available)
+        net_wifi_status(&wireless_status);
     s_timeout = display_timeout_get();
     pref_get("sb.wallpaper", &s_wallpaper, 4);
     pref_get("sb.24h", &s_24h, 4);
@@ -229,6 +269,8 @@ static const char *net_state_name(uint32_t state)
     case NET_CONFIGURING:   return "Connecting" GFX_CH_ELLIPSIS;
     case NET_UP:            return "Connected";
     case NET_UP_STATIC:     return "Connected (static)";
+    case NET_DISCONNECTED:  return "Disconnected";
+    case NET_ASSOCIATING:   return "Joining Wi-Fi" GFX_CH_ELLIPSIS;
     default:                return "No Card";
     }
 }
@@ -246,10 +288,13 @@ static void draw_root(gfx_surface *s)
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
     ui_draw_navbar(s, "Settings", NULL, NULL, 0);
     section_y = UI_NAV_H + 12;
-    struct net_status st = { .state = NET_NO_CARD };
-    if (cell_visible(s) && net_status(&st) < 0)
-        st.state = NET_NO_CARD;
-    cell(s, 0, "Network", net_state_name(st.state), true, R_NETWORK);
+    /* A clipped-out row reuses the last status, and so the layout. */
+    static struct net_status st = { .state = NET_NO_CARD };
+    if (cell_visible(s))
+        root_card = card_key(&st);
+    if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
+    cell(s, wifi_available ? 1 : 0, "Network", net_state_name(st.state), true, R_NETWORK);
+    if (wifi_available) cell(s, 3, "Wi-Fi", wifi_name(wireless_status.state), true, R_WIFI);
     section_gap();
     cell(s, 1, "Sounds", NULL, true, R_SOUNDS);
     cell(s, 2, "Display", NULL, true, R_DISPLAY);
@@ -388,7 +433,7 @@ static void draw_network(gfx_surface *s)
     if (st.state == NET_NO_CARD) {
         cell(s, 0, "Status", "No Card", false, 0);
         gfx_text_center(s, 0, section_y + 10, UI_W, ui_font(FONT_R12),
-                        "Insert an NE2000 Ethernet card.", 0x4C566C, 255);
+                        "Insert an Ethernet or Wi-Fi card.", 0x4C566C, 255);
         return;
     }
     snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -505,6 +550,70 @@ static void draw_zone(gfx_surface *s)
         add_hit(vis, R_ZONE0 + i);
     }
     ui_draw_navbar(s, "Time Zone", "Date & Time", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+}
+
+static void draw_wifi(gfx_surface *s)
+{
+    gfx_rect area = zone_area();
+    gfx_surface c = *s;
+    nhits = 0;
+    ui_draw_pinstripes(s, area);
+    gfx_rect_intersect(s->clip, area, &c.clip);
+    const struct wifi_status *st = &wireless_status;
+    unsigned count = MIN(st->count, WIFI_AP_MAX);
+    zone_scroll.content_h = 24 + 2 * UI_ROW_H + 14 + MAX(count, 1u) * UI_ROW_H;
+    if (wifi_error || st->error) zone_scroll.content_h += UI_ROW_H + 14;
+    if (st->state == WIFI_CONNECTED || st->state == WIFI_CONNECTING)
+        zone_scroll.content_h += 14 + UI_ROW_H;
+    if (st->state == WIFI_CONNECTED) zone_scroll.content_h += 14 + 6 * UI_ROW_H;
+    if (!zone_scroll.dragging && !zone_scroll.animating)
+        zone_scroll.offset = MAX(0, MIN(zone_scroll.offset, ui_scroll_max(&zone_scroll)));
+    section_y = UI_NAV_H + 12 - zone_scroll.offset;
+    cell(&c, 1, "Status", wifi_name(st->state), false, 0);
+    cell(&c, 3, st->scanning ? "Scanning" GFX_CH_ELLIPSIS : "Scan Networks", NULL,
+         !st->scanning, st->scanning ? 0 : R_WIFI_SCAN);
+    section_gap();
+    if (wifi_error || st->error) {
+        int err = wifi_error ? wifi_error : st->error;
+        cell(&c, 0, err == GZ_ETIMEDOUT ? "Connection timed out" : "Wi-Fi request failed", NULL, false, 0);
+        section_gap();
+    }
+    if (!st->count) cell(&c, 0, st->scanning ? "Searching for networks" : "No networks found", NULL, false, 0);
+    for (unsigned i = 0; i < MIN(st->count, WIFI_AP_MAX); i++) {
+        char name[33]; wifi_ssid(name, &st->aps[i]);
+        bool enabled = !st->aps[i].privacy && st->state != WIFI_CONNECTING;
+        cell(&c, st->count == 1 ? 0 : i == 0 ? 1 : i + 1 == st->count ? 3 : 2,
+             "", NULL, enabled, enabled ? R_WIFI_AP0 + i : 0);
+        /* Clip long SSIDs before the disclosure icon or security label. */
+        gfx_surface label = c;
+        gfx_rect r = gfx_r(CELL_X + 10, section_y - UI_ROW_H, enabled ? 185 : 115, UI_ROW_H);
+        gfx_rect_intersect(c.clip, r, &label.clip);
+        gfx_text(&label, r.x, r.y + 7, ui_font(FONT_B13), name, UI_TEXT, 255);
+        if (st->aps[i].privacy)
+            gfx_text(&c, 145, r.y + 8, ui_font(FONT_R12), "Unsupported", UI_TEXT_DETAIL, 255);
+    }
+    if (st->state == WIFI_CONNECTED || st->state == WIFI_CONNECTING) {
+        char name[33], text[32]; wifi_ssid(name, &st->current);
+        section_gap();
+        cell(&c, 0, "Disconnect", NULL, true, R_WIFI_DISCONNECT);
+        if (st->state == WIFI_CONNECTED) {
+            section_gap();
+            cell(&c, 1, "SSID", NULL, false, 0);
+            cell(&c, 2, name, NULL, false, 0);
+            snprintf(text, sizeof(text), "%02x:%02x:%02x:%02x:%02x:%02x",
+                st->current.bssid[0], st->current.bssid[1], st->current.bssid[2],
+                st->current.bssid[3], st->current.bssid[4], st->current.bssid[5]);
+            cell(&c, 2, "BSSID", text, false, 0);
+            snprintf(text, sizeof(text), "%u", st->current.channel);
+            cell(&c, 2, "Channel", text, false, 0);
+            snprintf(text, sizeof(text), "%u", st->current.signal);
+            cell(&c, 2, "Signal", text, false, 0);
+            snprintf(text, sizeof(text), "%u%s Mbps", st->current.rate / 2, st->current.rate & 1 ? ".5" : "");
+            cell(&c, 3, "Rate", text, false, 0);
+        }
+    }
+    ui_draw_navbar(s, "Wi-Fi", "Settings", &back_rect, 0);
     add_hit(back_rect, R_BACK);
 }
 
@@ -657,6 +766,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_DATETIME: draw_datetime(s); break;
     case V_ABOUT: draw_about(s); break;
     case V_NETWORK: draw_network(s); break;
+    case V_WIFI: draw_wifi(s); break;
     case V_PASSCODE: draw_passcode(s); break;
     case V_PIN: draw_pin(s); break;
     case V_SOUNDS: draw_sounds(s); break;
@@ -1039,6 +1149,25 @@ static void pin_key(int k)
 
 static void activate(int id)
 {
+    if (id == R_WIFI) {
+        wifi_error = net_wifi_status(&wireless_status);
+        ui_scroll_reset(&zone_scroll, 0, UI_H - UI_NAV_H);
+        if (!wifi_error) wifi_error = net_wifi_scan();
+        go(V_WIFI, true);
+        return;
+    }
+    if (view == V_WIFI && (id == R_WIFI_SCAN || id == R_WIFI_DISCONNECT ||
+                           (id >= R_WIFI_AP0 && id < R_WIFI_AP0 + WIFI_AP_MAX))) {
+        if (id == R_WIFI_SCAN) wifi_error = net_wifi_scan();
+        else if (id == R_WIFI_DISCONNECT) wifi_error = net_wifi_disconnect();
+        else {
+            unsigned index = id - R_WIFI_AP0;
+            if (index >= wireless_status.count || wireless_status.aps[index].privacy) return;
+            wifi_error = net_wifi_connect(wireless_status.aps[index].ssid, wireless_status.aps[index].ssid_len);
+        }
+        net_wifi_status(&wireless_status);
+        return;
+    }
     if (id == R_TIMEOUT) {
         display_msg = NULL;
         go(V_TIMEOUT, true);
@@ -1264,7 +1393,7 @@ static int hit_test(int x, int y);
  * for it (the nav bar's back button). */
 static bool zone_touch(const struct gz_input_event *ev)
 {
-    if (view != V_ZONE || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
+    if ((view != V_ZONE && view != V_WIFI) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
                            ev->type != GZ_EV_TOUCH_UP))
         return false;
     if (ev->type == GZ_EV_TOUCH_DOWN)
@@ -1284,8 +1413,11 @@ static bool zone_touch(const struct gz_input_event *ev)
         pressed = R_NONE;
         if (id != R_NONE && hit_test(ev->x, ev->y) == id) {
             activate(id);
-            if (view != V_ZONE)
+            if (view == V_WIFI) {
+                redraw_rect(zone_area());
                 return true;
+            }
+            if (view != V_ZONE) return true;
         }
     }
     if (zone_scroll.offset != old_offset)
@@ -1297,6 +1429,7 @@ static bool zone_touch(const struct gz_input_event *ev)
 
 static int hit_test(int x, int y)
 {
+    if (view == V_WIFI && y < UI_NAV_H) return gfx_rect_contains(back_rect, x, y) ? R_BACK : R_NONE;
     /* Later entries (buttons inside cells) take priority. */
     for (int i = nhits - 1; i >= 0; i--) {
         if (gfx_rect_contains(hits[i].r, x, y))
@@ -1315,17 +1448,35 @@ int main(void)
 
     for (;;) {
         struct gz_input_event ev;
-        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK ? 1000 : -1;
+        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI ? 1000
+                    : view == V_ROOT ? 2000 : -1;
         if (view == V_TOUCH_TEST)
             timeout = 250;
-        if (view == V_ZONE && zone_scroll.animating)
+        if ((view == V_ZONE || view == V_WIFI) && zone_scroll.animating)
             timeout = 16;
         if (!ui_next_event(&ev, timeout)) {
             if (view == V_TOUCH_TEST) {
                 touch_test_tick();
                 continue;
             }
-            if (view == V_ZONE) {
+            if (view == V_ROOT) {
+                struct net_status st;
+                if (card_key(&st) != root_card)
+                    redraw();       /* a card came or went: rows change */
+                continue;
+            }
+            if (view == V_WIFI && !zone_scroll.animating) {
+                struct net_status st;
+                card_key(&st);
+                if (!wifi_available) {      /* the card was pulled */
+                    view = V_ROOT;
+                    redraw();
+                    continue;
+                }
+                int rv = net_wifi_status(&wireless_status);
+                if (rv) { memset(&wireless_status, 0, sizeof(wireless_status)); wifi_error = rv; }
+                redraw_rect(zone_area());
+            } else if (view == V_ZONE || view == V_WIFI) {
                 int old_offset = zone_scroll.offset;
                 ui_scroll_step(&zone_scroll);
                 if (zone_scroll.offset != old_offset)

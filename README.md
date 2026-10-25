@@ -12,11 +12,11 @@ boot ROM from NAND. The project site is [glaze-os.com](https://glaze-os.com)
 | --- | --- |
 | `boot/` | Stage-1 SPL loaded by the boot ROM; it streams the kernel from NAND |
 | `kernel/` | Exceptions, TLB/page tables, scheduler, IPC, shared memory, ELF loader, romfs, syscalls |
-| `kernel/drivers/` | ICU/GIU interrupt cascade, PIU touch, buttons, RTC, NAND, raw flash for the file server, NE2000 Ethernet |
+| `kernel/drivers/` | ICU/GIU interrupt cascade, PIU touch, buttons, RTC, NAND, raw flash for the file server, NE2000 Ethernet, XI-825 Wi-Fi |
 | `lib/` | Minimal libc, `libgfx` (RGB565 software renderer), `libui` (widgets, keyboard, transitions) |
 | `servers/springboard/` | Compositor, lock screen, home screen, app launching |
 | `servers/fs/` | File server: littlefs on Dhara on raw NAND, with ECC and bad-block handling (see below) |
-| `servers/net/` | Network server: lwIP (TCP, UDP, DHCP, DNS, ICMP) over the NE2000 (see below) |
+| `servers/net/` | Network server: lwIP (TCP, UDP, DHCP, DNS, ICMP) over Ethernet or XI-825 Wi-Fi (see below) |
 | `apps/` | Built-in apps, plus `ktest` (kernel self-tests) |
 | `packages/` | Installable apps, built as `.gzp` packages rather than into romfs (`hello`, the test app) |
 | `assets/` | Fonts (Bitstream Vera, see `assets/fonts/VeraCopyright.txt`) and generated art for romfs |
@@ -26,7 +26,8 @@ boot ROM from NAND. The project site is [glaze-os.com](https://glaze-os.com)
 | `tools/` | NAND image packer, romfs and package builder, Swift asset generator, PNG-to-GZI converter |
 
 All artwork is original. The device has no internal radios. Optional CF
-network cards use Settings > Network; the UI has no Wi-Fi signal indicators.
+network cards (NE2000, XI-825 and WL54-CF) appear in Settings; the XI-825
+adds Settings > Wi-Fi.
 
 ## Building
 
@@ -211,18 +212,24 @@ older OS builds still show memory and uptime. See [Task Manager](docs/TASK_MANAG
 
 ## Networking
 
-With an NE2000 PCMCIA card (`--ne2000` on the emulator), Glaze gets an
+With an NE2000 PCMCIA card (`--ne2000`) or a Z-Com XI-825 CF Wi-Fi card
+(`--xi825` on the emulator), Glaze gets an
 address by DHCP and can reach the network. The kernel driver
 (`kernel/drivers/ne2000.c`) only moves Ethernet frames, and only for the
 network server in `servers/net`, which runs
 [lwIP](https://savannah.nongnu.org/projects/lwip/). If DHCP doesn't answer
-within ten seconds, it falls back to 10.0.0.1/8 with 10.0.0.254 as router
+within ten seconds of an active link, it falls back to 10.0.0.1/8 with 10.0.0.254 as router
 and DNS server, the addresses of the emulator's NAT gateway.
 
 Apps use `lib/include/glaze/net.h`: `net_resolve`, `net_socket`,
 `net_connect`, `net_send`, `net_recv`, `net_bind`/`net_listen`/`net_accept`,
 `net_sendto`/`net_recvfrom` and `net_ping`. Calls that wait take a timeout.
 
+- **Settings > Wi-Fi** appears with XI-825. Scan and select **BE300**, the
+  emulator's open virtual network. The selected network reconnects on later
+  boots; Disconnect disables reconnection until you select a network again.
+  Physical Wi-Fi networks, WEP/WPA, and ad-hoc mode are outside this version.
+  See [XI-825 Wi-Fi](docs/WIFI.md) for controls, driver details, and tests.
 - **Settings > Network** shows the card, the address, router and DNS server,
   and pings the router.
 - **Browser** (`apps/browser`) loads web pages over HTTP/1.1 and renders

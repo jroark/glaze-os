@@ -1,0 +1,5 @@
+# Reuse t_wifi's filesystem: association must occur without selecting a network.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 102
+8500 drag 120 265 120 85 450

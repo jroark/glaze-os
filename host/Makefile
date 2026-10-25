@@ -429,6 +429,15 @@ browser-google: $(WEB_OBJS) libwolfssl.a libjerry.a ../out/host/browser-platform
 	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) libwolfssl.a libjerry.a -lm
 .PHONY: browser-google
 
+# Use the existing emulator as the independent PRISM firmware reference.
+XI825_MODEL ?= $(HOME)/src/be300
+xi825-test: ../tests/xi825.c ../kernel/drivers/xi825.c ../lib/include/glaze/wifi.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -Dxi825_init=prism_init -c $(XI825_MODEL)/src/hw/xi825.c -o ../out/host/xi825-model.o
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -I$(XI825_MODEL)/src/hw -o ../out/host/xi825-test ../tests/xi825.c ../out/host/xi825-model.o
+	../out/host/xi825-test
+.PHONY: xi825-test
+
 .PHONY: net-driver-test
 net-driver-test: ../tests/net_driver.c ../kernel/drivers/net.c
 	@mkdir -p ../out/host

@@ -6,12 +6,18 @@
  * frames the kernel queues (tcpip_input) and takes the core lock to touch
  * the interface.
  *
+ * The card can come and go: the main loop asks the kernel about it every
+ * CARD_CHECK_MS, attaching the interface to a card inserted after boot and
+ * taking it down when the card is pulled.
+ *
  * The interface asks DHCP for an address. If nothing answers within
  * DHCP_WAIT_MS it falls back to 10.0.0.1/8 with 10.0.0.254 as router and
  * DNS server, the addresses of the be300 emulator's NAT gateway.
  */
 
 #include <glaze/sys.h>
+#include <glaze/wifi.h>
+#include <glaze/prefs.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -25,11 +31,16 @@
 #include "server.h"
 
 #define DHCP_WAIT_MS    10000u
+#define CARD_CHECK_MS   2000u
 
 static struct netif nif;
 static struct gz_netif_info info;
 static volatile int state = NET_NO_CARD;     /* also set by the tcpip thread */
-static uint32_t dhcp_started;
+static uint32_t dhcp_started, card_checked;
+static int bound_port;
+static bool added;          /* netif_add has run (once, for the first card) */
+static bool wireless, associated;
+static struct wifi_preference saved;
 static uint8_t frame[1536] __attribute__((aligned(4)));
 static uint32_t rand_state;
 
@@ -105,6 +116,59 @@ static void tcpip_ready(void *arg)
     sys_sem_signal(arg);
 }
 
+/* Brings the interface up on the card the kernel reports in info. */
+static int attach(void)
+{
+    LOCK_TCPIP_CORE();
+    if (!added) {
+        if (!netif_add(&nif, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4, NULL, nif_init,
+                       tcpip_input)) {
+            UNLOCK_TCPIP_CORE();
+            return GZ_ENOMEM;
+        }
+        netif_set_status_callback(&nif, status_changed);
+        netif_set_default(&nif);
+        added = true;
+    } else {
+        memcpy(nif.hwaddr, info.mac, ETH_HWADDR_LEN);
+    }
+    wireless = info.kind == GZ_NET_XI825;
+    associated = false;
+    netif_set_up(&nif);
+    if (!wireless) {
+        netif_set_link_up(&nif);
+        dhcp_start(&nif);
+        dhcp_started = gz_time_ms();
+        state = NET_CONFIGURING;
+    } else state = NET_DISCONNECTED;
+    UNLOCK_TCPIP_CORE();
+    gz_net_bind(bound_port);
+    if (wireless) {
+        int len = pref_get(WIFI_PREF, &saved, sizeof(saved));
+        if (len == sizeof(saved) && saved.version == 1 && saved.reconnect == 1 &&
+            saved.network.ssid_len > 0 && saved.network.ssid_len <= WIFI_SSID_MAX) {
+            int rv = gz_wifi_ctl(WIFI_CONNECT, &saved.network);
+            net_log("wifi: saved network association %d\n", rv);
+        } else memset(&saved, 0, sizeof(saved));
+    }
+    return 0;
+}
+
+/* The card was pulled: no lease to release, just forget the link. */
+static void detach(void)
+{
+    LOCK_TCPIP_CORE();
+    dhcp_stop(&nif);
+    netif_set_link_down(&nif);
+    netif_set_down(&nif);
+    netif_set_addr(&nif, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4);
+    dns_setserver(0, IP_ADDR_ANY);
+    associated = false;
+    state = NET_NO_CARD;
+    UNLOCK_TCPIP_CORE();
+    net_log("net: network card removed\n");
+}
+
 int net_if_init(int port)
 {
     sys_sem_t ready;
@@ -114,34 +178,88 @@ int net_if_init(int port)
     tcpip_init(tcpip_ready, &ready);
     sys_arch_sem_wait(&ready, 0);
     sys_sem_free(&ready);
+    bound_port = port;
+    card_checked = gz_time_ms();
     if (gz_net_info(&info) < 0 || !info.present) {
         net_log("net: no network card\n");
         return GZ_ENETDOWN;
     }
+    return attach();
+}
+
+static void wifi_link(void)
+{
+    struct wifi_status status;
+    if (!wireless) return;
+    if (gz_wifi_ctl(WIFI_STATUS, &status) < 0) return;
+    bool up = status.state == WIFI_CONNECTED;
     LOCK_TCPIP_CORE();
-    struct netif *n = netif_add(&nif, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4, NULL, nif_init, tcpip_input);
-    if (n) {
-        netif_set_status_callback(&nif, status_changed);
-        netif_set_default(&nif);
+    if (up && !associated) {
         netif_set_link_up(&nif);
-        netif_set_up(&nif);
-        dhcp_start(&nif);
-        dhcp_started = gz_time_ms();
         state = NET_CONFIGURING;
+        dhcp_started = gz_time_ms();
+        dhcp_start(&nif);
+        net_log("wifi: associated, starting DHCP\n");
+    } else if (!up && associated) {
+        dhcp_release_and_stop(&nif);
+        netif_set_link_down(&nif);
+        netif_set_addr(&nif, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4);
+        dns_setserver(0, IP_ADDR_ANY);
+        net_log("wifi: link down\n");
     }
+    associated = up;
+    if (!up) state = status.state == WIFI_CONNECTING ? NET_ASSOCIATING : NET_DISCONNECTED;
     UNLOCK_TCPIP_CORE();
-    if (!n)
-        return GZ_ENOMEM;
-    gz_net_bind(port);
-    return 0;
+}
+
+int net_if_wifi(uint32_t op, void *buf)
+{
+    if (!wireless) return GZ_ENOENT;
+    if (op == WIFI_STATUS || op == WIFI_SCAN) return gz_wifi_ctl(op, buf);
+    if (op != WIFI_CONNECT && op != WIFI_DISCONNECT) return GZ_EINVAL;
+    struct wifi_preference next = saved;
+    if (op == WIFI_CONNECT) {
+        struct wifi_request *req = buf;
+        if (!req->ssid_len || req->ssid_len > WIFI_SSID_MAX) return GZ_EINVAL;
+        memset(&next, 0, sizeof(next));
+        next.network = *req;
+    }
+    next.version = 1;
+    next.reconnect = op == WIFI_CONNECT;
+    /* Persist the intent before changing the card: errors remain reviewable. */
+    int rv = pref_put(WIFI_PREF, &next, sizeof(next));
+    if (rv) return rv;
+    saved = next;
+    /* Force the old link down before another association can complete, so
+     * switching networks always discards the previous lease and DNS. */
+    if (op == WIFI_CONNECT) {
+        rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL);
+        wifi_link();
+        if (rv) return rv;
+    }
+    rv = gz_wifi_ctl(op, buf);
+    wifi_link();
+    return rv;
 }
 
 void net_if_poll(void)
 {
     int n;
+    uint32_t now = gz_time_ms();
 
+    if (now - card_checked >= CARD_CHECK_MS) {
+        card_checked = now;
+        bool present = gz_net_info(&info) >= 0 && info.present;
+        if (state == NET_NO_CARD && present) {
+            net_log("net: network card inserted\n");
+            attach();
+        } else if (state != NET_NO_CARD && !present) {
+            detach();
+        }
+    }
     if (state == NET_NO_CARD)
         return;
+    wifi_link();
     while ((n = gz_net_recv(frame, sizeof(frame))) > 0) {
         struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)n, PBUF_POOL);
         if (!p)
@@ -178,6 +296,7 @@ void net_if_status(struct net_status *st)
     st->state = (uint32_t)state;
     gz_net_info(&info);
     memcpy(st->mac, info.mac, sizeof(st->mac));
+    st->kind = state == NET_NO_CARD ? GZ_NET_NONE : info.kind;
     st->rx_frames = info.rx_frames;
     st->tx_frames = info.tx_frames;
     st->rx_dropped = info.rx_dropped;
