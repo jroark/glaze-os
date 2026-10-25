@@ -69,21 +69,9 @@
 #define RX_START    0x46
 #define RX_STOP     0x80
 
-#define QUEUE_LEN   8
-#define FRAME_MIN   60
-
-struct frame {
-    uint16_t len;
-    uint8_t data[1536];
-};
-
 static bool present;
 static uint8_t mac[6];
-static int bound_port;
-static struct frame queue[QUEUE_LEN];
-static uint32_t q_head, q_tail;
-static uint32_t rx_frames, tx_frames, rx_dropped, overruns;
-static uint8_t tx_buf[1536] __attribute__((aligned(4)));
+static uint8_t rx_buf[1536];
 static uint8_t run = CR_STP;        /* CR_STA once the NIC is started */
 
 static void page0(void)
@@ -181,21 +169,14 @@ static void receive(void)
         uint8_t after = hdr[1];
         if (after < RX_START || after >= RX_STOP || count < 4 + 14) {
             /* A corrupt header: give up on the ring's contents. */
-            rx_dropped++;
+            net_rx_drop();
             after = read_curr();
         } else {
             uint16_t len = (uint16_t)(count - 4);
-            if (len > sizeof(queue[0].data))
-                len = sizeof(queue[0].data);
-            if (q_head - q_tail >= QUEUE_LEN) {
-                rx_dropped++;
-            } else {
-                struct frame *f = &queue[q_head % QUEUE_LEN];
-                ring_read((uint16_t)((next << 8) + 4), f->data, len);
-                f->len = len;
-                q_head++;
-                rx_frames++;
-            }
+            if (len > sizeof(rx_buf))
+                len = sizeof(rx_buf);
+            ring_read((uint16_t)((next << 8) + 4), rx_buf, len);
+            net_receive(rx_buf, len);
         }
         uint8_t bnry = (uint8_t)(after - 1);
         if (bnry < RX_START)
@@ -209,7 +190,7 @@ static void receive(void)
  * the ring, then leave loopback. */
 static void overflow(void)
 {
-    overruns++;
+    net_overrun();
     NE_REG(CR) = CR_NODMA | CR_STP;
     wait_isr(ISR_RST);
     NE_REG(RBCR0) = 0;
@@ -225,7 +206,6 @@ void ne2000_irq(void)
 {
     if (!present)
         return;
-    uint32_t before = q_head;
     for (int i = 0; i < 4; i++) {
         uint8_t isr = NE_REG(ISR) & (uint8_t)~ISR_RDC;
         if (!isr)
@@ -238,8 +218,6 @@ void ne2000_irq(void)
         }
         NE_REG(ISR) = isr & (uint8_t)~(ISR_PRX | ISR_RXE | ISR_OVW);
     }
-    if (q_head != before && bound_port > 0)
-        ipc_notify(bound_port, GZ_NOTIFY_NET);
 }
 
 void ne2000_init(void)
@@ -302,6 +280,7 @@ void ne2000_init(void)
     NE_REG(TCR) = 0;
     NE_REG(RCR) = RCR_AB;
     present = true;
+    net_set_mac(mac);
     KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;    /* its interrupt; irq_init masked it */
     kprintf("ne2000: MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -312,55 +291,8 @@ bool ne2000_present(void)
     return present;
 }
 
-static int check(struct proc *p)
+int ne2000_send(const uint8_t *tx_buf, uint32_t len)
 {
-    if (!(p->flags & PROC_NET))
-        return GZ_EPERM;
-    return present ? 0 : GZ_ENOENT;
-}
-
-int sys_net_info(struct proc *p, uint32_t uout)
-{
-    struct gz_netif_info info;
-
-    if (!(p->flags & PROC_NET))
-        return GZ_EPERM;
-    memset(&info, 0, sizeof(info));
-    info.present = present;
-    memcpy(info.mac, mac, sizeof(mac));
-    info.rx_frames = rx_frames;
-    info.tx_frames = tx_frames;
-    info.rx_dropped = rx_dropped;
-    info.overruns = overruns;
-    return copy_to_as(&p->as, uout, &info, sizeof(info));
-}
-
-int sys_net_bind(struct proc *p, int port)
-{
-    int rv = check(p);
-
-    if (rv)
-        return rv;
-    bound_port = port;
-    if (q_head != q_tail)
-        ipc_notify(port, GZ_NOTIFY_NET);
-    return 0;
-}
-
-int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len)
-{
-    int rv = check(p);
-
-    if (rv)
-        return rv;
-    if (len < 14 || len > GZ_ETH_FRAME_MAX)
-        return GZ_EINVAL;
-    if (copy_from_as(&p->as, tx_buf, ubuf, len))
-        return GZ_EINVAL;
-    if (len < FRAME_MIN) {
-        memset(tx_buf + len, 0, FRAME_MIN - len);
-        len = FRAME_MIN;
-    }
     dma_write(TX_PAGE << 8, tx_buf, (uint16_t)len);
     NE_REG(TPSR) = TX_PAGE;
     NE_REG(TBCR0) = (uint8_t)len;
@@ -373,22 +305,5 @@ int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len)
     NE_REG(ISR) = isr;
     if (!done || (isr & ISR_TXE))
         return GZ_EIO;
-    tx_frames++;
     return (int)len;
-}
-
-int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max)
-{
-    int rv = check(p);
-
-    if (rv)
-        return rv;
-    if (q_head == q_tail)
-        return 0;
-    struct frame *f = &queue[q_tail % QUEUE_LEN];
-    uint32_t n = MIN(f->len, max);
-    if (copy_to_as(&p->as, ubuf, f->data, n))
-        return GZ_EINVAL;
-    q_tail++;
-    return (int)n;
 }

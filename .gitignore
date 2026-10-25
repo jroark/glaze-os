@@ -24,3 +24,5 @@ __pycache__/
 host/browser.o/
 host/jerry.o
 host/libjerry.a
+
+/firmware/wl54cf/

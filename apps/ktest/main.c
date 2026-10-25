@@ -1,6 +1,6 @@
 /* Kernel self-test: IPC round trips, notifications, sleep, shm, malloc, faults,
  * threads and semaphores, the key/value store, the file server, the audio
- * server and, with an NE2000, the network. */
+ * server and, with a network card, the network. */
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -960,7 +960,7 @@ static void test_net(void)
           "net syscalls denied to apps");
     CHECK(net_status(&st) == 0, "net status");
     if (st.state == NET_NO_CARD) {
-        printf("ktest: SKIP network (no NE2000; boot with --ne2000)\n");
+        printf("ktest: SKIP network (no network card; boot with --ne2000 or --wl54cf)\n");
         CHECK(net_socket(NET_TCP) == GZ_ENETDOWN, "net down without a card");
         return;
     }
