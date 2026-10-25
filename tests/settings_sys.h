@@ -10,4 +10,6 @@ int gz_rtc_set(const struct gz_datetime *dt);
 int gz_sysinfo(struct gz_sysinfo *si);
 int gz_port_lookup(const char *name);
 int gz_notify(int port, uint32_t bits);
+int gz_getpid(void);
+int gz_send(int port, const struct gz_msg *msg, struct gz_msg *reply);
 #endif

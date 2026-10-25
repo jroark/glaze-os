@@ -1,0 +1,5 @@
+# Reuse t_display's filesystem. Run for 12 seconds: final Display levels
+# must be brightness 5 and contrast 8, loaded from the saved preference.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 264

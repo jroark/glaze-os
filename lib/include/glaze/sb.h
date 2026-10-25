@@ -48,6 +48,20 @@ enum {
     SB_BADGE_SET_FOR,       /* as SB_BADGE_SET, for req.path */
     SB_NOTE_POST_FOR,       /* as SB_NOTE_POST, for req.path */
     SB_NOTE_CANCEL_FOR,     /* as SB_NOTE_CANCEL, for req.path */
+    /* Foreground built-in Settings only; w3 = pid. PREVIEW carries a
+     * touch_calibration in w4..w10. All replies return a status in w0. */
+    SB_TOUCH_BEGIN,
+    SB_TOUCH_PREVIEW,
+    SB_TOUCH_SAVE,
+    SB_TOUCH_CANCEL,
+    SB_TOUCH_RESET,
+    /* Foreground Settings only; w1 = native brightness, w2 = contrast,
+     * w3 = pid. Replies return status in w0 and current levels in w1/w2. */
+    SB_DISPLAY_GET,
+    SB_DISPLAY_PREVIEW,
+    SB_DISPLAY_SAVE,
+    SB_DISPLAY_CANCEL,
+    SB_DISPLAY_RESET,
 };
 
 enum {
@@ -89,5 +103,9 @@ struct sb_shared {
 /* From libui, before DEACTIVATE when a touch is down: the touch is over, but
  * nothing was released, so nothing should act (x, y: its last position). */
 #define GZ_EV_TOUCH_CANCEL      0x103
+/* SpringBoard cancelled an unsaved calibration (timeout, Home or lock). */
+#define GZ_EV_TOUCH_CAL_END     0x104
+/* A system transition reverted a display drag; x/y = brightness/contrast. */
+#define GZ_EV_DISPLAY_REVERT    0x105
 
 #endif
