@@ -21,14 +21,36 @@
 
 #define RING_SIZE   64
 
-/* Power on and scan while the pen is down (WaitPenTouch mode). */
-#define PIU_SCAN    (PIUCNT_PIUPWR | PIUCNT_PIUSEQEN | PIUCNT_PADATSTART)
+/* Power on and scan while the pen is down (WaitPenTouch mode): start at
+ * pen-down and stop at pen-up, as Windows CE runs it (CNT 0x1304 in the
+ * idle dump) and NEC's driver (0x0326). Without PADATSTOP a real BE-300's
+ * sequencer stopped in state 6 after the first touch. */
+#define PIU_SCAN    (PIUCNT_PIUPWR | PIUCNT_PIUSEQEN | PIUCNT_PADATSTART | PIUCNT_PADATSTOP)
 
 static struct gz_input_event ring[RING_SIZE];
 static uint32_t ring_head, ring_tail;
 static int bound_port;
 static bool pen_down;
 static int pen_x, pen_y;
+
+/*
+ * Touch filtering for the resistive panel. A real BE-300's samples jump by
+ * more than a tap's slop as the contact settles and again at lift-off, so
+ * a still tap read as the start of a swipe (the emulator's are exact). As
+ * in tslib: drop samples without the valid flag (bit 15 of each ADC word,
+ * as NEC's vrc4173-piu.c checks), drop the first after pen-down, hold the
+ * latest back so the lift-off one is never reported, average the last
+ * FILTER_N, and only report a move of at least MOVE_MIN pixels.
+ */
+#define ADC_VALID       0x8000u
+#define FILTER_N        3
+#define MOVE_MIN        2
+
+static int stroke_samples;              /* valid samples since pen-down */
+static int first_x, first_y;            /* the dropped settling sample */
+static int win_x[FILTER_N], win_y[FILTER_N], win_n;
+static bool held;                       /* a filtered sample not yet reported */
+static int held_x, held_y;
 static uint8_t keys1, keys2;
 
 void input_push(uint16_t type, uint16_t code, int x, int y)
@@ -73,11 +95,74 @@ static bool adc_ok(uint16_t v, uint16_t lo, uint16_t hi)
     return v >= lo && v <= hi;
 }
 
+static void stroke_reset(void)
+{
+    stroke_samples = 0;
+    win_n = 0;
+    held = false;
+}
+
+static void report(int x, int y)
+{
+    if (!pen_down) {
+        input_push(GZ_EV_TOUCH_DOWN, 0, x, y);
+    } else {
+        int dx = x - pen_x, dy = y - pen_y;
+        if (dx < MOVE_MIN && dx > -MOVE_MIN && dy < MOVE_MIN && dy > -MOVE_MIN)
+            return;
+        input_push(GZ_EV_TOUCH_MOVE, 0, x, y);
+    }
+    pen_down = true;
+    pen_x = x;
+    pen_y = y;
+}
+
+static void touch_sample(int x, int y)
+{
+    if (stroke_samples++ == 0) {
+        first_x = x;
+        first_y = y;
+        return;
+    }
+    int i = win_n++ % FILTER_N, n = win_n < FILTER_N ? win_n : FILTER_N, sx = 0, sy = 0;
+    win_x[i] = x;
+    win_y[i] = y;
+    for (int k = 0; k < n; k++) {
+        sx += win_x[k];
+        sy += win_y[k];
+    }
+    if (held)
+        report(held_x, held_y);
+    held = true;
+    held_x = sx / n;
+    held_y = sy / n;
+}
+
+/* Pen-up: the held sample is the lift-off one and is dropped, unless the
+ * tap was too short to report anything, which then lands where it began. */
+static void touch_release(void)
+{
+    if (!pen_down && stroke_samples) {
+        if (held)
+            report(held_x, held_y);
+        else
+            report(first_x, first_y);
+    }
+    if (pen_down) {
+        pen_down = false;
+        input_push(GZ_EV_TOUCH_UP, 0, pen_x, pen_y);
+    }
+    stroke_reset();
+}
+
 static void read_page(uint32_t base)
 {
     uint16_t yp = REG16(base + 0x0), ym = REG16(base + 0x4);
     uint16_t xm = REG16(base + 0x8), xp = REG16(base + 0xC);
     int x = 0, y = 0, n = 0;
+
+    if (!(yp & ym & xm & xp & ADC_VALID))
+        return;
 
     /* Average the +/- plates when both are in range. */
     if (adc_ok(xp, ADC_X_MIN, ADC_X_MAX)) {
@@ -102,13 +187,7 @@ static void read_page(uint32_t base)
     if (y >= FB_HEIGHT)
         y = FB_HEIGHT - 1;
 
-    /* The panel keeps sampling a resting pen; only report movement. */
-    if (pen_down && x == pen_x && y == pen_y)
-        return;
-    input_push(pen_down ? GZ_EV_TOUCH_MOVE : GZ_EV_TOUCH_DOWN, 0, x, y);
-    pen_down = true;
-    pen_x = x;
-    pen_y = y;
+    touch_sample(x, y);
 }
 
 static void touch_irq(void)
@@ -116,10 +195,12 @@ static void touch_irq(void)
     uint16_t status = PIU_INT;
     uint16_t mask = status >> 8;
     uint16_t active = status & mask & 0xFF;
-    uint16_t ack = 0;
+    uint16_t ack = active & PIUINT_OTHER;
 
-    /* A short tap can deliver page data and pen-up together; publish the
-     * coordinates first. */
+    /* A new stroke starts clean; a short tap can deliver page data and
+     * pen-up together, so the coordinates come before the release. */
+    if ((active & PIUINT_PENCHG) && (PIU_CNT & PIUCNT_PENDOWN) && !pen_down)
+        stroke_reset();
     if (active & PIUINT_PAGE0) {
         read_page(PIU_PAGE0);
         ack |= PIUINT_PAGE0;
@@ -129,10 +210,8 @@ static void touch_irq(void)
         ack |= PIUINT_PAGE1;
     }
     if (active & PIUINT_PENCHG) {
-        if (!(PIU_CNT & PIUCNT_PENDOWN) && pen_down) {
-            pen_down = false;
-            input_push(GZ_EV_TOUCH_UP, 0, pen_x, pen_y);
-        }
+        if (!(PIU_CNT & PIUCNT_PENDOWN))
+            touch_release();
         ack |= PIUINT_PENCHG;
     }
     if (active & PIUINT_DATALOST) {
@@ -146,6 +225,10 @@ static void touch_irq(void)
     }
     if (ack)
         PIU_INT = (uint16_t)((mask << 8) | ack);
+    /* Re-arm the scan after every interrupt, as NEC's VRC4173 PIU driver
+     * does (linux4be 2.4 drivers/char/vrc4173-piu.c rewrites PIUCNTREG at
+     * the end of its handler); a no-op while the sequencer is scanning. */
+    PIU_CNT = PIU_SCAN;
 }
 
 static void key_edges(uint8_t now, uint8_t prev, uint8_t bit, uint16_t code)
@@ -196,13 +279,13 @@ void input_init(void)
     keys1 = KEYS_SET1;
     keys2 = KEYS_SET2;
 
-    /* PENCHG + page + datalost interrupts and WaitPenTouch scanning (doc:
-     * Touch; Linux driver). The interval is in 30 us units: the idle dump's
-     * 0x5DC samples at ~22 Hz, which loses the end of quick drags, so scan
-     * every ~10 ms instead. */
-    PIU_SIVL = 0x0150;
+    /* Windows CE's settings from the idle dump (hw_dump_vrc4173.txt
+     * 0x0A000300): a 0x5DC interval (30 us units, ~22 Hz) and stable count
+     * 0xC8, and interrupt mask 0xDD. A ~10 ms interval lost data on the
+     * first touch on a real BE-300. */
+    PIU_SIVL = 0x05DC;
     PIU_STBL = 0x00C8;
-    PIU_INT = (PIUINT_PENCHG | PIUINT_DATALOST | PIUINT_PAGE0 | PIUINT_PAGE1) << 8;
+    PIU_INT = (PIUINT_PENCHG | PIUINT_DATALOST | PIUINT_PAGE0 | PIUINT_PAGE1 | PIUINT_OTHER) << 8;
     PIU_CNT = PIU_SCAN;
     stowaway_init();
 #ifdef GLAZE_INPUT_SCRIPT

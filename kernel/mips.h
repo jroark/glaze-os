@@ -73,6 +73,8 @@
 #define write_c0_compare(v)     mtc0($11, v)
 #define read_c0_badvaddr()      mfc0($8)
 #define read_c0_prid()          mfc0($15)
+#define read_c0_config()        mfc0($16)
+#define write_c0_config(v)      mtc0($16, v)
 #define read_c0_entryhi()       mfc0($10)
 #define write_c0_entryhi(v)     mtc0($10, v)
 

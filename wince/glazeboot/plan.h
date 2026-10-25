@@ -1,8 +1,8 @@
 /*
  * GlazeBoot's hand-over plan, shared by the trampoline (tramp.c), the host
  * test (tests/glazeboot_plan.c), the ramboot SPL (boot/spl.c) and, through
- * the generated glazeboot_abi.h (mkabi.c), the eVC loader
- * (evc/GlazeBoot.cpp).
+ * the generated glazeboot_abi.h (mkabi.c), the Windows CE loader
+ * (GlazeBoot.c).
  *
  * The loader reads the kernel and romfs into memory Windows CE gives it,
  * which is scattered over physical RAM, possibly over the very pages they

@@ -465,14 +465,15 @@ all: $(OUT)/glaze.bin $(PKG_FILES)
 
 # ---- GlazeBoot: boot from RAM out of Windows CE (docs/GLAZEBOOT.md) -----------
 
-# The loader is a Windows CE program built with eMbedded Visual C++ 3.0
-# from wince/glazeboot/evc. This builds what it needs from GCC and stages a
-# self-contained project in out/glazeboot/evc (CRLF): the trampoline as
-# bytes (tramp_blob.h, since eVC has no inline MIPS assembly) and the
-# layouts it shares with the kernel (glazeboot_abi.h). Build GlazeBoot.exe
-# there and put it in out/glazeboot for tools/mkceboot.sh.
+# The loader (wince/glazeboot/GlazeBoot.c) is a Windows CE program, built
+# on the host with the be300-dev toolchain (clang and the Casio SDK):
+# `make glazeboot-exe`. `make glazeboot` builds what it needs from GCC into
+# out/glazeboot/gen: the trampoline as bytes (tramp_blob.h) and the layouts
+# it shares with the kernel (glazeboot_abi.h). Under ./build.sh the two run
+# separately, the first in the container and the second natively.
 GB_DIR := $(OUT)/glazeboot
-GB_EVC := $(GB_DIR)/evc
+GB_GEN := $(GB_DIR)/gen
+BE300_DEV ?= ../be300-dev
 GB_CFLAGS := $(ARCHFLAGS) -std=gnu11 -ffreestanding -fno-builtin -nostdlib \
     -fno-stack-protector -fno-tree-loop-distribute-patterns -Os -Wall -Wextra -Ilib/include -MMD
 
@@ -490,7 +491,7 @@ $(GB_DIR)/tramp.checked: $(GB_DIR)/tramp.o
 $(GB_DIR)/tramp.elf: $(GB_DIR)/tramp.o $(GB_DIR)/tramp.checked wince/glazeboot/tramp.lds
 	$(LD) -m elf32ltsmip -T wince/glazeboot/tramp.lds -o $@ $<
 
-$(GB_EVC)/tramp_blob.h: $(GB_DIR)/tramp.elf tools/mktrampblob.py
+$(GB_GEN)/tramp_blob.h: $(GB_DIR)/tramp.elf tools/mktrampblob.py
 	@mkdir -p $(dir $@)
 	$(OBJCOPY) -O binary -j .text $< $(GB_DIR)/tramp.bin
 	$(CROSS)nm $< > $(GB_DIR)/tramp.sym
@@ -500,13 +501,9 @@ $(GB_DIR)/mkabi: wince/glazeboot/mkabi.c wince/glazeboot/plan.h lib/include/glaz
 	@mkdir -p $(dir $@)
 	$(HOSTCC) -std=gnu11 -Wall -Wextra -Ilib/include -o $@ $<
 
-$(GB_EVC)/glazeboot_abi.h: $(GB_DIR)/mkabi
+$(GB_GEN)/glazeboot_abi.h: $(GB_DIR)/mkabi
 	@mkdir -p $(dir $@)
 	$< > $@
-
-$(GB_EVC)/%: wince/glazeboot/evc/%
-	@mkdir -p $(dir $@)
-	sed 's/$$/\r/' $< > $@
 
 $(GB_DIR)/kernel.bin: $(OUT)/kernel.elf tools/mkkernelbin.py
 	@mkdir -p $(dir $@)
@@ -520,10 +517,24 @@ $(GB_DIR)/glaze.cfg: wince/glazeboot/glaze.cfg
 	cp $< $@
 
 GB_FILES := $(GB_DIR)/kernel.bin $(GB_DIR)/romfs.img $(GB_DIR)/glaze.cfg \
-    $(GB_EVC)/tramp_blob.h $(GB_EVC)/glazeboot_abi.h $(GB_EVC)/GlazeBoot.cpp $(GB_EVC)/GlazeBoot.vcp
+    $(GB_GEN)/tramp_blob.h $(GB_GEN)/glazeboot_abi.h
 
 glazeboot: $(GB_FILES)
-.PHONY: glazeboot
+
+# The loader, natively (no GCC needed): the generated headers must exist.
+BE300_RT := $(BE300_DEV)/build/rt/libbe300rt.a
+
+$(GB_DIR)/GlazeBoot.o: wince/glazeboot/GlazeBoot.c $(BE300_DEV)/tools/be300-cc $(GB_GEN)/tramp_blob.h $(GB_GEN)/glazeboot_abi.h
+	@[ -x $(BE300_DEV)/tools/be300-cc ] && [ -f $(BE300_RT) ] || \
+	    { echo "no be300-dev at $(BE300_DEV) (set BE300_DEV, run its setup.sh)" >&2; exit 1; }
+	$(BE300_DEV)/tools/be300-cc -Os -Wall -Wextra -Wno-unused-parameter -I$(GB_GEN) -c -o $@ $<
+
+$(GB_DIR)/GlazeBoot.exe: $(GB_DIR)/GlazeBoot.o
+	$(BE300_DEV)/tools/be300-ld -o $@ --map $(GB_DIR)/GlazeBoot.map $< $(BE300_RT) \
+	    -L $(BE300_DEV)/sdk/Lib -l coredll
+
+glazeboot-exe: $(GB_DIR)/GlazeBoot.exe
+.PHONY: glazeboot glazeboot-exe
 
 # RAM-boot test image (tests/run_ramboot.sh): an SPL that hands over the way
 # GlazeBoot does, through its trampoline, and optionally a FAT volume

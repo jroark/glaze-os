@@ -61,7 +61,10 @@ int nand_disk_open(bool rw)
     if (open_ && nand_disk_flush() < 0)
         return GZ_EIO;
     open_ = false;
-    if (nand_raw_read(0, table) < 0)
+    int rv = nand_raw_read(0, table);
+    if (rv == GZ_ENOENT)            /* GlazeBoot's nand=off */
+        return rv;
+    if (rv < 0)
         return GZ_EIO;
     for (uint32_t i = 0; i < TABLE_SLOTS; i++) {
         uint32_t start = u32(table + i * 16 + 8), len = u32(table + i * 16 + 12);

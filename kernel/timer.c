@@ -34,14 +34,32 @@ uint64_t time_us(void)
     return clock_update() * 1000u / count_per_ms;
 }
 
+/* Count's rate in the emulator, if the RTC can't measure it. */
+#define GUESS_COUNT_PER_MS  10372u
+/* RTC reads before giving up on it ticking: a tick is ~30 us, a read well
+ * under 1 us, so this is seconds. */
+#define RTC_POLLS           5000000u
+
+static bool rtc_ok;
+
+bool timer_rtc_ok(void)
+{
+    return rtc_ok;
+}
+
 static void calibrate(void)
 {
     /* Measure Count across 100 ms of RTC elapsed time (3277 ticks). */
     const uint16_t span = RTC_HZ / 10;
     uint16_t start = RTC_ETIME_L;
+    uint32_t n = 0;
 
+    count_per_ms = GUESS_COUNT_PER_MS;
     while (RTC_ETIME_L == start)
-        ;
+        if (++n == RTC_POLLS) {
+            kputs("timer: the RTC isn't counting; guessing Count's rate\n");
+            return;
+        }
     start = RTC_ETIME_L;
     uint32_t c0 = read_c0_count();
     while ((uint16_t)(RTC_ETIME_L - start) < span)
@@ -51,6 +69,7 @@ static void calibrate(void)
     count_per_ms = (c1 - c0) / 100u;
     if (count_per_ms == 0)
         count_per_ms = 1;
+    rtc_ok = true;
 }
 
 void timer_init(void)
@@ -73,6 +92,7 @@ void timer_irq(void)
     if ((int32_t)(next_compare - now) <= 0)
         next_compare = now + count_per_tick;
     write_c0_compare(next_compare);     /* also acknowledges IP7 */
+    cmcu_tick();
     sched_timer_tick(time_us());
     input_poll();
     ne2000_irq();

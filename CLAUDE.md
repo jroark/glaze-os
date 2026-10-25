@@ -14,9 +14,11 @@ make -j8 INPUT_SCRIPT=tests/x.txt # replay scripted input (see Testing)
 make -C host fstest               # native build of the file-system stack test
 make -C host fat-test             # CF/FAT volume test on FAT12/16/32 images, then fsck.fat
 make -C host ui-events-test       # libui's touch cancel, suspension and resume, natively
-make glazeboot                    # GlazeBoot, booting Glaze from RAM out of Windows CE (docs/GLAZEBOOT.md)
+make glazeboot                    # GlazeBoot's GCC parts, booting Glaze from RAM out of Windows CE (docs/GLAZEBOOT.md)
+make glazeboot-exe                # the GlazeBoot.exe loader, natively with ../be300-dev (BE300_DEV)
 make -C host glazeboot-test       # its page hand-over plan on random layouts
 tests/run_ramboot.sh 90 INIT=bin/ktest  # RAM boot through GlazeBoot's trampoline in the emulator
+tests/run_ceboot.sh 90            # GlazeBoot from a CF card under the emulator's stock Windows CE
 ```
 
 There is no linter; the build uses `-Wall -Wextra` and should stay warning-free. `compile_flags.txt` is for clangd.
@@ -143,15 +145,15 @@ and shared text editor.
 - Images go through vendored `stb_image.h` (PNG, JPEG, GIF), downscaled at decode time; a document tree's decoded images are capped at 3 MiB.
 
 **RAM boot** (`wince/glazeboot`, `glaze/bootinfo.h`, `docs/GLAZEBOOT.md`):
-- GlazeBoot is a Windows CE program, not a Glaze one, and lives outside `apps/`. The loader (`evc/GlazeBoot.cpp`, `GlazeBoot.vcp`) is built with eMbedded Visual C++ 3.0 from the folder `make glazeboot` stages in `out/glazeboot/evc`. The GCC build supplies that folder's generated headers:
-  - `tramp_blob.h`: the trampoline (`tramp.c`, position independent) as bytes, since eVC has no inline MIPS assembly;
+- GlazeBoot is a Windows CE program, not a Glaze one, and lives outside `apps/`. The loader (`wince/glazeboot/GlazeBoot.c`) is C built with the be300-dev toolchain (clang and the Casio SDK; `make glazeboot-exe`, natively, since `./build.sh` runs in a container). `make glazeboot` supplies its generated headers in `out/glazeboot/gen`:
+  - `tramp_blob.h`: the trampoline (`tramp.c`, position independent) as bytes;
   - `glazeboot_abi.h`: shared layouts from `wince/glazeboot/mkabi.c`.
-- It loads `kernel.bin` (`tools/mkkernelbin.py`) and `romfs.img` from a CF card. The trampoline runs the page plan in `plan.h`.
+- It loads `kernel.bin` (`tools/mkkernelbin.py`) and `romfs.img` from a CF card (`tools/mkceboot.sh --autorun` makes one that Windows CE starts on insertion). The trampoline runs the page plan in `plan.h`. Until the console works, each stage paints the boot trace (`gz_boot_trace`, `glaze/bootinfo.h`) across the top of the screen.
 - The kernel gets a0 = `struct gz_bootinfo` (the SPL passes 0). `ram_boot` is then set:
   - romfs pages come straight from reserved RAM, with no cache;
   - `SYS_FLASH_*` are a RAM disk (`SYS_FLASH_INFO` gives its size);
   - `SYS_NAND_*` open the whole NAND to the file server, never writing blocks 0-1.
-- The file server mounts Windows CE's FAT partition as `/NAND` (`servers/fs/nanddisk.c`, FatFs drive 1; the card is drive 0, and card paths go to FatFs unprefixed). Windows CE's spare-area ECC and block replacement aren't handled yet, so NAND writes are opt-in (`nand=rw`).
+- The file server mounts Windows CE's FAT partition as `/NAND` (`servers/fs/nanddisk.c`, FatFs drive 1; the card is drive 0, and card paths go to FatFs unprefixed). Windows CE's spare-area ECC and block replacement aren't handled yet, so NAND writes are opt-in (`nand=rw`). On a real BE-300 the first raw NAND read after Windows CE freezes the machine, so `glaze.cfg` ships `nand=off` (`GZ_BOOT_NAND_OFF`; `tests/run_ceboot.sh` passes `nand=ro`).
 - `make ramboot` (`boot/spl.c` with `-DSPL_RAMBOOT`) hands over the same way from the SPL, so the emulator can test it.
 
 ## Hardware notes
@@ -159,4 +161,11 @@ and shared text editor.
 Register addresses and bit meanings follow the VR4131 and VRC4173 user's manuals and the be300 emulator's models (the `be300` and `mipsel-cross-image` repos hold the manuals, hardware dumps and the Linux port). Cite the manual section in comments when touching hardware code. Some things are known not to match real hardware yet:
 - **D-cache colouring:** owned pages and ELF mappings match their KSEG0 cache colour, with code publication cache maintenance. Existing device/resource/shared-memory policies remain; the emulator doesn't model cache contents, so real-hardware validation is still required.
 - **Factory bad-block marks:** these sit in the spare area and are never read.
-- **PCMCIA card setup:** the NE2000 and CF drivers assume the card already decodes I/O at port 0x300, as the emulator's does, and that a CF card decodes the secondary IDE ports. A real card needs its configuration option register written through attribute memory first.
+- **PCMCIA card setup:** the NE2000 and CF drivers assume the card already decodes I/O at port 0x300, as the emulator's does, and that a CF card decodes the secondary IDE ports. A real card needs its configuration option register written through attribute memory first. After Windows CE, the CF probe reads garbage (`cf: , 7012384 sectors`).
+
+Learned on a real BE-300 through GlazeBoot (docs/GLAZEBOOT.md has the details), none of which the emulator showed:
+- **VR4131 PRId 0x0C80** needs Linux's CACHE-instruction workaround (Config bits 22 and 16), applied in `start.S` before any cached store because it also halves the D-cache line size.
+- **Watchdog:** Casio's power-management microcontroller (ScCmcu, 0x0A007800) resets the device 150 s after its last reload; `kernel/drivers/cmcu.c` replays Windows CE's reloads from the tick.
+- **GIRQ0 source enables:** bit 3 of 0x0A000010 + 4n enables source n (`KJ_SRC_*`); writing pending bits there is not an acknowledge.
+- **Touch:** the PIU needs PADATSTOP, mask 0xDD and a 45 ms scan interval as Windows CE sets them, and the resistive panel's samples are filtered (settle, hold-back, average) so taps don't read as swipes.
+- **Serial:** the sync cable's UART (shared with the Stowaway) only works once a Windows CE app has opened `COM1:`, which GlazeBoot does at 115200.

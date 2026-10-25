@@ -115,6 +115,11 @@ static int check_nand(struct proc *p, uint32_t block, bool write)
 {
     if (!(p->flags & PROC_FLASH) || !ram_boot)
         return GZ_EPERM;
+    /* GlazeBoot's nand=off: on a real BE-300 the first read after Windows CE
+     * stalls the bus in the stream window, freezing the machine, until the
+     * NAND engine's state after nanddisk.dll is understood. */
+    if (ram_boot->flags & GZ_BOOT_NAND_OFF)
+        return GZ_ENOENT;
     if (block >= GZ_NAND_BLOCKS)
         return GZ_EINVAL;
     if (write && (!(ram_boot->flags & GZ_BOOT_NAND_RW) || block < GZ_NAND_FIRST_WRITABLE))

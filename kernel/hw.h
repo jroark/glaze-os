@@ -27,7 +27,9 @@
 #define ICU_MSYSINT1        REG16(ICU_BASE + 0x0C)
 #define ICU_MGIUINTL        REG16(ICU_BASE + 0x14)
 #define ICU_SYSINT2         REG16(0x0F0000A0u)
+#define ICU_GIUINTH         REG16(0x0F0000A2u)
 #define ICU_MSYSINT2        REG16(0x0F0000A6u)
+#define ICU_MGIUINTH        REG16(0x0F0000A8u)
 #define SYSINT1_RTCL1       (1u << 2)
 #define SYSINT1_GIU         (1u << 8)
 
@@ -49,12 +51,31 @@
 /* VR4131 GIU (doc: GPIO). */
 #define GIU_BASE            0x0F000140u
 #define GIU_INTSTATL        REG16(GIU_BASE + 0x08)
+#define GIU_INTSTATH        REG16(GIU_BASE + 0x0A)
 #define GIU_INTENL          REG16(GIU_BASE + 0x0C)
+#define GIU_INTENH          REG16(GIU_BASE + 0x0E)
 
 /* VRC4173 companion: GIRQ0 cascade on GIU line 0 (doc: Interrupts; the
- * Linux port's irq.c). Status and ack are write-1-to-clear. */
+ * Linux port's irq.c). KJ_INTSTAT shows each source's level. */
 #define KJ_INTSTAT          REG32(0x0A000004u)
-#define KJ_INTACK           REG32(0x0A000014u)
+/* Per-source control for GIRQ0 bits 0 (PCMCIA) and 1 (buttons): bit 3
+ * enables the source. Windows CE's OAL masks a source in its ISR with
+ * `&= ~0x08` (docs hardware.txt, GIRQ0-0 and GIRQ0-1), and both read 0x0C
+ * under Windows CE (hw_dump_vrc4173.txt core block). The emulator takes any
+ * write to either as that source's acknowledge. */
+#define KJ_SRC_PCMCIA       REG32(0x0A000010u)
+#define KJ_SRC_KEYS         REG32(0x0A000014u)
+#define KJ_SRC_ENABLE       0x08u
+
+
+/* ScCmcu, the companion's interface to Casio's power-management
+ * microcontroller (hardware.txt:189, "ScCmcu Base on companion"). */
+#define CMCU_BASE           0x0A007800u
+#define CMCU_CMD            REG32(CMCU_BASE + 0x08)
+#define CMCU_ARG            REG32(CMCU_BASE + 0x0C)
+#define CMCU_CONFIG         REG32(CMCU_BASE + 0x10)
+#define CMCU_TIMEOUT        REG32(CMCU_BASE + 0x14)
+#define CMCU_STATUS         REG32(CMCU_BASE + 0x34)
 #define KJ_CF_CAUSE         REG32(0x0A00A03Cu)
 #define KJ_INT_CF           (1u << 0)
 #define KJ_INT_KEYS         (1u << 1)
@@ -145,10 +166,12 @@
 #define PIUCNT_PIUPWR       0x0002u
 #define PIUCNT_PIUSEQEN     0x0004u
 #define PIUCNT_PADATSTART   0x0100u
+#define PIUCNT_PADATSTOP    0x0200u
 #define PIUCNT_PENDOWN      0x2000u
 #define PIUINT_PENCHG       0x01u
 #define PIUINT_DATALOST     0x04u
 #define PIUINT_PAGE0        0x08u
+#define PIUINT_OTHER        0xC0u   /* enabled by Windows CE; acknowledged */
 #define PIUINT_PAGE1        0x10u
 
 /* Buttons (doc: Buttons). A dummy halfword read at +2 precedes the live
