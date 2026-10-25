@@ -2,7 +2,7 @@
     memcpy; memmove; memset; memcmp; memchr; strlen; strcmp; strncmp; strncpy;
     strchr; strlcpy; strlcat; strcpy; strcat; strncat; strrchr; strstr; strspn;
     strcspn; strnlen; strdup; strndup; strcasecmp; strncasecmp;
-    malloc; calloc; realloc; free; exit; abs; atoi; strtol; strtoul; qsort;
+    malloc; calloc; realloc; free; exit; abort; abs; atoi; strtol; strtoul; qsort;
     snprintf; vsnprintf; printf; puts;
     __assert_fail; __glaze_ld_init; __glaze_ld_finish; __gz_errno; __gz_threaded;
     __divdi3; __moddi3; __udivdi3; __umoddi3;

@@ -47,6 +47,7 @@ static bool added;          /* netif_add has run (once, for the first card) */
 static bool wireless, associated;
 static struct wifi_preference saved;
 static int auth_error, auth_failure;
+static void seed_from_card(void);
 static int connect_network(const struct wifi_credentials *c);
 static int save_choice(const struct wifi_preference *choice)
 {
@@ -200,6 +201,7 @@ int net_if_init(int port)
     sys_sem_free(&ready);
     bound_port = port;
     card_checked = gz_time_ms();
+    seed_from_card();
     if (gz_net_info(&info) < 0 || !info.present) {
         net_log("net: no network card\n");
         return GZ_ENETDOWN;
@@ -230,6 +232,40 @@ static void wifi_link(void)
     associated = up;
     if (!up) state = status.state == WIFI_CONNECTING || status.state == WIFI_AUTHENTICATING ? NET_ASSOCIATING : NET_DISCONNECTED;
     UNLOCK_TCPIP_CORE();
+}
+
+/*
+ * A GlazeBoot boot has a fresh RAM disk for /, so no factory seed: take one
+ * from the boot CF card, where the card's writer put 32 bytes from the
+ * host's CSPRNG (glaze.seed beside GlazeBoot), and ratchet it on the card
+ * before using it, so that no two boots start from the same seed. Without
+ * the file, net.entropy stays missing and authentication refuses to run.
+ */
+static const char *const card_seeds[] = { "/Card/CE/R4100/glaze.seed", "/Card/Glaze/glaze.seed" };
+static void seed_from_card(void)
+{
+    uint8_t seed[32], next[32], boot[32];
+    if (pref_get("net.entropy", seed, sizeof(seed)) == sizeof(seed)) {
+        forced_memzero(seed, sizeof(seed));
+        return;
+    }
+    for (unsigned i = 0; i < sizeof(card_seeds) / sizeof(card_seeds[0]); i++) {
+        if (fs_read_file(card_seeds[i], seed, sizeof(seed)) != sizeof(seed)) continue;
+        uint64_t time = gz_time_us();
+        const uint8_t *parts[] = {(const uint8_t *)"card next", (uint8_t *)&time};
+        size_t lengths[] = {9, sizeof(time)};
+        int rv = hmac_sha256_vector(seed, sizeof(seed), 2, parts, lengths, next);
+        parts[0] = (const uint8_t *)"boot seed";
+        if (!rv) rv = hmac_sha256_vector(seed, sizeof(seed), 2, parts, lengths, boot);
+        /* The card's next seed is written before this boot's is used. */
+        if (!rv && fs_write_file(card_seeds[i], next, sizeof(next)) == sizeof(next) &&
+            fs_write_file(PREFS_DIR "/net.entropy", boot, sizeof(boot)) == sizeof(boot))
+            net_log("wifi: random seed from the boot card\n");
+        else
+            net_log("wifi: couldn't ratchet the boot card's seed\n");
+        break;
+    }
+    forced_memzero(seed, sizeof(seed)); forced_memzero(next, sizeof(next)); forced_memzero(boot, sizeof(boot));
 }
 
 /* The seed originates from the host CSPRNG in the factory filesystem image.

@@ -8,6 +8,7 @@ void *calloc(size_t n, size_t m);
 void *realloc(void *p, size_t n);
 void free(void *p);
 void exit(int code) __attribute__((noreturn));
+void abort(void) __attribute__((noreturn));
 int abs(int v);
 int atoi(const char *s);
 long strtol(const char *s, char **end, int base);
