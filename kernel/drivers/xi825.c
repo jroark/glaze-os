@@ -32,6 +32,8 @@ static struct wifi_status wifi;
 static uint16_t tx_fid;
 static bool tx_ready;
 static uint64_t association_started, scan_started;
+static bool port_on;            /* MAC port 0 enabled (command 1) */
+static uint32_t sta_version;    /* station firmware, major << 16 | minor << 8 | variant */
 static struct { uint16_t len; uint8_t data[1536]; } queue[QUEUE];
 static uint32_t head, tail;
 static uint8_t scratch[1600];
@@ -39,22 +41,32 @@ static uint16_t get16(const uint8_t *b) { return b[0] | (uint16_t)b[1] << 8; }
 static void put16(uint8_t *b, uint16_t v) { b[0] = v; b[1] = v >> 8; }
 static void notify(void) { if (bound_port > 0) ipc_notify(bound_port, GZ_NOTIFY_NET); }
 
-static int wait_reg(unsigned reg, uint16_t mask, uint16_t value)
+/* Deadlines as Linux hostap's (hfa384x): a real PRISM's INIT, its first
+ * command after reset, takes hundreds of milliseconds. */
+#define WAIT_US         500000u
+#define INIT_WAIT_US    2000000u
+static int wait_reg_us(unsigned reg, uint16_t mask, uint16_t value, uint32_t us)
 {
     uint64_t start = time_us();
     do {
         uint16_t v = xread(reg);
-        if (v != 0xffff && (v & mask) == value) return 0;
-    } while (time_us() - start < 20000);
+        if (v == 0xffff) return GZ_EIO;     /* the card is gone */
+        if ((v & mask) == value) return 0;
+    } while (time_us() - start < us);
     return GZ_ETIMEDOUT;
+}
+static int wait_reg(unsigned reg, uint16_t mask, uint16_t value)
+{
+    return wait_reg_us(reg, mask, value, WAIT_US);
 }
 static int command(uint16_t cmd, uint16_t param)
 {
-    if (wait_reg(CMD, 0x8000, 0)) return GZ_ETIMEDOUT;
+    uint32_t us = (cmd & 0x3f) == 0 ? INIT_WAIT_US : WAIT_US;
+    if (wait_reg_us(CMD, 0x8000, 0, us)) return GZ_ETIMEDOUT;
     xwrite(EVACK, COMMAND);
     xwrite(PARAM, param);
     xwrite(CMD, cmd);
-    if (wait_reg(EVSTAT, COMMAND, COMMAND)) return GZ_ETIMEDOUT;
+    if (wait_reg_us(EVSTAT, COMMAND, COMMAND, us)) return GZ_ETIMEDOUT;
     uint16_t status = xread(STATUS);
     xwrite(EVACK, COMMAND);
     return (status & 0x7f00) || (status & 0x3f) != (cmd & 0x3f) ? GZ_EIO : 0;
@@ -127,6 +139,38 @@ static void scan_result(const uint8_t *b, unsigned len)
         ap->rate = get16(p + 60);
     }
     wifi.scanning = 0;
+    kprintf("xi825: scan found %u networks\n", wifi.count);
+    notify();
+}
+/* Host scan results (info 0xF103, station firmware 1.3.1 and later): the
+ * record size, a reserved word, then struct hfa384x_hostscan_result
+ * records (Linux hostap_common.h): chid, anl, sl, bssid[6], beacon
+ * interval, capability, ssid_len, ssid[32], sup_rates[10], rate, atim. */
+static void hostscan_result(const uint8_t *b, unsigned len)
+{
+    unsigned size = len >= 4 ? get16(b) : 0;
+    if (size != 64) {
+        kprintf("xi825: host scan record size %u\n", size);
+        wifi.error = GZ_EIO; wifi.scanning = 0; notify(); return;
+    }
+    wifi.count = 0;
+    for (unsigned off = 4; off + size <= len && wifi.count < WIFI_AP_MAX; off += size) {
+        const uint8_t *p = b + off;
+        unsigned n = get16(p + 16);
+        if (n > WIFI_SSID_MAX || !n) continue;
+        struct wifi_ap *ap = &wifi.aps[wifi.count++];
+        memset(ap, 0, sizeof(*ap));
+        ap->ssid_len = n;
+        memcpy(ap->ssid, p + 18, n);
+        memcpy(ap->bssid, p + 6, 6);
+        ap->channel = get16(p);
+        ap->noise = get16(p + 2);
+        ap->signal = get16(p + 4);
+        ap->privacy = (get16(p + 14) & 0x10) != 0;
+        ap->rate = get16(p + 60);
+    }
+    wifi.scanning = 0;
+    kprintf("xi825: host scan found %u networks\n", wifi.count);
     notify();
 }
 static void information(void)
@@ -138,7 +182,10 @@ static void information(void)
     if (!words || words > 799) { wifi.error = GZ_EIO; return; }
     unsigned len = (words - 1) * 2;
     if (bap(fid, 4, scratch, len, false)) return;
+    if (get16(hdr + 2) != 0xf200)
+        kprintf("xi825: info %x, %u bytes\n", get16(hdr + 2), len);
     if (get16(hdr + 2) == 0xf101) scan_result(scratch, len);
+    else if (get16(hdr + 2) == 0xf103) hostscan_result(scratch, len);
     else if (get16(hdr + 2) == 0xf200 && len >= 2) {
         unsigned state = get16(scratch);
         if (wifi.state == WIFI_DISCONNECTED || wifi.state == WIFI_FAILED) return;
@@ -185,7 +232,9 @@ void xi825_irq(void)
 {
     if (!present) return;
     for (unsigned i = 0; i < 16; i++) {
-        uint16_t events = xread(EVSTAT) & (RX | INFO | INFDROP);
+        uint16_t ev = xread(EVSTAT);
+        if (ev == 0xffff) break;            /* the card is gone */
+        uint16_t events = ev & (RX | INFO | INFDROP);
         if (!events) break;
         if (events & RX) receive();
         if (events & INFO) information();
@@ -197,6 +246,7 @@ void xi825_irq(void)
     }
     if (wifi.state == WIFI_CONNECTING && time_us() - association_started > 10000000) {
         command(2, 0);
+        port_on = false;
         wifi.state = WIFI_FAILED; wifi.error = GZ_ETIMEDOUT;
         memset(&wifi.current, 0, sizeof(wifi.current));
         notify();
@@ -208,11 +258,24 @@ void xi825_init(void)
     xwrite(INTEN, 0);
     int rv = command(0, 0);
     if (!rv) rv = read_rid(0xfc01, nic.mac, 6);
+    if (!rv) {
+        /* STAID: component id, variant, major, minor (hostap_common.h). */
+        uint8_t id[8];
+        if (!read_rid(0xfd20, id, sizeof(id))) {
+            sta_version = (uint32_t)get16(id + 4) << 16 | get16(id + 6) << 8 | get16(id + 2);
+            kprintf("xi825: station firmware %u.%u.%u (id %x)\n", get16(id + 4), get16(id + 6),
+                    get16(id + 2), get16(id));
+        }
+    }
     if (!rv) rv = scalar(0xfc00, 1); /* infrastructure */
     if (!rv) rv = scalar(0xfc28, 0); /* open */
     if (!rv) rv = command(0x0a, sizeof(scratch));
     if (!rv) rv = wait_reg(EVSTAT, ALLOC, ALLOC);
-    if (rv) { kprintf("xi825: initialization failed %d\n", rv); return; }
+    if (rv) {
+        kprintf("xi825: initialization failed %d (CMD %x EVSTAT %x STATUS %x)\n", rv,
+                xread(CMD), xread(EVSTAT), xread(STATUS));
+        return;
+    }
     tx_fid = xread(ALLOCFID);
     tx_ready = true;
     xwrite(EVACK, ALLOC);
@@ -233,6 +296,7 @@ void xi825_removed(void)
     xdisable();
     present = false;
     tx_ready = false;
+    port_on = false;
     head = tail = 0;
     memset(&nic, 0, sizeof(nic));
     memset(&wifi, 0, sizeof(wifi));
@@ -329,8 +393,36 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
     }
     if (op == WIFI_SCAN) {
         if (wifi.scanning) return GZ_EBUSY;
+        /* Station firmware answers the scan inquiry only with its port
+         * enabled (Linux hostap, prism2_request_scan): enable it for an SSID
+         * no network has, so that it scans without joining anything. */
+        if (!port_on) {
+            uint8_t ssid[34];
+            put16(ssid, WIFI_SSID_MAX);
+            for (unsigned i = 0; i < WIFI_SSID_MAX; i++)
+                ssid[2 + i] = (uint8_t)(0xA5 ^ i);
+            if (!(rv = write_rid(0xfc02, ssid, sizeof(ssid))) && !(rv = command(1, 0)))
+                port_on = true;
+            if (rv) kprintf("xi825: enabling the port to scan failed %d\n", rv);
+        }
         wifi.error = 0; wifi.scanning = 1; scan_started = time_us();
-        rv = command(0x11, 0xf101);
+        /* Firmware 1.3.1 and later scans all channels on a host scan
+         * request (hostap prism2_request_hostscan: channels 1-14, probes
+         * at 1 Mbps, any SSID); the scan inquiry only reports networks
+         * matching the desired SSID. Older firmware, or one refusing the
+         * RID, gets the inquiry. */
+        rv = GZ_ENOENT;
+        if (sta_version >= 0x010301) {
+            uint8_t req[38] = {0};
+            put16(req, 0x3fff);
+            put16(req + 2, 1);
+            rv = write_rid(0xfce5, req, sizeof(req));
+            kprintf("xi825: host scan requested %d\n", rv);
+        }
+        if (rv) {
+            rv = command(0x11, 0xf101);
+            kprintf("xi825: scan requested %d\n", rv);
+        }
         if (rv) { wifi.scanning = 0; wifi.error = rv; }
         return rv;
     }
@@ -341,6 +433,7 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
         if (!req.ssid_len || req.ssid_len > WIFI_SSID_MAX) return GZ_EINVAL;
     }
     if ((rv = command(2, 0))) return rv;
+    port_on = false;
     wifi.state = WIFI_DISCONNECTED; wifi.error = 0;
     head = tail = 0;
     memset(&wifi.current, 0, sizeof(wifi.current));
@@ -350,6 +443,7 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
     uint8_t ssid[34] = {0};
     put16(ssid, req.ssid_len); memcpy(ssid + 2, req.ssid, req.ssid_len);
     if (!(rv = write_rid(0xfc02, ssid, sizeof(ssid)))) rv = command(1, 0);
+    port_on = !rv;
     wifi.state = rv ? WIFI_FAILED : WIFI_CONNECTING;
     wifi.error = rv; association_started = time_us();
     notify(); return rv;

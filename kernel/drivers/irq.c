@@ -74,9 +74,14 @@ void irq_dispatch_ip2(void)
             }
         GIU_INTSTATL = 0x0001u;
         input_irq((uint16_t)pending);
+        /* Not while the socket is empty: a pulled network card's state
+         * change keeps the line up, and enabling the source again would
+         * take the interrupt forever, before pcmcia_poll() can see the
+         * removal. The next card's driver enables it. */
         if (pending & KJ_INT_CF) {
             netdev_irq();
-            if (netdev_present())
+            if (netdev_present() &&
+                (PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) == PCMCIA_CARD_IN)
                 KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
         }
         if (pending & KJ_INT_AUDIO)

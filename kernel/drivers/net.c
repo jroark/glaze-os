@@ -68,6 +68,11 @@ bool netdev_present(void)
 }
 void netdev_irq(void)
 {
+    /* From the tick and GIRQ0 alike: a pulled card reads 0xFF everywhere,
+     * which a driver would take for every event at once. pcmcia_poll()
+     * notices the removal itself. */
+    if ((PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) != PCMCIA_CARD_IN)
+        return;
     if (kind == GZ_NET_XI825) xi825_irq();
     else if (kind == GZ_NET_NE2000) ne2000_irq();
 }

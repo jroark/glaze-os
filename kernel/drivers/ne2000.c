@@ -58,6 +58,7 @@
 #define ISR_RST     0x80
 
 #define DCR_WTS     0x01    /* word-wide remote DMA */
+#define NE_DATA_PORT 0x10
 #define DCR_LS      0x08    /* normal operation, not loopback */
 #define DCR_FT1     0x40    /* FIFO threshold 8 bytes */
 #define RCR_AB      0x04    /* broadcast */
@@ -85,6 +86,11 @@ static uint32_t q_head, q_tail;
 static uint32_t rx_frames, tx_frames, rx_dropped, overruns;
 static uint8_t tx_buf[1536] __attribute__((aligned(4)));
 static uint8_t run = CR_STP;        /* CR_STA once the NIC is started */
+/* Word-wide remote DMA (DCR_WTS), or byte-wide: Windows CE's own NE2000
+ * driver reads the data port a byte at a time on a BE-300, and a card whose
+ * PROM doesn't read word-wide is tried again byte-wide (DP8390D "Data
+ * Configuration Register"; Linux ne.c probes the same way). */
+static bool wide = true;
 
 static void page0(void)
 {
@@ -100,11 +106,12 @@ static bool wait_isr(uint8_t bits)
     return false;
 }
 
-/* Remote DMA moves 16-bit words; odd lengths transfer one extra byte. */
+/* Remote DMA moves 16-bit words (odd lengths transfer one extra byte), or
+ * bytes when !wide. */
 static void dma_read(uint16_t addr, void *dst, uint16_t len)
 {
     uint8_t *d = dst;
-    uint16_t n = (uint16_t)((len + 1) & ~1);
+    uint16_t n = wide ? (uint16_t)((len + 1) & ~1) : len;
 
     page0();
     NE_REG(RBCR0) = (uint8_t)n;
@@ -112,11 +119,16 @@ static void dma_read(uint16_t addr, void *dst, uint16_t len)
     NE_REG(RSAR0) = (uint8_t)addr;
     NE_REG(RSAR1) = (uint8_t)(addr >> 8);
     NE_REG(CR) = CR_RREAD | run;
-    for (uint16_t i = 0; i < n; i += 2) {
-        uint16_t w = NE_DATA16;
-        d[i] = (uint8_t)w;
-        if (i + 1 < len)
-            d[i + 1] = (uint8_t)(w >> 8);
+    if (!wide) {
+        for (uint16_t i = 0; i < n; i++)
+            d[i] = NE_REG(NE_DATA_PORT);
+    } else {
+        for (uint16_t i = 0; i < n; i += 2) {
+            uint16_t w = NE_DATA16;
+            d[i] = (uint8_t)w;
+            if (i + 1 < len)
+                d[i + 1] = (uint8_t)(w >> 8);
+        }
     }
     wait_isr(ISR_RDC);
     NE_REG(ISR) = ISR_RDC;
@@ -124,7 +136,7 @@ static void dma_read(uint16_t addr, void *dst, uint16_t len)
 
 static void dma_write(uint16_t addr, const uint8_t *src, uint16_t len)
 {
-    uint16_t n = (uint16_t)((len + 1) & ~1);
+    uint16_t n = wide ? (uint16_t)((len + 1) & ~1) : len;
 
     page0();
     NE_REG(ISR) = ISR_RDC;
@@ -133,8 +145,13 @@ static void dma_write(uint16_t addr, const uint8_t *src, uint16_t len)
     NE_REG(RSAR0) = (uint8_t)addr;
     NE_REG(RSAR1) = (uint8_t)(addr >> 8);
     NE_REG(CR) = CR_RWRITE | run;
-    for (uint16_t i = 0; i < n; i += 2)
-        NE_DATA16 = (uint16_t)(src[i] | (i + 1 < len ? src[i + 1] << 8 : 0));
+    if (!wide) {
+        for (uint16_t i = 0; i < n; i++)
+            NE_REG(NE_DATA_PORT) = src[i];
+    } else {
+        for (uint16_t i = 0; i < n; i += 2)
+            NE_DATA16 = (uint16_t)(src[i] | (i + 1 < len ? src[i + 1] << 8 : 0));
+    }
     wait_isr(ISR_RDC);
     NE_REG(ISR) = ISR_RDC;
 }
@@ -242,6 +259,60 @@ void ne2000_irq(void)
         ipc_notify(bound_port, GZ_NOTIFY_NET);
 }
 
+static bool ram_works(void)
+{
+    uint8_t pattern[32], back[32];
+
+    for (unsigned i = 0; i < sizeof(pattern); i++)
+        pattern[i] = (uint8_t)(0x5A ^ (i * 37));
+    dma_write(TX_PAGE << 8, pattern, sizeof(pattern));
+    dma_read(TX_PAGE << 8, back, sizeof(back));
+    return !memcmp(pattern, back, sizeof(back));
+}
+
+/* The station address PROM, the first 32 bytes of card memory: each byte
+ * appears twice from a 16-bit card and once from an 8-bit one, bytes 14 and
+ * 15 of the PROM holding 0x57 on an NE2000. */
+static bool prom_mac(void)
+{
+    uint8_t prom[32];
+    int step;
+
+    dma_read(0, prom, sizeof(prom));
+    if (prom[28] == 0x57 && prom[30] == 0x57)
+        step = 2;
+    else if (prom[14] == 0x57 && prom[15] == 0x57)
+        step = 1;
+    else
+        return false;
+    for (int i = 0; i < 6; i++)
+        mac[i] = prom[i * step];
+    return true;
+}
+
+/* Some CF cards keep that PROM image in attribute memory instead, one byte
+ * per even address (Linux pcnet_cs's hw_info table; the AmbiCom AMB8610
+ * at 0x1C0, where the CIS showed 00 10 7a .. 57 57). Only below 0x200 is
+ * reachable (hw.h). */
+static bool attribute_mac(void)
+{
+    for (unsigned i = 0; i + 16 <= 0x100; i += 16) {
+        if (CF_CIS(i + 14) != 0x57 || CF_CIS(i + 15) != 0x57)
+            continue;
+        uint8_t or = 0, and = 0xFF;
+        for (int b = 0; b < 6; b++) {
+            mac[b] = CF_CIS(i + b);
+            or |= mac[b];
+            and &= mac[b];
+        }
+        if (or && and != 0xFF && !(mac[0] & 1)) {
+            kprintf("ne2000: station address from attribute memory %x\n", 2 * i);
+            return true;
+        }
+    }
+    return false;
+}
+
 void ne2000_init(void)
 {
     PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
@@ -263,6 +334,7 @@ void ne2000_init(void)
     wait_isr(ISR_RST);
     NE_REG(ISR) = 0xFF;
 
+    wide = true;
     NE_REG(CR) = CR_NODMA | CR_STP;
     NE_REG(DCR) = DCR_FT1 | DCR_LS | DCR_WTS;
     NE_REG(RBCR0) = 0;
@@ -272,16 +344,20 @@ void ne2000_init(void)
     NE_REG(RCR) = 0x20;            /* monitor: receive nothing yet */
     NE_REG(TCR) = TCR_LB0;
 
-    /* The station address PROM is the first 32 bytes of card memory, each
-     * byte doubled; bytes 14 and 15 are 0x57 on an NE2000. */
-    uint8_t prom[32];
-    dma_read(0, prom, sizeof(prom));
-    if (prom[28] != 0x57 || prom[30] != 0x57) {
-        kprintf("ne2000: card is not an NE2000 (PROM %x %x)\n", prom[28], prom[30]);
+    /* The remote DMA width the card answers: a pattern written to its
+     * transmit buffer must read back. */
+    if (!ram_works()) {
+        wide = false;
+        NE_REG(DCR) = DCR_FT1 | DCR_LS;
+        if (!ram_works()) {
+            kputs("ne2000: card is not an NE2000 (its buffer RAM doesn't read back)\n");
+            return;
+        }
+    }
+    if (!prom_mac() && !attribute_mac()) {
+        kputs("ne2000: no station address in the PROM or attribute memory\n");
         return;
     }
-    for (int i = 0; i < 6; i++)
-        mac[i] = prom[i * 2];
 
     NE_REG(CR) = CR_NODMA | CR_STP;
     NE_REG(PSTART) = RX_START;
@@ -303,8 +379,8 @@ void ne2000_init(void)
     NE_REG(RCR) = RCR_AB;
     present = true;
     KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;    /* its interrupt; irq_init masked it */
-    kprintf("ne2000: MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    kprintf("ne2000: MAC %02x:%02x:%02x:%02x:%02x:%02x (%s DMA)\n",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], wide ? "word" : "byte");
 }
 
 bool ne2000_present(void)

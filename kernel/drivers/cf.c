@@ -348,6 +348,29 @@ static bool configure(void)
     return false;
 }
 
+/*
+ * DEBUG(hw): which A020 setting gives the XI-825 16-bit I/O cycles, by the
+ * PRISM scratch register Linux hostap tests the same way (SWSUPPORT0 at
+ * 0x28): a 16-bit write of 0x8A32 reads back whole only over a 16-bit bus.
+ * Keeps the setting that works, bit 3 set if both do.
+ */
+#define PRISM_SWSUPPORT0    REG16(0x0A00C300u + 0x28)
+static void prism_bus_width(void)
+{
+    uint32_t a020 = PCMCIA_A020 & ~0x0Cu;
+    uint16_t with, without;
+
+    PCMCIA_A020 = a020 | PCMCIA_A020_CONFIG;
+    PRISM_SWSUPPORT0 = 0x8A32;
+    with = PRISM_SWSUPPORT0;
+    PCMCIA_A020 = a020;
+    PRISM_SWSUPPORT0 = 0x8A32;
+    without = PRISM_SWSUPPORT0;
+    kprintf("cf: PRISM scratch reads %x with A020 bit 3, %x without\n", with, without);
+    if (with == 0x8A32 || without != 0x8A32)
+        PCMCIA_A020 = a020 | PCMCIA_A020_CONFIG;
+}
+
 /* A network card's configuration: its CONFIG register, the entry that
  * decodes NET_IO_BASE (else the default), level interrupts. */
 static void configure_network(const struct cis *c)
@@ -366,6 +389,8 @@ static void configure_network(const struct cis *c)
     delay_ms(10);
     kprintf("cf: network card %x:%x, COR %x at %x (reads %x)\n", c->manufacturer,
             c->product, cor, c->cor, REG8(0x0A00D000u + c->cor));
+    if (c->manufacturer == 0xd601)
+        prism_bus_width();
 }
 
 /* The tuple bytes of a card that isn't storage, for its CIS (the emulator
@@ -385,14 +410,20 @@ static void log_cis(void)
  * take the first. The emulator's cards ignore the COR. */
 static void insert(void)
 {
+    int kind = -1;              /* the FUNCID first read: retries follow it */
+
     for (int attempt = 0; attempt < 3; attempt++) {
         struct cis c;
 
         socket_power_up();
         read_cis(&c);
-        if (attempt == 0 && c.function != FUNCID_FIXED)
+        if (c.function != FUNCID_FIXED && c.function != kind)
             log_cis();
-        if (c.function == FUNCID_NETWORK) {
+        if (kind < 0)
+            kind = c.function;
+        if (kind == FUNCID_NETWORK) {
+            if (c.function != FUNCID_NETWORK)
+                continue;       /* its CIS didn't read this time */
             configure_network(&c);
             if (netdev_insert(c.manufacturer, c.product))
                 return;
@@ -400,6 +431,10 @@ static void insert(void)
             kputs("cf: network card didn't come up, powering up again\n");
             continue;
         }
+        /* Only storage gets ATA, whose waits stall the whole system; a card
+         * whose CIS reads as nothing gets one try, the last. */
+        if (kind != FUNCID_FIXED && (c.function != -1 || attempt < 2))
+            continue;
         configure();
         if ((info.present = identify()))
             return;

@@ -220,6 +220,12 @@ static void update_clock(bool force)
 static bool update_card_status(void)
 {
     struct fs_stat st;
+    struct net_status net;
+
+    /* A network card can be inserted or pulled too (cf.c's pcmcia_poll);
+     * net_status is answered at once, without this process's session. */
+    network_card = net_status(&net) == 0 && net.state != NET_NO_CARD;
+    wireless_card = network_card && net.kind == GZ_NET_XI825;
     bool mounted = network_card || fs_stat("/Card", &st) == 0;
     bool changed = mounted != view.card_mounted;
 
@@ -1954,13 +1960,6 @@ int main(void)
     gz_input_bind(sb_port);
 
     update_clock(true);
-    /* A network card owns the socket for the whole boot; storage can hot-plug. */
-    struct net_status net;
-    network_card = net_status(&net) == 0 && net.state != NET_NO_CARD;
-    /* Cache the boot-time card kind before the NTP worker starts sharing
-     * libc's network session; opening details must not wait behind DNS. */
-    struct wifi_status ws;
-    wireless_card = network_card && net_wifi_status(&ws) == 0;
     update_card_status();
     state = ST_LOCK;
     render_lock();

@@ -296,6 +296,7 @@ void net_if_status(struct net_status *st)
     st->state = (uint32_t)state;
     gz_net_info(&info);
     memcpy(st->mac, info.mac, sizeof(st->mac));
+    st->kind = state == NET_NO_CARD ? GZ_NET_NONE : info.kind;
     st->rx_frames = info.rx_frames;
     st->tx_frames = info.tx_frames;
     st->rx_dropped = info.rx_dropped;
