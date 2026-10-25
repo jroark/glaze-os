@@ -134,13 +134,26 @@ gfx-test: ../tests/gfx.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
 	../out/host/gfx-test
 .PHONY: gfx-test
 
-settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main.c
+settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main.c ../lib/libc/touch.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/settings_sys.h \
 	    -o ../out/host/settings-test ../tests/settings.c hostres.c $(GFX) \
-	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c
+	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c
 	../out/host/settings-test
 .PHONY: settings-test
+
+touch-calibration-test: ../tests/touch_calibration.c ../lib/libc/touch.c ../servers/springboard/calibration.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/touch-calibration-test $^
+	../out/host/touch-calibration-test
+.PHONY: touch-calibration-test
+
+display-test: ../tests/display.c ../tests/display_sys.h ../kernel/drivers/display.c ../servers/springboard/display.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/display_sys.h \
+	    -o ../out/host/display-test ../tests/display.c ../servers/springboard/display.c
+	../out/host/display-test
+.PHONY: display-test
 
 taskmanager-test: ../tests/taskmanager.c ../tests/taskmanager_sys.h ../packages/taskmanager/main.c ../packages/taskmanager/monitor.c
 	@mkdir -p ../out/host

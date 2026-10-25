@@ -1,6 +1,7 @@
-/* Settings: network, sounds, wallpaper, date & time, passcode lock, about. */
+/* Settings: network, sounds, wallpaper, date & time, passcode, touch, about. */
 
 #include <glaze/audio.h>
+#include <glaze/display.h>
 #include <glaze/net.h>
 #include <glaze/notify.h>
 #include <glaze/ntp.h>
@@ -8,11 +9,13 @@
 #include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/tz.h>
+#include <glaze/touch.h>
 #include <glaze/ui.h>
 #include <stdio.h>
 #include <string.h>
 
-enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE };
+enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -23,6 +26,8 @@ enum {
     R_TONE_TIMER, R_TONE_CAL, R_TONE_NOTIFY,
     R_TONE0,                    /* R_TONE0 + n picks tone n; + AUDIO_TONES is None */
     R_ZONE0 = R_TONE0 + 32,     /* R_ZONE0 + n picks time zone n */
+    R_TOUCH = R_ZONE0 + 64, R_TOUCH_START, R_TOUCH_RESET, R_TOUCH_SAVE, R_TOUCH_RETRY, R_TOUCH_CANCEL,
+    R_DISPLAY, R_BRIGHTNESS, R_CONTRAST, R_DISPLAY_RESET,
 };
 
 struct hit {
@@ -36,6 +41,22 @@ static int nhits;
 static int pressed = R_NONE;
 static int preview_wall;
 static char ping_result[24];
+
+static const struct touch_point touch_targets[TOUCH_POINTS] = {
+    { UI_W / 2, UI_H / 2 + SB_STATUS_H },
+    { 24, 24 + SB_STATUS_H }, { UI_W - 24, 24 + SB_STATUS_H },
+    { UI_W - 24, UI_H - 24 + SB_STATUS_H }, { 24, UI_H - 24 + SB_STATUS_H },
+};
+static struct touch_point touch_samples[TOUCH_POINTS], touch_window[3], touch_origin, touch_marker;
+static int touch_step, touch_count;
+static bool touch_down, touch_moved, touch_marked;
+static uint32_t touch_until;
+static const char *touch_msg;
+
+static struct display_settings display_values = DISPLAY_DEFAULTS, display_before;
+static gfx_rect brightness_rect, contrast_rect;
+static int display_drag;
+static const char *display_msg;
 
 /* Passcode entry: turning it on asks for a new code twice, changing it
  * asks for the old one first, turning it off asks for the old one only. */
@@ -222,9 +243,10 @@ static void draw_root(gfx_surface *s)
     /* A clipped-out value needs no file-server round trip. The cell still
      * registers its full hit rectangle below. */
     bool enabled = cell_visible(s) && passcode_enabled();
-    cell(s, 3, "Passcode Lock", enabled ? "On" : "Off", true, R_PASSCODE);
-    section_gap();
-    cell(s, 0, "About", NULL, true, R_ABOUT);
+    cell(s, 2, "Passcode Lock", enabled ? "On" : "Off", true, R_PASSCODE);
+    cell(s, 2, "Touch Calibration", NULL, true, R_TOUCH);
+    cell(s, 2, "Display", NULL, true, R_DISPLAY);
+    cell(s, 3, "About", NULL, true, R_ABOUT);
 }
 
 static gfx_rect back_rect;
@@ -495,6 +517,107 @@ static void draw_pin(gfx_surface *s)
     ui_draw_passcode(s, pin_area(), &pin_pc);
 }
 
+static void touch_cross(gfx_surface *s, int x, int y, uint32_t ink)
+{
+    gfx_circle(s, x, y, 9, ink, 255);
+    gfx_circle(s, x, y, 7, 0xFFFFFF, 255);
+    gfx_line(s, x - 13, y, x + 13, y, ink, 255);
+    gfx_line(s, x, y - 13, x, y + 13, ink, 255);
+}
+
+static void draw_touch(gfx_surface *s)
+{
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Touch Calibration", "Settings", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    cell(s, 1, "Calibrate", NULL, true, R_TOUCH_START);
+    cell(s, 3, "Restore Defaults", NULL, true, R_TOUCH_RESET);
+    gfx_text_center(s, 0, 126, UI_W, ui_font(FONT_R12), "Use the stylus to align the screen.", UI_TEXT_DETAIL, 255);
+    gfx_text_center(s, 0, 145, UI_W, ui_font(FONT_R12), "Tap five targets, then test and save.", UI_TEXT_DETAIL, 255);
+    if (touch_msg)
+        gfx_text_center(s, 0, 184, UI_W, ui_font(FONT_R12), touch_msg, UI_TEXT_DETAIL, 255);
+}
+
+static void draw_touch_sample(gfx_surface *s)
+{
+    char progress[24];
+    nhits = 0;
+    gfx_fill(s, gfx_r(0, 0, UI_W, UI_H), 0xFFFFFF);
+    snprintf(progress, sizeof(progress), "Target %d of %d", touch_step + 1, TOUCH_POINTS);
+    gfx_text_center(s, 0, 62, UI_W, ui_font(FONT_B14), "Tap the center of the target", UI_TEXT, 255);
+    gfx_text_center(s, 0, 84, UI_W, ui_font(FONT_R12), "Lift the stylus after each tap.", UI_TEXT_DETAIL, 255);
+    gfx_text_center(s, 0, 107, UI_W, ui_font(FONT_B13), progress, UI_TEXT, 255);
+    gfx_text_center(s, 0, 214, UI_W, ui_font(FONT_R12), "Home or Esc cancels calibration.", UI_TEXT_DETAIL, 255);
+    if (touch_msg)
+        gfx_text_center(s, 0, 191, UI_W, ui_font(FONT_R12), touch_msg, UI_TEXT_DETAIL, 255);
+    touch_cross(s, touch_targets[touch_step].x, touch_targets[touch_step].y - SB_STATUS_H, 0x245DA8);
+}
+
+static void draw_touch_test(gfx_surface *s)
+{
+    char countdown[40];
+    int32_t remaining = (int32_t)(touch_until - gz_time_ms());
+    snprintf(countdown, sizeof(countdown), "Reverts in %d seconds", (int)(MAX(0, remaining) + 999) / 1000);
+    nhits = 0;
+    gfx_fill(s, gfx_r(0, 0, UI_W, UI_H), 0xFFFFFF);
+    ui_draw_navbar(s, "Test Touch", NULL, NULL, 0);
+    add_hit(ui_draw_bar_button(s, "Cancel", true, pressed == R_TOUCH_CANCEL, false, 0), R_TOUCH_CANCEL);
+    gfx_text_center(s, 0, 49, UI_W, ui_font(FONT_B13), "Tap or drag to test alignment.", UI_TEXT, 255);
+    gfx_text_center(s, 0, 69, UI_W, ui_font(FONT_R12), countdown, UI_TEXT_DETAIL, 255);
+    for (int i = 0; i < TOUCH_POINTS; i++) {
+        int x = touch_targets[i].x, y = touch_targets[i].y - SB_STATUS_H;
+        if (y > 100 && y < 240)
+            touch_cross(s, x, y, 0xA0A0A0);
+    }
+    if (touch_marked) {
+        gfx_circle(s, touch_marker.x, touch_marker.y, 4, 0x245DA8, 255);
+        gfx_line(s, touch_marker.x - 8, touch_marker.y, touch_marker.x + 8, touch_marker.y, 0x245DA8, 255);
+        gfx_line(s, touch_marker.x, touch_marker.y - 8, touch_marker.x, touch_marker.y + 8, 0x245DA8, 255);
+    }
+    if (touch_msg)
+        gfx_text_center(s, 0, 218, UI_W, ui_font(FONT_R12), touch_msg, UI_TEXT_DETAIL, 255);
+    small_button(s, gfx_r(16, 260, 96, 30), "Retry", R_TOUCH_RETRY);
+    small_button(s, gfx_r(128, 260, 96, 30), "Save", R_TOUCH_SAVE);
+}
+
+static void display_slider(gfx_surface *s, int y, const char *title, int value, int min, int max,
+                           gfx_rect *slider, int id)
+{
+    char label[12];
+    gfx_rect r = gfx_r(CELL_X, y, CELL_W, 74);
+    ui_draw_group_cell(s, r, 0, false);
+    gfx_text(s, r.x + 10, r.y + 10, ui_font(FONT_B13), title, UI_TEXT, 255);
+    snprintf(label, sizeof(label), "%d / %d", value, max);
+    gfx_text(s, r.x + r.w - 10 - gfx_text_width(ui_font(FONT_R13), label), r.y + 10,
+             ui_font(FONT_R13), label, UI_TEXT_DETAIL, 255);
+    *slider = gfx_r(r.x + 10, r.y + 34, r.w - 20, 30);
+    ui_draw_slider(s, *slider, value - min, max - min);
+    add_hit(*slider, id);
+}
+
+static void draw_display(gfx_surface *s)
+{
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Display", "Settings", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    display_slider(s, 42, "Brightness", display_values.brightness,
+                   DISPLAY_BRIGHTNESS_MIN, DISPLAY_BRIGHTNESS_MAX, &brightness_rect, R_BRIGHTNESS);
+    display_slider(s, 128, "Contrast", display_values.contrast,
+                   0, DISPLAY_CONTRAST_MAX, &contrast_rect, R_CONTRAST);
+    /* A neutral ramp makes changes visible without leaving Settings. */
+    for (int i = 0; i < 11; i++) {
+        uint32_t gray = (uint32_t)(i * 255 / 10);
+        gfx_fill(s, gfx_r(10 + i * 20, 216, 20, 20), gray * 0x010101);
+    }
+    if (display_msg)
+        gfx_text_center(s, 0, 242, UI_W, ui_font(FONT_R12), display_msg, UI_TEXT_DETAIL, 255);
+    section_y = 266;
+    cell(s, 0, "Restore Defaults", NULL, true, R_DISPLAY_RESET);
+}
+
 static void draw_view(gfx_surface *s, enum view v)
 {
     switch (v) {
@@ -509,6 +632,10 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_SOUNDS: draw_sounds(s); break;
     case V_TONE: draw_tone(s); break;
     case V_ZONE: draw_zone(s); break;
+    case V_TOUCH: draw_touch(s); break;
+    case V_TOUCH_SAMPLE: draw_touch_sample(s); break;
+    case V_TOUCH_TEST: draw_touch_test(s); break;
+    case V_DISPLAY: draw_display(s); break;
     }
 }
 
@@ -571,6 +698,201 @@ static void press(int id)
 }
 
 /* ---- actions ------------------------------------------------------------ */
+
+static int touch_request(uint32_t op, const struct touch_calibration *c)
+{
+    struct gz_msg m = {0}, r = {0};
+    m.w[0] = op;
+    m.w[3] = (uint32_t)gz_getpid();
+    if (c)
+        memcpy(&m.w[4], c, sizeof(*c));
+    int rv = gz_send(ui.sb_port, &m, &r);
+    return rv < 0 ? rv : (int)r.w[0];
+}
+
+static void touch_finish(const char *msg)
+{
+    touch_down = false;
+    touch_msg = msg;
+    pressed = R_NONE;
+    view = V_TOUCH;
+    redraw();
+}
+
+static void touch_start(void)
+{
+    if (touch_request(SB_TOUCH_BEGIN, NULL) < 0) {
+        touch_finish("Could not start calibration.");
+        return;
+    }
+    touch_step = touch_count = 0;
+    touch_down = touch_moved = touch_marked = false;
+    touch_msg = NULL;
+    pressed = R_NONE;
+    view = V_TOUCH_SAMPLE;
+    redraw();
+}
+
+static bool touch_calibration_event(const struct gz_input_event *ev)
+{
+    if (view != V_TOUCH_SAMPLE && view != V_TOUCH_TEST)
+        return false;
+    if (ev->type == GZ_EV_TOUCH_CAL_END || ev->type == GZ_EV_APP_DEACTIVATE) {
+        touch_finish("Calibration cancelled.");
+        return true;
+    }
+    if (ev->type == GZ_EV_KEY_DOWN && ev->code == GZ_KEY_ESC) {
+        touch_request(SB_TOUCH_CANCEL, NULL);
+        touch_finish("Calibration cancelled.");
+        return true;
+    }
+    if (ev->type == GZ_EV_TOUCH_CANCEL) {
+        touch_down = false;
+        pressed = R_NONE;
+        return true;
+    }
+    if (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE && ev->type != GZ_EV_TOUCH_UP)
+        return false;
+    if (view == V_TOUCH_TEST) {
+        touch_marker = (struct touch_point){ ev->x, ev->y };
+        touch_marked = true;
+        redraw();
+        return false;              /* normal hit testing handles Save/Retry/Cancel */
+    }
+    struct touch_point p = { ev->x, ev->y + SB_STATUS_H };
+    if (ev->type == GZ_EV_TOUCH_DOWN) {
+        touch_down = true;
+        touch_moved = false;
+        touch_count = 0;
+        touch_origin = p;
+    }
+    if (!touch_down)
+        return true;
+    int64_t dx = p.x - touch_origin.x, dy = p.y - touch_origin.y;
+    if (dx * dx + dy * dy > 12 * 12)
+        touch_moved = true;
+    if (ev->type != GZ_EV_TOUCH_UP) {
+        touch_window[touch_count++ % 3] = p;
+        return true;
+    }
+    touch_down = false;
+    if (touch_moved) {
+        touch_msg = "Hold steady and tap again.";
+        redraw();
+        return true;
+    }
+    p = (struct touch_point){0};
+    int count = MIN(3, touch_count);
+    for (int i = 0; i < count; i++) {
+        p.x += touch_window[i].x;
+        p.y += touch_window[i].y;
+    }
+    touch_samples[touch_step++] = (struct touch_point){ p.x / count, p.y / count };
+    touch_msg = NULL;
+    if (touch_step == TOUCH_POINTS) {
+        struct touch_calibration c;
+        if (touch_fit(&c, touch_samples, touch_targets) < 0) {
+            touch_request(SB_TOUCH_CANCEL, NULL);
+            touch_finish("Targets did not match. Try again.");
+        } else if (touch_request(SB_TOUCH_PREVIEW, &c) < 0) {
+            touch_request(SB_TOUCH_CANCEL, NULL);
+            touch_finish("Could not preview calibration.");
+        } else {
+            view = V_TOUCH_TEST;
+            touch_until = gz_time_ms() + TOUCH_PREVIEW_MS;
+            redraw();
+        }
+    } else {
+        redraw();
+    }
+    return true;
+}
+
+static void touch_test_tick(void)
+{
+    if ((int32_t)(gz_time_ms() - touch_until) >= 0) {
+        touch_request(SB_TOUCH_CANCEL, NULL);
+        touch_finish("Test timed out. Calibration restored.");
+    } else {
+        redraw();
+    }
+}
+
+static int display_request(uint32_t op)
+{
+    struct gz_msg m = {0}, r = {0};
+    m.w[0] = op;
+    m.w[1] = (uint32_t)display_values.brightness;
+    m.w[2] = (uint32_t)display_values.contrast;
+    m.w[3] = (uint32_t)gz_getpid();
+    int rv = gz_send(ui.sb_port, &m, &r);
+    if (rv < 0)
+        return rv;
+    /* Even a failed save returns the restored hardware levels. */
+    if (op != SB_DISPLAY_PREVIEW) {
+        struct display_settings actual = { DISPLAY_VERSION, (int32_t)r.w[1], (int32_t)r.w[2] };
+        if (display_valid(&actual))
+            display_values = actual;
+    }
+    return (int)r.w[0];
+}
+
+static void display_cancel_drag(void)
+{
+    if (!display_drag)
+        return;
+    display_request(SB_DISPLAY_CANCEL);
+    display_values = display_before;
+    display_drag = R_NONE;
+    redraw();
+}
+
+static bool display_touch(const struct gz_input_event *ev)
+{
+    if (view != V_DISPLAY)
+        return false;
+    if (ev->type == GZ_EV_DISPLAY_REVERT) {
+        struct display_settings actual = { DISPLAY_VERSION, ev->x, ev->y };
+        if (display_valid(&actual))
+            display_values = actual;
+        display_drag = R_NONE;
+        redraw();
+        return true;
+    }
+    if (ev->type == GZ_EV_TOUCH_CANCEL || ev->type == GZ_EV_APP_DEACTIVATE ||
+        (ev->type == GZ_EV_KEY_DOWN && ev->code == GZ_KEY_ESC)) {
+        display_cancel_drag();
+        return false;
+    }
+    if (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE && ev->type != GZ_EV_TOUCH_UP)
+        return false;
+    if (ev->type == GZ_EV_TOUCH_DOWN) {
+        display_drag = gfx_rect_contains(brightness_rect, ev->x, ev->y) ? R_BRIGHTNESS :
+                       gfx_rect_contains(contrast_rect, ev->x, ev->y) ? R_CONTRAST : R_NONE;
+        display_before = display_values;
+        display_msg = NULL;
+    }
+    if (!display_drag)
+        return false;
+    struct display_settings before = display_values;
+    if (display_drag == R_BRIGHTNESS)
+        display_values.brightness = DISPLAY_BRIGHTNESS_MIN +
+            ui_slider_value(brightness_rect, DISPLAY_BRIGHTNESS_MAX - DISPLAY_BRIGHTNESS_MIN, ev->x);
+    else
+        display_values.contrast = ui_slider_value(contrast_rect, DISPLAY_CONTRAST_MAX, ev->x);
+    bool up = ev->type == GZ_EV_TOUCH_UP;
+    if (up || before.brightness != display_values.brightness || before.contrast != display_values.contrast) {
+        int rv = display_request(up ? SB_DISPLAY_SAVE : SB_DISPLAY_PREVIEW);
+        if (rv < 0) {
+            display_cancel_drag();
+            display_msg = "Could not save. Try again.";
+        }
+        redraw();
+    }
+    if (up)
+        display_drag = R_NONE;
+    return true;
+}
 
 static void adjust_field(int field, int delta)
 {
@@ -686,12 +1008,49 @@ static void pin_key(int k)
 
 static void activate(int id)
 {
+    if (id == R_DISPLAY) {
+        display_msg = display_request(SB_DISPLAY_GET) < 0 ? "Display controls unavailable." : NULL;
+        go(V_DISPLAY, true);
+        return;
+    }
+    if (id == R_DISPLAY_RESET) {
+        display_msg = display_request(SB_DISPLAY_RESET) < 0 ? "Could not restore defaults." : "Default levels restored.";
+        redraw();
+        return;
+    }
+    if (id == R_TOUCH_START || id == R_TOUCH_RETRY) {
+        touch_start();
+        return;
+    }
+    if (id == R_TOUCH_CANCEL) {
+        touch_request(SB_TOUCH_CANCEL, NULL);
+        touch_finish("Calibration cancelled.");
+        return;
+    }
+    if (id == R_TOUCH_SAVE) {
+        if (touch_request(SB_TOUCH_SAVE, NULL) < 0) {
+            touch_msg = "Could not save. Retry or cancel.";
+            redraw();
+        } else {
+            touch_finish("Calibration saved.");
+        }
+        return;
+    }
+    if (id == R_TOUCH_RESET) {
+        touch_msg = touch_request(SB_TOUCH_RESET, NULL) < 0 ? "Could not restore defaults." : "Factory calibration restored.";
+        redraw();
+        return;
+    }
     if (id == R_BACK || id == R_PIN_CANCEL) {
         go(view == V_PREVIEW ? V_WALLPAPER : view == V_PIN ? V_PASSCODE : view == V_TONE ? V_SOUNDS
            : view == V_ZONE ? V_DATETIME : V_ROOT, false);
         return;
     }
     switch (id) {
+    case R_TOUCH:
+        touch_msg = NULL;
+        go(V_TOUCH, true);
+        return;
     case R_24H:
         s_24h = !s_24h;
         save("sb.24h", s_24h);
@@ -906,9 +1265,15 @@ int main(void)
     for (;;) {
         struct gz_input_event ev;
         int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK ? 1000 : -1;
+        if (view == V_TOUCH_TEST)
+            timeout = 250;
         if (view == V_ZONE && zone_scroll.animating)
             timeout = 16;
         if (!ui_next_event(&ev, timeout)) {
+            if (view == V_TOUCH_TEST) {
+                touch_test_tick();
+                continue;
+            }
             if (view == V_ZONE) {
                 int old_offset = zone_scroll.offset;
                 ui_scroll_step(&zone_scroll);
@@ -919,6 +1284,10 @@ int main(void)
             }
             continue;
         }
+        if (touch_calibration_event(&ev))
+            continue;
+        if (display_touch(&ev))
+            continue;
         if (ev.type == GZ_EV_TOUCH_CANCEL) {
             /* Home mid-touch: drop the touch without acting on it. */
             pin_pc.pressed = -1;

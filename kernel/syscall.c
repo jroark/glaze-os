@@ -208,6 +208,7 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_RTC_GET:       rv = sys_rtc_get(AS, a0); break;
     case SYS_RTC_SET:       rv = sys_rtc_set(AS, a0); break;
     case SYS_FB_MAP:        rv = sys_fb_map(); break;
+    case SYS_DISPLAY_SET:   rv = PRIV() ? display_set((int)a0, (int)a1) : GZ_EPERM; break;
     case SYS_INPUT_STATUS:  rv = stowaway_status(); break;
     case SYS_INPUT_BIND:    rv = PRIV() ? input_bind((int)a0) : GZ_EPERM; break;
     case SYS_INPUT_READ:    rv = PRIV() ? input_read(AS, a0, a1) : GZ_EPERM; break;

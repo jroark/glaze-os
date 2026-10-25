@@ -5,6 +5,8 @@
  */
 
 #include "sb_internal.h"
+#include "calibration.h"
+#include "display.h"
 
 #include <glaze/audio.h>
 #include <glaze/fs.h>
@@ -58,6 +60,8 @@ static gfx_surface snap;        /* cached frame underneath animations */
 static struct sb_view view;
 static enum state state;
 static int sb_port;
+static struct sb_calibration calibration;
+static struct sb_display display_controls;
 
 /* Running app slots (one foreground + background apps, each with its own shm). */
 struct sb_running {
@@ -368,6 +372,8 @@ static void hide_banner(void)
 /* A queued banner waits for the home screen or an app to be up. */
 static void show_queued_banner(void)
 {
+    if (calibration.owner)
+        return;
     if (!banner_queued || (state != ST_HOME && state != ST_APP))
         return;
     banner_queued = false;
@@ -555,6 +561,10 @@ static void slot_reset(int i)
 {
     struct sb_running *s = &running[i];
 
+    if (calibration.owner == s->pid)
+        sb_calibration_cancel(&calibration);
+    if (display_controls.owner == s->pid)
+        sb_display_cancel(&display_controls);
     s->pid = 0;
     s->app_index = -1;
     s->port = 0;
@@ -617,6 +627,31 @@ static void send_slot_event(struct sb_running *s, const struct gz_input_event *e
 static void send_event(const struct gz_input_event *ev)
 {
     send_slot_event(front(), ev);
+}
+
+static void calibration_cancel(void)
+{
+    int pid = calibration.owner;
+    sb_calibration_cancel(&calibration);
+    int slot = find_slot_by_pid(pid);
+    if (slot >= 0) {
+        struct gz_input_event e = { .type = GZ_EV_TOUCH_CAL_END, .time_ms = now_ms() };
+        send_slot_event(&running[slot], &e);
+    }
+}
+
+static void display_cancel(void)
+{
+    int slot = find_slot_by_pid(display_controls.owner);
+    sb_display_cancel(&display_controls);
+    if (slot >= 0) {
+        struct gz_input_event e = {
+            .type = GZ_EV_DISPLAY_REVERT, .time_ms = now_ms(),
+            .x = (int16_t)display_controls.current.brightness,
+            .y = (int16_t)display_controls.current.contrast,
+        };
+        send_slot_event(&running[slot], &e);
+    }
 }
 
 static bool evict_lru_background(int exclude_slot)
@@ -699,6 +734,8 @@ static void close_switcher(void)
 /* Move the foreground app into the background pool instead of killing it. */
 static void app_background(void)
 {
+    calibration_cancel();
+    display_cancel();
     if (front_slot < 0)
         return;
     int slot = front_slot;
@@ -769,6 +806,8 @@ static void begin_zoom_in(void)
 
 static void begin_zoom_out(void)
 {
+    calibration_cancel();
+    display_cancel();
     banner_visible = banner_touch = false;
     close_switcher();
     load_settings();
@@ -866,6 +905,8 @@ static void launch(int index)
 
 static void lock_device(void)
 {
+    calibration_cancel();
+    display_cancel();
     lock_over_app = (state == ST_APP);
     banner_visible = banner_touch = false;
     view.jiggle = alert.open = false;
@@ -1459,7 +1500,20 @@ static void handle_input(void)
 
     while ((n = gz_input_read(evs, 16)) > 0) {
         for (int i = 0; i < n; i++) {
-            const struct gz_input_event *e = &evs[i];
+            struct gz_input_event *e = &evs[i];
+            if (calibration.owner && calibration.preview && (int32_t)(now_ms() - calibration.until) >= 0)
+                calibration_cancel();
+            if (sb_calibration_input(&calibration, e)) {
+                /* Sampling must bypass status-bar, banner and other system
+                 * hit tests, even when the old calibration is very wrong. */
+                send_event(e);
+                continue;
+            }
+            if (calibration.owner && calibration.preview &&
+                (e->type == GZ_EV_TOUCH_DOWN || e->type == GZ_EV_TOUCH_MOVE || e->type == GZ_EV_TOUCH_UP)) {
+                send_event(e);      /* keep test touches on the test page */
+                continue;
+            }
             if (card_details_event(e))
                 continue;
             if (e->type == GZ_EV_KEY_DOWN || e->type == GZ_EV_KEY_UP) {
@@ -1638,12 +1692,50 @@ static int handle_note_msg(const struct gz_msg *m, struct gz_msg *r)
 
 /* ---- app messages ------------------------------------------------------- */
 
+static bool settings_request_allowed(int pid)
+{
+    int app = front_app();
+    return state == ST_APP && front() && front()->pid == pid && app >= 0 &&
+           !sb_apps[app].installed && !strcmp(sb_apps[app].path, "bin/settings");
+}
+
 static void handle_msg(int token, struct gz_msg *m)
 {
     struct gz_msg r;
 
     memset(&r, 0, sizeof(r));
     switch (m->w[0]) {
+    case SB_DISPLAY_GET:
+    case SB_DISPLAY_PREVIEW:
+    case SB_DISPLAY_SAVE:
+    case SB_DISPLAY_CANCEL:
+    case SB_DISPLAY_RESET:
+        r.w[0] = settings_request_allowed((int)m->w[3]) ?
+            (uint32_t)sb_display_request(&display_controls, m->w[0], (int)m->w[3], (int)m->w[1], (int)m->w[2]) :
+            (uint32_t)GZ_EPERM;
+        r.w[1] = (uint32_t)display_controls.current.brightness;
+        r.w[2] = (uint32_t)display_controls.current.contrast;
+        break;
+    case SB_TOUCH_BEGIN:
+    case SB_TOUCH_PREVIEW:
+    case SB_TOUCH_SAVE:
+    case SB_TOUCH_CANCEL:
+    case SB_TOUCH_RESET: {
+        int pid = (int)m->w[3];
+        if (!settings_request_allowed(pid)) {
+            r.w[0] = (uint32_t)GZ_EPERM;
+            break;
+        }
+        struct touch_calibration candidate;
+        memcpy(&candidate, &m->w[4], sizeof(candidate));
+        r.w[0] = (uint32_t)sb_calibration_request(&calibration, m->w[0], pid, &candidate, now_ms());
+        if (!r.w[0]) {
+            if (m->w[0] == SB_TOUCH_BEGIN)
+                hide_banner();
+            front()->shared->tail = front()->shared->head; /* discard touches in the previous coordinate space */
+        }
+        break;
+    }
     case SB_HELLO: {
         int slot = find_slot_by_pid((int)m->w[3]);
         if (slot < 0) {
@@ -1806,6 +1898,8 @@ int main(void)
     init_surfaces();
     sb_draw_init();
     load_settings();
+    sb_calibration_load(&calibration);
+    sb_display_load(&display_controls);
     apps_scan(false);                   /* before notify_load: it keys on bundles */
     apps_changed();
     notify_load();
@@ -1862,6 +1956,8 @@ int main(void)
             timeout = MIN(timeout, due);
         if (banner_visible)
             timeout = MIN(timeout, (int)(banner_until - t) < 0 ? 0 : (int)(banner_until - t));
+        if (calibration.owner && calibration.preview)
+            timeout = MIN(timeout, MAX((int32_t)(calibration.until - t), 0));
 
         struct gz_msg m;
         int tok = gz_recv(sb_port, &m, timeout);
@@ -1877,6 +1973,8 @@ int main(void)
         }
 
         t = now_ms();
+        if (calibration.owner && calibration.preview && (int32_t)(t - calibration.until) >= 0)
+            calibration_cancel();
         if (anim.active && (int)(t - next_frame) >= 0) {
             frame();
             next_frame += FRAME_MS;
