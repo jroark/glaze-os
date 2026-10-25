@@ -129,8 +129,12 @@ static bool firmware(void)
 }
 static unsigned command(uint16_t op, unsigned n)
 {
-    if (n < 8 || n > sizeof(cmd) || !wait_bits(0x20, COMMAND))
+    if (n < 8 || n > sizeof(cmd))
         return 0;
+    if (!wait_bits(0x20, COMMAND)) {
+        kprintf("wl54cf: command %x: card not ready (status %x)\n", op, wl_read16(0x20));
+        return 0;
+    }
     put16(cmd, op);
     put16(cmd + 2, n);
     put16(cmd + 4, ++sequence);
@@ -138,35 +142,71 @@ static unsigned command(uint16_t op, unsigned n)
     wl_write16(0x18, n);
     write_fifo(0x1a, cmd, n);
     signal(COMMAND);
-    if (!wait_bits(0x22, RESPONSE))
-        return 0;
-    unsigned count = wl_read16(0x30);
+    /* A real card's scan sweeps every channel, and authentication and
+     * association wait for the access point: seconds, not milliseconds. */
+    uint32_t deadline = op == 6 || op == 0x11 || op == 0x12 || op == 0x50 ? 3000000u : TIMEOUT_US;
+    uint64_t t0 = time_us();
+    while (!(wl_read16(0x22) & RESPONSE))
+        if (time_us() - t0 > deadline) {
+            kprintf("wl54cf: command %x: no response (cause %x)\n", op, wl_read16(0x22));
+            return 0;
+        }
+    /* As Linux libertas if_cs_receive_cmdres: the response is in the card
+     * once CARD_STATUS (0x20) shows it and RESP_LEN is set. A real WL54-CF
+     * raises the cause bit first and reads a length of 0 until then. */
+    unsigned count = 0;
+    for (t0 = time_us(); time_us() - t0 < deadline;)
+        if ((wl_read16(0x20) & RESPONSE) && (count = wl_read16(0x30)) != 0)
+            break;
     if (count < 16 || count > sizeof(buf)) {
+        kprintf("wl54cf: command %x: response length %u\n", op, count);
         wl_write16(0x22, RESPONSE);
         return 0;
     }
     read_fifo(0x12, buf, count);
     wl_write16(0x22, RESPONSE);
     unsigned length = get16(buf + 2);
-    if (get16(buf) != (op | 0x8000) || get16(buf + 4) != sequence || get16(buf + 6) || length < 8 ||
-        length > count - 8)
+    /* A real WL54-CF (firmware 2.5) answers ASSOCIATE 0x0050 with the older
+     * command's code, 0x8012. */
+    uint16_t code = get16(buf);
+    bool answers = code == (op | 0x8000) || (op == 0x50 && code == 0x8012);
+    if (!answers || get16(buf + 4) != sequence || get16(buf + 6) || length < 8 ||
+        length > count - 8) {
+        kprintf("wl54cf: command %x (seq %u): response %u bytes: %04x %04x %04x %04x\n", op,
+                sequence, count, get16(buf), length, get16(buf + 4), get16(buf + 6));
         return 0;
+    }
     return length;
 }
 /* Parse standard SCAN response, including all bounds before dereferencing IEs. */
-static bool scan(void)
+/* One SCAN command (CMD_802_11_SCAN) over `count` channels from `first`,
+ * as Linux libertas lbs_scan sends it: any BSS type and BSSID, then a
+ * wildcard SSID TLV, a channel list TLV (active scan, 100 ms per channel)
+ * and the b/g rates TLV. A real WL54-CF answers no SCAN without them. The
+ * results are added to wifi.aps, one entry per BSSID. */
+static bool scan_channels(unsigned first, unsigned count)
 {
+    static const uint8_t rates[] = {0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c};
     memset(cmd, 0, sizeof(cmd)); cmd[8] = 3;
-    unsigned n = command(6, 15);
-    if (n < 11 || get16(buf + 8) != n - 11) return false;
-    unsigned end = n, pos = 11;
-    wifi.count = 0;
+    unsigned p = 15;
+    put16(cmd + p, 0); put16(cmd + p + 2, 0); p += 4;               /* SSID: any */
+    put16(cmd + p, 0x0101); put16(cmd + p + 2, count * 7); p += 4;  /* channel list */
+    for (unsigned c = first; c < first + count; c++) {
+        cmd[p] = 0; cmd[p + 1] = (uint8_t)c; cmd[p + 2] = 0;        /* b/g, active */
+        put16(cmd + p + 3, 0); put16(cmd + p + 5, 100); p += 7;
+    }
+    put16(cmd + p, 0x0001); put16(cmd + p + 2, sizeof(rates)); p += 4;
+    memcpy(cmd + p, rates, sizeof(rates)); p += sizeof(rates);
+    unsigned n = command(6, p);
+    /* bssdescriptsize, nr_sets, the descriptors, then optional TLVs. */
+    if (n < 11 || get16(buf + 8) > n - 11) return false;
+    unsigned end = 11 + get16(buf + 8), pos = 11;
     for (unsigned b = 0; b < buf[10]; b++) {
         if (pos + 2 > end) return false;
         unsigned length = get16(buf + pos); pos += 2;
         if (length < 19 || length > end - pos) return false;
-        unsigned stop = pos + length, idx = wifi.count;
-        struct wifi_ap entry = {0}; uint8_t rates[14]; unsigned nr = 0;
+        unsigned stop = pos + length;
+        struct wifi_ap entry = {0}; uint8_t ap_rate[14]; unsigned nr = 0;
         uint16_t capability = get16(buf + pos + 17);
         memcpy(entry.bssid, buf + pos, 6);
         entry.signal = buf[pos + 6]; entry.privacy = !!(capability & 16);
@@ -179,7 +219,7 @@ static bool scan(void)
                 entry.ssid_len = l; memcpy(entry.ssid, buf + ie, l);
             } else if (tag == 3 && l == 1) entry.channel = buf[ie];
             else if (tag == 1 || tag == 50) {
-                for (unsigned r = 0; r < l && nr < sizeof(rates); r++) rates[nr++] = buf[ie+r];
+                for (unsigned r = 0; r < l && nr < sizeof(ap_rate); r++) ap_rate[nr++] = buf[ie+r];
             } else if ((tag == 48 || (tag == 221 && l >= 4 &&
                         !memcmp(buf + ie, "\x00\x50\xf2\x01", 4))) && l + 2 <= WIFI_IE_MAX) {
                 if (!entry.ie_len || tag == 48) {
@@ -188,14 +228,26 @@ static bool scan(void)
             }
             ie += l;
         }
+        unsigned idx = 0;
+        while (idx < wifi.count && memcmp(wifi.aps[idx].bssid, entry.bssid, 6))
+            idx++;
         if (entry.ssid_len && (capability & 1) && idx < WIFI_AP_MAX) {
             wifi.aps[idx] = entry; ap_capability[idx] = capability;
-            memcpy(ap_rates[idx], rates, nr); ap_rates_len[idx] = nr;
-            wifi.count++;
+            memcpy(ap_rates[idx], ap_rate, nr); ap_rates_len[idx] = nr;
+            if (idx == wifi.count)
+                wifi.count++;
         }
         pos = stop;
     }
-    return pos == end;
+    return true;
+}
+static bool scan(void)
+{
+    bool any = false;
+    wifi.count = 0;
+    for (unsigned c = 1; c <= 13; c += 4)
+        any |= scan_channels(c, MIN(4u, 14 - c));
+    return any;
 }
 static int key_material(const struct wifi_key *key)
 {
@@ -260,7 +312,10 @@ static int associate(const struct wifi_config *c)
     memset(cmd, 0, 12); put16(cmd+8, 0x43 | (c->security == WIFI_WEP ? 8 : 0));
     if (!command(0x28, 12)) return GZ_EIO;
     memset(cmd, 0, 25); memcpy(cmd+8, ap->bssid, 6); cmd[14] = c->shared_auth;
-    if (!command(0x11, 25)) return WIFI_EAUTH;
+    if (!command(0x11, 25)) {
+        kputs("wl54cf: authentication got no answer\n");
+        return WIFI_EAUTH;
+    }
     memset(cmd, 0, sizeof(cmd)); memcpy(cmd+8, ap->bssid, 6);
     put16(cmd+14, ap_capability[i] & 0x11); put16(cmd+16, 10); put16(cmd+18, 100);
     unsigned p = 21;
@@ -273,7 +328,12 @@ static int associate(const struct wifi_config *c)
         put16(cmd+p, c->ie[0]); put16(cmd+p+2, c->ie_len-2);
         memcpy(cmd+p+4, c->ie+2, c->ie_len-2); p += c->ie_len+2;
     }
-    if (command(0x50, p) < 14 || get16(buf+10)) return WIFI_EAUTH;
+    unsigned answer = command(0x50, p);
+    if (answer < 14 || get16(buf+10)) {
+        if (answer)
+            kprintf("wl54cf: association refused, status %x\n", get16(buf + 10));
+        return WIFI_EAUTH;
+    }
     wifi.current = *ap; wifi.current.rate = 22; wifi.security = c->security;
     authorized = c->security < WIFI_WPA_PSK;
     wifi.state = authorized ? WIFI_CONNECTED : WIFI_AUTHENTICATING;
@@ -313,15 +373,60 @@ bool wl54cf_init(void)
     wl_set_cor(0x80);
     wl_set_cor(1); /* PC Card COR reset / configuration index from CIS. */
     wl_write16(4, 31);
-    if (wl_read8(0x1c) != 0x12 || !firmware())
+    /* Product revision (Linux libertas if_cs: IF_CS_PRODUCT_ID): the
+     * CF8385 is supported from B1 (0x12) on; later revisions report more. */
+    /* A card just configured may not answer at once (real cards read 0
+     * at first): wait for the same revision twice. */
+    uint8_t rev = 0, last = 0xff;
+    for (uint64_t t0 = time_us(); time_us() - t0 < 1000000;) {
+        rev = wl_read8(0x1c);
+        if (rev && rev != 0xff && rev == last)
+            break;
+        last = rev;
+        for (uint64_t t1 = time_us(); time_us() - t1 < 10000;)
+            ;
+    }
+    uint8_t state = wl_read8(0x3f);
+    kprintf("wl54cf: revision %x, firmware state %x\n", rev, state);
+    /* Linux libertas refuses revisions below B1 (0x12) with its own
+     * firmware; a real WL54-CF is B0 (0x10), and the firmware here comes
+     * from the card's own Windows CE driver (docs/WL54CF.md), so B0 is
+     * tried as well. */
+    if (rev < 0x10 || rev == 0xff) {
+        kputs("wl54cf: unsupported chip revision; I/O registers:");
+        for (unsigned r = 0; r < 0x40; r++)
+            kprintf("%s%02x", r % 16 ? " " : "\n  ", wl_read8(r));
+        kputs("\n");
         goto fail;
+    }
+    if (!firmware()) {
+        kprintf("wl54cf: firmware download failed (state %x, scratch %x)\n", wl_read8(0x3f),
+                wl_read16(0x28));
+        goto fail;
+    }
     wl_write16(0x22, 31);
     memset(cmd, 0, 46);
     if (command(3, 46) != 46)
         goto fail;
-    net_set_mac(buf + 16);
-    kprintf("wl54cf: MAC %02x:%02x:%02x:%02x:%02x:%02x\n", buf[16], buf[17], buf[18], buf[19],
-            buf[20], buf[21]);
+    /* A real B0 card leaves the permanent address zero here: its MAC is the
+     * CIS's LAN_NODE_ID (CISTPL_FUNCE), as its Windows CE driver reads it. */
+    static const uint8_t zero[6];
+    uint8_t mac[6];
+    memcpy(mac, buf + 16, 6);
+    if (!memcmp(mac, zero, 6) && pcmcia_node_id(mac)) {
+        /* The firmware sends from the address it holds: give it this one
+         * (CMD_802_11_MAC_ADDRESS, action SET, as Linux libertas
+         * lbs_set_mac_address), or the access point sees 00:00:00:00:00:00
+         * and authentication times out (association status 4). */
+        memset(cmd, 0, 16);
+        put16(cmd + 8, 1);
+        memcpy(cmd + 10, mac, 6);
+        unsigned set = command(0x4d, 16);
+        kprintf("wl54cf: station address from the CIS%s\n", set ? ", set in the firmware" : "; the firmware refused it");
+    }
+    net_set_mac(mac);
+    kprintf("wl54cf: MAC %02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3],
+            mac[4], mac[5]);
     memset(cmd, 0, 12);
     put16(cmd + 8, 1);
     put16(cmd + 10, 1);
@@ -366,10 +471,21 @@ void wl54cf_irq(void)
                     if (authorized || (frame[12] == 0x88 && frame[13] == 0x8e))
                         net_receive(frame, len - 8);
                     else net_rx_drop();
-                } else
+                } else {
+                    /* DEBUG(hw): what a real card's receive descriptor holds. */
+                    static unsigned logged;
+                    if (logged++ < 8)
+                        kprintf("wl54cf: rx drop: %u bytes, status %x len %u off %u: %02x %02x %02x %02x %02x %02x\n",
+                                n, get16(buf), len, off, off < n ? buf[off] : 0,
+                                off + 12 < n ? buf[off + 12] : 0, off + 13 < n ? buf[off + 13] : 0,
+                                off + 14 < n ? buf[off + 14] : 0, off + 15 < n ? buf[off + 15] : 0,
+                                off + 16 < n ? buf[off + 16] : 0);
                     net_rx_drop();
-            } else
+                }
+            } else {
+                kprintf("wl54cf: rx length %u\n", n);
                 net_rx_drop();
+            }
             signal(RX);
         }
         if (cause & EVENT) {

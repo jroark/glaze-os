@@ -197,6 +197,32 @@ static void read_cis(struct cis *c)
     }
 }
 
+bool pcmcia_node_id(uint8_t mac[6])
+{
+    unsigned i = 0;
+
+    for (int n = 0; n < 64 && i + 2 < CIS_LIMIT; n++) {
+        uint8_t code = CF_CIS(i);
+        if (code == TPL_END)
+            break;
+        if (code == TPL_NULL) {
+            i++;
+            continue;
+        }
+        unsigned len = CF_CIS(i + 1);
+        if (len == 0xFF || i + 2 + len > CIS_LIMIT)
+            break;
+        /* FUNCE, type 4 (LAN_NODE_ID), length 6, the address. */
+        if (code == 0x22 && len >= 8 && CF_CIS(i + 2) == 0x04 && CF_CIS(i + 3) == 6) {
+            for (int b = 0; b < 6; b++)
+                mac[b] = CF_CIS(i + 4 + b);
+            return true;
+        }
+        i += 2 + len;
+    }
+    return false;
+}
+
 static int cis_function(void)
 {
     struct cis c;
@@ -416,6 +442,14 @@ static void insert(void)
         struct cis c;
 
         socket_power_up();
+        /* Some cards (a real WL54-CF) answer only some time after reset:
+         * wait for the CIS's first tuple, CISTPL_DEVICE or a link target. */
+        for (uint64_t t0 = time_us(); time_us() - t0 < 1000000u;) {
+            uint8_t first = CF_CIS(0);
+            if (first != 0x00 && first != 0xFF)
+                break;
+            delay_ms(10);
+        }
         read_cis(&c);
         if (c.function != FUNCID_FIXED && c.function != kind)
             log_cis();

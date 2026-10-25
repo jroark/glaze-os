@@ -253,12 +253,30 @@ fail:
     forced_memzero(seed, sizeof(seed)); forced_memzero(next, sizeof(next)); forced_memzero(block, sizeof(block));
     return -1;
 }
-static int install_key(const struct wifi_key *key) { return gz_wifi_ctl(WIFI_SET_KEY, (void *)key); }
-static int authorize(void) { return gz_wifi_ctl(WIFI_AUTHORIZE, NULL); }
-static int send_eapol(const uint8_t *p, unsigned n) { return gz_net_send(p, n); }
+/* DEBUG(hw): the WPA handshake on a real WL54-CF, step by step. */
+static int install_key(const struct wifi_key *key)
+{
+    int rv = gz_wifi_ctl(WIFI_SET_KEY, (void *)key);
+    net_log("wifi: install %s key (cipher %u): %d\n", key->pairwise ? "pairwise" : "group",
+            key->cipher, rv);
+    return rv;
+}
+static int authorize(void)
+{
+    int rv = gz_wifi_ctl(WIFI_AUTHORIZE, NULL);
+    net_log("wifi: authorize: %d\n", rv);
+    return rv;
+}
+static int send_eapol(const uint8_t *p, unsigned n)
+{
+    int rv = gz_net_send(p, n);
+    net_log("wifi: EAPOL out %u bytes: %d\n", n, rv);
+    return rv;
+}
 static uint32_t wifi_time(void) { return gz_time_ms(); }
 static void authentication_failed(int error)
 {
+    net_log("wifi: authentication failed: %d\n", error);
     auth_failure = error;
     /* Revoke traffic now; defer freeing the state machine until its callback returns. */
     gz_wifi_ctl(WIFI_DISCONNECT, NULL);
@@ -361,6 +379,7 @@ void net_if_poll(void)
     wifi_link();
     while ((n = gz_net_recv(frame, sizeof(frame))) > 0) {
         if (wireless && n >= 14 && frame[12] == 0x88 && frame[13] == 0x8e) {
+            net_log("wifi: EAPOL in %d bytes\n", n);
             wifi_supplicant_rx(frame, n); continue;
         }
         if (wireless && (!associated || auth_failure)) continue;

@@ -49,6 +49,8 @@ void cf_init(void);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);
+/* The CIS's LAN_NODE_ID (CISTPL_FUNCE): a network card's station address. */
+bool pcmcia_node_id(uint8_t mac[6]);
 int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 int sys_cf_write(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 
