@@ -50,10 +50,28 @@ int sys_cf_info(struct proc *p, uint32_t uout);
 int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 int sys_cf_write(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 
-/* ne2000.c: PCMCIA Ethernet for the network server. */
+/* net.c: select one boot-time card and dispatch privileged raw frame I/O. */
+void netdev_init(void);
+void netdev_irq(void);
+bool netdev_present(void);
+bool netdev_claimed(void); /* keep ATA off a detected NIC even if its init failed */
+int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t buf);
+/* ne2000.c and xi825.c: hardware backends. */
 void ne2000_init(void);
 void ne2000_irq(void);
 bool ne2000_present(void);
+void xi825_init(void);
+void xi825_irq(void);
+bool xi825_present(void);
+int xi825_info(struct proc *p, uint32_t out);
+int xi825_bind(struct proc *p, int port);
+int xi825_send(struct proc *p, uint32_t buf, uint32_t len);
+int xi825_recv(struct proc *p, uint32_t buf, uint32_t len);
+int xi825_control(struct proc *p, uint32_t op, uint32_t buf);
+int ne2000_info(struct proc *p, uint32_t out);
+int ne2000_bind(struct proc *p, int port);
+int ne2000_send(struct proc *p, uint32_t buf, uint32_t len);
+int ne2000_recv(struct proc *p, uint32_t buf, uint32_t len);
 int sys_net_info(struct proc *p, uint32_t uout);
 int sys_net_bind(struct proc *p, int port);
 int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len);
