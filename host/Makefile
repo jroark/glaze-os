@@ -428,3 +428,18 @@ browser-google: $(WEB_OBJS) libwolfssl.a libjerry.a ../out/host/browser-platform
 	$(CC) $(WEB_CFLAGS) -o ../out/host/browser-google ../tests/browser_google.c \
 	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) libwolfssl.a libjerry.a -lm
 .PHONY: browser-google
+
+.PHONY: net-driver-test
+net-driver-test: ../tests/net_driver.c ../kernel/drivers/net.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/net-driver-test ../tests/net_driver.c
+	../out/host/net-driver-test
+
+# Optional peer-model tests; point at the matching be300 worktree.
+BE300_SOURCE ?= ../../be300
+.PHONY: wl54cf-driver-test
+wl54cf-driver-test: ../tests/wl54cf_driver.c ../kernel/drivers/wl54cf.c ../kernel/drivers/wl54cf_io.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -I$(BE300_SOURCE)/src -Dwl54cf_init=wl54cf_model_init -c $(BE300_SOURCE)/src/hw/wl54cf.c -o ../out/host/wl54cf-model.o
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -I$(BE300_SOURCE)/src ../tests/wl54cf_driver.c ../out/host/wl54cf-model.o -o ../out/host/wl54cf-driver-test
+	../out/host/wl54cf-driver-test

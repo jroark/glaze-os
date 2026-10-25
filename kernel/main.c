@@ -78,7 +78,7 @@ void kmain(const struct gz_bootinfo *bi)
     TRACE(14, GZ_TRACE_WHITE);
     input_init();
     TRACE(15, GZ_TRACE_WHITE);
-    ne2000_init();
+    net_init();
     TRACE(16, GZ_TRACE_WHITE);
     cf_init();
     TRACE(17, GZ_TRACE_WHITE);

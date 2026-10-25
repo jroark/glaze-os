@@ -238,7 +238,7 @@ struct gz_flash_info {
 #define GZ_ETH_FRAME_MAX    1514    /* without the CRC */
 
 struct gz_netif_info {
-    uint32_t present;           /* an NE2000 card answered the probe */
+    uint32_t present;           /* a network card initialized successfully */
     uint8_t mac[6];
     uint16_t reserved;
     uint32_t rx_frames, tx_frames;

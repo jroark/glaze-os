@@ -50,7 +50,19 @@ int sys_cf_info(struct proc *p, uint32_t uout);
 int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 int sys_cf_write(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 
-/* ne2000.c: PCMCIA Ethernet for the network server. */
+/* Network device dispatch and shared frame API (net.c). */
+void net_init(void);
+void net_irq(void);
+bool net_present(void);
+void net_set_mac(const uint8_t mac[6]);
+void net_receive(const uint8_t *frame, uint32_t len);
+void net_rx_drop(void);
+void net_overrun(void);
+/* Backend drivers: identify before touching device registers. */
+bool wl54cf_init(void);
+void wl54cf_irq(void);
+int wl54cf_send(const uint8_t *frame, uint32_t len);
+int ne2000_send(const uint8_t *frame, uint32_t len);
 void ne2000_init(void);
 void ne2000_irq(void);
 bool ne2000_present(void);

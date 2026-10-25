@@ -25,8 +25,8 @@ boot ROM from NAND. The project site is [glaze-os.com](https://glaze-os.com)
 | `third_party/` | littlefs, Dhara and lwIP, unmodified (see `third_party/README.md`) |
 | `tools/` | NAND image packer, romfs and package builder, Swift asset generator, PNG-to-GZI converter |
 
-All artwork is original. The device has no radios, so the UI doesn't show
-signal or Wi-Fi indicators.
+All artwork is original. The device has no internal radios. Optional CF
+network cards use Settings > Network; the UI has no Wi-Fi signal indicators.
 
 ## Building
 
@@ -62,7 +62,8 @@ be300 --nand out/glaze.bin --rtc-host-time
 
 The emulator writes NAND back to the image, so work on a copy if you want a
 clean file system each run. Add `--ne2000` to insert the emulated PCMCIA Ethernet
-card (see Networking).
+card (see Networking). `--wl54cf` selects the AmbiCom wireless CF model
+with Glaze firmware built using `WL54CF=1`; see [WL54-CF](docs/WL54CF.md).
 
 For unattended UI tests, build with `INPUT_SCRIPT=tests/calc.txt`. The kernel
 then replays the timed touch and key events in that file (see
