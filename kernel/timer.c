@@ -34,8 +34,13 @@ uint64_t time_us(void)
     return clock_update() * 1000u / count_per_ms;
 }
 
-/* Count's rate in the emulator, if the RTC can't measure it. */
-#define GUESS_COUNT_PER_MS  10372u
+/* Count's rate if the RTC can't measure it: a real BE-300 measures 10406
+ * kHz, the emulator 10372. */
+#define GUESS_COUNT_PER_MS  10406u
+/* A plausible Count rate (VR4131 Count runs at half PClock): anything else
+ * is a bad measurement. */
+#define MIN_COUNT_PER_MS    2000u
+#define MAX_COUNT_PER_MS    100000u
 /* RTC reads before giving up on it ticking: a tick is ~30 us, a read well
  * under 1 us, so this is seconds. */
 #define RTC_POLLS           5000000u
@@ -47,28 +52,66 @@ bool timer_rtc_ok(void)
     return rtc_ok;
 }
 
-static void calibrate(void)
+/* The RTC's elapsed-time counter counts on its own clock: a read can catch
+ * it changing, so take a value two reads agree on. */
+static uint16_t rtc_ticks(void)
 {
-    /* Measure Count across 100 ms of RTC elapsed time (3277 ticks). */
+    uint16_t a, b;
+
+    do {
+        a = RTC_ETIME_L;
+        b = RTC_ETIME_L;
+    } while (a != b);
+    return a;
+}
+
+/* Count across 100 ms of RTC time (3277 ticks), or 0 if the RTC isn't
+ * counting. */
+static uint32_t measure(void)
+{
     const uint16_t span = RTC_HZ / 10;
-    uint16_t start = RTC_ETIME_L;
+    uint16_t start = rtc_ticks();
     uint32_t n = 0;
 
+    while (rtc_ticks() == start)
+        if (++n == RTC_POLLS)
+            return 0;
+    start = rtc_ticks();
+    uint32_t c0 = read_c0_count();
+    while ((uint16_t)(rtc_ticks() - start) < span)
+        ;
+    return (read_c0_count() - c0) / 100u;
+}
+
+/* On a real BE-300 one boot in a few measured 187 kHz instead of 10406
+ * (the RTC freshly reset, or a torn read), which ran every timeout ~55
+ * times fast: the median of three, checked for plausibility. */
+static void calibrate(void)
+{
+    uint32_t m[3];
+
     count_per_ms = GUESS_COUNT_PER_MS;
-    while (RTC_ETIME_L == start)
-        if (++n == RTC_POLLS) {
+    for (int i = 0; i < 3; i++) {
+        m[i] = measure();
+        if (!m[i]) {
             kputs("timer: the RTC isn't counting; guessing Count's rate\n");
             return;
         }
-    start = RTC_ETIME_L;
-    uint32_t c0 = read_c0_count();
-    while ((uint16_t)(RTC_ETIME_L - start) < span)
-        ;
-    uint32_t c1 = read_c0_count();
-
-    count_per_ms = (c1 - c0) / 100u;
-    if (count_per_ms == 0)
-        count_per_ms = 1;
+    }
+    for (int i = 0; i < 2; i++)
+        for (int k = i + 1; k < 3; k++)
+            if (m[k] < m[i]) {
+                uint32_t t = m[i];
+                m[i] = m[k];
+                m[k] = t;
+            }
+    if (m[1] < MIN_COUNT_PER_MS || m[1] > MAX_COUNT_PER_MS) {
+        kprintf("timer: implausible Count rates %u %u %u kHz; guessing\n", m[0], m[1], m[2]);
+        return;
+    }
+    if (m[2] - m[0] > m[1] / 50)
+        kprintf("timer: Count rates %u %u %u kHz disagree; using the median\n", m[0], m[1], m[2]);
+    count_per_ms = m[1];
     rtc_ok = true;
 }
 
