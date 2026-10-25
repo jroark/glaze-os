@@ -129,10 +129,15 @@ static int check_nand(struct proc *p, uint32_t block, bool write)
 
 int sys_nand_read(struct proc *p, uint32_t page, uint32_t ubuf)
 {
+    static bool reset;
     int rv = check_nand(p, page / NAND_PAGES_PER_BLOCK, false);
 
     if (rv)
         return rv;
+    if (!reset) {
+        nand_reset();
+        reset = true;
+    }
     nand_read_page(page, page_buf);
     return copy_to_as(&p->as, ubuf, page_buf, NAND_PAGE_DATA);
 }

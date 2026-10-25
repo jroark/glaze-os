@@ -62,6 +62,16 @@ void irq_dispatch_ip2(void)
         }
         if (pending & KJ_INT_KEYS)
             KJ_SRC_KEYS &= ~KJ_SRC_ENABLE;
+        /* A source with no driver here, left enabled by Windows CE (a RAM
+         * boot) or raised by a block it set up, would hold the line for
+         * good: mask it with its enable, as the OAL masks what it serves.
+         * The NAND's DMA did that on a real BE-300. */
+        uint32_t foreign = pending & ~(KJ_INT_CF | KJ_INT_KEYS | KJ_INT_AUDIO | KJ_INT_TOUCH) & 0x1FFFFu;
+        for (uint32_t n = 0; foreign; n++, foreign >>= 1)
+            if (foreign & 1u) {
+                KJ_GIRQ0_EN(n) &= ~KJ_SRC_ENABLE;
+                kprintf("irq: masked GIRQ0 source %u\n", n);
+            }
         GIU_INTSTATL = 0x0001u;
         input_irq((uint16_t)pending);
         if (pending & KJ_INT_CF) {
