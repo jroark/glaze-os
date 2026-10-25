@@ -20,6 +20,8 @@
  */
 
 #include "sound.h"
+#include "radio.h"
+#include "radio_mp3.h"
 
 #include <glaze/audio.h>
 #include <glaze/fs.h>
@@ -87,6 +89,11 @@ static int stream_pid;
 static uint32_t stream_rate, stream_ch;
 static uint32_t stream_base;
 
+/* Radio transport lives on a worker; decoding/output remain on this loop. */
+static bool radio_owned, radio_primed, radio_format;
+static uint32_t radio_epoch, radio_bad_bytes;
+static struct radio_mp3 radio_decoder;
+
 static void log_msg(const char *msg)
 {
     char line[128];
@@ -126,6 +133,17 @@ static void out_start(void)
 {
     if (!hw_running && gz_audio_start(hw_rate, hw_ch) == 0)
         hw_running = true;
+}
+
+static void radio_release(void)
+{
+    radio_stop();
+    if (radio_owned) {
+        out_stop(true);
+        radio_mp3_close(&radio_decoder);
+        radio_owned = false;
+        log_msg("radio stopped");
+    }
 }
 
 /* Moves pending samples into the kernel ring; true once they are all in. */
@@ -402,6 +420,7 @@ static bool neighbour(int delta, char *out, size_t max)
 
 static int play_at(const char *p, uint32_t ms)
 {
+    radio_release();
     if (stream_session >= 0) {
         out_stop(true);
         stream_session = -1;
@@ -451,6 +470,7 @@ static int op_seek(uint32_t ms)
 
 static int op_pause(void)
 {
+    if (radio_owned) { radio_release(); return 0; }
     if (state != AUDIO_PLAYING)
         return 0;
     if (stream_session < 0)
@@ -481,6 +501,7 @@ static int op_resume(void)
 
 static int op_stop(void)
 {
+    radio_release();
     out_stop(true);
     if (src != SRC_NONE) {
         src_seek(0);
@@ -543,6 +564,7 @@ static int stream_open(int sess, uint32_t rate, uint32_t ch)
 {
     if (rate < 4000 || rate > 96000 || (ch != 1 && ch != 2))
         return GZ_EINVAL;
+    radio_release();
     if (stream_session < 0 && src != SRC_NONE && state != AUDIO_STOPPED) {
         reseek_ms = position();
         reseek = true;
@@ -603,6 +625,70 @@ static int stream_clock(struct gz_msg *r)
     return 0;
 }
 
+static void radio_service(void)
+{
+    if (!radio_owned) return;
+    if (!radio_active()) {
+        out_stop(true);
+        radio_mp3_close(&radio_decoder);
+        radio_owned = false;
+        return;
+    }
+    uint32_t next_epoch;
+    uint32_t buffered = radio_buffered(&next_epoch);
+    if (next_epoch != radio_epoch) {
+        radio_epoch = next_epoch;
+        out_stop(true);
+        radio_primed = radio_format = false;
+        radio_bad_bytes = 0;
+        if (radio_mp3_reset(&radio_decoder)) { radio_fail(RADIO_E_MEMORY); return; }
+    }
+    if (!radio_primed) {
+        if (buffered < RADIO_PRIME) return;
+        radio_primed = true;
+    }
+    if (!ring_wants_data() || !out_flush_pend()) return;
+    uint8_t input[4096];
+    int room = (int)sizeof(radio_decoder.input) - radio_decoder.len;
+    int n = radio_read(radio_epoch, input, MIN(room, (int)sizeof(input)));
+    if (n) {
+        radio_mp3_feed(&radio_decoder, input, n);
+        radio_bad_bytes += (uint32_t)n;
+    }
+    MP3FrameInfo info;
+    int frames = radio_mp3_frame(&radio_decoder, pcm, &info);
+    if (frames) {
+        radio_bad_bytes = 0;
+        if (!radio_format || src_rate != (uint32_t)info.samprate || src_ch != (uint32_t)info.nChans) {
+            src_rate = (uint32_t)info.samprate;
+            src_ch = (uint32_t)info.nChans;
+            out_config(src_rate, src_ch);
+            radio_format = true;
+        }
+        src_kbps = (uint32_t)info.bitrate / 1000;
+        out_convert(pcm, frames);
+        out_flush_pend();
+        struct gz_audio_status ks;
+        status(&ks);
+        if (!hw_running && ks.queued >= PRIME_BYTES) {
+            out_start();
+            char text[96];
+            snprintf(text, sizeof(text), "radio playing: %u Hz, %u ch, %u kbps", src_rate, src_ch, src_kbps);
+            log_msg(text);
+        }
+        radio_output(hw_running, src_kbps);
+    } else {
+        if (radio_bad_bytes >= RADIO_CAPACITY) { radio_fail(RADIO_E_FORMAT); return; }
+        struct gz_audio_status ks;
+        status(&ks);
+        if (hw_running && !ks.queued && !pend_len) {
+            out_stop(true);
+            radio_primed = false;
+            radio_output(false, 0);
+        }
+    }
+}
+
 /* ---- system sounds ------------------------------------------------------------- */
 
 /* Starts the output for sounds when nothing else holds it, keeps the mix
@@ -615,6 +701,8 @@ static int sound_service(void)
     if (!hw_running) {
         if (!busy)
             return -1;
+        if (radio_owned)
+            return 50;          /* radio will configure and prime its output */
         if (stream_session >= 0)
             return 50;          /* mixed in once the stream starts */
         if (src != SRC_NONE && state == AUDIO_PAUSED && !reseek) {
@@ -697,7 +785,7 @@ static int op_state(struct session *s)
     st->channels = src_ch;
     st->bitrate = src_kbps;
     st->underruns = ks.underruns;
-    st->streaming = stream_session >= 0;
+    st->streaming = stream_session >= 0 || radio_owned;
     if (src != SRC_NONE) {
         snprintf(st->path, sizeof(st->path), "%s", path);
         snprintf(st->title, sizeof(st->title), "%s", title);
@@ -729,6 +817,25 @@ static int dispatch(struct gz_msg *m, struct gz_msg *r)
     case AUD_NEXT:          return op_skip(1);
     case AUD_PREV:          return op_skip(-1);
     case AUD_STATE:         return op_state(s);
+    case AUD_RADIO_PLAY: {
+        _Static_assert(sizeof(struct radio_request) <= AUDIO_BUF_SIZE, "radio request fits");
+        int rv = radio_start((const struct radio_request *)s->buf);
+        if (rv < 0) return rv;
+        stream_close();
+        src_close();
+        path[0] = title[0] = artist[0] = 0;
+        state = AUDIO_STOPPED; reseek = false;
+        out_stop(true);
+        radio_owned = true;
+        radio_epoch = 0;
+        return 0;
+    }
+    case AUD_RADIO_STATE: {
+        _Static_assert(sizeof(struct radio_state) <= AUDIO_BUF_SIZE, "radio state fits");
+        radio_snapshot((struct radio_state *)s->buf);
+        return 0;
+    }
+    case AUD_RADIO_STOP: radio_release(); return 0;
     case AUD_STREAM_OPEN:   return stream_open((int)sess, m->w[2], m->w[3]);
     case AUD_STREAM_WRITE:
         if (stream_session != (int)sess)
@@ -760,6 +867,7 @@ int main(void)
     gz_port_register(port, AUDIO_PORT_NAME);
     for (;;) {
         int timeout = 1000;
+        if (radio_owned) timeout = 10;
         if (state == AUDIO_PLAYING && stream_session < 0 && src != SRC_NONE)
             timeout = (!src_eof || pend_len) ? (ring_wants_data() ? 0 : -1) : 50;
         int t = gz_recv(port, &m, min_timeout(timeout, sound_timeout));
@@ -771,6 +879,7 @@ int main(void)
             sound_notify(m.w[0]);
         }
         player_service();
+        radio_service();
         sound_timeout = sound_service();
         uint64_t now = gz_time_us();
         if (now - last_reap > 1000000) {

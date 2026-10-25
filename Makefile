@@ -131,7 +131,7 @@ $(OUT)/lib/libmedia.a: $(patsubst lib/%.c,$(OUT)/lib/%.o,$(LIBMEDIA_SRCS)) $(HEL
 
 $(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
 $(OUT)/servers/net/%.o: USER_CFLAGS += $(NET_INC)
-$(OUT)/servers/audio/%.o: USER_CFLAGS += $(HELIX_INC)
+$(OUT)/servers/audio/%.o: USER_CFLAGS += $(HELIX_INC) -Iapps/browser $(WOLFSSL_INC)
 $(OUT)/apps/browser/%.o: USER_CFLAGS += -Ithird_party/stb $(WOLFSSL_INC) $(JERRY_INC)
 $(OUT)/apps/video/%.o: USER_CFLAGS += -Ithird_party/stb
 
@@ -141,8 +141,8 @@ $(OUT)/apps/video/%.o: USER_CFLAGS += -Ithird_party/stb
 PROG_EXTRA_appstore := apps/browser/http.c apps/browser/conn.c apps/browser/tls.c apps/browser/url.c
 APPSTORE_URL ?= https://appstore.glaze-os.com
 PROG_CFLAGS_appstore := -DAPPSTORE_URL='"$(APPSTORE_URL)"' -Iapps/browser -Ithird_party/stb $(WOLFSSL_INC)
-PROG_DEPS_appstore := $(OUT)/pic/libwolfssl.a
-PROG_LDLIBS_appstore := $(OUT)/pic/libwolfssl.a
+PROG_DEPS_appstore := $(OUT)/shared/libwolfssl.so.1
+PROG_LDLIBS_appstore := -l:libwolfssl.so.1
 $(OUT)/apps/appstore/%.o: USER_CFLAGS += -DAPPSTORE_URL='"$(APPSTORE_URL)"' -Iapps/browser -Ithird_party/stb $(WOLFSSL_INC)
 # Pick up build-time endpoint changes without requiring a clean build.
 $(OUT)/apps/appstore/main.o $(OUT)/dyn/apps/appstore/main.o: FORCE
@@ -150,7 +150,8 @@ $(OUT)/apps/appstore/main.o $(OUT)/dyn/apps/appstore/main.o: FORCE
 
 PROG_CFLAGS_browser := -Ithird_party/stb $(WOLFSSL_INC) $(JERRY_INC)
 PROG_CFLAGS_video := -Ithird_party/stb
-PROG_CFLAGS_audio := $(HELIX_INC)
+PROG_EXTRA_audio := apps/browser/conn.c apps/browser/tls.c apps/browser/url.c
+PROG_CFLAGS_audio := $(HELIX_INC) -Iapps/browser $(WOLFSSL_INC)
 # CE entry points have a uniform twelve-word C signature, but original callers
 # reserve stack space only for the real API's arguments. A sibling call to
 # another adapter may otherwise spill unused words over the caller's saved ra.
@@ -160,10 +161,10 @@ $(patsubst %.c,$(OUT)/%.o,$(wildcard apps/wince/*.c)) \
 $(patsubst %.c,$(OUT)/dyn/%.o,$(wildcard apps/wince/*.c)): Makefile
 PROG_DEPS_video := $(OUT)/shared/libmedia.so.1
 PROG_LDLIBS_video := -l:libmedia.so.1
-PROG_DEPS_audio := $(OUT)/pic/libhelix.a $(OUT)/shared/libmedia.so.1
-PROG_LDLIBS_audio := $(OUT)/pic/libhelix.a -l:libmedia.so.1
-PROG_DEPS_browser := $(OUT)/pic/libwolfssl.a $(OUT)/pic/libjerry.a
-PROG_LDLIBS_browser := $(OUT)/pic/libwolfssl.a $(OUT)/pic/libjerry.a
+PROG_DEPS_audio := $(OUT)/pic/libhelix.a $(OUT)/shared/libwolfssl.so.1 $(OUT)/shared/libmedia.so.1
+PROG_LDLIBS_audio := $(OUT)/pic/libhelix.a -l:libwolfssl.so.1 -l:libmedia.so.1
+PROG_DEPS_browser := $(OUT)/shared/libwolfssl.so.1 $(OUT)/pic/libjerry.a
+PROG_LDLIBS_browser := -l:libwolfssl.so.1 $(OUT)/pic/libjerry.a
 PROG_STATIC_DEPS_browser := $(OUT)/lib/libjerry.a
 PROG_LDFLAGS_browser := --exclude-libs ALL
 PROG_CFLAGS_gmail := $(WOLFSSL_INC)
@@ -184,6 +185,11 @@ USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)
 # ---- user programs ----------------------------------------------------------
 
 PROG_DIRS := $(wildcard apps/* servers/*)
+ifeq ($(RADIO_TESTS),1)
+PROG_DIRS += tests/radio_guest
+RADIO_TEST_URL ?= https://somafm.com/groovesalad.pls
+PROG_CFLAGS_radio_guest := -DRADIO_TEST_URL='"$(RADIO_TEST_URL)"'
+endif
 ifneq ($(LD_TESTS),1)
 PROG_DIRS := $(filter-out apps/ldtest apps/ldtest_peer apps/ldtest_ro apps/ldtest_oom,$(PROG_DIRS))
 endif
@@ -269,6 +275,13 @@ $(OUT)/pic/libwolfssl.a: $(WOLFSSL_PIC_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
+# TLS code is shared by Browser, App Store and the radio audio service.
+# Its only application-provided imports are glaze_tls_seed/time; those are
+# exported by each executable and resolved by ld-glaze at process startup.
+$(OUT)/shared/libwolfssl.so.1: $(WOLFSSL_PIC_OBJS) $(OUT)/shared/libc.so.1 lib/wolfssl.exports.map
+	@mkdir -p $(dir $@)
+	$(LD) $(DYN_LDFLAGS) -shared -soname libwolfssl.so.1 --gc-sections --version-script=lib/wolfssl.exports.map -o $@ $(filter %.o,$^) -L$(OUT)/shared --as-needed -l:libc.so.1
+
 JERRY_PIC_OBJS := $(patsubst %.c,$(OUT)/pic/%.o,$(JERRY_SRCS))
 $(JERRY_PIC_OBJS): TP_INC := $(JERRY_INC)
 $(OUT)/pic/libjerry.a: $(JERRY_PIC_OBJS)
@@ -291,7 +304,7 @@ $(OUT)/shared/ld-glaze.so.1: $(OUT)/ldso/entry.o $(OUT)/ldso/ldso.o $(OUT)/ldso/
 
 ifeq ($(DYNAMIC),1)
 $(foreach d,$(PROG_DIRS),$(if $(filter $(notdir $(d)),$(STATIC_PROGS)),$(eval $(call STATIC_template,$(d))),$(eval $(call DYNAMIC_template,$(d)))))
-ROMFS_LIBS := $(SHARED_LIBS) $(OUT)/shared/libmedia.so.1 $(OUT)/shared/ld-glaze.so.1
+ROMFS_LIBS := $(SHARED_LIBS) $(OUT)/shared/libmedia.so.1 $(OUT)/shared/libwolfssl.so.1 $(OUT)/shared/ld-glaze.so.1
 else
 $(foreach d,$(PROG_DIRS),$(eval $(call STATIC_template,$(d))))
 ROMFS_LIBS :=
