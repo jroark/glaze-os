@@ -149,6 +149,39 @@ touched.
 - The loader itself still needs a test under the emulator's stock Windows CE
   (`be300 --nand All_nand_300.bin --cf out/ceboot.img`).
 
+## Audio after Windows CE
+
+The wave driver explicitly initializes the codec and companion power/wake
+registers using the stock `wavedev.dll` sequence. It preserves the original
+halfword/word access widths, enables codec power, waits for each command to
+complete and allows 5 ms to settle before starting DMA. Stop disables codec
+power. Codec waits time out after 10 ms, leave DMA stopped and return
+`GZ_ETIMEDOUT` from the raw start/stop syscall; failed starts preserve queued
+PCM for a retry.
+
+The DMA address pairs are current (`0x8B0/0x8B4`) and next (`0x8B8/0x8BC`).
+Hardware promotes next to current at a completion. Like wavedev's helper
+at `0x01912174`, every refill queues the newly filled buffer through the
+next pair, and every playback start restores both pairs. Buffer rotation
+is tracked in software (`0x019121A0`), since normal hardware playback can
+repeatedly report status `1` for successive RAM buffers. The allocator's
+cached zeroing is flushed before using uncached DMA aliases.
+
+The audio GIRQ0 source stays masked while stopped and is masked before
+handling, following Windows CE's OAL. If a completion remains asserted after
+acknowledgement, the source stays masked while the existing 100 Hz timer
+poll continues to service buffers. This keeps an audio interrupt from
+starving the scheduler. Bounded serial diagnostics report initialization,
+the first four starts and their initial completions.
+
+`make -C host audio-driver-test` exercises the production driver with fake
+MMIO: codec power/settling, current/next buffer replenishment, repeated and
+simultaneous completion flags, restarts, IRQ masking, timeouts and recovery.
+NAND boot, the RAM-boot trampoline and full Windows CE/GlazeBoot emulator
+runs pass `INIT=bin/ktest`. Headphone output is also confirmed on a real
+BE-300. The internal buzzer uses a separate BLG block at `0x0A000980`
+(Casio SDK `buzzer.h`, `hardware.txt:186`); this driver does not implement it.
+
 ## Boot trace
 
 Until the console works, every stage of a RAM boot paints a block across the
