@@ -8,6 +8,7 @@ void net_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /* netif.c */
 int net_if_init(int port);
+int net_if_wifi(uint32_t op, void *buf);
 void net_if_poll(void);         /* frames from the kernel, DHCP fallback */
 int net_if_state(void);
 void net_if_status(struct net_status *st);

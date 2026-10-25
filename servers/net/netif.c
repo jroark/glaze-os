@@ -1,5 +1,5 @@
 /*
- * The lwIP network interface over the kernel's NE2000 driver, address
+ * The lwIP network interface over the kernel's selected network driver, address
  * configuration, and the platform hooks lwIP calls (arch/cc.h).
  *
  * lwIP runs in its tcpip thread. The server's main thread hands it the
@@ -12,6 +12,8 @@
  */
 
 #include <glaze/sys.h>
+#include <glaze/wifi.h>
+#include <glaze/prefs.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -30,6 +32,8 @@ static struct netif nif;
 static struct gz_netif_info info;
 static volatile int state = NET_NO_CARD;     /* also set by the tcpip thread */
 static uint32_t dhcp_started;
+static bool wireless, associated;
+static struct wifi_preference saved;
 static uint8_t frame[1536] __attribute__((aligned(4)));
 static uint32_t rand_state;
 
@@ -123,17 +127,83 @@ int net_if_init(int port)
     if (n) {
         netif_set_status_callback(&nif, status_changed);
         netif_set_default(&nif);
-        netif_set_link_up(&nif);
+        wireless = info.kind == GZ_NET_XI825;
         netif_set_up(&nif);
-        dhcp_start(&nif);
-        dhcp_started = gz_time_ms();
-        state = NET_CONFIGURING;
+        if (!wireless) {
+            netif_set_link_up(&nif);
+            dhcp_start(&nif);
+            dhcp_started = gz_time_ms();
+            state = NET_CONFIGURING;
+        } else state = NET_DISCONNECTED;
     }
     UNLOCK_TCPIP_CORE();
     if (!n)
         return GZ_ENOMEM;
     gz_net_bind(port);
+    if (wireless) {
+        int len = pref_get(WIFI_PREF, &saved, sizeof(saved));
+        if (len == sizeof(saved) && saved.version == 1 && saved.reconnect == 1 &&
+            saved.network.ssid_len > 0 && saved.network.ssid_len <= WIFI_SSID_MAX) {
+            int rv = gz_wifi_ctl(WIFI_CONNECT, &saved.network);
+            net_log("wifi: saved network association %d\n", rv);
+        } else memset(&saved, 0, sizeof(saved));
+    }
     return 0;
+}
+
+static void wifi_link(void)
+{
+    struct wifi_status status;
+    if (!wireless) return;
+    if (gz_wifi_ctl(WIFI_STATUS, &status) < 0) return;
+    bool up = status.state == WIFI_CONNECTED;
+    LOCK_TCPIP_CORE();
+    if (up && !associated) {
+        netif_set_link_up(&nif);
+        state = NET_CONFIGURING;
+        dhcp_started = gz_time_ms();
+        dhcp_start(&nif);
+        net_log("wifi: associated, starting DHCP\n");
+    } else if (!up && associated) {
+        dhcp_release_and_stop(&nif);
+        netif_set_link_down(&nif);
+        netif_set_addr(&nif, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4);
+        dns_setserver(0, IP_ADDR_ANY);
+        net_log("wifi: link down\n");
+    }
+    associated = up;
+    if (!up) state = status.state == WIFI_CONNECTING ? NET_ASSOCIATING : NET_DISCONNECTED;
+    UNLOCK_TCPIP_CORE();
+}
+
+int net_if_wifi(uint32_t op, void *buf)
+{
+    if (!wireless) return GZ_ENOENT;
+    if (op == WIFI_STATUS || op == WIFI_SCAN) return gz_wifi_ctl(op, buf);
+    if (op != WIFI_CONNECT && op != WIFI_DISCONNECT) return GZ_EINVAL;
+    struct wifi_preference next = saved;
+    if (op == WIFI_CONNECT) {
+        struct wifi_request *req = buf;
+        if (!req->ssid_len || req->ssid_len > WIFI_SSID_MAX) return GZ_EINVAL;
+        memset(&next, 0, sizeof(next));
+        next.network = *req;
+    }
+    next.version = 1;
+    next.reconnect = op == WIFI_CONNECT;
+    /* Persist the intent before changing the card: errors remain reviewable. */
+    int rv = pref_put(WIFI_PREF, &next, sizeof(next));
+    if (rv) return rv;
+    saved = next;
+    /* Force the old link down before another association can complete, so
+     * switching networks always discards the previous lease and DNS. */
+    if (op == WIFI_CONNECT) {
+        rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL);
+        wifi_link();
+        if (rv) return rv;
+    }
+    rv = gz_wifi_ctl(op, buf);
+    wifi_link();
+    return rv;
 }
 
 void net_if_poll(void)
@@ -142,6 +212,7 @@ void net_if_poll(void)
 
     if (state == NET_NO_CARD)
         return;
+    wifi_link();
     while ((n = gz_net_recv(frame, sizeof(frame))) > 0) {
         struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)n, PBUF_POOL);
         if (!p)

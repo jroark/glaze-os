@@ -15,6 +15,7 @@
  */
 
 #include <errno.h>
+#include <glaze/wifi.h>
 #include <glaze/sys.h>
 #include <glaze/thread.h>
 #include <string.h>
@@ -645,6 +646,15 @@ static int handle(const struct gz_msg *m, struct gz_msg *r, int token)
         net_if_status((struct net_status *)sessions[sess].buf);
         return 0;
     }
+    if (op >= NET_WIFI_STATUS && op <= NET_WIFI_DISCONNECT)
+        return net_if_wifi(op - NET_WIFI_STATUS, sessions[sess].buf);
+    /* Closing a descriptor remains valid while the interface is down. */
+    if (op == NET_CLOSE) {
+        struct sock *s = sock_get(sess, m->w[2]);
+        if (!s) return GZ_EINVAL;
+        sock_close(s);
+        return 0;
+    }
     int state = net_if_state();
     if (state != NET_UP && state != NET_UP_STATIC)
         return GZ_ENETDOWN;
@@ -665,9 +675,6 @@ static int handle(const struct gz_msg *m, struct gz_msg *r, int token)
     if (!s)
         return GZ_EINVAL;
     switch (op) {
-    case NET_CLOSE:
-        sock_close(s);
-        return 0;
     case NET_BIND:
         return op_bind(s, m->w[3]);
     case NET_LISTEN:

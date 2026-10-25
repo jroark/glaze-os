@@ -54,7 +54,7 @@ void irq_dispatch_ip2(void)
         /* As the OAL does: mask the PCMCIA source while it is handled, after
          * reading the cause register, which clears CF state changes (doc:
          * CF; Linux irq.c). The NE2000 holds the line while its own ISR has
-         * unmasked bits, which ne2000_irq() clears; only then is the source
+         * unmasked bits, which netdev_irq() clears; only then is the source
          * enabled again, and only for it. */
         if (pending & KJ_INT_CF) {
             (void)KJ_CF_CAUSE;
@@ -75,8 +75,8 @@ void irq_dispatch_ip2(void)
         GIU_INTSTATL = 0x0001u;
         input_irq((uint16_t)pending);
         if (pending & KJ_INT_CF) {
-            ne2000_irq();
-            if (ne2000_present())
+            netdev_irq();
+            if (netdev_present())
                 KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
         }
         if (pending & KJ_INT_AUDIO)

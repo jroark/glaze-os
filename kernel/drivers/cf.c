@@ -2,7 +2,7 @@
  * CompactFlash storage card: ATA in the PCMCIA card window, for the file
  * server (servers/fs), which runs FatFs on it as /Card.
  *
- * The card shares the socket with the NE2000; only one of them is ever
+ * The card shares the socket with network cards; only one of them is ever
  * present. Transfers are polled PIO with READ/WRITE SECTORS in LBA28 mode
  * (CF+ and CompactFlash spec 6.2, ATA-4 commands 20h, 30h, ECh). The
  * emulator raises no interrupt when a command completes (be300
@@ -222,7 +222,7 @@ static void probe(void)
 
 void cf_init(void)
 {
-    if (!ne2000_present() && card_inserted()) {
+    if (!netdev_claimed() && card_inserted()) {
         PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
         probe();
         if (!info.present)
@@ -243,8 +243,8 @@ int sys_cf_info(struct proc *p, uint32_t uout)
     if (!(p->flags & PROC_FLASH))
         return GZ_EPERM;
     /* No hot-plug interrupt: look at the socket each time and re-identify
-     * on a change. An NE2000 owns the socket for the whole boot. */
-    if (!ne2000_present() && card_inserted() != socket_full)
+     * on a change. A network card owns the socket for the whole boot. */
+    if (!netdev_claimed() && card_inserted() != socket_full)
         probe();
     return copy_to_as(&p->as, uout, &info, sizeof(info));
 }

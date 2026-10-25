@@ -319,7 +319,7 @@ static int check(struct proc *p)
     return present ? 0 : GZ_ENOENT;
 }
 
-int sys_net_info(struct proc *p, uint32_t uout)
+int ne2000_info(struct proc *p, uint32_t uout)
 {
     struct gz_netif_info info;
 
@@ -327,6 +327,7 @@ int sys_net_info(struct proc *p, uint32_t uout)
         return GZ_EPERM;
     memset(&info, 0, sizeof(info));
     info.present = present;
+    info.kind = present ? GZ_NET_NE2000 : GZ_NET_NONE;
     memcpy(info.mac, mac, sizeof(mac));
     info.rx_frames = rx_frames;
     info.tx_frames = tx_frames;
@@ -335,7 +336,7 @@ int sys_net_info(struct proc *p, uint32_t uout)
     return copy_to_as(&p->as, uout, &info, sizeof(info));
 }
 
-int sys_net_bind(struct proc *p, int port)
+int ne2000_bind(struct proc *p, int port)
 {
     int rv = check(p);
 
@@ -347,7 +348,7 @@ int sys_net_bind(struct proc *p, int port)
     return 0;
 }
 
-int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len)
+int ne2000_send(struct proc *p, uint32_t ubuf, uint32_t len)
 {
     int rv = check(p);
 
@@ -377,7 +378,7 @@ int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len)
     return (int)len;
 }
 
-int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max)
+int ne2000_recv(struct proc *p, uint32_t ubuf, uint32_t max)
 {
     int rv = check(p);
 

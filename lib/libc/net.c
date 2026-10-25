@@ -1,6 +1,7 @@
 /* Network client: requests to the network server (see glaze/net.h). */
 
 #include <glaze/net.h>
+#include <glaze/wifi.h>
 #include <glaze/sys.h>
 #include <glaze/thread.h>
 #include <stdio.h>
@@ -90,9 +91,35 @@ int net_status(struct net_status *st)
     return 0;
 }
 
+int net_wifi_status(struct wifi_status *status)
+{
+    SESSION_LOCKED();
+    int rv = call(NET_WIFI_STATUS, 0, 0, 0, 0, NULL);
+    if (!rv) memcpy(status, buf, sizeof(*status));
+    return rv;
+}
+int net_wifi_scan(void)
+{
+    SESSION_LOCKED(); return call(NET_WIFI_SCAN, 0, 0, 0, 0, NULL);
+}
+int net_wifi_connect(const void *ssid, uint32_t length)
+{
+    SESSION_LOCKED();
+    if (!ssid || !length || length > WIFI_SSID_MAX) return GZ_EINVAL;
+    int rv = connect(); if (rv) return rv;
+    struct wifi_request req = { .ssid_len = length };
+    memcpy(req.ssid, ssid, length);
+    memcpy(buf, &req, sizeof(req));
+    return call(NET_WIFI_CONNECT, 0, 0, 0, 0, NULL);
+}
+int net_wifi_disconnect(void)
+{
+    SESSION_LOCKED(); return call(NET_WIFI_DISCONNECT, 0, 0, 0, 0, NULL);
+}
+
 int net_wait_up(int timeout_ms)
 {
-    struct net_status st;
+    struct net_status st = {0};
     uint32_t start = gz_time_ms();
 
     for (;;) {
