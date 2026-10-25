@@ -16,7 +16,7 @@
  * System sounds need no session: they are asked for with notification
  * bits on the server's port (AUDIO_NOTIFY_*), so the compositor and apps
  * never wait for the server. They play over either mode through the
- * kernel's mix ring, at the "Ringer and Alerts" volume, and only when their
+ * kernel's mix ring, at the master output volume, and only when their
  * setting (the snd.* preferences) allows. There are two voices: a click
  * (taps, keys, swipes, lock) and an alert (a tone, which for the timer
  * repeats until stopped or a minute passes).
@@ -60,7 +60,8 @@ enum {
 #define AUDIO_NOTIFY_STOP       0x00010000u     /* silences the alert voice */
 #define AUDIO_NOTIFY_RELOAD     0x00020000u     /* re-reads the snd.* preferences */
 
-/* Preferences (int32 each). Tones are an index below AUDIO_TONES, or
+/* Preferences (int32 each). Volume controls music, streams and effects.
+ * Tones are an index below AUDIO_TONES, or
  * AUDIO_TONE_NONE. */
 #define AUDIO_PREF_VOLUME       "snd.volume"        /* 0-10, default 7 */
 #define AUDIO_PREF_TOUCH        "snd.touch"         /* default off */

@@ -95,6 +95,7 @@ static void reset(void)
     running = present = idle = false;
     ring_head = ring_tail = mix_head = mix_tail = 0;
     frames_played = underruns = diag_starts = diag_drains = 0;
+    master_gain = 32768;
     bound_port = -1;
     /* Model a handoff with playback still armed; init must stop it. */
     regs[0x880 / 4] = AUD_CTRL_OUT;
@@ -162,6 +163,35 @@ int main(void)
     regs[0x8a8 / 4] = 0;
     assert(sys_audio_stop(&owner, 1) == 0);
 
+    /* Master gain is applied once after mixing, including data queued
+     * before the change. Apps cannot bypass the audio server to set it. */
+    reset();
+    struct proc client = {0};
+    assert(sys_audio_gain(&client, 0) == GZ_EPERM);
+    assert(sys_audio_gain(&owner, 32769) == GZ_EINVAL);
+    int16_t *input = (int16_t *)user_pcm;
+    input[0] = 12000; input[1] = -12000;
+    assert(sys_audio_write(&owner, 0, 4) == 4);
+    input[0] = 4000; input[1] = -4000;
+    assert(sys_audio_mix(&owner, 0, 4) == 4);
+    assert(sys_audio_gain(&owner, 16384) == 0);
+    assert(sys_audio_start(&owner, 22050, 1) == 0);
+    int16_t *output = (int16_t *)pages;
+    assert(output[0] == 8000 && output[1] == -8000);
+    assert(sys_audio_write(&owner, 0, 4) == 4);
+    assert(sys_audio_gain(&owner, 0) == 0);
+    regs[0x8a8 / 4] = 1;
+    audio_irq();
+    assert(output[0] == 0 && output[1] == 0 && running);
+    regs[0x8a8 / 4] = 0;
+    assert(sys_audio_gain(&owner, 32768) == 0);
+    assert(sys_audio_write(&owner, 0, 4) == 4);
+    regs[0x8a8 / 4] = 2;
+    audio_irq();
+    output = (int16_t *)(pages + PAGE_SIZE);
+    assert(output[0] == 4000 && output[1] == -4000 && running);
+    regs[0x8a8 / 4] = 0;
+    assert(sys_audio_stop(&owner, 1) == 0);
     assert(!running && !AUD_ARM && !AUD_DMA_RUN);
     assert(!(KJ_SRC_EN & AUD_SRC_EN_BIT));
     KJ_SRC_EN |= AUD_SRC_EN_BIT;

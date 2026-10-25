@@ -182,6 +182,20 @@ runs pass `INIT=bin/ktest`. Headphone output is also confirmed on a real
 BE-300. The internal buzzer uses a separate BLG block at `0x0A000980`
 (Casio SDK `buzzer.h`, `hardware.txt:186`); this driver does not implement it.
 
+Settings → Sounds → Volume controls music, radio, video streams and effects.
+The audio server reads `snd.volume`, uses the existing squared gain curve
+and passes Q15 gain through the appended, audio-server-only `SYS_AUDIO_GAIN`
+syscall. Existing syscall numbers and audio IPC stay unchanged. Gain is
+applied once after effects mixing at DMA refill, so queued PCM responds
+within two buffers after releasing the slider without restarting playback.
+Effects are no longer pre-scaled. Deploy the matching kernel and audio-server
+romfs together.
+
+`make -C host audio-volume-test` checks preference reload, mute/full gain,
+clamping and single-stage effects scaling; the driver test checks live gain
+changes on queued PCM and access control. Music volume adjustment is also
+confirmed on real hardware with the `audio-volume4` build.
+
 ## Boot trace
 
 Until the console works, every stage of a RAM boot paints a block across the

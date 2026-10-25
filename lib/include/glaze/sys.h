@@ -120,6 +120,8 @@ static inline int gz_audio_write(const void *pcm, uint32_t len) { return GZ_SC2(
 static inline int gz_audio_stop(int flush) { return GZ_SC1(SYS_AUDIO_STOP, flush); }
 static inline int gz_audio_status(struct gz_audio_status *st) { return GZ_SC1(SYS_AUDIO_STATUS, st); }
 static inline int gz_audio_mix(const void *pcm, uint32_t len) { return GZ_SC2(SYS_AUDIO_MIX, pcm, len); }
+/* Applied at DMA refill, including PCM already queued and mixed effects. */
+static inline int gz_audio_gain(uint32_t gain) { return GZ_SC1(SYS_AUDIO_GAIN, gain); }
 
 /* Threads and semaphores; lib/include/glaze/thread.h has the libc layer. */
 static inline int gz_thread_spawn(void (*entry)(void *), void *arg) { return GZ_SC2(SYS_THREAD_CREATE, entry, arg); }

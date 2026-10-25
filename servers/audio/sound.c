@@ -4,8 +4,9 @@
  *
  * Clips are 22050 Hz mono 16-bit PCM WAVs in romfs "sounds/", made by
  * tools/mksounds.py and used in place. Two voices play at once, a click and
- * an alert; each is mixed at SOUND_RATE, scaled by the "Ringer and Alerts"
- * volume, converted to the output's rate and channels, and kept at most
+ * an alert; each is mixed at SOUND_RATE, converted to the output's rate
+ * and channels, then scaled with music by the kernel's master volume.
+ * Samples are kept at most
  * MIX_AHEAD bytes ahead in the mix ring, so a stopped alarm goes quiet
  * within a fraction of a second.
  */
@@ -86,6 +87,7 @@ static void load_settings(void)
     vol = vol < 0 ? 0 : vol > AUDIO_VOLUME_MAX ? AUDIO_VOLUME_MAX : vol;
     /* Squared, so the steps sound roughly even. */
     gain = vol * vol * 32768 / (AUDIO_VOLUME_MAX * AUDIO_VOLUME_MAX);
+    gz_audio_gain((uint32_t)gain);
     sw_touch = pref_int(AUDIO_PREF_TOUCH, 0);
     sw_keys = pref_int(AUDIO_PREF_KEYS, 1);
     sw_swipe = pref_int(AUDIO_PREF_SWIPE, 1);
@@ -229,7 +231,7 @@ static int32_t voice_next(struct voice *v)
 static void mix_chunk(void)
 {
     for (int i = 0; i < CHUNK; i++) {
-        int32_t s = (voice_next(&click) + voice_next(&alert)) * gain >> 15;
+        int32_t s = voice_next(&click) + voice_next(&alert);
         mixed[i] = (int16_t)(s > 32767 ? 32767 : s < -32768 ? -32768 : s);
     }
     mixed_off = 0;

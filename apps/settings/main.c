@@ -497,7 +497,7 @@ static void draw_sounds(gfx_surface *s)
     add_hit(back_rect, R_BACK);
     section_y = UI_NAV_H + 10;
 
-    /* Alerts and system sounds; music and video play at full level. */
+    /* Master output volume: music, video and system sounds. */
     gfx_rect r = gfx_r(CELL_X, section_y, CELL_W, UI_ROW_H);
     const gfx_font *lf = ui_font(FONT_B13);
     ui_draw_group_cell(s, r, 0, false);

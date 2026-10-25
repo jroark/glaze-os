@@ -78,6 +78,7 @@ enum {
     SYS_DISPLAY_SET,        /* privileged: a0 = native brightness, a1 = contrast */
     SYS_DISPLAY_POWER,      /* privileged: a0 = backlight on (0 or 1), CPU/input remain active */
     SYS_WIFI_CTL,          /* PROC_NET only: operation, buffer */
+    SYS_AUDIO_GAIN,        /* PROC_AUDIO only: a0 = master Q15 gain, 0..32768 */
     SYS_COUNT
 };
 
