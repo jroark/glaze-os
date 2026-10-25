@@ -82,7 +82,10 @@ Defaults removes the saved correction. The correction applies to the lock
 screen, home screen and all apps, and survives reboot.
 
 Settings > Display adjusts the physical backlight and LCD contrast, with
-live sliders, saved levels and Restore Defaults. See [Display controls](docs/DISPLAY.md)
+live sliders, saved levels and Restore Defaults. It also contains Wallpaper
+and Screen Timeout (30 seconds to 10 minutes or Never; default 1 minute).
+Timeout locks and turns off the backlight; any input wakes to the lock screen.
+See [Display controls](docs/DISPLAY.md)
 for hardware details and validation.
 
 Run `make -C host touch-calibration-test settings-test ui-events-test` for

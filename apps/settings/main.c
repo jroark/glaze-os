@@ -15,7 +15,7 @@
 #include <string.h>
 
 enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
-            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY };
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -28,6 +28,7 @@ enum {
     R_ZONE0 = R_TONE0 + 32,     /* R_ZONE0 + n picks time zone n */
     R_TOUCH = R_ZONE0 + 64, R_TOUCH_START, R_TOUCH_RESET, R_TOUCH_SAVE, R_TOUCH_RETRY, R_TOUCH_CANCEL,
     R_DISPLAY, R_BRIGHTNESS, R_CONTRAST, R_DISPLAY_RESET,
+    R_TIMEOUT, R_TIMEOUT0, R_TIMEOUT_LAST = R_TIMEOUT0 + 5,
 };
 
 struct hit {
@@ -57,6 +58,18 @@ static struct display_settings display_values = DISPLAY_DEFAULTS, display_before
 static gfx_rect brightness_rect, contrast_rect;
 static int display_drag;
 static const char *display_msg;
+static int32_t s_timeout = DISPLAY_TIMEOUT_DEFAULT;
+static const int32_t timeout_seconds[] = { 30, 60, 120, 300, 600, 0 };
+static const char *const timeout_labels[] = { "30 seconds", "1 minute", "2 minutes", "5 minutes", "10 minutes", "Never" };
+static const char *const timeout_summaries[] = { "30 sec", "1 min", "2 min", "5 min", "10 min", "Never" };
+
+static int timeout_index(void)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(timeout_seconds); i++)
+        if (timeout_seconds[i] == s_timeout)
+            return (int)i;
+    return 1;
+}
 
 /* Passcode entry: turning it on asks for a new code twice, changing it
  * asks for the old one first, turning it off asks for the old one only. */
@@ -93,6 +106,7 @@ static int volume_before;           /* restored if the drag is cancelled */
 
 static void load(void)
 {
+    s_timeout = display_timeout_get();
     pref_get("sb.wallpaper", &s_wallpaper, 4);
     pref_get("sb.24h", &s_24h, 4);
     s_zone = tz_current();
@@ -238,14 +252,13 @@ static void draw_root(gfx_surface *s)
     cell(s, 0, "Network", net_state_name(st.state), true, R_NETWORK);
     section_gap();
     cell(s, 1, "Sounds", NULL, true, R_SOUNDS);
-    cell(s, 2, "Wallpaper", NULL, true, R_WALLPAPER);
+    cell(s, 2, "Display", NULL, true, R_DISPLAY);
     cell(s, 2, "Date & Time", NULL, true, R_DATETIME);
     /* A clipped-out value needs no file-server round trip. The cell still
      * registers its full hit rectangle below. */
     bool enabled = cell_visible(s) && passcode_enabled();
     cell(s, 2, "Passcode Lock", enabled ? "On" : "Off", true, R_PASSCODE);
     cell(s, 2, "Touch Calibration", NULL, true, R_TOUCH);
-    cell(s, 2, "Display", NULL, true, R_DISPLAY);
     cell(s, 3, "About", NULL, true, R_ABOUT);
 }
 
@@ -255,7 +268,7 @@ static void draw_wallpaper(gfx_surface *s)
 {
     nhits = 0;
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
-    ui_draw_navbar(s, "Wallpaper", "Settings", &back_rect, 0);
+    ui_draw_navbar(s, "Wallpaper", "Display", &back_rect, 0);
     add_hit(back_rect, R_BACK);
     for (int i = 0; i < 3; i++) {
         gfx_rect t = gfx_r(12 + i * 76, UI_NAV_H + 16, 64, 85);
@@ -586,13 +599,13 @@ static void display_slider(gfx_surface *s, int y, const char *title, int value, 
                            gfx_rect *slider, int id)
 {
     char label[12];
-    gfx_rect r = gfx_r(CELL_X, y, CELL_W, 74);
+    gfx_rect r = gfx_r(CELL_X, y, CELL_W, 62);
     ui_draw_group_cell(s, r, 0, false);
-    gfx_text(s, r.x + 10, r.y + 10, ui_font(FONT_B13), title, UI_TEXT, 255);
+    gfx_text(s, r.x + 10, r.y + 6, ui_font(FONT_B13), title, UI_TEXT, 255);
     snprintf(label, sizeof(label), "%d / %d", value, max);
-    gfx_text(s, r.x + r.w - 10 - gfx_text_width(ui_font(FONT_R13), label), r.y + 10,
+    gfx_text(s, r.x + r.w - 10 - gfx_text_width(ui_font(FONT_R13), label), r.y + 6,
              ui_font(FONT_R13), label, UI_TEXT_DETAIL, 255);
-    *slider = gfx_r(r.x + 10, r.y + 34, r.w - 20, 30);
+    *slider = gfx_r(r.x + 10, r.y + 27, r.w - 20, 30);
     ui_draw_slider(s, *slider, value - min, max - min);
     add_hit(*slider, id);
 }
@@ -603,19 +616,36 @@ static void draw_display(gfx_surface *s)
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
     ui_draw_navbar(s, "Display", "Settings", &back_rect, 0);
     add_hit(back_rect, R_BACK);
-    display_slider(s, 42, "Brightness", display_values.brightness,
+    display_slider(s, 38, "Brightness", display_values.brightness,
                    DISPLAY_BRIGHTNESS_MIN, DISPLAY_BRIGHTNESS_MAX, &brightness_rect, R_BRIGHTNESS);
-    display_slider(s, 128, "Contrast", display_values.contrast,
+    display_slider(s, 104, "Contrast", display_values.contrast,
                    0, DISPLAY_CONTRAST_MAX, &contrast_rect, R_CONTRAST);
     /* A neutral ramp makes changes visible without leaving Settings. */
     for (int i = 0; i < 11; i++) {
         uint32_t gray = (uint32_t)(i * 255 / 10);
-        gfx_fill(s, gfx_r(10 + i * 20, 216, 20, 20), gray * 0x010101);
+        gfx_fill(s, gfx_r(10 + i * 20, 170, 20, 12), gray * 0x010101);
     }
     if (display_msg)
-        gfx_text_center(s, 0, 242, UI_W, ui_font(FONT_R12), display_msg, UI_TEXT_DETAIL, 255);
-    section_y = 266;
+        gfx_text_center(s, 0, 184, UI_W, ui_font(FONT_R12), display_msg, UI_TEXT_DETAIL, 255);
+    section_y = 206;
+    cell(s, 1, "Wallpaper", NULL, true, R_WALLPAPER);
+    cell(s, 3, "Screen Timeout", timeout_summaries[timeout_index()], true, R_TIMEOUT);
+    section_y = 272;
     cell(s, 0, "Restore Defaults", NULL, true, R_DISPLAY_RESET);
+}
+
+static void draw_timeout(gfx_surface *s)
+{
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Screen Timeout", "Display", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    for (unsigned i = 0; i < ARRAY_SIZE(timeout_seconds); i++)
+        cell(s, i == 0 ? 1 : i == ARRAY_SIZE(timeout_seconds) - 1 ? 3 : 2,
+             timeout_labels[i], s_timeout == timeout_seconds[i] ? "Selected" : NULL, true, R_TIMEOUT0 + i);
+    if (display_msg)
+        gfx_text_center(s, 0, 242, UI_W, ui_font(FONT_R12), display_msg, UI_TEXT_DETAIL, 255);
 }
 
 static void draw_view(gfx_surface *s, enum view v)
@@ -636,6 +666,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_TOUCH_SAMPLE: draw_touch_sample(s); break;
     case V_TOUCH_TEST: draw_touch_test(s); break;
     case V_DISPLAY: draw_display(s); break;
+    case V_TIMEOUT: draw_timeout(s); break;
     }
 }
 
@@ -1008,6 +1039,26 @@ static void pin_key(int k)
 
 static void activate(int id)
 {
+    if (id == R_TIMEOUT) {
+        display_msg = NULL;
+        go(V_TIMEOUT, true);
+        return;
+    }
+    if (view == V_TIMEOUT && id >= R_TIMEOUT0 && id <= R_TIMEOUT_LAST) {
+        int32_t seconds = timeout_seconds[id - R_TIMEOUT0];
+        if (pref_put(DISPLAY_TIMEOUT_PREF, &seconds, sizeof(seconds)) < 0) {
+            display_msg = "Could not save. Try again.";
+            redraw();
+            return;
+        }
+        s_timeout = seconds;
+        int p = gz_port_lookup(SB_PORT_NAME);
+        if (p > 0)
+            gz_notify(p, SB_NOTIFY_DISPLAY);
+        display_msg = NULL;
+        go(V_DISPLAY, false);
+        return;
+    }
     if (id == R_DISPLAY) {
         display_msg = display_request(SB_DISPLAY_GET) < 0 ? "Display controls unavailable." : NULL;
         go(V_DISPLAY, true);
@@ -1043,7 +1094,7 @@ static void activate(int id)
     }
     if (id == R_BACK || id == R_PIN_CANCEL) {
         go(view == V_PREVIEW ? V_WALLPAPER : view == V_PIN ? V_PASSCODE : view == V_TONE ? V_SOUNDS
-           : view == V_ZONE ? V_DATETIME : V_ROOT, false);
+           : view == V_ZONE ? V_DATETIME : (view == V_WALLPAPER || view == V_TIMEOUT) ? V_DISPLAY : V_ROOT, false);
         return;
     }
     switch (id) {

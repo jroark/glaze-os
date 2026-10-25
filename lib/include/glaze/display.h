@@ -2,6 +2,24 @@
 #ifndef GLAZE_DISPLAY_H
 #define GLAZE_DISPLAY_H
 #include <glaze/abi.h>
+#include <glaze/prefs.h>
+
+#define DISPLAY_TIMEOUT_PREF "display.timeout"
+#define DISPLAY_TIMEOUT_DEFAULT 60
+
+static inline bool display_timeout_valid(int32_t seconds)
+{
+    return seconds == 0 || seconds == 30 || seconds == 60 || seconds == 120 || seconds == 300 || seconds == 600;
+}
+
+static inline int32_t display_timeout_get(void)
+{
+    struct { int32_t seconds; uint32_t extra; } record;
+    if (pref_get(DISPLAY_TIMEOUT_PREF, &record, sizeof(record)) == sizeof(record.seconds) &&
+        display_timeout_valid(record.seconds))
+        return record.seconds;
+    return DISPLAY_TIMEOUT_DEFAULT;
+}
 
 #define DISPLAY_PREF "sb.display"
 #define DISPLAY_VERSION 1u

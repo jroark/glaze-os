@@ -7,6 +7,7 @@
 #include "sb_internal.h"
 #include "calibration.h"
 #include "display.h"
+#include "idle.h"
 
 #include <glaze/audio.h>
 #include <glaze/fs.h>
@@ -62,6 +63,7 @@ static enum state state;
 static int sb_port;
 static struct sb_calibration calibration;
 static struct sb_display display_controls;
+static struct sb_idle idle;
 
 /* Running app slots (one foreground + background apps, each with its own shm). */
 struct sb_running {
@@ -156,7 +158,7 @@ static uint32_t now_ms(void)
 static void flush(gfx_rect r)
 {
     /* Keep the modal visible while clocks, notifications and apps update. */
-    if (card_dialog.open)
+    if (card_dialog.open || idle.dark)
         return;
     gfx_blit(&fb, r.x, r.y, &bb, r);
 }
@@ -322,7 +324,7 @@ static void present_app_rect(gfx_rect r)
     struct sb_running *s = front();
     gfx_rect c;
 
-    if (card_dialog.open)
+    if (card_dialog.open || idle.dark)
         return;
     if (!s || !gfx_rect_intersect(r, gfx_r(0, 0, SB_APP_W, app_height()), &c))
         return;
@@ -403,7 +405,8 @@ static void render_card_dialog(void)
     gfx_blit(&bb, 0, 0, &snap, gfx_r(0, 0, SCREEN_W, SCREEN_H));
     card_dialog.button = sb_draw_card_details(&bb, &card_dialog.details, card_dialog.pressed);
     /* This is the only compositor write allowed while the dialog is open. */
-    gfx_blit(&fb, 0, 0, &bb, gfx_r(0, 0, SCREEN_W, SCREEN_H));
+    if (!idle.dark)
+        gfx_blit(&fb, 0, 0, &bb, gfx_r(0, 0, SCREEN_W, SCREEN_H));
 }
 
 static void close_card_dialog(void)
@@ -907,7 +910,8 @@ static void lock_device(void)
 {
     calibration_cancel();
     display_cancel();
-    lock_over_app = (state == ST_APP);
+    if (state != ST_LOCK && state != ST_PASSCODE && state != ST_UNLOCK)
+        lock_over_app = (state == ST_APP || state == ST_ZOOM_IN || state == ST_LAUNCH_WAIT);
     banner_visible = banner_touch = false;
     view.jiggle = alert.open = false;
     close_switcher();
@@ -919,6 +923,36 @@ static void lock_device(void)
     audio_sound(AUDIO_SND_LOCK);
     update_clock(true);
     render_lock();
+}
+
+static void screen_sleep(void)
+{
+    sb_idle_sleep(&idle);       /* block every compositor output before locking */
+    if (front() && idle.touch_down) {
+        struct gz_input_event cancel = {
+            .type = GZ_EV_TOUCH_CANCEL, .time_ms = now_ms(),
+            .x = idle.touch_x, .y = (int16_t)(idle.touch_y - app_top()),
+        };
+        send_event(&cancel);
+    }
+    if (card_dialog.open)
+        close_card_dialog();
+    lock_device();
+    memset(pin, 0, sizeof(pin));
+    view.pin.pressed = -1;
+    last_home_ms = 0;
+    gfx_fill(&fb, gfx_r(0, 0, SCREEN_W, SCREEN_H), 0);
+    gz_display_power(false);
+    puts("springboard: screen off");
+}
+
+static void screen_wake(void)
+{
+    update_clock(true);
+    render_lock();             /* paint before restoring illumination */
+    shimmer_next = now_ms() + 60;
+    gz_display_power(true);
+    puts("springboard: screen on");
 }
 
 static void begin_unlock(void)
@@ -1501,6 +1535,11 @@ static void handle_input(void)
     while ((n = gz_input_read(evs, 16)) > 0) {
         for (int i = 0; i < n; i++) {
             struct gz_input_event *e = &evs[i];
+            enum sb_idle_input action = sb_idle_input(&idle, e, now_ms());
+            if (action == SB_IDLE_WAKE)
+                screen_wake();
+            if (action != SB_IDLE_PASS)
+                continue;
             if (calibration.owner && calibration.preview && (int32_t)(now_ms() - calibration.until) >= 0)
                 calibration_cancel();
             if (sb_calibration_input(&calibration, e)) {
@@ -1900,6 +1939,7 @@ int main(void)
     load_settings();
     sb_calibration_load(&calibration);
     sb_display_load(&display_controls);
+    sb_idle_load(&idle, now_ms());
     apps_scan(false);                   /* before notify_load: it keys on bundles */
     apps_changed();
     notify_load();
@@ -1920,6 +1960,7 @@ int main(void)
     state = ST_LOCK;
     render_lock();
     timesync_start(sb_port);
+    idle.last_activity = now_ms();
     puts("springboard: ready");
     bench_log("ready", NULL, now_ms());
 
@@ -1930,7 +1971,7 @@ int main(void)
         if (anim.active) {
             int wait = (int)(next_frame - t);
             timeout = wait < 0 ? 0 : wait;
-        } else if (state == ST_LOCK && !dragging_knob && view.knob_x == 0) {
+        } else if (!idle.dark && state == ST_LOCK && !dragging_knob && view.knob_x == 0) {
             int wait = (int)(shimmer_next - t);
             timeout = MIN(timeout, wait < 0 ? 0 : wait);
         } else if (state == ST_LAUNCH_WAIT) {
@@ -1958,12 +1999,17 @@ int main(void)
             timeout = MIN(timeout, (int)(banner_until - t) < 0 ? 0 : (int)(banner_until - t));
         if (calibration.owner && calibration.preview)
             timeout = MIN(timeout, MAX((int32_t)(calibration.until - t), 0));
+        int idle_wait = sb_idle_wait(&idle, t);
+        if (idle_wait >= 0)
+            timeout = MIN(timeout, idle_wait);
 
         struct gz_msg m;
         int tok = gz_recv(sb_port, &m, timeout);
         if (tok == GZ_RECV_NOTIFY) {
             if (m.w[0] & GZ_NOTIFY_INPUT)
                 handle_input();
+            if (m.w[0] & SB_NOTIFY_DISPLAY)
+                sb_idle_load(&idle, now_ms());
             if (m.w[0] & SB_NOTIFY_TIME)
                 timesync_wake();
             if (m.w[0] & (SB_NOTIFY_TIME | SB_NOTIFY_CLOCK))
@@ -1973,6 +2019,8 @@ int main(void)
         }
 
         t = now_ms();
+        if (sb_idle_wait(&idle, t) == 0)
+            screen_sleep();
         if (calibration.owner && calibration.preview && (int32_t)(t - calibration.until) >= 0)
             calibration_cancel();
         if (anim.active && (int)(t - next_frame) >= 0) {
@@ -1982,7 +2030,7 @@ int main(void)
                 next_frame = t + FRAME_MS;      /* we fell behind; don't burst */
         }
 
-        if (state == ST_LOCK && !dragging_knob && view.knob_x == 0 && !anim.active &&
+        if (!idle.dark && state == ST_LOCK && !dragging_knob && view.knob_x == 0 && !anim.active &&
             (int)(t - shimmer_next) >= 0) {
             view.shimmer_x += 8;
             if (view.shimmer_x > TRACK_X + TRACK_W + 30)

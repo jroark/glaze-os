@@ -126,6 +126,18 @@ int main(void)
     assert(next(0).type == GZ_EV_APP_ACTIVATE && suspends == 1);
     printf("no cancel after a lift: PASS\n");
 
+    /* A compositor timeout explicitly cancels without deactivating the app.
+     * A later Home must not synthesize a second cancel for the same touch. */
+    reset();
+    push(GZ_EV_TOUCH_DOWN, 4, 5);
+    push(GZ_EV_TOUCH_CANCEL, 4, 5);
+    home();
+    assert(next(0).type == GZ_EV_TOUCH_DOWN);
+    assert(next(0).type == GZ_EV_TOUCH_CANCEL);
+    assert(next(0).type == GZ_EV_APP_DEACTIVATE);
+    assert(next(0).type == GZ_EV_APP_ACTIVATE);
+    printf("explicit cancel clears held touch: PASS\n");
+
     /* An app that keeps running gets DEACTIVATE and carries on. */
     reset();
     ui_set_background_running(true);

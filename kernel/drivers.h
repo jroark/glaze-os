@@ -25,6 +25,7 @@ void cmcu_tick(void);
 void input_init(void);
 /* display.c: physical backlight and panel contrast, stock BE-300 levels. */
 int display_set(int brightness, int contrast);
+int display_power(int on);
 void input_push(uint16_t type, uint16_t code, int x, int y);
 void stowaway_init(void);
 void stowaway_poll(void);
