@@ -302,6 +302,7 @@ void ne2000_init(void)
     NE_REG(TCR) = 0;
     NE_REG(RCR) = RCR_AB;
     present = true;
+    KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;    /* its interrupt; irq_init masked it */
     kprintf("ne2000: MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }

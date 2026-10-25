@@ -2,10 +2,33 @@
 
 #include "kernel.h"
 #include "hw.h"
+#include <glaze/bootinfo.h>
 
 #include <stdarg.h>
 
 static bool debug_uart;
+static bool dead;               /* the UART never became ready: output off */
+static bool tracing;            /* a RAM boot: panics also paint the trace */
+
+/* Polls for THRE before giving up on the UART for good. After Windows CE
+ * (a RAM boot) the companion SIU may be gated or unpowered, and an endless
+ * wait would hang the kernel before it draws anything. Generous: a byte
+ * takes about 1 ms at 9600 baud. */
+#define THRE_POLLS          200000u
+
+/* A RAM boot leaves the UART as Windows CE set it up: GlazeBoot opens COM1:
+ * at 115200 8N1 and leaves it open, which powers the sync cable's
+ * transceiver (as CyaCE did for linux4be, whose serial_be300.c also
+ * programmed nothing). Only note that a panic should paint the trace too. */
+void console_ram_boot(void)
+{
+    tracing = true;
+}
+
+bool console_dead(void)
+{
+    return dead;
+}
 
 void console_use_debug_uart(void)
 {
@@ -17,15 +40,18 @@ void console_use_debug_uart(void)
 
 void uart_putc(char c)
 {
-    if (debug_uart) {
-        while (!(REG8(0x0F000820u + 5) & UART_LSR_THRE))
-            ;
-        REG8(0x0F000820u) = (uint8_t)c;
-    } else {
-        while (!(UART_LSR & UART_LSR_THRE))
-            ;
-        UART_THR = (uint8_t)c;
-    }
+    uint32_t lsr = debug_uart ? 0x0F000825u : UART_BASE + 5 * 4;
+    uint32_t thr = debug_uart ? 0x0F000820u : UART_BASE;
+    uint32_t n = 0;
+
+    if (dead)
+        return;
+    while (!(REG8(lsr) & UART_LSR_THRE))
+        if (++n == THRE_POLLS) {
+            dead = true;
+            return;
+        }
+    REG8(thr) = (uint8_t)c;
 }
 
 void kputs(const char *s)
@@ -123,6 +149,9 @@ void panic(const char *fmt, ...)
     kvprintf(fmt, ap);
     va_end(ap);
     kputs("\n");
+    /* The boot trace's third row all red (glaze/bootinfo.h). */
+    for (uint32_t n = 24; tracing && n < 36; n++)
+        gz_boot_trace(n, GZ_TRACE_RED);
     for (;;)
         ;
 }

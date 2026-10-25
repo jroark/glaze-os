@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Write GlazeBoot's trampoline as a C header for the eVC build
-(wince/glazeboot/evc): the code as a DWORD array, so it is word aligned,
+"""Write GlazeBoot's trampoline as a C header for the Windows CE
+loader (wince/glazeboot/GlazeBoot.c): the code as a DWORD array, so it is word aligned,
 and the offsets of its entry points.
 
 usage: tools/mktrampblob.py tramp.bin tramp.sym out.h
@@ -40,4 +40,4 @@ lines = [
 for i in range(0, len(words), 6):
     lines.append("    " + ", ".join(f"0x{w:08x}" for w in words[i:i + 6]) + ",")
 lines += ["};", "", "#endif", ""]
-open(sys.argv[3], "w", newline="\r\n").write("\n".join(lines))
+open(sys.argv[3], "w").write("\n".join(lines))

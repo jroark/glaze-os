@@ -1,0 +1,7 @@
+# Set Never; the Display page must remain lit at 75 seconds, with no
+# "springboard: screen off" log line.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 147
+8000 tap 120 267
+9500 tap 120 223

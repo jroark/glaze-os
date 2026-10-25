@@ -3,11 +3,11 @@
  * as CyaCE did for Linux. Nothing is flashed: the device runs Glaze until it
  * is reset, then Windows CE cold-boots from the NAND as before.
  *
- * Built with eMbedded Visual C++ 3.0 (GlazeBoot.vcp, Win32 (WCE MIPS)). Two
- * headers come from the GCC build (`make glazeboot`, out/glazeboot/evc):
- * glazeboot_abi.h (layouts shared with the kernel, wince/glazeboot/mkabi.c)
- * and tramp_blob.h (the trampoline, wince/glazeboot/tramp.c, as bytes: eVC
- * has no inline MIPS assembly).
+ * Built with the be300-dev toolchain (clang and the Casio SDK, `make
+ * glazeboot-exe`). Two headers come from the GCC build (`make glazeboot`,
+ * out/glazeboot/gen): glazeboot_abi.h (layouts shared with the kernel,
+ * wince/glazeboot/mkabi.c) and tramp_blob.h (the trampoline,
+ * wince/glazeboot/tramp.c, as bytes, so the loader needs no MIPS assembly).
  *
  * It sits on a CompactFlash card in a folder with glaze.cfg, kernel.bin and
  * romfs.img, reads them, and builds the hand-over plan (plan.h):
@@ -50,16 +50,21 @@ typedef BOOL (*LockPagesFn)(LPVOID, DWORD, PDWORD, int);
 typedef BOOL (*SetKModeFn)(BOOL);
 typedef DWORD (*SetProcPermissionsFn)(DWORD);
 typedef void (*CacheSyncFn)(int);
+typedef BOOL (*GetSystemMemoryDivisionFn)(LPDWORD, LPDWORD, LPDWORD);
+typedef DWORD (*SetSystemMemoryDivisionFn)(DWORD);
 
 static LockPagesFn pLockPages;
 static SetKModeFn pSetKMode;
 static SetProcPermissionsFn pSetProcPermissions;
 static CacheSyncFn pCacheSync;
+static GetSystemMemoryDivisionFn pGetSystemMemoryDivision;
+static SetSystemMemoryDivisionFn pSetSystemMemoryDivision;
 
 /* ---- paths, the log, messages --------------------------------------------- */
 
 static WCHAR dir[MAX_PATH];     /* GlazeBoot's folder, with a trailing '\' */
 static HANDLE log_file = INVALID_HANDLE_VALUE;
+static HANDLE serial = INVALID_HANDLE_VALUE;
 
 static void PathOf(WCHAR *out, const WCHAR *name)
 {
@@ -72,7 +77,9 @@ static void PathOf(WCHAR *out, const WCHAR *name)
     out[n] = 0;
 }
 
-/* A line in glazeboot.log (ASCII), formatted by wvsprintf. */
+/* A line in glazeboot.log (ASCII), formatted by wvsprintf, and on the
+ * debug output (the emulator's stdout), which survives a crash that loses
+ * the file's last writes. */
 static void Say(const WCHAR *fmt, ...)
 {
     WCHAR wide[300];
@@ -83,14 +90,20 @@ static void Say(const WCHAR *fmt, ...)
     va_start(ap, fmt);
     wvsprintf(wide, fmt, ap);
     va_end(ap);
-    if (log_file == INVALID_HANDLE_VALUE)
-        return;
+    OutputDebugString(L"GlazeBoot: ");
+    OutputDebugString(wide);
+    OutputDebugString(L"\r\n");
     int n = WideCharToMultiByte(CP_ACP, 0, wide, -1, line, sizeof(line) - 2, NULL, NULL);
     if (n <= 0)
         return;
     line[n - 1] = '\r';
     line[n] = '\n';
-    WriteFile(log_file, line, n + 1, &done, NULL);
+    if (log_file != INVALID_HANDLE_VALUE)
+        WriteFile(log_file, line, n + 1, &done, NULL);
+    if (serial != INVALID_HANDLE_VALUE) {
+        WriteFile(serial, line, n + 1, &done, NULL);
+        FlushFileBuffers(serial);
+    }
 }
 
 static void Alert(const WCHAR *fmt, ...)
@@ -105,13 +118,51 @@ static void Alert(const WCHAR *fmt, ...)
     MessageBox(NULL, text, L"GlazeBoot", MB_OK | MB_ICONEXCLAMATION);
 }
 
+/* The sync cable's port, opened through Windows CE and left open: its
+ * driver powers the RS-232 transceiver (the BE-300 drives none of DSR, CTS
+ * or DCD otherwise) and sets up the companion SIU, which Glaze's console
+ * then uses as it is. 115200 8N1, as CyaCE's lib/debug.c opened it for
+ * Linux. The log goes to it too, each line flushed before the next step. */
+static void SerialOpen(void)
+{
+    DCB dcb;
+
+    serial = CreateFile(L"COM1:", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (serial == INVALID_HANDLE_VALUE) {
+        Say(L"serial: can't open COM1: (error %u)", GetLastError());
+        return;
+    }
+    dcb.DCBlength = sizeof(dcb);
+    GetCommState(serial, &dcb);
+    dcb.BaudRate = CBR_115200;
+    dcb.ByteSize = 8;
+    dcb.Parity = NOPARITY;
+    dcb.StopBits = ONESTOPBIT;
+    dcb.fOutxCtsFlow = FALSE;
+    dcb.fOutxDsrFlow = FALSE;
+    dcb.fOutX = FALSE;
+    dcb.fInX = FALSE;
+    dcb.fDtrControl = DTR_CONTROL_ENABLE;
+    dcb.fRtsControl = RTS_CONTROL_ENABLE;
+    if (!SetCommState(serial, &dcb))
+        Say(L"serial: SetCommState failed (error %u)", GetLastError());
+    EscapeCommFunction(serial, SETDTR);
+    EscapeCommFunction(serial, SETRTS);
+    Say(L"serial: COM1: open at 115200 8N1");
+}
+
 /* ---- memory ------------------------------------------------------------------ */
 
-struct Buf {
-    BYTE *p;
+/* Memory comes in pieces of up to CHUNK_PAGES: Windows CE has room for the
+ * romfs only in several (its largest allocation is smaller), and the plan
+ * moves each page on its own anyway. */
+#define CHUNK_PAGES     64
+
+typedef struct Buf {
+    BYTE *p;                    /* the first piece */
     DWORD size, pages;
     DWORD *pfn;                 /* LockPages' frame numbers, one per page */
-};
+} Buf;
 
 static DWORD pfn_shift;
 
@@ -125,28 +176,44 @@ static BYTE *PagesAlloc(DWORD pages)
     return (BYTE *)VirtualAlloc(NULL, pages * GB_PAGE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 }
 
-/* Committed, touched (so backed) and locked pages, with their frames. */
-static BOOL BufAlloc(Buf *b, DWORD size)
+/* Committed, touched (so backed) and locked pages, with their frames,
+ * filled from the file h if it isn't INVALID_HANDLE_VALUE. */
+static BOOL BufAlloc(Buf *b, DWORD size, HANDLE h)
 {
-    DWORD i;
+    DWORD at, i;
 
     b->size = size;
     b->pages = (size + GB_PAGE - 1) / GB_PAGE;
     if (!b->pages)
         b->pages = 1;
-    b->p = PagesAlloc(b->pages);
+    b->p = NULL;
     b->pfn = (DWORD *)PagesAlloc((b->pages * sizeof(DWORD) + GB_PAGE - 1) / GB_PAGE);
-    if (!b->p || !b->pfn)
+    if (!b->pfn)
         return FALSE;
-    for (i = 0; i < b->pages; i++)
-        ((volatile BYTE *)b->p)[i * GB_PAGE] = 0;
-    return pLockPages(b->p, b->pages * GB_PAGE, b->pfn, LOCKFLAG_WRITE);
+    for (at = 0; at < b->pages; at += CHUNK_PAGES) {
+        DWORD n = b->pages - at < CHUNK_PAGES ? b->pages - at : CHUNK_PAGES;
+        BYTE *p = PagesAlloc(n);
+        if (!p)
+            return FALSE;
+        if (!b->p)
+            b->p = p;
+        for (i = 0; i < n; i++)
+            ((volatile BYTE *)p)[i * GB_PAGE] = 0;
+        if (!pLockPages(p, n * GB_PAGE, b->pfn + at, LOCKFLAG_WRITE))
+            return FALSE;
+        if (h != INVALID_HANDLE_VALUE) {
+            DWORD want = size - at * GB_PAGE < n * GB_PAGE ? size - at * GB_PAGE : n * GB_PAGE, got;
+            for (i = 0; i < want; i += got)
+                if (!ReadFile(h, p + i, want - i, &got, NULL) || !got)
+                    return FALSE;
+        }
+    }
+    return TRUE;
 }
 
 static BOOL ReadWholeFile(const WCHAR *name, Buf *b)
 {
     WCHAR path[MAX_PATH];
-    DWORD got = 0;
 
     PathOf(path, name);
     HANDLE h = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -155,23 +222,22 @@ static BOOL ReadWholeFile(const WCHAR *name, Buf *b)
         return FALSE;
     }
     DWORD size = GetFileSize(h, NULL);
-    BOOL ok = size && size != 0xFFFFFFFF && size < SDRAM_BYTES / 2 && BufAlloc(b, size);
+    BOOL ok = size && size != 0xFFFFFFFF && size < SDRAM_BYTES / 2 && BufAlloc(b, size, h);
     if (!ok)
-        Alert(L"Not enough memory for %s (%u bytes).", name, size);
-    else if (!ReadFile(h, b->p, size, &got, NULL) || got != size) {
-        Alert(L"Can't read %s (error %u).", name, GetLastError());
-        ok = FALSE;
-    }
+        Alert(L"Can't load %s (%u bytes, error %u).", name, size, GetLastError());
     CloseHandle(h);
     return ok;
 }
 
 /* ---- glaze.cfg ----------------------------------------------------------------- */
 
+enum { NAND_OFF, NAND_RO, NAND_RW };
+
 static struct {
     WCHAR kernel[64], romfs[64];
-    DWORD ramfs_kb;
-    BOOL nand_rw, confirm, probe;
+    DWORD ramfs_kb, countdown;
+    DWORD nand;                 /* NAND_OFF, NAND_RO or NAND_RW */
+    BOOL confirm, probe;
 } cfg;
 
 static BOOL Prefix(const char *s, const char *p)
@@ -214,8 +280,9 @@ static void CfgRead(void)
     lstrcpy(cfg.kernel, L"kernel.bin");
     lstrcpy(cfg.romfs, L"romfs.img");
     cfg.ramfs_kb = 2048;
-    cfg.nand_rw = FALSE;
+    cfg.nand = NAND_OFF;
     cfg.confirm = TRUE;
+    cfg.countdown = 10;
     cfg.probe = FALSE;
 
     PathOf(path, L"glaze.cfg");
@@ -233,7 +300,9 @@ static void CfgRead(void)
         else if (Prefix(l, "ramfs_kb="))
             cfg.ramfs_kb = CfgNum(l + 9);
         else if (Prefix(l, "nand="))
-            cfg.nand_rw = Prefix(l + 5, "rw");
+            cfg.nand = Prefix(l + 5, "rw") ? NAND_RW : Prefix(l + 5, "ro") ? NAND_RO : NAND_OFF;
+        else if (Prefix(l, "countdown="))
+            cfg.countdown = CfgNum(l + 10);
         else if (Prefix(l, "confirm="))
             cfg.confirm = l[8] != '0';
         else if (Prefix(l, "mode="))
@@ -257,9 +326,46 @@ static BOOL ImportKernelCalls(void)
     pSetKMode = (SetKModeFn)GetProcAddress(core, L"SetKMode");
     pSetProcPermissions = (SetProcPermissionsFn)GetProcAddress(core, L"SetProcPermissions");
     pCacheSync = (CacheSyncFn)GetProcAddress(core, L"CacheSync");
+    pGetSystemMemoryDivision = (GetSystemMemoryDivisionFn)GetProcAddress(core, L"GetSystemMemoryDivision");
+    pSetSystemMemoryDivision = (SetSystemMemoryDivisionFn)GetProcAddress(core, L"SetSystemMemoryDivision");
     Say(L"coredll: LockPages %08X SetKMode %08X SetProcPermissions %08X CacheSync %08X",
         (DWORD)pLockPages, (DWORD)pSetKMode, (DWORD)pSetProcPermissions, (DWORD)pCacheSync);
     return pLockPages && pSetKMode && pSetProcPermissions && pCacheSync;
+}
+
+/* How Windows CE divides RAM between the object store and programs. */
+static void MemoryReport(void)
+{
+    MEMORYSTATUS ms;
+    DWORD store = 0, ram = 0, page = 0;
+
+    ms.dwLength = sizeof(ms);
+    GlobalMemoryStatus(&ms);
+    Say(L"memory: physical %u KiB, %u KiB free", ms.dwTotalPhys / 1024, ms.dwAvailPhys / 1024);
+    if (pGetSystemMemoryDivision && pGetSystemMemoryDivision(&store, &ram, &page))
+        Say(L"memory: object store %u pages, programs %u pages, of %u bytes", store, ram, page);
+}
+
+/* The stock Windows CE leaves programs about 4.5 MiB, short of the romfs,
+ * and keeps the rest of the RAM it doesn't run from for the object store.
+ * Lend programs all of the store's free pages but STORE_MARGIN; Windows CE
+ * is about to stop, so they aren't given back. */
+#define STORE_MARGIN    16
+
+static void BorrowStore(void)
+{
+    STORE_INFORMATION si;
+    DWORD store, ram, page;
+
+    if (!pGetSystemMemoryDivision || !pSetSystemMemoryDivision ||
+        !pGetSystemMemoryDivision(&store, &ram, &page) || !page || !GetStoreInformation(&si))
+        return;
+    DWORD spare = si.dwFreeSize / page;
+    if (spare <= STORE_MARGIN || spare > store)
+        return;
+    DWORD rv = pSetSystemMemoryDivision(store - (spare - STORE_MARGIN));
+    Say(L"memory: lent %u of the object store's pages to programs (result %u)", spare - STORE_MARGIN, rv);
+    MemoryReport();
 }
 
 /* Kernel mode, so KSEG0, KSEG1 and CP0 are reachable. */
@@ -269,13 +375,14 @@ static void KernelMode(void)
     pSetProcPermissions(0xFFFFFFFF);
 }
 
-/* LockPages' frame numbers are addresses shifted by KINX_PFN_SHIFT (6 on
- * MIPS, where they are EntryLo's PFN field). Rather than trust that, try
- * the likely shifts on a page written through its virtual address and read
- * back through KSEG1. */
+/* LockPages' frame numbers are EntryLo PFN fields, which on the VR41xx hold
+ * physical address bits 31:10 from bit 6 (VR4131 UM 5.4.3, EntryLo0/1),
+ * so the address shifted right by 4; the stock Windows CE's are. Rather
+ * than trust that, try the likely shifts on a page written through its
+ * virtual address and read back through KSEG1. */
 static BOOL FindPfnShift(Buf *b)
 {
-    static const DWORD shifts[] = { 6, 12, 8, 10, 0 };
+    static const DWORD shifts[] = { 4, 6, 12, 8, 10, 0 };
     volatile DWORD *v = (volatile DWORD *)b->p;
     DWORD i;
 
@@ -321,7 +428,7 @@ static BOOL AllocSafe(Buf *b)
     int tries;
 
     for (tries = 0; tries < 256; tries++) {
-        if (!BufAlloc(b, GB_PAGE))
+        if (!BufAlloc(b, GB_PAGE, INVALID_HANDLE_VALUE))
             return FALSE;
         DWORD f = PaOf(b->pfn[0]) / GB_PAGE;
         if (f < GB_FRAMES && !IsDst(f))
@@ -360,13 +467,121 @@ static BOOL LoadTrampoline(DWORD *pa)
     return TRUE;
 }
 
+/* The romfs file's size, from the card. */
+static DWORD RomfsKiB(void)
+{
+    WCHAR path[MAX_PATH];
+    DWORD size = 0;
+
+    PathOf(path, cfg.romfs);
+    HANDLE h = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        size = GetFileSize(h, NULL);
+        CloseHandle(h);
+    }
+    return size / 1024;
+}
+
+/* ---- the confirmation --------------------------------------------------------- */
+
+#define ID_BOOT     1
+#define ID_CANCEL   2
+#define CONFIRM_W   220
+#define CONFIRM_H   150
+
+static HINSTANCE app;
+static HWND confirm_text;
+static DWORD confirm_left;      /* seconds, 0 with no countdown */
+static int confirm_result;      /* -1 while asking, then TRUE to boot */
+
+static void ConfirmShowLeft(void)
+{
+    WCHAR text[160];
+
+    if (confirm_left)
+        wsprintf(text, L"Starting Glaze in %u s.\n\nWindows CE stops and nothing is saved to it. "
+                       L"Reset the BE-300 to return to it.", confirm_left);
+    else
+        wsprintf(text, L"Start Glaze now?\n\nWindows CE stops and nothing is saved to it. "
+                       L"Reset the BE-300 to return to it.");
+    SetWindowText(confirm_text, text);
+}
+
+static LRESULT CALLBACK ConfirmProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_TIMER:
+        if (confirm_left && !--confirm_left)
+            confirm_result = TRUE;
+        else
+            ConfirmShowLeft();
+        return 0;
+    case WM_COMMAND:
+        if (LOWORD(wp) == ID_BOOT || LOWORD(wp) == ID_CANCEL)
+            confirm_result = LOWORD(wp) == ID_BOOT;
+        return 0;
+    case WM_CLOSE:
+        confirm_result = FALSE;
+        return 0;
+    }
+    return DefWindowProc(w, msg, wp, lp);
+}
+
+/* A window over the shell counting down cfg.countdown seconds, with Boot
+ * and Cancel; TRUE to boot. Its own message loop makes it modal. */
+static BOOL Confirm(void)
+{
+    WNDCLASS wc;
+    RECT r;
+    MSG msg;
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = ConfirmProc;
+    wc.hInstance = app;
+    wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    wc.lpszClassName = L"GlazeBootConfirm";
+    RegisterClass(&wc);
+    HWND w = CreateWindowEx(WS_EX_TOPMOST, wc.lpszClassName, L"GlazeBoot", WS_POPUP | WS_CAPTION | WS_BORDER,
+                            (GetSystemMetrics(SM_CXSCREEN) - CONFIRM_W) / 2,
+                            (GetSystemMetrics(SM_CYSCREEN) - CONFIRM_H) / 2, CONFIRM_W, CONFIRM_H,
+                            NULL, NULL, app, NULL);
+    if (!w) {
+        Say(L"confirm: no window (error %u); booting", GetLastError());
+        return TRUE;
+    }
+    GetClientRect(w, &r);
+    confirm_text = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 8, 8, r.right - 16,
+                                r.bottom - 50, w, NULL, app, NULL);
+    CreateWindow(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 8, r.bottom - 34,
+                 (r.right - 24) / 2, 26, w, (HMENU)ID_CANCEL, app, NULL);
+    CreateWindow(L"BUTTON", L"Boot", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, r.right / 2 + 4,
+                 r.bottom - 34, (r.right - 24) / 2, 26, w, (HMENU)ID_BOOT, app, NULL);
+    confirm_left = cfg.countdown;
+    confirm_result = -1;
+    ConfirmShowLeft();
+    ShowWindow(w, SW_SHOW);
+    SetForegroundWindow(w);
+    UpdateWindow(w);
+    if (confirm_left)
+        SetTimer(w, 1, 1000, NULL);
+    while (confirm_result < 0 && GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    if (confirm_result < 0)     /* WM_QUIT */
+        confirm_result = FALSE;
+    DestroyWindow(w);
+    return confirm_result;
+}
+
 /* ---- probe mode ------------------------------------------------------------------ */
 
 typedef DWORD (*ReadC0Fn)(DWORD);
 
 static void Probe(void)
 {
-    DWORD code_pa, mb;
+    static BYTE *pieces[SDRAM_BYTES / (CHUNK_PAGES * GB_PAGE)];
+    DWORD code_pa, mb, n, i;
 
     if (!LoadTrampoline(&code_pa)) {
         Alert(L"Out of memory for the trampoline.");
@@ -387,7 +602,30 @@ static void Probe(void)
         VirtualFree(p, 0, MEM_RELEASE);
     }
     Say(L"probe: allocations up to %u MiB succeed", mb - 1);
+    for (n = 0; n < sizeof(pieces) / sizeof(pieces[0]) && (pieces[n] = PagesAlloc(CHUNK_PAGES)); n++)
+        for (i = 0; i < CHUNK_PAGES; i++)
+            pieces[n][i * GB_PAGE] = 0;
+    Say(L"probe: %u KiB in %u KiB pieces (romfs needs %u KiB)", n * CHUNK_PAGES * GB_PAGE / 1024,
+        CHUNK_PAGES * GB_PAGE / 1024, RomfsKiB());
+    while (n)
+        VirtualFree(pieces[--n], 0, MEM_RELEASE);
     Alert(L"Probe done: Status, Config and memory are in glazeboot.log.");
+}
+
+/* The boot trace (glaze/bootinfo.h): its three rows black, so that every
+ * block shows whatever Windows CE drew there, then block 0, white: the
+ * loader is about to call the trampoline. Needs kernel mode for KSEG1. */
+static void Trace0(void)
+{
+    volatile WORD *fb = (volatile WORD *)GZ_TRACE_FB;
+    DWORD x, y;
+
+    for (y = 0; y < 42; y++)
+        for (x = 0; x < 240; x++)
+            fb[y * GZ_TRACE_STRIDE + x] = 0;
+    for (y = 0; y < 12; y++)
+        for (x = 2; x < 18; x++)
+            fb[y * GZ_TRACE_STRIDE + x] = 0xFFFF;
 }
 
 /* ---- the boot -------------------------------------------------------------------- */
@@ -398,6 +636,7 @@ static int Boot(void)
     gz_kernel_bin kh;
     DWORD i, code_pa;
 
+    BorrowStore();
     if (!ReadWholeFile(cfg.kernel, &kernel) || !ReadWholeFile(cfg.romfs, &romfs))
         return 1;
     memcpy(&kh, kernel.p, sizeof(kh));
@@ -425,7 +664,7 @@ static int Boot(void)
     Say(L"layout: romfs %08X-%08X, RAM disk %08X-%08X", romfs_pa, romfs_pa + romfs.pages * GB_PAGE,
         ramfs_pa, romfs_pa);
 
-    if (!BufAlloc(&info, sizeof(gz_bootinfo))) {
+    if (!BufAlloc(&info, sizeof(gz_bootinfo), INVALID_HANDLE_VALUE)) {
         Alert(L"Out of memory.");
         return 1;
     }
@@ -433,7 +672,7 @@ static int Boot(void)
     memset(bi, 0, sizeof(*bi));
     bi->magic = GZ_BOOTINFO_MAGIC;
     bi->version = GZ_BOOTINFO_VERSION;
-    bi->flags = cfg.nand_rw ? GZ_BOOT_NAND_RW : 0;
+    bi->flags = cfg.nand == NAND_RW ? GZ_BOOT_NAND_RW : cfg.nand == NAND_OFF ? GZ_BOOT_NAND_OFF : 0;
     bi->romfs_pa = romfs_pa;
     bi->romfs_size = romfs.size;
     bi->ramfs_pa = ramfs_pa;
@@ -488,19 +727,17 @@ static int Boot(void)
     Say(L"plan: %u moves; trampoline %u bytes at %08X, control at %08X", control->count, TRAMP_BYTES,
         code_pa, ctrl_pa);
 
-    if (cfg.confirm &&
-        MessageBox(NULL, L"Start Glaze now?\n\nWindows CE stops, and nothing is saved to it. "
-                         L"Reset the BE-300 to return to Windows CE.",
-                   L"GlazeBoot", MB_OKCANCEL | MB_ICONQUESTION) != IDOK) {
+    if (cfg.confirm && !Confirm()) {
         Say(L"cancelled");
         return 0;
     }
     Say(L"handing over");
     CloseHandle(log_file);
     log_file = INVALID_HANDLE_VALUE;
-    Sleep(200);                 /* let the card finish writing the log */
+    Sleep(500);                 /* let the card and the serial port drain */
 
     KernelMode();
+    Trace0();
     pCacheSync(CACHE_SYNC_DISCARD | CACHE_SYNC_INSTRUCTIONS);
     ((void (*)(DWORD))KSEG0(code_pa + TRAMP_ENTRY))(KSEG0(ctrl_pa));
     return 1;                   /* not reached */
@@ -512,22 +749,29 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev, LPWSTR cmdline, int show)
     Buf test;
     int rv = 1;
 
+    app = instance;
     DWORD n = GetModuleFileName(instance, dir, MAX_PATH - 1);
     while (n && dir[n - 1] != L'\\')
         n--;
     dir[n] = 0;
     PathOf(path, L"glazeboot.log");
     log_file = CreateFile(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    SerialOpen();
     Say(L"GlazeBoot, built " WIDEN(__DATE__));
     CfgRead();
-    Say(L"cfg: kernel=%s romfs=%s ramfs_kb=%u nand=%s confirm=%u mode=%s", cfg.kernel, cfg.romfs,
-        cfg.ramfs_kb, cfg.nand_rw ? L"rw" : L"ro", cfg.confirm, cfg.probe ? L"probe" : L"boot");
+    Say(L"cfg: kernel=%s romfs=%s ramfs_kb=%u nand=%s confirm=%u countdown=%u mode=%s", cfg.kernel,
+        cfg.romfs, cfg.ramfs_kb, cfg.nand == NAND_RW ? L"rw" : cfg.nand == NAND_RO ? L"ro" : L"off", cfg.confirm, cfg.countdown, cfg.probe ? L"probe" : L"boot");
 
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    Say(L"system: page size %u, memory %08X-%08X", si.dwPageSize, (DWORD)si.lpMinimumApplicationAddress,
+        (DWORD)si.lpMaximumApplicationAddress);
     if (!ImportKernelCalls())
         Alert(L"This Windows CE lacks LockPages, SetKMode or CacheSync.");
     else {
+        MemoryReport();
         KernelMode();
-        if (!BufAlloc(&test, GB_PAGE) || !FindPfnShift(&test))
+        if (!BufAlloc(&test, GB_PAGE, INVALID_HANDLE_VALUE) || !FindPfnShift(&test))
             Alert(L"Can't find the physical address of memory; can't hand over.");
         else if (cfg.probe) {
             Probe();

@@ -1,6 +1,6 @@
 /*
- * The trampoline: the code that runs after Windows CE. GlazeBoot (built by
- * eVC, evc/GlazeBoot.cpp) carries it as bytes, tramp_blob.h, made from this
+ * The trampoline: the code that runs after Windows CE. GlazeBoot (a Windows
+ * CE program, GlazeBoot.c) carries it as bytes, tramp_blob.h, made from this
  * file by the GCC build (tools/mktrampblob.py). It copies them into a page
  * whose frame is no destination and calls tramp_entry, at offset 0, through
  * KSEG0 with a0 = the control page (plan.h), also through KSEG0.
@@ -20,9 +20,13 @@
  *   4. puts every page in place (gb_permute);
  *   5. writes back and invalidates the caches again and jumps to the
  *      kernel entry with a0 = the boot info (glaze/bootinfo.h).
+ *
+ * Each step paints its block of the boot trace (gz_boot_trace in
+ * glaze/bootinfo.h), since nothing else can tell where a hang happened.
  */
 
 #include "plan.h"
+#include <glaze/bootinfo.h>
 
 #define REG16(pa)   (*(volatile uint16_t *)(0xA0000000u | (pa)))
 #define REG32(pa)   (*(volatile uint32_t *)(0xA0000000u | (pa)))
@@ -31,6 +35,7 @@
 #define ICU_MSYSINT1    REG16(0x0F00008Cu)
 #define ICU_MGIUINTL    REG16(0x0F000094u)
 #define ICU_MSYSINT2    REG16(0x0F0000A6u)
+#define ICU_MGIUINTH    REG16(0x0F0000A8u)
 
 /* kernel/hw.h. */
 #define AUD_CTRL        REG32(0x0A000880u)
@@ -63,8 +68,8 @@ __asm__(
 
 /*
  * For GlazeBoot's probe mode: CP0 register a0 (0 Status, 1 PRId, 2 Config)
- * in v0, a leaf in the same blob, so the loader (built by eVC, which has no
- * inline assembly) can check it may run code through KSEG0 and read CP0
+ * in v0, a leaf in the same blob, so the loader (a Windows CE program with no
+ * MIPS assembly) can check it may run code through KSEG0 and read CP0
  * before relying on both. VR4131 UM ch. 6: a word of hazard after MFC0.
  */
 __asm__(
@@ -104,9 +109,11 @@ static inline __attribute__((always_inline)) void caches_flush(void)
 
 void tramp_main(struct gb_control *c)
 {
+    gz_boot_trace(1, GZ_TRACE_RED);
     ICU_MSYSINT1 = 0;
     ICU_MSYSINT2 = 0;
     ICU_MGIUINTL = 0;
+    ICU_MGIUINTH = 0;
 
     AUD_ARM = 0;
     AUD_CTRL &= ~0x08u;
@@ -118,10 +125,14 @@ void tramp_main(struct gb_control *c)
     /* Let any DMA in flight (NAND, audio) finish: a few ms at any clock. */
     for (volatile uint32_t i = 0; i < 2000000u; i++)
         ;
+    gz_boot_trace(2, GZ_TRACE_YELLOW);
 
     caches_flush();
+    gz_boot_trace(3, GZ_TRACE_GREEN);
     gb_permute(c);
+    gz_boot_trace(4, GZ_TRACE_CYAN);
     caches_flush();
+    gz_boot_trace(5, GZ_TRACE_BLUE);
 
     void (*entry)(uint32_t) = (void (*)(uint32_t))c->entry;
     entry(c->arg);

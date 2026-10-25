@@ -160,7 +160,9 @@ int card_mount_nand(bool writable)
     if (!rv)
         rv = fat_err(f_mount(&fatfs[NAND_DRIVE], "1:", 1));
     status[NAND_DRIVE] = rv;
-    if (rv) {
+    if (rv == GZ_ENOENT) {
+        snprintf(line, sizeof(line), "fs: /NAND is off (GlazeBoot nand=off)");
+    } else if (rv) {
         snprintf(line, sizeof(line), "fs: no FAT volume in the NAND (%d)", rv);
     } else {
         DWORD free_clusters;

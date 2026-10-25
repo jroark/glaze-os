@@ -108,7 +108,7 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
                 touching = true;
                 touch_x = ev->x;
                 touch_y = ev->y;
-            } else if (ev->type == GZ_EV_TOUCH_UP)
+            } else if (ev->type == GZ_EV_TOUCH_UP || ev->type == GZ_EV_TOUCH_CANCEL)
                 touching = false;
             else if (ev->type == GZ_EV_APP_ACTIVATE)
                 ui_invalidate_all();

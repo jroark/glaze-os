@@ -19,11 +19,25 @@ void irq_init(void)
     ICU_MSYSINT1 = 0;
     ICU_MSYSINT2 = 0;
     ICU_MGIUINTL = 0;
+    ICU_MGIUINTH = 0;
 
-    /* Clear stale cascade state, then enable GIU line 0 end to end. */
-    KJ_INTACK = 0xFFFFu;
-    GIU_INTSTATL = 0x0001u;
-    GIU_INTENL = GIU_INTENL | 0x0001u;
+    /* Only GIU line 0 is ours. After Windows CE (a RAM boot) other lines are
+     * enabled, such as its serial driver's, and one firing would hold
+     * SYSINT1's GIU bit with nothing here to clear it: an interrupt storm
+     * on a real BE-300. Turn every other line off and clear what is
+     * pending, then enable line 0 end to end (VR4131 UM ch. 14 GIU
+     * GIUINTEN/GIUINTSTAT, ch. 11 ICU MGIUINTL/MGIUINTH). */
+    GIU_INTENL = 0;
+    GIU_INTENH = 0;
+    /* Buttons are polled every tick (input_poll) and the CF disk is polled,
+     * so their GIRQ0 sources stay masked; ne2000_init enables the PCMCIA
+     * one for a network card. Left enabled after Windows CE, the CF card's
+     * level interrupt stormed on a real BE-300. */
+    KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
+    KJ_SRC_KEYS &= ~KJ_SRC_ENABLE;
+    GIU_INTSTATL = 0xFFFFu;
+    GIU_INTSTATH = 0xFFFFu;
+    GIU_INTENL = 0x0001u;
     ICU_MGIUINTL = 0x0001u;
     ICU_MSYSINT1 = SYSINT1_GIU;
 }
@@ -37,16 +51,24 @@ void irq_dispatch_ip2(void)
     if (ICU_GIUINTL & 0x0001u) {
         uint32_t pending = KJ_INTSTAT;
 
-        /* CF state changes are only cleared by reading the cause register
-         * (doc: CF; Linux irq.c). The NE2000 holds the line while its own
-         * ISR has unmasked bits, which ne2000_irq() clears. */
-        if (pending & KJ_INT_CF)
+        /* As the OAL does: mask the PCMCIA source while it is handled, after
+         * reading the cause register, which clears CF state changes (doc:
+         * CF; Linux irq.c). The NE2000 holds the line while its own ISR has
+         * unmasked bits, which ne2000_irq() clears; only then is the source
+         * enabled again, and only for it. */
+        if (pending & KJ_INT_CF) {
             (void)KJ_CF_CAUSE;
-        KJ_INTACK = pending;
+            KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
+        }
+        if (pending & KJ_INT_KEYS)
+            KJ_SRC_KEYS &= ~KJ_SRC_ENABLE;
         GIU_INTSTATL = 0x0001u;
         input_irq((uint16_t)pending);
-        if (pending & KJ_INT_CF)
+        if (pending & KJ_INT_CF) {
             ne2000_irq();
+            if (ne2000_present())
+                KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
+        }
         if (pending & KJ_INT_AUDIO)
             audio_irq();
     }
