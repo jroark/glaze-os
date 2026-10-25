@@ -85,12 +85,90 @@ static bool card_inserted(void)
     return (PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) == PCMCIA_CARD_IN;
 }
 
-/* The FUNCID tuple's function code, or -1 when the CIS has none. */
-static int cis_function(void)
+/*
+ * What the card information structure says (PC Card spec, "Card
+ * Information Structure"): FUNCID, MANFID, CONFIG's configuration register
+ * address, and the configuration index to use. Tuples are read only below
+ * attribute address 0x200: above it, 0x0A00D200 is the NAND's direct-I/O
+ * port unless A020 bit 3 maps the configuration registers (hw.h).
+ */
+#define CIS_LIMIT       0x100u          /* tuple bytes: attribute 0..0x1FF */
+#define TPL_MANFID      0x20
+#define TPL_CONFIG      0x1A
+#define TPL_CFTABLE     0x1B
+#define FUNCID_NETWORK  0x06
+#define NET_IO_BASE     0x300u          /* NE_REG and the XI-825's window */
+
+struct cis {
+    int function;                       /* -1: no FUNCID */
+    unsigned manufacturer, product;
+    uint32_t cor;                       /* attribute address, 0: none */
+    int index, io_index;                /* default entry; one decoding 0x300 */
+};
+
+/* A CFTABLE_ENTRY's index and whether it can decode NET_IO_BASE: a range
+ * starting there, or address lines only (the window picks the base). */
+static void cis_entry(unsigned at, unsigned len, struct cis *c)
+{
+    unsigned end = at + len, p = at;
+#define NEXT() (p < end ? CF_CIS(p++) : 0)
+    uint8_t indx = NEXT();
+    int index = indx & 0x3F;
+
+    if (c->index < 0 || (indx & 0x40))
+        c->index = index;
+    if (indx & 0x80)
+        (void)NEXT();                   /* interface */
+    uint8_t fs = NEXT();
+    for (unsigned n = fs & 3; n; n--) {  /* power descriptors */
+        uint8_t sel = NEXT();
+        for (int bit = 0; bit < 7; bit++)
+            if (sel & (1u << bit))
+                while ((NEXT() & 0x80) && p < end)
+                    ;
+    }
+    if (fs & 0x04) {                    /* timing */
+        uint8_t t = NEXT();
+        if ((t & 3) != 3)
+            while ((NEXT() & 0x80) && p < end)
+                ;
+        if (((t >> 2) & 7) != 7)
+            while ((NEXT() & 0x80) && p < end)
+                ;
+        if (((t >> 5) & 7) != 7)
+            while ((NEXT() & 0x80) && p < end)
+                ;
+    }
+    if (!(fs & 0x08))
+        return;
+    uint8_t io = NEXT();
+    bool decodes = !(io & 0x80) && (io & 0x1F) >= 5;
+    if (io & 0x80) {
+        uint8_t r = NEXT();
+        unsigned asz = (r >> 4) & 3, lsz = (r >> 6) & 3;
+        asz = asz == 3 ? 4 : asz;
+        lsz = lsz == 3 ? 4 : lsz;
+        for (unsigned n = (r & 0x0F) + 1; n; n--) {
+            uint32_t base = 0;
+            for (unsigned b = 0; b < asz; b++)
+                base |= (uint32_t)NEXT() << (8 * b);
+            for (unsigned b = 0; b < lsz; b++)
+                (void)NEXT();
+            decodes = decodes || base == NET_IO_BASE;
+        }
+    }
+    if (decodes && c->io_index < 0)
+        c->io_index = index;
+#undef NEXT
+}
+
+static void read_cis(struct cis *c)
 {
     unsigned i = 0;
 
-    for (int n = 0; n < 64 && i < 0x400; n++) {
+    memset(c, 0, sizeof(*c));
+    c->function = c->index = c->io_index = -1;
+    for (int n = 0; n < 64 && i + 2 < CIS_LIMIT; n++) {
         uint8_t code = CF_CIS(i);
         if (code == TPL_END)
             break;
@@ -98,14 +176,33 @@ static int cis_function(void)
             i++;
             continue;
         }
-        uint8_t link = CF_CIS(i + 1);
-        if (code == TPL_FUNCID)
-            return CF_CIS(i + 2);
-        if (link == 0xFF)
+        unsigned len = CF_CIS(i + 1);
+        if (len == 0xFF || i + 2 + len > CIS_LIMIT)
             break;
-        i += 2 + link;
+        unsigned at = i + 2;
+        if (code == TPL_FUNCID && len >= 1)
+            c->function = CF_CIS(at);
+        else if (code == TPL_MANFID && len >= 4) {
+            c->manufacturer = CF_CIS(at) | (unsigned)CF_CIS(at + 1) << 8;
+            c->product = CF_CIS(at + 2) | (unsigned)CF_CIS(at + 3) << 8;
+        } else if (code == TPL_CONFIG && len >= 3) {
+            unsigned rasz = (CF_CIS(at) & 3) + 1;
+            c->cor = 0;
+            for (unsigned b = 0; b < rasz && 2 + b < len; b++)
+                c->cor |= (uint32_t)CF_CIS(at + 2 + b) << (8 * b);
+        } else if (code == TPL_CFTABLE && len >= 1) {
+            cis_entry(at, len, c);
+        }
+        i = at + len;
     }
-    return -1;
+}
+
+static int cis_function(void)
+{
+    struct cis c;
+
+    read_cis(&c);
+    return c.function;
 }
 
 /*
@@ -251,23 +348,80 @@ static bool configure(void)
     return false;
 }
 
+/* A network card's configuration: its CONFIG register, the entry that
+ * decodes NET_IO_BASE (else the default), level interrupts. */
+static void configure_network(const struct cis *c)
+{
+    int index = c->io_index >= 0 ? c->io_index : c->index >= 0 ? c->index : 1;
+    uint8_t cor = (uint8_t)(0x40u | (unsigned)index);
+
+    if (!c->cor || c->cor >= 0x800u) {
+        kprintf("cf: network card has no usable CONFIG (%x)\n", c->cor);
+        return;
+    }
+    PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
+    PCMCIA_A024 = PCMCIA_A024 & ~0x0Cu;
+    PCMCIA_A020 = (PCMCIA_A020 & ~0x04u) | PCMCIA_A020_CONFIG;
+    REG8(0x0A00D000u + c->cor) = cor;
+    delay_ms(10);
+    kprintf("cf: network card %x:%x, COR %x at %x (reads %x)\n", c->manufacturer,
+            c->product, cor, c->cor, REG8(0x0A00D000u + c->cor));
+}
+
+/* The tuple bytes of a card that isn't storage, for its CIS (the emulator
+ * models cards from such dumps). */
+static void log_cis(void)
+{
+    for (unsigned off = 0; off < CIS_LIMIT; off += 32) {
+        kprintf("cf: cis %02x:", off);
+        for (unsigned i = off; i < off + 32; i++)
+            kprintf(" %02x", CF_CIS(i));
+        kputs("\n");
+    }
+}
+
+/* A card inserted after boot: power it, read its CIS, and bring up the
+ * driver for it. Up to three power-ups: a card pushed in slowly may not
+ * take the first. The emulator's cards ignore the COR. */
+static void insert(void)
+{
+    for (int attempt = 0; attempt < 3; attempt++) {
+        struct cis c;
+
+        socket_power_up();
+        read_cis(&c);
+        if (attempt == 0 && c.function != FUNCID_FIXED)
+            log_cis();
+        if (c.function == FUNCID_NETWORK) {
+            configure_network(&c);
+            if (netdev_insert(c.manufacturer, c.product))
+                return;
+            netdev_removed();
+            kputs("cf: network card didn't come up, powering up again\n");
+            continue;
+        }
+        configure();
+        if ((info.present = identify()))
+            return;
+        kprintf("cf: inserted card not ready (status %x), powering up again\n",
+                CF_ATA(ATA_STATUS));
+    }
+}
+
 static void probe(void)
 {
     bool was = info.present, had = socket_full;
 
     socket_full = card_inserted();
-    if (socket_full && !had && booted) {
-        /* Up to three power-ups: a card pushed in slowly may not take the
-         * first. The emulator's card ignores the COR and always answers. */
-        for (int attempt = 0; attempt < 3; attempt++) {
-            socket_power_up();
-            configure();
-            if ((info.present = identify()))
-                break;
-            kprintf("cf: inserted card not ready (status %x), powering up again\n",
-                    CF_ATA(ATA_STATUS));
+    if (!socket_full) {
+        if (netdev_claimed()) {
+            netdev_removed();
+            kputs("cf: network card removed\n");
         }
-    } else {
+        info.present = false;
+    } else if (!had && booted) {
+        insert();
+    } else if (!netdev_claimed()) {
         info.present = identify();
     }
     if (info.present || was)
@@ -276,7 +430,7 @@ static void probe(void)
         kprintf("cf: %s, %u sectors\n", info.model, info.sectors);
     else if (was)
         kputs("cf: card removed\n");
-    else if (socket_full)
+    else if (socket_full && !netdev_claimed())
         kprintf("cf: card not ready (status %x)\n", CF_ATA(ATA_STATUS));
 }
 
@@ -290,7 +444,14 @@ void cf_init(void)
         if (!info.present)
             kputs("cf: card is not an ATA disk\n");
     }
+    socket_full = card_inserted();      /* a network card found at boot too */
     booted = true;
+}
+
+void pcmcia_poll(void)
+{
+    if (booted && card_inserted() != socket_full)
+        probe();
 }
 
 static int check(struct proc *p)
@@ -304,10 +465,9 @@ int sys_cf_info(struct proc *p, uint32_t uout)
 {
     if (!(p->flags & PROC_FLASH))
         return GZ_EPERM;
-    /* No hot-plug interrupt: look at the socket each time and re-identify
-     * on a change. A network card owns the socket for the whole boot. */
-    if (!netdev_claimed() && card_inserted() != socket_full)
-        probe();
+    /* No hot-plug interrupt: look at the socket each time, and handle an
+     * insertion or removal of whatever card. */
+    pcmcia_poll();
     return copy_to_as(&p->as, uout, &info, sizeof(info));
 }
 

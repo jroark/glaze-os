@@ -1,10 +1,29 @@
-/* One network card owns the primary socket for the lifetime of a boot. */
+/* One network card owns the primary socket until it is removed: found at
+ * boot, or inserted later (cf.c's pcmcia_poll(), which powers and
+ * configures it first). */
 #ifndef NETDEV_TEST
 #include "../kernel.h"
 #include "../hw.h"
 #include "../drivers.h"
 #endif
 static unsigned kind;
+bool netdev_present(void);
+
+/* The driver for a network card's identity. The XI-825 is known by its
+ * MANFID; anything else gets the NE2000 driver, which checks the DP8390's
+ * registers and the station PROM before claiming it, since NE2000 clones
+ * carry many manufacturer codes. */
+static void select_card(unsigned manufacturer, unsigned product)
+{
+    if (manufacturer == 0xd601 && product == 5) {
+        kind = GZ_NET_XI825;
+        xi825_init();
+    } else {
+        kind = GZ_NET_NE2000;
+        ne2000_init();
+    }
+}
+
 void netdev_init(void)
 {
     PCMCIA_BRIDGE |= PCMCIA_BRIDGE_EN;
@@ -24,16 +43,24 @@ void netdev_init(void)
         }
         i += 2 + len;
     }
-    /* Never probe the other NIC's registers or an ATA card with NIC writes. */
-    if (function != 6) return;
-    if (manufacturer == 0xd601 && product == 5) {
-        kind = GZ_NET_XI825;
-        xi825_init();
-    } else if (manufacturer == 0x149 && product == 0x200) {
-        kind = GZ_NET_NE2000;
-        ne2000_init();
-    }
+    /* Never probe a storage card's registers with NIC writes. */
+    if (function == 6)
+        select_card(manufacturer, product);
 }
+
+bool netdev_insert(unsigned manufacturer, unsigned product)
+{
+    select_card(manufacturer, product);
+    return netdev_present();
+}
+
+void netdev_removed(void)
+{
+    if (kind == GZ_NET_XI825) xi825_removed();
+    else if (kind == GZ_NET_NE2000) ne2000_removed();
+    kind = GZ_NET_NONE;
+}
+
 bool netdev_claimed(void) { return kind != GZ_NET_NONE; }
 bool netdev_present(void)
 {
@@ -46,6 +73,7 @@ void netdev_irq(void)
 }
 int sys_net_info(struct proc *p, uint32_t out)
 {
+    pcmcia_poll();          /* the network server's look at the socket */
     return kind == GZ_NET_XI825 ? xi825_info(p, out) : ne2000_info(p, out);
 }
 int sys_net_bind(struct proc *p, int port)

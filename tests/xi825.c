@@ -48,6 +48,7 @@ static void kprintf(const char *fmt, ...) { (void)fmt; }
 #define xwrite8(r,v) xi825_write(&model, r, 1, v)
 #define xcor(v) ((void)(v))
 #define xenable() ((void)0)
+#define xdisable() ((void)0)
 #include "../kernel/drivers/xi825.c"
 #define CHECK(v) do { if (!(v)) { fprintf(stderr, "line %d: %s\n", __LINE__, #v); exit(1); } } while (0)
 static void transmit(void *opaque, const uint8_t *data, size_t len)

@@ -16,6 +16,7 @@
 #define xwrite8(r, v) (REG8(0x0A00C300u + (r)) = (v))
 #define xcor(v) (REG8(0x0A00D3E0u) = (v))
 #define xenable() (KJ_SRC_PCMCIA |= KJ_SRC_ENABLE)
+#define xdisable() (KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE)
 #endif
 #include <glaze/wifi.h>
 
@@ -224,6 +225,19 @@ void xi825_init(void)
             nic.mac[0], nic.mac[1], nic.mac[2], nic.mac[3], nic.mac[4], nic.mac[5]);
 }
 bool xi825_present(void) { return present; }
+
+/* The card was pulled: forget it, its link and its queued frames, and mask
+ * its interrupt, so that a card inserted later starts from scratch. */
+void xi825_removed(void)
+{
+    xdisable();
+    present = false;
+    tx_ready = false;
+    head = tail = 0;
+    memset(&nic, 0, sizeof(nic));
+    memset(&wifi, 0, sizeof(wifi));
+    notify();
+}
 static int check(struct proc *p)
 {
     return !(p->flags & PROC_NET) ? GZ_EPERM : present ? 0 : GZ_ENOENT;

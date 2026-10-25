@@ -47,6 +47,8 @@ int sys_nand_erase(struct proc *p, uint32_t block);
 /* cf.c: CompactFlash ATA card for the file server. */
 void cf_init(void);
 int sys_cf_info(struct proc *p, uint32_t uout);
+/* Looks at the PCMCIA socket and handles an insertion or removal. */
+void pcmcia_poll(void);
 int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 int sys_cf_write(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 
@@ -55,12 +57,16 @@ void netdev_init(void);
 void netdev_irq(void);
 bool netdev_present(void);
 bool netdev_claimed(void); /* keep ATA off a detected NIC even if its init failed */
+bool netdev_insert(unsigned manufacturer, unsigned product); /* hot: true if up */
+void netdev_removed(void);
 int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t buf);
 /* ne2000.c and xi825.c: hardware backends. */
 void ne2000_init(void);
+void ne2000_removed(void);
 void ne2000_irq(void);
 bool ne2000_present(void);
 void xi825_init(void);
+void xi825_removed(void);
 void xi825_irq(void);
 bool xi825_present(void);
 int xi825_info(struct proc *p, uint32_t out);

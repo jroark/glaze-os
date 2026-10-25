@@ -312,6 +312,17 @@ bool ne2000_present(void)
     return present;
 }
 
+/* The card was pulled: mask its interrupt and drop what it queued. */
+void ne2000_removed(void)
+{
+    KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
+    present = false;
+    run = CR_STP;
+    q_head = q_tail = 0;
+    if (bound_port > 0)
+        ipc_notify(bound_port, GZ_NOTIFY_NET);
+}
+
 static int check(struct proc *p)
 {
     if (!(p->flags & PROC_NET))

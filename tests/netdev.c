@@ -21,8 +21,12 @@ static uint8_t read_cis(unsigned n)
 #define PCMCIA_STATUS_MASK 12
 #define PCMCIA_CARD_IN 4
 #define CF_CIS(n) read_cis(n)
+static unsigned ne_removes, xi_removes;
 static void xi825_init(void) { xi_inits++; }
 static void ne2000_init(void) { ne_inits++; }
+static void xi825_removed(void) { xi_removes++; }
+static void ne2000_removed(void) { ne_removes++; }
+static void pcmcia_poll(void) {}
 static bool xi825_present(void) { return ready; }
 static bool ne2000_present(void) { return ready; }
 static void xi825_irq(void) { xi_irqs++; }
@@ -62,10 +66,16 @@ int main(void)
     CHECK(sys_wifi_ctl(&p,0,0)==GZ_ENOENT);
     netdev_irq(); CHECK(ne_irqs==1 && !xi_irqs);
     reset(); identity(0xd601,5,4); netdev_init(); CHECK(!xi_inits && !ne_inits && !netdev_claimed());
-    reset(); identity(0x1234,5,6); netdev_init(); CHECK(!xi_inits && !ne_inits);
+    /* Other network cards get the NE2000 driver, which checks the DP8390. */
+    reset(); identity(0x1234,5,6); netdev_init(); CHECK(!xi_inits && ne_inits==1);
+    /* Hot insertion and removal. */
+    reset(); CHECK(netdev_insert(0xd601,5) && xi_inits==1 && netdev_claimed());
+    netdev_removed(); CHECK(xi_removes==1 && !netdev_claimed());
+    reset(); ready=false; CHECK(!netdev_insert(0x149,0x200) && ne_inits==1);
+    netdev_removed(); CHECK(ne_removes==1 && !netdev_claimed());
     reset(); cis[0]=0x20; cis[1]=255; netdev_init(); CHECK(!xi_inits && !ne_inits && last_read==1);
     reset(); memset(cis,0,sizeof(cis)); netdev_init(); CHECK(!netdev_claimed() && reads<=64);
     reset(); identity(0xd601,5,6); ready=false; netdev_init();
     CHECK(netdev_claimed() && !netdev_present());
-    puts("netdev: absent, XI825, NE2000, storage, unknown, malformed and failed-init selection PASS");
+    puts("netdev: absent, XI825, NE2000, storage, unknown, malformed, failed-init, insertion and removal PASS");
 }
