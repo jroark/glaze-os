@@ -21,7 +21,13 @@ BUILD_ID ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 # Test builds: replay this input script (see kernel/drivers/input.c).
 INPUT_SCRIPT ?=
 
-ARCHFLAGS := -march=mips2 -mabi=32 -mno-abicalls -fno-pic -G 0 -msoft-float
+# GCC's VR41xx errata workarounds, off by default as in Linux's VR41xx
+# builds: VR_FIX="-mfix-vr4130 -mfix-vr4120" pads mflo/mfhi and keeps GCC
+# off DIV, calling the helpers in lib/libc/divdi3.c. Tried while chasing
+# corruption on a real BE-300 that turned out to be shared-memory cache
+# colours (kernel/shm.c); kept for testing.
+VR_FIX ?=
+ARCHFLAGS := -march=mips2 -mabi=32 -mno-abicalls -fno-pic -G 0 -msoft-float $(VR_FIX)
 CFLAGS_COMMON := $(ARCHFLAGS) -std=gnu11 -ffreestanding -fno-builtin -nostdlib \
     -fno-stack-protector -Wall -Wextra -Wno-unused-parameter -g -Ilib/include -Ilib/libc/include
 
@@ -298,7 +304,10 @@ $(OUT)/ldso/%.o: lib/ldso/%.S
 $(OUT)/ldso/string.o: lib/libc/string.c
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_CFLAGS) -Os -c -o $@ $<
-$(OUT)/shared/ld-glaze.so.1: $(OUT)/ldso/entry.o $(OUT)/ldso/ldso.o $(OUT)/ldso/string.o lib/ldso/ldso.lds
+$(OUT)/ldso/divdi3.o: lib/libc/divdi3.c
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -Os -c -o $@ $<
+$(OUT)/shared/ld-glaze.so.1: $(OUT)/ldso/entry.o $(OUT)/ldso/ldso.o $(OUT)/ldso/string.o $(OUT)/ldso/divdi3.o lib/ldso/ldso.lds
 	@mkdir -p $(dir $@)
 	$(LD) -m elf32ltsmip -z max-page-size=4096 -T lib/ldso/ldso.lds --gc-sections -o $@ $(filter %.o,$^)
 
