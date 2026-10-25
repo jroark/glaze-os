@@ -406,8 +406,10 @@ int wl54cf_send(const uint8_t *frame, uint32_t len)
     return (int)len;
 }
 
+/* The card was pulled: stop using it; a card inserted later starts over. */
 void wl54cf_removed(void)
 {
+    KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
     online = authorized = pairwise_key = group_key = false;
     memset(&wifi, 0, sizeof(wifi));
     memset(cmd, 0, sizeof(cmd)); memset(buf, 0, sizeof(buf));

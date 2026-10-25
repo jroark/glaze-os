@@ -1,4 +1,14 @@
-/* Shared memory objects: refcounted sets of frames mappable by id. */
+/*
+ * Shared memory objects: refcounted sets of frames mappable by id.
+ *
+ * Frame i has cache colour i & 1 (physical bit 12), and as_map_frames maps
+ * the first frame at a VA with bit 12 clear, so every process's mapping and
+ * the kernel's KSEG0 alias index the same lines of the VR4131's virtually
+ * indexed D-cache (VR4131 UM 1.6.3: two ways of 8 KiB). Frames of any colour
+ * let one process read stale lines another had written: the network and
+ * file servers' session buffers corrupted data on a real BE-300, which the
+ * emulator, modelling no cache, never showed.
+ */
 
 #include "kernel.h"
 #include "hw.h"
@@ -25,7 +35,7 @@ int shm_create(uint32_t len)
         if (s->refs)
             continue;
         for (uint32_t i = 0; i < npages; i++) {
-            void *page = page_alloc();
+            void *page = page_alloc_colour_raw(i * PAGE_SIZE);
             if (!page) {
                 while (i--)
                     page_free((void *)KSEG0(s->frames[i]));

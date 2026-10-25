@@ -176,6 +176,7 @@ static int attach(void)
 static void detach(void)
 {
     wifi_supplicant_stop();
+    auth_error = auth_failure = 0;
     LOCK_TCPIP_CORE();
     dhcp_stop(&nif);
     netif_set_link_down(&nif);

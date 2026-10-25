@@ -11,14 +11,17 @@
  *
  * There is no hot-plug interrupt: SYS_CF_INFO samples the socket status
  * and re-identifies the card when it changes, bumping a generation count
- * the file server compares to notice a swapped card. As for the NE2000,
- * the card is assumed to decode its I/O window without a configuration
- * option register write (TODO: real cards need one, through the CIS).
+ * the file server compares to notice a swapped card. At boot the card is
+ * the one GlazeBoot came from, configured by Windows CE (or decoded by the
+ * emulator without configuration); a card inserted later gets the socket
+ * power-up and configuration register writes Windows CE's pcmcia.dll does,
+ * with the COR value Windows CE gave the boot card.
  */
 
 #include "../kernel.h"
 #include "../hw.h"
 #include "../drivers.h"
+#include "../proc.h"
 
 /* Taskfile registers (offsets from CF_ATA_BASE). */
 #define ATA_ERROR       1       /* read */
@@ -62,6 +65,7 @@ static struct gz_cf_info info;
 static bool socket_full;         /* the socket status at the last probe */
 static bool booted;              /* cf_init has run: later insertions are hot */
 static uint16_t io_buf[GZ_CF_IO_MAX / 2];
+static int boot_cor = -1;        /* the COR Windows CE set, if it was readable */
 
 static bool wait_status(uint8_t mask, uint8_t want)
 {
@@ -81,12 +85,90 @@ static bool card_inserted(void)
     return (PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) == PCMCIA_CARD_IN;
 }
 
-/* The FUNCID tuple's function code, or -1 when the CIS has none. */
-static int cis_function(void)
+/*
+ * What the card information structure says (PC Card spec, "Card
+ * Information Structure"): FUNCID, MANFID, CONFIG's configuration register
+ * address, and the configuration index to use. Tuples are read only below
+ * attribute address 0x200: above it, 0x0A00D200 is the NAND's direct-I/O
+ * port unless A020 bit 3 maps the configuration registers (hw.h).
+ */
+#define CIS_LIMIT       0x100u          /* tuple bytes: attribute 0..0x1FF */
+#define TPL_MANFID      0x20
+#define TPL_CONFIG      0x1A
+#define TPL_CFTABLE     0x1B
+#define FUNCID_NETWORK  0x06
+#define NET_IO_BASE     0x300u          /* NE_REG and the XI-825's window */
+
+struct cis {
+    int function;                       /* -1: no FUNCID */
+    unsigned manufacturer, product;
+    uint32_t cor;                       /* attribute address, 0: none */
+    int index, io_index;                /* default entry; one decoding 0x300 */
+};
+
+/* A CFTABLE_ENTRY's index and whether it can decode NET_IO_BASE: a range
+ * starting there, or address lines only (the window picks the base). */
+static void cis_entry(unsigned at, unsigned len, struct cis *c)
+{
+    unsigned end = at + len, p = at;
+#define NEXT() (p < end ? CF_CIS(p++) : 0)
+    uint8_t indx = NEXT();
+    int index = indx & 0x3F;
+
+    if (c->index < 0 || (indx & 0x40))
+        c->index = index;
+    if (indx & 0x80)
+        (void)NEXT();                   /* interface */
+    uint8_t fs = NEXT();
+    for (unsigned n = fs & 3; n; n--) {  /* power descriptors */
+        uint8_t sel = NEXT();
+        for (int bit = 0; bit < 7; bit++)
+            if (sel & (1u << bit))
+                while ((NEXT() & 0x80) && p < end)
+                    ;
+    }
+    if (fs & 0x04) {                    /* timing */
+        uint8_t t = NEXT();
+        if ((t & 3) != 3)
+            while ((NEXT() & 0x80) && p < end)
+                ;
+        if (((t >> 2) & 7) != 7)
+            while ((NEXT() & 0x80) && p < end)
+                ;
+        if (((t >> 5) & 7) != 7)
+            while ((NEXT() & 0x80) && p < end)
+                ;
+    }
+    if (!(fs & 0x08))
+        return;
+    uint8_t io = NEXT();
+    bool decodes = !(io & 0x80) && (io & 0x1F) >= 5;
+    if (io & 0x80) {
+        uint8_t r = NEXT();
+        unsigned asz = (r >> 4) & 3, lsz = (r >> 6) & 3;
+        asz = asz == 3 ? 4 : asz;
+        lsz = lsz == 3 ? 4 : lsz;
+        for (unsigned n = (r & 0x0F) + 1; n; n--) {
+            uint32_t base = 0;
+            for (unsigned b = 0; b < asz; b++)
+                base |= (uint32_t)NEXT() << (8 * b);
+            for (unsigned b = 0; b < lsz; b++)
+                (void)NEXT();
+            decodes = decodes || base == NET_IO_BASE;
+        }
+    }
+    if (decodes && c->io_index < 0)
+        c->io_index = index;
+#undef NEXT
+}
+
+static void read_cis(struct cis *c)
 {
     unsigned i = 0;
 
-    for (int n = 0; n < 64 && i < 0x400; n++) {
+    memset(c, 0, sizeof(*c));
+    c->function = c->index = c->io_index = -1;
+    for (int n = 0; n < 64 && i + 2 < CIS_LIMIT; n++) {
         uint8_t code = CF_CIS(i);
         if (code == TPL_END)
             break;
@@ -94,14 +176,33 @@ static int cis_function(void)
             i++;
             continue;
         }
-        uint8_t link = CF_CIS(i + 1);
-        if (code == TPL_FUNCID)
-            return CF_CIS(i + 2);
-        if (link == 0xFF)
+        unsigned len = CF_CIS(i + 1);
+        if (len == 0xFF || i + 2 + len > CIS_LIMIT)
             break;
-        i += 2 + link;
+        unsigned at = i + 2;
+        if (code == TPL_FUNCID && len >= 1)
+            c->function = CF_CIS(at);
+        else if (code == TPL_MANFID && len >= 4) {
+            c->manufacturer = CF_CIS(at) | (unsigned)CF_CIS(at + 1) << 8;
+            c->product = CF_CIS(at + 2) | (unsigned)CF_CIS(at + 3) << 8;
+        } else if (code == TPL_CONFIG && len >= 3) {
+            unsigned rasz = (CF_CIS(at) & 3) + 1;
+            c->cor = 0;
+            for (unsigned b = 0; b < rasz && 2 + b < len; b++)
+                c->cor |= (uint32_t)CF_CIS(at + 2 + b) << (8 * b);
+        } else if (code == TPL_CFTABLE && len >= 1) {
+            cis_entry(at, len, c);
+        }
+        i = at + len;
     }
-    return -1;
+}
+
+static int cis_function(void)
+{
+    struct cis c;
+
+    read_cis(&c);
+    return c.function;
 }
 
 /*
@@ -186,10 +287,28 @@ static void delay_ms(uint32_t ms)
  * the boot ROM has done this. Enough for the emulator; a real BE-300's card
  * still reads 0 afterwards, presumably until its configuration register is
  * set through a mapped attribute window, which isn't done yet. */
+/* The register state Windows CE left, and the boot card's COR when the
+ * configuration window is mapped (A020 bit 3, as pcmcia.dll leaves it). */
+static void note_boot_state(void)
+{
+    uint32_t a020 = PCMCIA_A020;
+
+    kprintf("cf: socket CTRL %x RESET %x STATUS %x BRIDGE %x A020 %x A024 %x A034 %x\n",
+            PCMCIA_CTRL, PCMCIA_RESET, PCMCIA_STATUS, PCMCIA_BRIDGE, a020, PCMCIA_A024,
+            PCMCIA_A034);
+    if ((a020 & 0x0Cu) == PCMCIA_A020_CONFIG) {
+        boot_cor = CF_COR;
+        kprintf("cf: COR %x CCSR %x\n", (unsigned)boot_cor, CF_CCSR);
+    }
+}
+
 static void socket_power_up(void)
 {
-    PCMCIA_A020 = 0;
-    PCMCIA_A024 = 0;
+    /* 0x0198C2F8 then 0x0198C318: Vcc, presumably. */
+    PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
+    PCMCIA_A034 = (PCMCIA_A034 | 0x08u) & ~0x30u;
+    PCMCIA_A024 = PCMCIA_A024 & ~0x0Cu;
+    PCMCIA_A020 = PCMCIA_A020 & ~0x0Cu;
     PCMCIA_CTRL = 0;
     PCMCIA_RESET = PCMCIA_RESET | 1u;
     PCMCIA_CTRL = 8;
@@ -202,33 +321,172 @@ static void socket_power_up(void)
     PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
 }
 
+/* The configuration writes pcmcia.dll makes before atadisk.dll's first
+ * command (traced in the emulator, the store at 0x0198A468): A034 bit 2,
+ * A024 bits 2-3 clear, A020 bit 3 mapping the registers, then CCSR, COR,
+ * CCSR. The COR is the boot card's; 0x43 (I/O at the secondary IDE ports,
+ * level interrupts; CF spec 4.3.2) if it couldn't be read. A card still
+ * settling in the socket can drop the write, so it is read back. */
+static bool configure(void)
+{
+    uint8_t cor = boot_cor >= 0 ? (uint8_t)boot_cor : 0x43u;
+
+    PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
+    PCMCIA_A024 = PCMCIA_A024 & ~0x0Cu;
+    PCMCIA_A020 = (PCMCIA_A020 & ~0x04u) | PCMCIA_A020_CONFIG;
+    for (int i = 0; i < 5; i++) {
+        CF_CCSR = 0xFD;
+        CF_COR = cor;
+        CF_CCSR = 0x01;
+        delay_ms(10);
+        if (CF_COR == cor)
+            return true;
+        delay_ms(100);
+    }
+    kprintf("cf: inserted card ignores COR %x (reads %x), A020 %x A034 %x\n",
+            cor, CF_COR, PCMCIA_A020, PCMCIA_A034);
+    return false;
+}
+
+/*
+ * DEBUG(hw): which A020 setting gives the XI-825 16-bit I/O cycles, by the
+ * PRISM scratch register Linux hostap tests the same way (SWSUPPORT0 at
+ * 0x28): a 16-bit write of 0x8A32 reads back whole only over a 16-bit bus.
+ * Keeps the setting that works, bit 3 set if both do.
+ */
+#define PRISM_SWSUPPORT0    REG16(0x0A00C300u + 0x28)
+static void prism_bus_width(void)
+{
+    uint32_t a020 = PCMCIA_A020 & ~0x0Cu;
+    uint16_t with, without;
+
+    PCMCIA_A020 = a020 | PCMCIA_A020_CONFIG;
+    PRISM_SWSUPPORT0 = 0x8A32;
+    with = PRISM_SWSUPPORT0;
+    PCMCIA_A020 = a020;
+    PRISM_SWSUPPORT0 = 0x8A32;
+    without = PRISM_SWSUPPORT0;
+    kprintf("cf: PRISM scratch reads %x with A020 bit 3, %x without\n", with, without);
+    if (with == 0x8A32 || without != 0x8A32)
+        PCMCIA_A020 = a020 | PCMCIA_A020_CONFIG;
+}
+
+/* A network card's configuration: its CONFIG register, the entry that
+ * decodes NET_IO_BASE (else the default), level interrupts. */
+static void configure_network(const struct cis *c)
+{
+    int index = c->io_index >= 0 ? c->io_index : c->index >= 0 ? c->index : 1;
+    uint8_t cor = (uint8_t)(0x40u | (unsigned)index);
+
+    if (!c->cor || c->cor >= 0x800u) {
+        kprintf("cf: network card has no usable CONFIG (%x)\n", c->cor);
+        return;
+    }
+    PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
+    PCMCIA_A024 = PCMCIA_A024 & ~0x0Cu;
+    PCMCIA_A020 = (PCMCIA_A020 & ~0x04u) | PCMCIA_A020_CONFIG;
+    REG8(0x0A00D000u + c->cor) = cor;
+    delay_ms(10);
+    kprintf("cf: network card %x:%x, COR %x at %x (reads %x)\n", c->manufacturer,
+            c->product, cor, c->cor, REG8(0x0A00D000u + c->cor));
+    if (c->manufacturer == 0xd601)
+        prism_bus_width();
+}
+
+/* The tuple bytes of a card that isn't storage, for its CIS (the emulator
+ * models cards from such dumps). */
+static void log_cis(void)
+{
+    for (unsigned off = 0; off < CIS_LIMIT; off += 32) {
+        kprintf("cf: cis %02x:", off);
+        for (unsigned i = off; i < off + 32; i++)
+            kprintf(" %02x", CF_CIS(i));
+        kputs("\n");
+    }
+}
+
+/* A card inserted after boot: power it, read its CIS, and bring up the
+ * driver for it. Up to three power-ups: a card pushed in slowly may not
+ * take the first. The emulator's cards ignore the COR. */
+static void insert(void)
+{
+    int kind = -1;              /* the FUNCID first read: retries follow it */
+
+    for (int attempt = 0; attempt < 3; attempt++) {
+        struct cis c;
+
+        socket_power_up();
+        read_cis(&c);
+        if (c.function != FUNCID_FIXED && c.function != kind)
+            log_cis();
+        if (kind < 0)
+            kind = c.function;
+        if (kind == FUNCID_NETWORK) {
+            if (c.function != FUNCID_NETWORK)
+                continue;       /* its CIS didn't read this time */
+            configure_network(&c);
+            if (net_insert(c.manufacturer, c.product))
+                return;
+            net_removed();
+            kputs("cf: network card didn't come up, powering up again\n");
+            continue;
+        }
+        /* Only storage gets ATA, whose waits stall the whole system; a card
+         * whose CIS reads as nothing gets one try, the last. */
+        if (kind != FUNCID_FIXED && (c.function != -1 || attempt < 2))
+            continue;
+        configure();
+        if ((info.present = identify()))
+            return;
+        kprintf("cf: inserted card not ready (status %x), powering up again\n",
+                CF_ATA(ATA_STATUS));
+    }
+}
+
 static void probe(void)
 {
     bool was = info.present, had = socket_full;
 
     socket_full = card_inserted();
-    if (socket_full && !had && booted)
-        socket_power_up();
-    info.present = identify();
+    if (!socket_full) {
+        if (net_present()) {
+            net_removed();
+            kputs("cf: network card removed\n");
+        }
+        info.present = false;
+    } else if (!had && booted) {
+        insert();
+    } else if (!net_present()) {
+        info.present = identify();
+    }
     if (info.present || was)
         info.generation++;
     if (info.present)
         kprintf("cf: %s, %u sectors\n", info.model, info.sectors);
     else if (was)
         kputs("cf: card removed\n");
-    else if (socket_full)
+    else if (socket_full && !net_present())
         kprintf("cf: card not ready (status %x)\n", CF_ATA(ATA_STATUS));
 }
 
 void cf_init(void)
 {
+    if (ram_boot && !net_present())
+        note_boot_state();
     if (!net_present() && card_inserted()) {
         PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
         probe();
         if (!info.present)
             kputs("cf: card is not an ATA disk\n");
     }
+    socket_full = card_inserted();      /* a network card found at boot too */
     booted = true;
+}
+
+void pcmcia_poll(void)
+{
+    if (booted && card_inserted() != socket_full)
+        probe();
 }
 
 static int check(struct proc *p)
@@ -242,10 +500,9 @@ int sys_cf_info(struct proc *p, uint32_t uout)
 {
     if (!(p->flags & PROC_FLASH))
         return GZ_EPERM;
-    /* No hot-plug interrupt: look at the socket each time and re-identify
-     * on a change. A recognized network card owns the socket for the whole boot. */
-    if (!net_present() && card_inserted() != socket_full)
-        probe();
+    /* No hot-plug interrupt: look at the socket each time, and handle an
+     * insertion or removal of whatever card. */
+    pcmcia_poll();
     return copy_to_as(&p->as, uout, &info, sizeof(info));
 }
 

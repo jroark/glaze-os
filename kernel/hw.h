@@ -125,6 +125,16 @@
 #define PCMCIA_STATUS       REG32(0x0A00A008u)
 #define PCMCIA_A020         REG32(0x0A00A020u)
 #define PCMCIA_A024         REG32(0x0A00A024u)
+/* pcmcia.dll's helpers only ever touch bits 2-3 of A020/A024 and 2-5 of
+ * A034 (0x0198BF8C-0x0198C3A8). On insertion it sets A034 bit 2 then bit 3
+ * (clearing 4-5): presumably the socket's Vcc. Before writing the card's
+ * configuration registers it sets A020 bit 3 (clearing 2), which it leaves
+ * set: with it, 0x0A00D200/D202 reach attribute offsets 0x200/0x202 (COR,
+ * CCSR); without it they are the NAND's direct-I/O port. */
+#define PCMCIA_A034         REG32(0x0A00A034u)
+#define PCMCIA_A020_CONFIG  0x08u
+#define CF_COR              REG8(0x0A00D200u)
+#define CF_CCSR             REG8(0x0A00D202u)
 /* Written 1 by Windows CE's interrupt handlers on every interrupt
  * (hardware.txt:15); the emulator opens the card windows on it. */
 #define PCMCIA_WINDOWS      REG32(0x0A001B20u)

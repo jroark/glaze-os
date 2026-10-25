@@ -21,7 +21,8 @@ In a RAM boot:
 | Trampoline and hand-over plan | Done; tested natively (`make -C host glazeboot-test`), in the emulator, and on a real BE-300 |
 | Loader (`GlazeBoot.c`) | Built with be300-dev; boots Glaze from the emulator's stock Windows CE (`tests/run_ceboot.sh`) and on a real BE-300, to SpringBoard with touch, buttons and apps |
 | `/NAND` on a real BE-300 | Done read-only (`nand=ro`, the default): pages mapped through Windows CE's block table and ECC-corrected |
-| `/Card` on a real BE-300 | Works for the boot card (8-bit transfers); a card re-inserted under Glaze isn't usable yet |
+| `/Card` on a real BE-300 | Done: the boot card (8-bit transfers), and cards inserted later |
+| Network cards on a real BE-300 | Done when inserted after boot (the boot card is the CF): an AmbiCom AMB8610 NE2000 gets DHCP and loads https; a Z-Com XI-825 scans (open networks only) |
 | Writes to `/NAND` on a real device | Unsafe until writes keep Windows CE's spare-area tags and ECC (see below) |
 
 ## Using it
@@ -178,9 +179,29 @@ None of these showed in the emulator:
   panel's samples are filtered so that taps don't read as swipes.
 - **CompactFlash.** After Windows CE each 16-bit access of the data register
   carries one byte, so the driver sets the card's 8-bit mode (SET FEATURES
-  01h) and moves data a byte at a time. A card inserted later gets the
-  socket power-up pcmcia.dll does, which works in the emulator
-  (`--cf-eject-after`/`--cf-insert-after`) but not yet on a real BE-300.
+  01h) and moves data a byte at a time.
+- **Cards inserted later** (`cf.c`'s `pcmcia_poll`, from `SYS_CF_INFO` and
+  `SYS_NET_INFO`). As pcmcia.dll does: A034 bits 2 and 3 (Vcc, presumably),
+  reset, then the CIS (read only below attribute 0x200, since 0x0A00D200 is
+  also the NAND's direct-I/O port). Storage gets CCSR 0xFD, the COR Windows
+  CE gave the boot card, CCSR 0x01, with A020 bit 3 set. A network card gets
+  its CONFIG register written with a CFTABLE entry decoding I/O 0x300, and
+  goes to the NE2000 or XI-825 driver (`net.c`). Retries cover a card pushed
+  in slowly. Pulling a card masks its interrupt until the next one is up
+  (otherwise its state change held GIRQ0 forever). The emulator's
+  `--net-insert-after` swaps the CF card for a network card.
+- **NE2000 clones.** The AmbiCom AMB8610 keeps its station address in
+  attribute memory (0x1C0) rather than buffer RAM, as Linux pcnet_cs knows,
+  and its DP8390 runs remote DMA only with STA set, as Linux ne.c always
+  issues it; the DMA width is picked by a RAM read-back test.
+- **XI-825.** Station firmware 1.3.5 needs hostap's command deadlines (INIT
+  takes far longer than 20 ms) and scans with the host scan RID 0xFCE5; its
+  real CIS (logged on insertion) has CONFIG at 0x3E0 and a 16-bit-only I/O
+  entry.
+- **Shared memory and the D-cache.** Session buffers shared by a server and
+  its client had frames of any cache colour, so the two could read different
+  lines for one frame: TLS and gzip data arrived corrupted at random. Frames
+  and mappings now agree (`kernel/shm.c`).
 - **NAND.** Windows CE's nanddisk.dll reads pages by DMA (0x1CC0-0x1CF4) and
   leaves the engine set up for it; Glaze's PIO reads stalled after it. The
   kernel now frames operations as Windows CE's kernel does (A400/A408/A40C,
@@ -206,6 +227,16 @@ None of these showed in the emulator:
   0x0A007800) resets the device 150 s after its last reload; Windows CE writes
   0x96 to 0x7814 every ~9 s, and `kernel/drivers/cmcu.c` does the same.
 
+## Apps in a RAM boot
+
+A RAM boot copies all of romfs into RAM, unlike a NAND boot, which pages it in
+on demand. GlazeBoot's `romfs.img` therefore carries only the apps named in
+`GB_APPS` (default `appstore browser settings`; `make glazeboot GB_APPS=all`
+keeps them all), their icons, the servers, and the test programs. The NAND
+image is unchanged. SpringBoard shows a built-in app only when romfs holds its
+program. The default saves about 580 KiB, leaving about 8.3 MiB free at
+SpringBoard on the emulator.
+
 ## Known gaps
 
 - **Writes to Windows CE's NAND.** Reads go through Windows CE's block table
@@ -213,12 +244,9 @@ None of these showed in the emulator:
   replace blocks in place. That suits the emulator, whose restore images have
   no spare area; on a device Windows CE would lose those blocks. Keep
   `nand=ro` there until writes keep the tags and ECC.
-- **Hardware state.** Glaze's drivers assume what the boot ROM leaves. On a
-  real BE-300, Windows CE leaves one of them differently:
-  - the CF socket: a re-inserted card isn't decoded until it is configured,
-    presumably through an attribute window pcmcia.dll maps; not done yet.
-
-  The LCD mode is the same.
+- **Socket registers.** A020, A024 and A034's bits are inferred from
+  pcmcia.dll's helpers and traces, not documented; A020 bit 3 made no
+  difference to the XI-825's 16-bit I/O.
 - **Memory.** The romfs (about 4.7 MiB) fits only with the object store's free
   pages lent to programs; `mode=probe` reports what Windows CE gives.
 

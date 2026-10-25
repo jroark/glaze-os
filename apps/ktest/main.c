@@ -960,8 +960,34 @@ static void test_net(void)
     CHECK(gz_net_send(frame, sizeof(frame)) == GZ_EPERM && gz_net_recv(frame, sizeof(frame)) == GZ_EPERM,
           "net syscalls denied to apps");
     CHECK(net_status(&st) == 0, "net status");
+    CHECK(gz_wifi_ctl(WIFI_STATUS, frame) == GZ_EPERM, "wifi syscall denied to apps");
+    struct wifi_status ws;
+    bool wireless = net_wifi_status(&ws) == 0;
+    uint16_t card = st.kind;
+    /* Rejoin as the image was provisioned: tests/run_wifi_security.py saves
+     * WEP/WPA credentials for secured access points, else open BE300. */
+    static struct wifi_preference provisioned;
+    if (!wireless || pref_get(WIFI_PREF, &provisioned, sizeof(provisioned)) != sizeof(provisioned) ||
+        provisioned.version != 2) {
+        memset(&provisioned, 0, sizeof(provisioned));
+        provisioned.credentials.network.ssid_len = 5;
+        memcpy(provisioned.credentials.network.ssid, "BE300", 5);
+    }
+    if (wireless) {
+        CHECK(net_wifi_disconnect() == 0 && net_status(&st) == 0 &&
+              st.state == NET_DISCONNECTED && !st.addr && !st.dns, "wifi disconnect clears address and DNS");
+        CHECK(net_wifi_scan() == 0, "wifi scan starts while disconnected");
+        for (int i = 0; i < 60; i++) {
+            if (net_wifi_status(&ws) == 0 && !ws.scanning) break;
+            gz_sleep_ms(100);
+        }
+        CHECK(ws.count == 1 && ws.aps[0].ssid_len == 5 && !memcmp(ws.aps[0].ssid, "BE300", 5), "wifi scan BE300");
+        CHECK(net_wifi_connect("", 0) == GZ_EINVAL && net_wifi_connect("BE300", 33) == GZ_EINVAL,
+              "wifi rejects invalid SSID lengths");
+        CHECK(net_wifi_connect_secure(&provisioned.credentials) == 0, "wifi association starts");
+    } else CHECK(net_wifi_scan() == GZ_ENOENT, "wifi unsupported without XI825");
     if (st.state == NET_NO_CARD) {
-        printf("ktest: SKIP network (no network card; boot with --ne2000 or --wl54cf)\n");
+        printf("ktest: SKIP network (no network card; boot with --ne2000, --xi825 or --wl54cf)\n");
         CHECK(net_socket(NET_TCP) == GZ_ENETDOWN, "net down without a card");
         return;
     }
@@ -1067,6 +1093,34 @@ static void test_net(void)
         printf("ktest: INFO no internet DNS\n");
     }
 
+    if (wireless) {
+        int fd = net_socket(NET_TCP);
+        CHECK(fd >= 0 && net_wifi_disconnect() == 0, "wifi disconnect with open socket");
+        CHECK(net_close(fd) == 0, "socket closes while wifi down");
+        CHECK(net_status(&st) == 0 && st.state == NET_DISCONNECTED && !st.addr && !st.dns,
+              "wifi down has no stale IP or DNS");
+        struct wifi_preference choice;
+        CHECK(pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && !choice.reconnect,
+              "wifi explicit disconnect disables reconnect");
+        /* The XI-825 starts associating and times out; the WL54-CF scans for
+         * the network first and refuses one that isn't there. */
+        if (card == GZ_NET_XI825) {
+            CHECK(net_wifi_connect("missing", 7) == 0, "wifi unavailable network starts");
+            gz_sleep_ms(11000);
+            CHECK(net_wifi_status(&ws) == 0 && ws.state == WIFI_FAILED && ws.error == GZ_ETIMEDOUT,
+                  "wifi unavailable network times out");
+        } else {
+            CHECK(net_wifi_connect("missing", 7) == GZ_ENOENT, "wifi unavailable network refused");
+        }
+        CHECK(net_status(&st) == 0 && st.state == NET_DISCONNECTED && !st.addr,
+              "wifi no DHCP fallback without association");
+        CHECK(net_wifi_connect_secure(&provisioned.credentials) == 0 && net_wait_up(15000) == 0,
+              "wifi reconnect gets address");
+        CHECK(pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && choice.version == 2 &&
+              choice.reconnect && choice.credentials.network.ssid_len == 5 &&
+              !memcmp(choice.credentials.network.ssid, "BE300", 5),
+              "wifi remembers selected network");
+    }
     uint32_t utc;
     rv = ntp_query(NTP_SERVER, 6000, &utc);
     if (rv == 0) {

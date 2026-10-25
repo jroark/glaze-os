@@ -12,6 +12,7 @@
 # Output: out/shots/ceboot/{stdout.log,nand.img,cf.img,glazeboot.log} and
 # out/shots/ceboot.png. Set BE300 to the emulator binary and BE300_NAND to
 # the Windows CE image if they aren't under ../be300.
+# EMU_ARGS adds emulator options (e.g. --cf-eject-after 40 --cf-insert-after 50).
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 secs=${1:-60}
@@ -34,7 +35,7 @@ cp "${BE300_NAND:-$emu/ce/restore_images/All_nand_300.bin}" "$out/nand.img"
 cd "$out"
 rm -f screenshot_*.bmp glazeboot.log
 SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-dummy} \
-    gtimeout "${secs}s" "${BE300:-$emu/build-host/be300}" --nand nand.img --rtc-host-time --cf cf.img \
+    gtimeout "${secs}s" "${BE300:-$emu/build-host/be300}" --nand nand.img --rtc-host-time --cf cf.img $EMU_ARGS \
     > stdout.log 2> stderr.log || true
 ls screenshot_*.bmp >/dev/null 2>&1 && sips -s format png screenshot_*.bmp --out "$out.png" >/dev/null
 MTOOLS_SKIP_CHECK=1 mtype -i cf.img ::/CE/R4100/glazeboot.log 2>/dev/null | tr -d '\r' > glazeboot.log || true

@@ -47,41 +47,51 @@ int sys_nand_erase(struct proc *p, uint32_t block);
 /* cf.c: CompactFlash ATA card for the file server. */
 void cf_init(void);
 int sys_cf_info(struct proc *p, uint32_t uout);
+/* Looks at the PCMCIA socket and handles an insertion or removal. */
+void pcmcia_poll(void);
 int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 int sys_cf_write(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 
-/* Network device dispatch and shared frame API (net.c). */
-void xi825_init(void);
-void xi825_irq(void);
-void xi825_removed(void);
-bool xi825_present(void);
-int xi825_info(struct proc *, uint32_t);
-int xi825_bind(struct proc *, int);
-int xi825_send(struct proc *, uint32_t, uint32_t);
-int xi825_recv(struct proc *, uint32_t, uint32_t);
-int xi825_control(struct proc *, uint32_t, uint32_t);
-int sys_wifi_ctl(struct proc *, uint32_t, uint32_t);
-int wl54cf_control(uint32_t, void *);
+/* Network card dispatch and the shared frame API (net.c). One card owns the
+ * socket until it is pulled: found at boot, or inserted later (cf.c's
+ * pcmcia_poll(), which powers and configures it first). */
 void net_init(void);
 void net_irq(void);
-bool net_present(void);
+bool net_present(void);     /* claimed: keep ATA off it even if it failed */
+bool net_up(void);          /* claimed and its driver running */
+bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up */
+void net_removed(void);
 void net_set_mac(const uint8_t mac[6]);
 void net_receive(const uint8_t *frame, uint32_t len);
 void net_rx_drop(void);
 void net_overrun(void);
-/* Backend drivers: identify before touching device registers. */
-bool wl54cf_init(void);
-void wl54cf_irq(void);
-void wl54cf_removed(void);
-int wl54cf_send(const uint8_t *frame, uint32_t len);
-int ne2000_send(const uint8_t *frame, uint32_t len);
-void ne2000_init(void);
-void ne2000_irq(void);
-bool ne2000_present(void);
+int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t buf);
 int sys_net_info(struct proc *p, uint32_t uout);
 int sys_net_bind(struct proc *p, int port);
 int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len);
 int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max);
+/* Backends: identified by the CIS before their registers are touched. The
+ * NE2000 and WL54-CF move frames through net.c's queue; the XI-825 keeps its
+ * own (xi825.c). */
+void ne2000_init(void);
+void ne2000_irq(void);
+bool ne2000_present(void);
+void ne2000_removed(void);
+int ne2000_send(const uint8_t *frame, uint32_t len);
+bool wl54cf_init(void);
+void wl54cf_irq(void);
+void wl54cf_removed(void);
+int wl54cf_send(const uint8_t *frame, uint32_t len);
+int wl54cf_control(uint32_t op, void *buf);   /* Wi-Fi controls (kernel buffer) */
+void xi825_init(void);
+void xi825_removed(void);
+void xi825_irq(void);
+bool xi825_present(void);
+int xi825_info(struct proc *p, uint32_t out);
+int xi825_bind(struct proc *p, int port);
+int xi825_send(struct proc *p, uint32_t buf, uint32_t len);
+int xi825_recv(struct proc *p, uint32_t buf, uint32_t len);
+int xi825_control(struct proc *p, uint32_t op, uint32_t buf);
 
 /* audio.c: wave-output DMA for the audio server. */
 void audio_init(void);

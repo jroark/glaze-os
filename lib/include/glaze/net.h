@@ -95,7 +95,7 @@ enum {
 struct net_status {
     uint32_t state;
     uint8_t mac[6];
-    uint16_t kind;
+    uint16_t kind;          /* GZ_NET_* (glaze/abi.h), GZ_NET_NONE without a card */
     uint32_t addr, mask, gateway, dns;
     uint32_t rx_frames, tx_frames, rx_dropped;
 };

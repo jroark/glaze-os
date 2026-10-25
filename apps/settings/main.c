@@ -68,6 +68,20 @@ static const char *wifi_error_text(int error)
     }
 }
 
+static uint32_t root_card;              /* the card and state the root list shows */
+
+/* What the root list depends on: whether there's a card, which, and its
+ * state. Cards come and go (cf.c's pcmcia_poll); net_status is answered at
+ * once. */
+static uint32_t card_key(struct net_status *st)
+{
+    if (net_status(st) < 0) {
+        memset(st, 0, sizeof(*st));
+        st->state = NET_NO_CARD;
+    }
+    wifi_available = st->state != NET_NO_CARD && (st->kind == GZ_NET_XI825 || st->kind == GZ_NET_WL54CF);
+    return st->state | (uint32_t)st->kind << 8;
+}
 static const char *wifi_name(uint32_t state)
 {
     switch (state) {
@@ -150,7 +164,10 @@ static int volume_before;           /* restored if the drag is cancelled */
 
 static void load(void)
 {
-    wifi_available = net_wifi_status(&wireless_status) == 0;
+    struct net_status st;
+    card_key(&st);
+    if (wifi_available)
+        net_wifi_status(&wireless_status);
     s_timeout = display_timeout_get();
     pref_get("sb.wallpaper", &s_wallpaper, 4);
     pref_get("sb.24h", &s_24h, 4);
@@ -293,9 +310,10 @@ static void draw_root(gfx_surface *s)
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
     ui_draw_navbar(s, "Settings", NULL, NULL, 0);
     section_y = UI_NAV_H + 12;
-    struct net_status st = { .state = NET_NO_CARD };
-    if (cell_visible(s) && net_status(&st) < 0)
-        st.state = NET_NO_CARD;
+    /* A clipped-out row reuses the last status, and so the layout. */
+    static struct net_status st = { .state = NET_NO_CARD };
+    if (cell_visible(s))
+        root_card = card_key(&st);
     if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
     cell(s, wifi_available ? 1 : 0, "Network", net_state_name(st.state), true, R_NETWORK);
     if (wifi_available) cell(s, 3, "Wi-Fi", wifi_name(wireless_status.state), true, R_WIFI);
@@ -1536,7 +1554,8 @@ int main(void)
 
     for (;;) {
         struct gz_input_event ev;
-        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI ? 1000 : -1;
+        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI ? 1000
+                    : view == V_ROOT ? 2000 : -1;
         if (view == V_TOUCH_TEST)
             timeout = 250;
         if ((view == V_ZONE || view == V_WIFI) && zone_scroll.animating)
@@ -1546,7 +1565,20 @@ int main(void)
                 touch_test_tick();
                 continue;
             }
+            if (view == V_ROOT) {
+                struct net_status st;
+                if (card_key(&st) != root_card)
+                    redraw();       /* a card came or went: rows change */
+                continue;
+            }
             if (view == V_WIFI && !zone_scroll.animating) {
+                struct net_status st;
+                card_key(&st);
+                if (!wifi_available) {      /* the card was pulled */
+                    view = V_ROOT;
+                    redraw();
+                    continue;
+                }
                 int rv = net_wifi_status(&wireless_status);
                 if (rv) { memset(&wireless_status, 0, sizeof(wireless_status)); wifi_error = rv; }
                 redraw_rect(zone_area());

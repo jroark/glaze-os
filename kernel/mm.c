@@ -484,10 +484,13 @@ static uint32_t mmap_reuse(struct addrspace *as, uint32_t len)
     return va + len + PAGE_SIZE <= as->mmap_top ? va : as->mmap_top;
 }
 
+/* Shared memory frames, frame i of cache colour i & 1 (shm.c): the first is
+ * mapped at a VA with bit 12 clear, so each page's VA matches its colour. */
 uint32_t as_map_frames(struct addrspace *as, const uint32_t *frames, uint32_t npages, int shm_id)
 {
-    uint32_t va = npages ? mmap_reuse(as, npages * PAGE_SIZE) : as->mmap_top;
-    if (!npages || npages > (GZ_DSO_BASE - va - PAGE_SIZE) / PAGE_SIZE) return 0;
+    uint32_t base = npages ? mmap_reuse(as, (npages + 1) * PAGE_SIZE) : as->mmap_top;
+    uint32_t va = base + (base & 0x1000u);
+    if (!npages || va >= GZ_DSO_BASE || npages > (GZ_DSO_BASE - va - PAGE_SIZE) / PAGE_SIZE) return 0;
     struct region *r = as_region_add(as, va, 0, REGION_SHM, shm_id);
     if (!r) return 0;
     for (uint32_t i = 0; i < npages; i++) {
@@ -497,8 +500,8 @@ uint32_t as_map_frames(struct addrspace *as, const uint32_t *frames, uint32_t np
         }
         r->npages++;
     }
-    if (va == as->mmap_top)
-        as->mmap_top += npages * PAGE_SIZE + PAGE_SIZE;
+    if (base == as->mmap_top)
+        as->mmap_top = va + npages * PAGE_SIZE + PAGE_SIZE;
     return va;
 }
 

@@ -82,6 +82,16 @@ source failure. Override `OPENSSL_FLAGS` and `OPENSSL_LIBS` outside the default
 Homebrew location. Driver tests use structural firmware fixtures, without
 vendor binaries, and run under ASan/UBSan.
 
+## Cards inserted at run time and real hardware
+
+Either card can be inserted and pulled at run time (`kernel/drivers/cf.c`'s
+`pcmcia_poll`, `net.c`), which is how a GlazeBoot boot gets one: the network
+server attaches to a card that appears and stops the supplicant when it goes.
+On a real BE-300 the XI-825 (station firmware 1.3.5) scans with the host scan
+RID 0xFCE5, which firmware before 1.3.1 lacks (it falls back to the scan
+inquiry), and its command deadlines follow Linux hostap's. The WL54-CF's real
+CIS has CONFIG at attribute 0x200.
+
 For guest tests, extract local firmware as described in WL54CF.md, build the
 emulator with OpenSSL available, then:
 
