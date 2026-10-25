@@ -20,9 +20,9 @@ In a RAM boot:
 | Kernel RAM-boot mode, RAM disk, `/NAND` | Done; tested in the emulator (`tests/run_ramboot.sh`, ktest passes) |
 | Trampoline and hand-over plan | Done; tested natively (`make -C host glazeboot-test`), in the emulator, and on a real BE-300 |
 | Loader (`GlazeBoot.c`) | Built with be300-dev; boots Glaze from the emulator's stock Windows CE (`tests/run_ceboot.sh`) and on a real BE-300, to SpringBoard with touch, buttons and apps |
-| `/NAND` on a real BE-300 | Mounts with `nand=ro`, but some sectors read wrong (no ECC correction or bad-sector replacement yet), so `nand=off` is the default |
+| `/NAND` on a real BE-300 | Done read-only (`nand=ro`, the default): pages mapped through Windows CE's block table and ECC-corrected |
 | `/Card` on a real BE-300 | Works for the boot card (8-bit transfers); a card re-inserted under Glaze isn't usable yet |
-| Writes to `/NAND` on a real device | Unsafe until Windows CE's spare-area ECC and block replacement are handled (see below) |
+| Writes to `/NAND` on a real device | Unsafe until writes keep Windows CE's spare-area tags and ECC (see below) |
 
 ## Using it
 
@@ -133,6 +133,8 @@ touched.
 ## Testing
 
 - `make -C host glazeboot-test` runs the plan on random scattered layouts.
+- `make -C host nand-ecc-test` checks the NAND ECC decoder on pages encoded
+  in Windows CE's layout, with one and two bytes corrupted.
 - `make -C host fat-test` runs `/NAND` on a RAM NAND model, checking that
   programs only clear bits.
 - `tests/run_ramboot.sh [seconds] [make args]` builds `make ramboot` and boots
@@ -184,28 +186,35 @@ None of these showed in the emulator:
   kernel now frames operations as Windows CE's kernel does (A400/A408/A40C,
   CTRL), with the NAND unit's clock at 0x0A001134 first (nanddisk.dll
   gates it between operations, and gated reads return zeros), turns that
-  DMA off and resets the engine and chip first. Windows CE's volume then
-  mounts, but some sectors read wrong: nanddisk.dll corrects them with the
-  spare area's ECC and redirects bad ones to an alternate area, neither of
-  which Glaze does yet. Turning the DMA off
+  DMA off and resets the engine and chip first. Turning the DMA off
   raises GIRQ0 source 12, which the interrupt handler now masks, as it does
   any source with no driver.
+- **Windows CE's NAND format** (`kernel/drivers/flash.c`, `nand_ecc.c`).
+  Spare bytes 0-3 of a page are `AA 55 0F FF` (`AA 55 FF ..` erased), 4-7 its
+  block's logical number, 8-15 a Reed-Solomon parity over GF(2^10)
+  (x^10 + x^3 + 1) of the 512 data and first 8 spare bytes, one bit-reversed
+  byte per symbol, correcting two bytes. Before the first NAND read the
+  kernel builds nanddisk.dll's block table (NandColdBoot, 0x019A3B24): a
+  physical block whose first five pages agree three times on a logical
+  number serves it, erased blocks get the numbers from 1004, the rest are
+  bad. On the test device 656 of 1024 blocks were moved and one was bad,
+  which is what garbled the names when pages were read one to one. The
+  layout was worked out from raw pages: the NAND engine's ECC registers
+  (A464-A4C0), loaded as the DLL loads them, gave syndromes that matched
+  nothing.
 - **The watchdog.** Casio's power-management microcontroller (ScCmcu,
   0x0A007800) resets the device 150 s after its last reload; Windows CE writes
   0x96 to 0x7814 every ~9 s, and `kernel/drivers/cmcu.c` does the same.
 
 ## Known gaps
 
-- **Windows CE's NAND format.** `nanddisk.dll` keeps ECC in the spare area and
-  replaces bad blocks ("Last BlockReplace"; the restore image is 1004 logical
-  blocks of the chip's 1024). `/NAND` maps sectors to pages one to one and
-  writes blank spare bytes. That suits the emulator, which synthesizes the spare
-  area, but on a device Windows CE may then see ECC errors. Keep `nand=ro` there
-  until both are understood.
+- **Writes to Windows CE's NAND.** Reads go through Windows CE's block table
+  and ECC, but writes program blank spare bytes, with no tag or parity, and
+  replace blocks in place. That suits the emulator, whose restore images have
+  no spare area; on a device Windows CE would lose those blocks. Keep
+  `nand=ro` there until writes keep the tags and ECC.
 - **Hardware state.** Glaze's drivers assume what the boot ROM leaves. On a
-  real BE-300, Windows CE leaves two of them differently:
-  - the NAND: Windows CE's data is ECC-corrected and partly remapped by
-    nanddisk.dll, which Glaze doesn't do yet (hence `nand=off`);
+  real BE-300, Windows CE leaves one of them differently:
   - the CF socket: a re-inserted card isn't decoded until it is configured,
     presumably through an attribute window pcmcia.dll maps; not done yet.
 
