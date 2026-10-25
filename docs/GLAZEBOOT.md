@@ -20,7 +20,7 @@ In a RAM boot:
 | Kernel RAM-boot mode, RAM disk, `/NAND` | Done; tested in the emulator (`tests/run_ramboot.sh`, ktest passes) |
 | Trampoline and hand-over plan | Done; tested natively (`make -C host glazeboot-test`), in the emulator, and on a real BE-300 |
 | Loader (`GlazeBoot.c`) | Built with be300-dev; boots Glaze from the emulator's stock Windows CE (`tests/run_ceboot.sh`) and on a real BE-300, to SpringBoard with touch, buttons and apps |
-| `/NAND` on a real BE-300 | Off (`nand=off`): with the engine taken back from Windows CE's DMA, reads complete but return zeros |
+| `/NAND` on a real BE-300 | Mounts with `nand=ro`, but some sectors read wrong (no ECC correction or bad-sector replacement yet), so `nand=off` is the default |
 | `/Card` on a real BE-300 | Works for the boot card (8-bit transfers); a card re-inserted under Glaze isn't usable yet |
 | Writes to `/NAND` on a real device | Unsafe until Windows CE's spare-area ECC and block replacement are handled (see below) |
 
@@ -182,8 +182,12 @@ None of these showed in the emulator:
 - **NAND.** Windows CE's nanddisk.dll reads pages by DMA (0x1CC0-0x1CF4) and
   leaves the engine set up for it; Glaze's PIO reads stalled after it. The
   kernel now frames operations as Windows CE's kernel does (A400/A408/A40C,
-  CTRL), turns that DMA off and resets the engine and chip first, which
-  ends the stall, but the data still reads as zeros. Turning the DMA off
+  CTRL), with the NAND unit's clock at 0x0A001134 first (nanddisk.dll
+  gates it between operations, and gated reads return zeros), turns that
+  DMA off and resets the engine and chip first. Windows CE's volume then
+  mounts, but some sectors read wrong: nanddisk.dll corrects them with the
+  spare area's ECC and redirects bad ones to an alternate area, neither of
+  which Glaze does yet. Turning the DMA off
   raises GIRQ0 source 12, which the interrupt handler now masks, as it does
   any source with no driver.
 - **The watchdog.** Casio's power-management microcontroller (ScCmcu,
@@ -200,8 +204,8 @@ None of these showed in the emulator:
   until both are understood.
 - **Hardware state.** Glaze's drivers assume what the boot ROM leaves. On a
   real BE-300, Windows CE leaves two of them differently:
-  - the NAND engine, owned by nanddisk.dll's DMA: PIO reads return zeros
-    (hence `nand=off`);
+  - the NAND: Windows CE's data is ECC-corrected and partly remapped by
+    nanddisk.dll, which Glaze doesn't do yet (hence `nand=off`);
   - the CF socket: a re-inserted card isn't decoded until it is configured,
     presumably through an attribute window pcmcia.dll maps; not done yet.
 

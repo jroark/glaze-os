@@ -10,8 +10,10 @@
  * closed with phase 2, and ACK is read. The boot ROM leaves the engine set
  * up, but Windows CE's nanddisk.dll leaves A40C and CTRL clear. A read
  * drains the whole 528-byte page as Windows CE does. After Windows CE (a
- * RAM boot) nand_reset() runs first; on a real BE-300 reads then complete
- * but return zeros, so /NAND stays off there (GlazeBoot nand=off).
+ * RAM boot) nand_reset() runs first. On a real BE-300 that reads Windows
+ * CE's FAT volume, but without nanddisk.dll's ECC correction and
+ * bad-sector replacement some sectors come back wrong, so /NAND stays off
+ * by default there (GlazeBoot nand=off).
  */
 
 #include "../kernel.h"
@@ -47,6 +49,7 @@ static void wait_ready(void)
 
 static void select(void)
 {
+    NAND_UNIT_CLOCK = 1;
     NAND_XFER_EN0 = 1;
     NAND_XFER_EN2 = 1;
     NAND_XFER_PIO = 1;

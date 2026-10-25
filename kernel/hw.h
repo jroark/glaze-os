@@ -214,8 +214,11 @@
 
 /* NAND via the VRC4173 SPL transfer engine (doc: NAND Flash and Controller). */
 /* Written 1 before every operation by Windows CE's kernel (PIO) NAND path
- * (0x80F0A658-64); its nanddisk.dll clears A40C after each DMA transfer, so
- * after Windows CE the stream port isn't fed until they are set again. */
+ * (0x80F0A654-64), the companion's NAND unit clock (0x1134, in its per-unit
+ * clock/power block) first. nanddisk.dll's enable/disable helpers
+ * (0x019A540C/0x019A542C) set and clear that clock around each operation,
+ * so after Windows CE the unit is gated and reads complete with zeros. */
+#define NAND_UNIT_CLOCK     REG32(0x0A001134u)
 /* The companion's NAND DMA, which Windows CE's nanddisk.dll turns on while
  * it owns the NAND (0x1CC0 = 1) and off when it hands the engine back to
  * the kernel's PIO path (0x1CC0 = 0, PC 0x019A58A4); 0x1CF4 = 1 after each
