@@ -63,6 +63,7 @@
  * `&= ~0x08` (docs hardware.txt, GIRQ0-0 and GIRQ0-1), and both read 0x0C
  * under Windows CE (hw_dump_vrc4173.txt core block). The emulator takes any
  * write to either as that source's acknowledge. */
+#define KJ_GIRQ0_EN(n)      REG32(0x0A000010u + 4u * (n))   /* GIRQ0 source n enable */
 #define KJ_SRC_PCMCIA       REG32(0x0A000010u)
 #define KJ_SRC_KEYS         REG32(0x0A000014u)
 #define KJ_SRC_ENABLE       0x08u
@@ -115,6 +116,18 @@
  * Linux port's setup.c). The companion's card status at 0x0A001000 reads
  * 0x4 with a card, 0xC for an empty attached socket (doc: CompactFlash and
  * PCMCIA), and 0 on the emulator when nothing is attached. */
+/* Socket power and reset, as Windows CE's pcmcia.dll drives them when a card
+ * is inserted (traced in the emulator, its code at 0x0198BFD4-0x0198C1F8):
+ * CTRL 0 -> 8 -> 9 with RESET bit 0 held, then RESET released and CTRL 0x0B,
+ * STATUS reading 0x2F9 once the card is up (hw_dump_vrc4173.txt). */
+#define PCMCIA_CTRL         REG32(0x0A00A000u)
+#define PCMCIA_RESET        REG32(0x0A00A004u)
+#define PCMCIA_STATUS       REG32(0x0A00A008u)
+#define PCMCIA_A020         REG32(0x0A00A020u)
+#define PCMCIA_A024         REG32(0x0A00A024u)
+/* Written 1 by Windows CE's interrupt handlers on every interrupt
+ * (hardware.txt:15); the emulator opens the card windows on it. */
+#define PCMCIA_WINDOWS      REG32(0x0A001B20u)
 #define PCMCIA_BRIDGE       REG32(0x0A00A01Cu)
 #define PCMCIA_BRIDGE_EN    0x04u
 #define PCMCIA_CARD_STATUS  REG32(0x0A001000u)
@@ -136,8 +149,11 @@
  * tuple byte per even address (PC Card spec, "Attribute Memory"). */
 #define CF_ATA_BASE         0x0A00C170u
 #define CF_ATA(r)           REG8(CF_ATA_BASE + (r))
-#define CF_ATA_DATA16       REG16(CF_ATA_BASE)
 #define CF_ATA_CTL          REG8(0x0A00C376u)
+/* Tuples only: 0x0A00D200/D202 is the NAND direct-I/O data/control port
+ * (the boot ROM sends NAND commands there), so attribute offset 0x200, the
+ * card's configuration register, is not reachable as CF_CIS(0x100); writing
+ * it on a real BE-300 sent the NAND a stray byte and hung its next read. */
 #define CF_CIS(i)           REG8(0x0A00D000u + 2 * (i))
 
 /* VRC4173 SIU UART, register stride 4 (doc: UARTs). */
@@ -197,6 +213,22 @@
 #define KEY2_POWER          0x80u
 
 /* NAND via the VRC4173 SPL transfer engine (doc: NAND Flash and Controller). */
+/* Written 1 before every operation by Windows CE's kernel (PIO) NAND path
+ * (0x80F0A654-64), the companion's NAND unit clock (0x1134, in its per-unit
+ * clock/power block) first. nanddisk.dll's enable/disable helpers
+ * (0x019A540C/0x019A542C) set and clear that clock around each operation,
+ * so after Windows CE the unit is gated and reads complete with zeros. */
+#define NAND_UNIT_CLOCK     REG32(0x0A001134u)
+/* The companion's NAND DMA, which Windows CE's nanddisk.dll turns on while
+ * it owns the NAND (0x1CC0 = 1) and off when it hands the engine back to
+ * the kernel's PIO path (0x1CC0 = 0, PC 0x019A58A4); 0x1CF4 = 1 after each
+ * transfer. While it is on, page data goes to DMA, not the stream port. */
+#define NAND_DMA_ENABLE     REG32(0x0A001CC0u)
+#define NAND_DMA_STATE      REG32(0x0A001CF4u)
+#define NAND_XFER_EN0       REG32(0x0A00A400u)
+#define NAND_XFER_EN2       REG32(0x0A00A408u)
+#define NAND_XFER_PIO       REG32(0x0A00A40Cu)
+#define NAND_XFER_CTRL      REG32(0x0A00A410u)
 #define NAND_XFER_CMD       REG32(0x0A00A414u)
 #define NAND_XFER_ADDR8     REG8(0x0A00A420u)
 #define NAND_XFER_ACK       REG32(0x0A00A430u)

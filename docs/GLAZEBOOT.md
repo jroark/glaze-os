@@ -20,8 +20,8 @@ In a RAM boot:
 | Kernel RAM-boot mode, RAM disk, `/NAND` | Done; tested in the emulator (`tests/run_ramboot.sh`, ktest passes) |
 | Trampoline and hand-over plan | Done; tested natively (`make -C host glazeboot-test`), in the emulator, and on a real BE-300 |
 | Loader (`GlazeBoot.c`) | Built with be300-dev; boots Glaze from the emulator's stock Windows CE (`tests/run_ceboot.sh`) and on a real BE-300, to SpringBoard with touch, buttons and apps |
-| `/NAND` on a real BE-300 | Off (`nand=off`): the first NAND read after Windows CE freezes the machine |
-| `/Card` on a real BE-300 | Not mounted: the CF probe reads garbage after Windows CE |
+| `/NAND` on a real BE-300 | Mounts with `nand=ro`, but some sectors read wrong (no ECC correction or bad-sector replacement yet), so `nand=off` is the default |
+| `/Card` on a real BE-300 | Works for the boot card (8-bit transfers); a card re-inserted under Glaze isn't usable yet |
 | Writes to `/NAND` on a real device | Unsafe until Windows CE's spare-area ECC and block replacement are handled (see below) |
 
 ## Using it
@@ -174,6 +174,22 @@ None of these showed in the emulator:
 - **Touch.** The PIU stops after one touch without PADATSTOP; it uses Windows
   CE's settings (`CNT 0x1304`, mask `0xDD`, a 45 ms interval). The resistive
   panel's samples are filtered so that taps don't read as swipes.
+- **CompactFlash.** After Windows CE each 16-bit access of the data register
+  carries one byte, so the driver sets the card's 8-bit mode (SET FEATURES
+  01h) and moves data a byte at a time. A card inserted later gets the
+  socket power-up pcmcia.dll does, which works in the emulator
+  (`--cf-eject-after`/`--cf-insert-after`) but not yet on a real BE-300.
+- **NAND.** Windows CE's nanddisk.dll reads pages by DMA (0x1CC0-0x1CF4) and
+  leaves the engine set up for it; Glaze's PIO reads stalled after it. The
+  kernel now frames operations as Windows CE's kernel does (A400/A408/A40C,
+  CTRL), with the NAND unit's clock at 0x0A001134 first (nanddisk.dll
+  gates it between operations, and gated reads return zeros), turns that
+  DMA off and resets the engine and chip first. Windows CE's volume then
+  mounts, but some sectors read wrong: nanddisk.dll corrects them with the
+  spare area's ECC and redirects bad ones to an alternate area, neither of
+  which Glaze does yet. Turning the DMA off
+  raises GIRQ0 source 12, which the interrupt handler now masks, as it does
+  any source with no driver.
 - **The watchdog.** Casio's power-management microcontroller (ScCmcu,
   0x0A007800) resets the device 150 s after its last reload; Windows CE writes
   0x96 to 0x7814 every ~9 s, and `kernel/drivers/cmcu.c` does the same.
@@ -188,11 +204,12 @@ None of these showed in the emulator:
   until both are understood.
 - **Hardware state.** Glaze's drivers assume what the boot ROM leaves. On a
   real BE-300, Windows CE leaves two of them differently:
-  - the NAND engine: the first stream read stalls the bus (hence `nand=off`);
-  - the CF socket: the ATA probe reads garbage, so `/Card` doesn't mount.
+  - the NAND: Windows CE's data is ECC-corrected and partly remapped by
+    nanddisk.dll, which Glaze doesn't do yet (hence `nand=off`);
+  - the CF socket: a re-inserted card isn't decoded until it is configured,
+    presumably through an attribute window pcmcia.dll maps; not done yet.
 
   The LCD mode is the same.
 - **Memory.** The romfs (about 4.7 MiB) fits only with the object store's free
   pages lent to programs; `mode=probe` reports what Windows CE gives.
-- **Touch calibration.** Glaze maps the panel with fixed ADC ranges; Windows
-  CE's own calibration is in its registry and could be passed in.
+

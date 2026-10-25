@@ -21,7 +21,8 @@
 #include "../drivers.h"
 
 /* Taskfile registers (offsets from CF_ATA_BASE). */
-#define ATA_ERROR       1
+#define ATA_ERROR       1       /* read */
+#define ATA_FEATURES    1       /* write */
 #define ATA_COUNT       2
 #define ATA_LBA0        3
 #define ATA_LBA1        4
@@ -44,6 +45,8 @@
 #define CMD_READ        0x20
 #define CMD_WRITE       0x30
 #define CMD_IDENTIFY    0xEC
+#define CMD_SET_FEATURES 0xEF
+#define FEATURE_8BIT    0x01    /* CF spec: 8-bit data transfers */
 
 /* CIS tuples (PC Card spec, "Card Information Structure"). */
 #define TPL_NULL        0x00
@@ -57,6 +60,7 @@
 
 static struct gz_cf_info info;
 static bool socket_full;         /* the socket status at the last probe */
+static bool booted;              /* cf_init has run: later insertions are hot */
 static uint16_t io_buf[GZ_CF_IO_MAX / 2];
 
 static bool wait_status(uint8_t mask, uint8_t want)
@@ -100,16 +104,26 @@ static int cis_function(void)
     return -1;
 }
 
+/*
+ * Data moves a byte at a time, the card in 8-bit mode (set in identify).
+ * On a real BE-300 after Windows CE, each 16-bit access of the data
+ * register carried one byte with a zero high byte, so IDENTIFY read as
+ * garbage; byte access works whatever the bridge or the card's mode.
+ */
 static void read_sector(uint16_t *buf)
 {
-    for (int i = 0; i < SECTOR / 2; i++)
-        buf[i] = CF_ATA_DATA16;
+    for (int i = 0; i < SECTOR / 2; i++) {
+        uint16_t lo = CF_ATA(0);
+        buf[i] = lo | (uint16_t)CF_ATA(0) << 8;
+    }
 }
 
 static void write_sector(const uint16_t *buf)
 {
-    for (int i = 0; i < SECTOR / 2; i++)
-        CF_ATA_DATA16 = buf[i];
+    for (int i = 0; i < SECTOR / 2; i++) {
+        CF_ATA(0) = (uint8_t)buf[i];
+        CF_ATA(0) = (uint8_t)(buf[i] >> 8);
+    }
 }
 
 /* IDENTIFY strings are big-endian within each word, space padded. */
@@ -141,6 +155,13 @@ static bool identify(void)
     if (!wait_status(ST_DRDY, ST_DRDY))
         return false;
 
+    /* 8-bit transfers (CF spec SET FEATURES 01h); a card that refuses
+     * reports an error, and the transfers below still work byte-wise. */
+    CF_ATA(ATA_FEATURES) = FEATURE_8BIT;
+    CF_ATA(ATA_DEVICE) = DEV_LBA;
+    CF_ATA(ATA_COMMAND) = CMD_SET_FEATURES;
+    (void)wait_status(0, 0);
+
     CF_ATA(ATA_DEVICE) = DEV_LBA;
     CF_ATA(ATA_COMMAND) = CMD_IDENTIFY;
     if (!wait_status(ST_DRQ | ST_ERR, ST_DRQ))
@@ -152,11 +173,42 @@ static bool identify(void)
     return info.sectors != 0;
 }
 
+static void delay_ms(uint32_t ms)
+{
+    uint64_t t0 = time_us();
+    while (time_us() - t0 < ms * 1000u)
+        ;
+}
+
+/* A card inserted after boot is unpowered and unconfigured: power and reset
+ * the socket as pcmcia.dll does on insertion (hw.h), with the PC Card
+ * spec's 300 ms power-up and a settle after reset. At boot Windows CE or
+ * the boot ROM has done this. Enough for the emulator; a real BE-300's card
+ * still reads 0 afterwards, presumably until its configuration register is
+ * set through a mapped attribute window, which isn't done yet. */
+static void socket_power_up(void)
+{
+    PCMCIA_A020 = 0;
+    PCMCIA_A024 = 0;
+    PCMCIA_CTRL = 0;
+    PCMCIA_RESET = PCMCIA_RESET | 1u;
+    PCMCIA_CTRL = 8;
+    PCMCIA_CTRL = 9;
+    delay_ms(300);
+    PCMCIA_RESET = PCMCIA_RESET & ~1u;
+    delay_ms(20);
+    PCMCIA_CTRL = 0x0B;
+    PCMCIA_WINDOWS = 1;
+    PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
+}
+
 static void probe(void)
 {
-    bool was = info.present;
+    bool was = info.present, had = socket_full;
 
     socket_full = card_inserted();
+    if (socket_full && !had && booted)
+        socket_power_up();
     info.present = identify();
     if (info.present || was)
         info.generation++;
@@ -164,16 +216,19 @@ static void probe(void)
         kprintf("cf: %s, %u sectors\n", info.model, info.sectors);
     else if (was)
         kputs("cf: card removed\n");
+    else if (socket_full)
+        kprintf("cf: card not ready (status %x)\n", CF_ATA(ATA_STATUS));
 }
 
 void cf_init(void)
 {
-    if (ne2000_present() || !card_inserted())
-        return;
-    PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
-    probe();
-    if (!info.present)
-        kputs("cf: card is not an ATA disk\n");
+    if (!ne2000_present() && card_inserted()) {
+        PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
+        probe();
+        if (!info.present)
+            kputs("cf: card is not an ATA disk\n");
+    }
+    booted = true;
 }
 
 static int check(struct proc *p)

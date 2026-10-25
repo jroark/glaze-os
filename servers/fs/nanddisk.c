@@ -80,7 +80,7 @@ int nand_disk_open(bool rw)
         cached = UINT32_MAX;
         return 0;
     }
-    return GZ_ENOENT;
+    return GZ_ECORRUPT;              /* no FAT volume in the table */
 }
 
 DSTATUS nand_disk_status(void)
