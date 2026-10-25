@@ -56,6 +56,7 @@ static uint32_t cur_rate, cur_channels;
 static uint32_t next_drain;             /* buffer the DMA finishes next */
 static uint32_t frames_played, underruns;
 static uint32_t diag_starts, diag_drains;
+static uint32_t master_gain = 32768;    /* Q15, set by the audio server */
 
 static void hw_dump(const char *stage)
 {
@@ -164,7 +165,13 @@ static void refill(uint32_t i)
             underruns++;
     }
     mix_in(d, DMA_BYTES / frame * frame);
-
+    /* Scale at the last stage so changing volume affects already queued
+     * music and effects within two DMA buffers, without restarting them. */
+    if (master_gain != 32768) {
+        int16_t *samples = (int16_t *)d;
+        for (uint32_t k = 0; k < DMA_BYTES / 2; k++)
+            samples[k] = (int16_t)((int32_t)samples[k] * (int32_t)master_gain >> 15);
+    }
 }
 
 static void program_buffers(void)
@@ -281,6 +288,18 @@ static int check(struct proc *p)
     if (!(p->flags & PROC_AUDIO))
         return GZ_EPERM;
     return present ? 0 : GZ_ENOENT;
+}
+
+int sys_audio_gain(struct proc *p, uint32_t gain)
+{
+    int rv = check(p);
+
+    if (rv)
+        return rv;
+    if (gain > 32768)
+        return GZ_EINVAL;
+    master_gain = gain;
+    return 0;
 }
 
 int sys_audio_bind(struct proc *p, int port)

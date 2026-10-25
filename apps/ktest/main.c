@@ -804,7 +804,8 @@ static void test_audio(void)
     struct audio_state st;
     uint32_t phase = 0, played = 0, queued = 0;
 
-    CHECK(gz_audio_start(22050, 1) == GZ_EPERM && gz_audio_write(pcm, 4) == GZ_EPERM,
+    CHECK(gz_audio_start(22050, 1) == GZ_EPERM && gz_audio_write(pcm, 4) == GZ_EPERM &&
+          gz_audio_gain(0) == GZ_EPERM,
           "raw audio denied to apps");
 
     /* Stream mode: the clock must follow wall time with no underruns. */

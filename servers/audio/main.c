@@ -864,6 +864,7 @@ int main(void)
         log_msg("no wave output");
         return 1;
     }
+    sound_notify(AUDIO_NOTIFY_RELOAD);  /* master volume before any playback */
     gz_port_register(port, AUDIO_PORT_NAME);
     for (;;) {
         int timeout = 1000;

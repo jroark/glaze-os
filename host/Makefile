@@ -108,6 +108,12 @@ audio-driver-test: ../tests/audio_driver.c ../kernel/drivers/audio.c ../kernel/h
 	../out/host/$@
 .PHONY: audio-driver-test
 
+audio-volume-test: ../tests/audio_volume.c ../servers/audio/sound.c ../lib/media/wav.c ../lib/media/resample.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/$@ ../tests/audio_volume.c ../lib/media/wav.c ../lib/media/resample.c
+	../out/host/$@
+.PHONY: audio-volume-test
+
 stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $^
 	./$@
