@@ -24,8 +24,12 @@ record. Select a network again to reconnect. An unavailable network times
 out after ten seconds and stays down until another explicit selection.
 DHCP and its ten-second static fallback run only while associated; link
 loss clears addresses and DNS. Wi-Fi controls continue working while down.
-Secured networks are displayed as unsupported. WEP/WPA, ad-hoc networking,
-physical-card validation, and live card replacement are outside this version.
+Secured networks are displayed as unsupported. WEP/WPA and ad-hoc networking
+are outside this version. The card can be inserted and pulled at run time
+(`kernel/drivers/cf.c`'s `pcmcia_poll`); on a real BE-300 (station firmware
+1.3.5) it scans with the host scan RID 0xFCE5, which firmware before 1.3.1
+lacks (it falls back to the scan inquiry), and its command deadlines follow
+Linux hostap's. Joining a network is untested on hardware.
 
 ## Interfaces and driver
 
