@@ -107,7 +107,9 @@ static bool wait_isr(uint8_t bits)
 }
 
 /* Remote DMA moves 16-bit words (odd lengths transfer one extra byte), or
- * bytes when !wide. */
+ * bytes when !wide. It is always issued with STA, as Linux ne.c does even
+ * while probing in loopback: a real DP8390 runs no remote DMA stopped, which
+ * the emulator doesn't model. */
 static void dma_read(uint16_t addr, void *dst, uint16_t len)
 {
     uint8_t *d = dst;
@@ -118,7 +120,7 @@ static void dma_read(uint16_t addr, void *dst, uint16_t len)
     NE_REG(RBCR1) = (uint8_t)(n >> 8);
     NE_REG(RSAR0) = (uint8_t)addr;
     NE_REG(RSAR1) = (uint8_t)(addr >> 8);
-    NE_REG(CR) = CR_RREAD | run;
+    NE_REG(CR) = CR_RREAD | CR_STA;
     if (!wide) {
         for (uint16_t i = 0; i < n; i++)
             d[i] = NE_REG(NE_DATA_PORT);
@@ -144,7 +146,7 @@ static void dma_write(uint16_t addr, const uint8_t *src, uint16_t len)
     NE_REG(RBCR1) = (uint8_t)(n >> 8);
     NE_REG(RSAR0) = (uint8_t)addr;
     NE_REG(RSAR1) = (uint8_t)(addr >> 8);
-    NE_REG(CR) = CR_RWRITE | run;
+    NE_REG(CR) = CR_RWRITE | CR_STA;
     if (!wide) {
         for (uint16_t i = 0; i < n; i++)
             NE_REG(NE_DATA_PORT) = src[i];
@@ -267,7 +269,12 @@ static bool ram_works(void)
         pattern[i] = (uint8_t)(0x5A ^ (i * 37));
     dma_write(TX_PAGE << 8, pattern, sizeof(pattern));
     dma_read(TX_PAGE << 8, back, sizeof(back));
-    return !memcmp(pattern, back, sizeof(back));
+    if (!memcmp(pattern, back, sizeof(back)))
+        return true;
+    kprintf("ne2000: %s-wide RAM test reads %02x %02x %02x %02x (wrote %02x %02x %02x %02x), ISR %x\n",
+            wide ? "word" : "byte", back[0], back[1], back[2], back[3], pattern[0], pattern[1],
+            pattern[2], pattern[3], NE_REG(ISR));
+    return false;
 }
 
 /* The station address PROM, the first 32 bytes of card memory: each byte
