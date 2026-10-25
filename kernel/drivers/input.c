@@ -82,11 +82,9 @@ void input_push(uint16_t type, uint16_t code, int x, int y)
 
 static int adc_pos(uint16_t v, uint16_t lo, uint16_t hi, int span, bool invert)
 {
-    if (v < lo)
-        v = lo;
-    if (v > hi)
-        v = hi;
-    int d = invert ? hi - v : v - lo;
+    /* Keep out-of-factory-range positions for calibration. SpringBoard
+     * applies the saved correction before clamping to the LCD. */
+    int d = invert ? (int)hi - v : (int)v - lo;
     return d * (span - 1) / (hi - lo);
 }
 
@@ -184,8 +182,6 @@ static void read_page(uint32_t base)
         n++;
     }
     y = n ? y / n : adc_pos(yp, ADC_Y_MIN, ADC_Y_MAX, PANEL_H, false);
-    if (y >= FB_HEIGHT)
-        y = FB_HEIGHT - 1;
 
     touch_sample(x, y);
 }

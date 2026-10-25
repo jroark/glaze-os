@@ -1,0 +1,12 @@
+# Use --install-from-files: Documents contains SomaFM.gzp and Welcome.txt.
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+6500 tap 120 64
+8500 tap 120 64
+10500 tap 120 242
+15000 tap 120 203
+16000 key home
+18000 tap 90 192
+20000 key ok
+40000 key home
+42000 tap 90 192

@@ -23,6 +23,8 @@ void cmcu_tick(void);
 
 /* input.c: touch panel and buttons. */
 void input_init(void);
+/* display.c: physical backlight and panel contrast, stock BE-300 levels. */
+int display_set(int brightness, int contrast);
 void input_push(uint16_t type, uint16_t code, int x, int y);
 void stowaway_init(void);
 void stowaway_poll(void);

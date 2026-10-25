@@ -75,6 +75,7 @@ enum {
     SYS_NAND_PROG,
     SYS_NAND_ERASE,
     SYS_MUNMAP_ANON,        /* free a whole SYS_MMAP_ANON allocation at a0 */
+    SYS_DISPLAY_SET,        /* privileged: a0 = native brightness, a1 = contrast */
     SYS_COUNT
 };
 

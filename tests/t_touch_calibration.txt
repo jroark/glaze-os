@@ -1,0 +1,14 @@
+# Settings > Touch Calibration: simulate a panel offset by +35,+35.
+# Sampling bypasses screen clipping, including the bottom targets at y=331.
+# Run for 17 seconds. Final page must say "Calibration saved."
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 237
+7500 tap 120 72
+8500 tap 155 203
+9500 tap 59 75
+10500 tap 251 75
+11500 tap 251 331
+12500 tap 59 331
+# The saved mapping must correct this tap to the Save button (176,291).
+14500 tap 211 326

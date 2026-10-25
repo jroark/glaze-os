@@ -1,0 +1,9 @@
+# Preinstall SomaFM as the only package (tests/run_somafm.py).
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+6000 key ok
+12000 tap 120 288
+18000 key home
+20000 tap 210 62
+30000 key home
+32000 tap 90 192

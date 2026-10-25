@@ -45,6 +45,9 @@ static uint32_t pool_count;
 
 /* Seed material for the DRBG: SHA-256 output keyed by a pool of the saved
  * seed and noise, with fresh noise mixed into every request. */
+/* Shared wolfSSL resolves these callbacks from the executable. Browser
+ * objects otherwise use hidden visibility for the JavaScript engine. */
+__attribute__((visibility("default")))
 int glaze_tls_seed(unsigned char *out, unsigned int n)
 {
     uint8_t buf[WC_SHA256_DIGEST_SIZE + 64 + 4];
@@ -74,6 +77,7 @@ int glaze_tls_seed(unsigned char *out, unsigned int n)
     return 0;
 }
 
+__attribute__((visibility("default")))
 time_t glaze_tls_time(time_t *t)
 {
     time_t now = (time_t)plat_time();

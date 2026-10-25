@@ -22,7 +22,7 @@ int main(int argc, char **argv)
     assert(text);
     assert(fread(text, 1, n, f) == (size_t)n);
     fclose(f);
-    assert(store_parse(&catalog, text, n) && catalog.count == 8);
+    assert(store_parse(&catalog, text, n) && catalog.count >= 9);
     assert(store_matches(&catalog.apps[0], "HELLO") && store_matches(&catalog.apps[0], "glaze") &&
            !store_matches(&catalog.apps[0], "not-an-app"));
     assert(!strcmp(catalog.apps[3].id,"minesweeper") && store_matches(&catalog.apps[3],"MINEFIELD"));
@@ -30,6 +30,13 @@ int main(int argc, char **argv)
     assert(!strcmp(catalog.apps[5].id,"taskmanager") && store_matches(&catalog.apps[5],"CPU"));
     assert(!strcmp(catalog.apps[6].id,"aim") && store_matches(&catalog.apps[6],"buddies"));
     assert(!strcmp(catalog.apps[7].id,"gmail") && store_matches(&catalog.apps[7],"IMAPS"));
+    bool radio_found = false;
+    for (int i = 0; i < catalog.count; i++)
+        if (!strcmp(catalog.apps[i].id, "somafm")) {
+            assert(store_matches(&catalog.apps[i], "radio") && store_matches(&catalog.apps[i], "Ethernet"));
+            radio_found = true;
+        }
+    assert(radio_found);
     for (long i = 0; i < n; i++) {
         char c = text[i];
         text[i] = 0;

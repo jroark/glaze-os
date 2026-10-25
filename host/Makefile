@@ -127,6 +127,30 @@ store-http-test: libwolfssl.a
 	python3 ../tests/store_transport.py
 .PHONY: store-http-test
 
+radio-test: ../tests/radio_protocol.c ../servers/audio/radio_protocol.c ../servers/audio/radio_mp3.c
+	@mkdir -p ../out/host
+	$(CC) $(MEDIA_CFLAGS) -o ../out/host/radio-test $^ $(wildcard ../third_party/helix-mp3/*.c ../third_party/helix-mp3/real/*.c)
+	../out/host/radio-test ../userdata/Music/Demo.mp3
+.PHONY: radio-test
+
+radio-worker-test: libwolfssl.a
+	@mkdir -p ../out/host
+	$(CC) $(MEDIA_CFLAGS) -I../apps/browser -I../third_party/wolfssl -I../apps/browser/tls \
+	    -DWOLFSSL_USER_SETTINGS -include ../tests/radio_host.h -o ../out/host/radio-worker-test \
+	    ../tests/radio_worker.c ../servers/audio/radio.c ../servers/audio/radio_protocol.c ../servers/audio/radio_mp3.c \
+	    ../apps/browser/conn.c ../apps/browser/tls.c ../apps/browser/url.c \
+	    $(wildcard ../third_party/helix-mp3/*.c ../third_party/helix-mp3/real/*.c) libwolfssl.a -lpthread
+	python3 ../tests/radio_transport.py
+.PHONY: radio-worker-test
+
+somafm-ui-test: ../tests/somafm_ui.c ../tests/somafm_sys.h ../packages/somafm/main.c ../packages/somafm/stations.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -include ../tests/somafm_sys.h \
+	    -o ../out/host/somafm-ui-test ../tests/somafm_ui.c hostres.c $(GFX) \
+	    ../lib/ui/widgets.c ../lib/ui/list.c ../lib/ui/text.c
+	../out/host/somafm-ui-test
+.PHONY: somafm-ui-test
+
 # Scalar pixel oracles for clipping, alpha, dithering and three-slice sampling.
 gfx-test: ../tests/gfx.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
 	@mkdir -p ../out/host
@@ -134,13 +158,26 @@ gfx-test: ../tests/gfx.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
 	../out/host/gfx-test
 .PHONY: gfx-test
 
-settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main.c
+settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main.c ../lib/libc/touch.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/settings_sys.h \
 	    -o ../out/host/settings-test ../tests/settings.c hostres.c $(GFX) \
-	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c
+	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c
 	../out/host/settings-test
 .PHONY: settings-test
+
+touch-calibration-test: ../tests/touch_calibration.c ../lib/libc/touch.c ../servers/springboard/calibration.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/touch-calibration-test $^
+	../out/host/touch-calibration-test
+.PHONY: touch-calibration-test
+
+display-test: ../tests/display.c ../tests/display_sys.h ../kernel/drivers/display.c ../servers/springboard/display.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/display_sys.h \
+	    -o ../out/host/display-test ../tests/display.c ../servers/springboard/display.c
+	../out/host/display-test
+.PHONY: display-test
 
 taskmanager-test: ../tests/taskmanager.c ../tests/taskmanager_sys.h ../packages/taskmanager/main.c ../packages/taskmanager/monitor.c
 	@mkdir -p ../out/host

@@ -1,0 +1,16 @@
+# Home during sampling, then retry and let the preview expire.
+# Run for 50 seconds. Final page must say "Calibration cancelled."
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 237
+7500 tap 120 72
+8500 down 120 168
+9000 key home
+9500 up 120 168
+11000 tap 150 285
+12500 tap 120 72
+13500 tap 120 168
+14500 tap 24 40
+15500 tap 216 40
+16500 tap 216 296
+17500 tap 24 296

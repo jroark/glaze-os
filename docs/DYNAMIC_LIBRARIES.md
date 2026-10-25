@@ -11,7 +11,9 @@ the audio server, which the kernel also starts, is dynamic.
 network and audio clients, and BSD socket wrappers. `libgfx.so.1` owns
 graphics and font resources; `libui.so.1` owns widgets and the app client.
 `libmedia.so.1` holds the WAV/ADPCM/AVI/MP3-probe/resampling code the audio
-server and Videos both use. Each has an explicit export map. lwIP,
+server and Videos both use. `libwolfssl.so.1` shares TLS code between Browser,
+App Store and audio; its RNG and time callbacks resolve from each executable
+and its contexts remain private to that process. Each has an explicit export map. lwIP,
 Dhara/littlefs, Browser's engine and the Helix MP3 decoder (in `bin/audio`,
 from a private PIC archive) still have one consumer each, so moving them into
 separate libraries would add loader and file overhead without removing copies. Internal helpers stay private to their library.

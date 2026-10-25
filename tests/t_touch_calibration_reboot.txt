@@ -1,0 +1,7 @@
+# Reuse the filesystem from t_touch_calibration (FS_FROM in tests/run.sh).
+# These offset taps rely on the saved -35,-35 mapping loaded at boot.
+# Run for 12 seconds. Final page must say "Factory calibration restored."
+3000 drag 75 315 270 315 500
+4500 tap 185 320
+6500 tap 155 272
+8000 tap 155 138

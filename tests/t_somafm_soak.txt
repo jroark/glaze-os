@@ -1,0 +1,8 @@
+# Ten minutes with the UI suspended while Calculator is open.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+6000 key ok
+18000 key home
+20000 tap 210 62
+640000 key home
+642000 tap 90 192

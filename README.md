@@ -76,6 +76,22 @@ path, `tests/touch.sh` drives the emulator window with xdotool on an X display
 Xvfb :99 & DISPLAY=:99 tests/touch.sh tests/touch_unlock.act
 ```
 
+Settings > Touch Calibration aligns the stylus with five targets, then gives
+you 30 seconds to test and save the result. Home or Esc cancels; Restore
+Defaults removes the saved correction. The correction applies to the lock
+screen, home screen and all apps, and survives reboot.
+
+Settings > Display adjusts the physical backlight and LCD contrast, with
+live sliders, saved levels and Restore Defaults. See [Display controls](docs/DISPLAY.md)
+for hardware details and validation.
+
+Run `make -C host touch-calibration-test settings-test ui-events-test` for
+native calibration and UI checks. For emulator coverage, run
+`tests/run.sh tests/t_touch_calibration.txt 18`, then
+`FS_FROM=out/shots/t_touch_calibration/glaze.bin tests/run.sh tests/t_touch_calibration_reboot.txt 12`.
+The first run saves a deliberately offset calibration; the second loads it
+at boot and restores the factory defaults.
+
 ## Memory map
 
 | NAND offset | Contents |
@@ -218,6 +234,11 @@ the guest reaches whatever the host can. Without a card, the network server
 reports "No Card" and calls fail with `GZ_ENETDOWN`.
 
 ## Audio
+
+The installable **SomaFM** app streams 51 internet-radio stations, with
+favorites, current-track metadata, and playback that continues after Home.
+It requires the updated audio service and an Ethernet card.
+See [SomaFM radio](docs/SOMAFM.md) for installation and verification.
 
 The BE-300's speaker is fed by a ping-pong DMA block in the companion chip,
 not the VRC4173's AIU; its registers come from WinCE's `wavedev.dll`, as

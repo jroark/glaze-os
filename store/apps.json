@@ -82,5 +82,11 @@
     "developer": "Glaze",
     "summary": "TurboGrafx-16 HuCards, ready to play.",
     "description": "Play TurboGrafx-16 and PC Engine HuCards with the BE-300 buttons: OK and Esc for I and II, and Run and Select from the pause menu. Copy your own .pce files to Documents or a card, or try the included Glaze demo. Saves are kept, and Home suspends your game. No BIOS, commercial cards or CD games are included."
+  },
+  {
+    "id": "somafm",
+    "developer": "Glaze",
+    "summary": "SomaFM radio, live on your Glaze.",
+    "description": "Listen to 51 SomaFM stations, save your favorites, and see the current song. Music keeps playing when you return Home or open another app. An unofficial player for personal listening; SomaFM is listener supported. Requires an Ethernet card and a Glaze OS version with radio playback support."
   }
 ]
