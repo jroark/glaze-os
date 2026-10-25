@@ -343,15 +343,17 @@ SOUND_FILES := $(wildcard assets/sounds/*)
 
 ROMFS_BINS := $(foreach p,$(PROGS),$(OUT)/romfs/bin/$(p))
 
-$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) tools/mkromfs.py
-	$(PYTHON) tools/mkromfs.py $@ \
-	    $(foreach p,$(PROGS),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
+# mkromfs arguments for programs $(1) and assets $(2).
+ROMFS_ARGS = $(foreach p,$(1),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
 	    $(foreach l,$(ROMFS_LIBRARY_FILES),lib/$(notdir $(l))=$(l)) \
-	    $(foreach a,$(ASSET_FILES),res/$(notdir $(a))=$(a)) \
+	    $(foreach a,$(2),res/$(notdir $(a))=$(a)) \
 	    $(foreach w,$(WEB_FILES),web/$(notdir $(w))=$(w)) \
 	    $(foreach c,$(SSL_FILES),ssl/$(notdir $(c))=$(c)) \
 	    $(foreach s,$(SOUND_FILES),sounds/$(notdir $(s))=$(s)) \
 	    $(if $(INPUT_SCRIPT),test/input.txt=$(INPUT_SCRIPT))
+
+$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) tools/mkromfs.py
+	$(PYTHON) tools/mkromfs.py $@ $(call ROMFS_ARGS,$(PROGS),$(ASSET_FILES))
 
 # ---- kernel -----------------------------------------------------------------
 
@@ -522,8 +524,23 @@ $(GB_DIR)/kernel.bin: $(OUT)/kernel.elf tools/mkkernelbin.py
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/mkkernelbin.py $< $@
 
-$(GB_DIR)/romfs.img: $(OUT)/romfs.img
-	cp $< $@
+# A RAM boot holds all of romfs in RAM, so GlazeBoot's carries only the apps
+# in GB_APPS (SpringBoard shows the built-ins it finds), with their icons;
+# servers and test programs always go in. GB_APPS=all keeps every app.
+GB_APPS ?= appstore browser settings
+GB_TEST_PROGS := ktest ktest_pong ldtest ldtest_peer ldtest_ro ldtest_oom ldmem
+ifeq ($(GB_APPS),all)
+GB_DROP :=
+else
+GB_DROP := $(filter-out $(GB_APPS) $(GB_TEST_PROGS),$(notdir $(wildcard apps/*)))
+endif
+GB_PROGS := $(filter-out $(GB_DROP),$(PROGS))
+GB_ASSETS := $(filter-out $(foreach a,$(GB_DROP),assets/gen/icon_$(a).gzi) \
+    $(if $(filter clock,$(GB_DROP)),assets/gen/tab_%.gzi),$(ASSET_FILES))
+
+$(GB_DIR)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) tools/mkromfs.py FORCE
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/mkromfs.py $@ $(call ROMFS_ARGS,$(GB_PROGS),$(GB_ASSETS))
 
 $(GB_DIR)/glaze.cfg: wince/glazeboot/glaze.cfg
 	@mkdir -p $(dir $@)

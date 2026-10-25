@@ -4,6 +4,12 @@
 
 #include <stdio.h>
 
+bool sb_has_program(const char *path)
+{
+    (void)path;
+    return true;
+}
+
 int main(void)
 {
     static uint16_t px[240 * 320];

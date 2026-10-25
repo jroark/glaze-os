@@ -206,6 +206,16 @@ None of these showed in the emulator:
   0x0A007800) resets the device 150 s after its last reload; Windows CE writes
   0x96 to 0x7814 every ~9 s, and `kernel/drivers/cmcu.c` does the same.
 
+## Apps in a RAM boot
+
+A RAM boot copies all of romfs into RAM, unlike a NAND boot, which pages it in
+on demand. GlazeBoot's `romfs.img` therefore carries only the apps named in
+`GB_APPS` (default `appstore browser settings`; `make glazeboot GB_APPS=all`
+keeps them all), their icons, the servers, and the test programs. The NAND
+image is unchanged. SpringBoard shows a built-in app only when romfs holds its
+program. The default saves about 580 KiB, leaving about 8.3 MiB free at
+SpringBoard on the emulator.
+
 ## Known gaps
 
 - **Writes to Windows CE's NAND.** Reads go through Windows CE's block table

@@ -106,6 +106,8 @@ extern const char *const sb_wallpapers[];
 extern const int sb_num_wallpapers;
 
 void sb_draw_init(void);
+/* Whether romfs holds program `path` (main.c; true in the host preview). */
+bool sb_has_program(const char *path);
 /* An installed app's icon (NULL for the generic one); data must stay alive. */
 void sb_set_icon(int app, const gfx_image *img);
 void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt);

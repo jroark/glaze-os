@@ -149,6 +149,7 @@ and shared text editor.
 - GlazeBoot is a Windows CE program, not a Glaze one, and lives outside `apps/`. The loader (`wince/glazeboot/GlazeBoot.c`) is C built with the be300-dev toolchain (clang and the Casio SDK; `make glazeboot-exe`, natively, since `./build.sh` runs in a container). `make glazeboot` supplies its generated headers in `out/glazeboot/gen`:
   - `tramp_blob.h`: the trampoline (`tramp.c`, position independent) as bytes;
   - `glazeboot_abi.h`: shared layouts from `wince/glazeboot/mkabi.c`.
+- Its `romfs.img` is GlazeBoot's own: a RAM boot holds all of romfs in RAM, so it carries only the apps in `GB_APPS` (default `appstore browser settings`; `GB_APPS=all` for every app) and their icons, plus servers and test programs. SpringBoard shows only the built-in apps whose program romfs holds (`sb_has_program`).
 - It loads `kernel.bin` (`tools/mkkernelbin.py`) and `romfs.img` from a CF card (`tools/mkceboot.sh --autorun` makes one that Windows CE starts on insertion). The trampoline runs the page plan in `plan.h`. Until the console works, each stage paints the boot trace (`gz_boot_trace`, `glaze/bootinfo.h`) across the top of the screen.
 - The kernel gets a0 = `struct gz_bootinfo` (the SPL passes 0). `ram_boot` is then set:
   - romfs pages come straight from reserved RAM, with no cache;

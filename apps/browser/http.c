@@ -317,6 +317,17 @@ static int body_bytes(struct http *h, const uint8_t *d, int n)
 }
 
 /* Content coding, once the body is complete. */
+/* A body that won't decode, with enough to tell truncation, bad data and
+ * a failed allocation apart. */
+static int decode_failed(struct http *h, const char *ce, const char *why)
+{
+    const uint8_t *d = h->body;
+    printf("browser: %s body of %d bytes (Content-Length %d) won't decode: %s; starts %02x %02x %02x %02x\n",
+           ce, h->body_len, h->content_length, why, h->body_len > 0 ? d[0] : 0,
+           h->body_len > 1 ? d[1] : 0, h->body_len > 2 ? d[2] : 0, h->body_len > 3 ? d[3] : 0);
+    return WE_DECODE;
+}
+
 static int decode_body(struct http *h)
 {
     if (h->sink) return 0;
@@ -330,7 +341,7 @@ static int decode_body(struct http *h)
     if (strstr(ce, "gzip")) {
         /* RFC 1952 header, then raw deflate. */
         if (n < 18 || d[0] != 0x1F || d[1] != 0x8B || d[2] != 8)
-            return WE_DECODE;
+            return decode_failed(h, ce, "no gzip header");
         int flags = d[3], off = 10;
         if (flags & 4)
             off += 2 + (d[off] | d[off + 1] << 8);
@@ -343,7 +354,7 @@ static int decode_body(struct http *h)
         if (flags & 2)
             off += 2;
         if (off >= n)
-            return WE_DECODE;
+            return decode_failed(h, ce, "gzip header runs past the body");
         d += off;
         n -= off;
         zlib = false;
@@ -352,7 +363,7 @@ static int decode_body(struct http *h)
     }
     uint8_t *out = web_inflate(d, n, zlib, &out_len);
     if (!out)
-        return WE_DECODE;
+        return decode_failed(h, ce, "inflate failed (bad or cut-off data, or out of memory)");
     if (out_len > h->max_body) {
         free(out);
         return WE_TOO_BIG;

@@ -217,6 +217,14 @@ static void update_clock(bool force)
     sb_clock_from(&view.clk, &dt);
 }
 
+bool sb_has_program(const char *path)
+{
+    uint32_t size;
+
+    /* Only address space: romfs pages come in on first touch. */
+    return gz_romfs_map(path, &size) != NULL;
+}
+
 static bool update_card_status(void)
 {
     struct fs_stat st;
