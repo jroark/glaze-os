@@ -84,7 +84,12 @@ void irq_dispatch_ip2(void)
                 (PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) == PCMCIA_CARD_IN)
                 KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
         }
-        if (pending & KJ_INT_AUDIO)
+        if (pending & KJ_INT_AUDIO) {
+            /* WinCE's OAL masks the source before handing it to wavedev.
+             * In particular a pending level without drained-buffer bits
+             * must not retrigger forever. The timer also polls audio. */
+            KJ_SRC_EN &= ~AUD_SRC_EN_BIT;
             audio_irq();
+        }
     }
 }

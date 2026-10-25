@@ -102,6 +102,12 @@ nand-ecc-test: ../tests/nand_ecc.c ../kernel/drivers/nand_ecc.c ../kernel/driver
 	./$@
 .PHONY: nand-ecc-test
 
+audio-driver-test: ../tests/audio_driver.c ../kernel/drivers/audio.c ../kernel/hw.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fno-strict-aliasing -fsanitize=address,undefined -o ../out/host/$@ ../tests/audio_driver.c
+	../out/host/$@
+.PHONY: audio-driver-test
+
 stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $^
 	./$@
