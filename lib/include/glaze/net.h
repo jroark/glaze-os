@@ -53,6 +53,7 @@ enum {
     NET_SHUTDOWN,       /* w2 = socket, w3 = NET_SHUT_* */
     NET_NAME,           /* w2 = socket, w3 = 0 local / 1 peer -> w1 = address, w2 = port */
     NET_WIFI_STATUS, NET_WIFI_SCAN, NET_WIFI_CONNECT, NET_WIFI_DISCONNECT,
+    NET_WIFI_CONNECT_SECURE, NET_WIFI_FORGET,
 };
 
 #define NET_MSG_DONTWAIT    0x1     /* send: queue what fits, GZ_ETIMEDOUT if nothing */

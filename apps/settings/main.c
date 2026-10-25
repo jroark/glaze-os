@@ -16,7 +16,7 @@
 #include <string.h>
 
 enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
-            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI };
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -31,6 +31,8 @@ enum {
     R_DISPLAY, R_BRIGHTNESS, R_CONTRAST, R_DISPLAY_RESET,
     R_TIMEOUT, R_TIMEOUT0, R_TIMEOUT_LAST = R_TIMEOUT0 + 5,
     R_WIFI, R_WIFI_SCAN, R_WIFI_DISCONNECT, R_WIFI_AP0,
+    R_WIFI_FORGET = R_WIFI_AP0 + WIFI_AP_MAX, R_WIFI_SECURITY, R_WIFI_EDIT, R_WIFI_SHOW,
+    R_WIFI_KEY_INDEX, R_WIFI_AUTH, R_WIFI_JOIN, R_WIFI_DONE,
 };
 
 struct hit {
@@ -46,6 +48,26 @@ static int preview_wall;
 static char ping_result[24];
 static struct wifi_status wireless_status;
 static bool wifi_available;
+static int wifi_error;
+static struct wifi_credentials wifi_entry;
+static char wifi_password[65];
+static int wifi_cursor;
+static bool wifi_show, wifi_editing;
+static struct ui_keyboard wifi_keyboard;
+static const char *const wifi_security_names[] = {"Open", "WEP", "WPA Personal", "WPA2 Personal"};
+static const char *wifi_error_text(int error)
+{
+    switch (error) {
+    case WIFI_EUNSUPPORTED: return "Security unavailable on this card";
+    case WIFI_EAUTH: return "Authentication failed. Check key.";
+    case WIFI_ERANDOM: return "Secure random seed unavailable";
+    case GZ_EINVAL: return "Check key format and length";
+    case GZ_ENOENT: return "Network unavailable";
+    case GZ_ETIMEDOUT: return "Connection timed out";
+    default: return "Wi-Fi request failed";
+    }
+}
+
 static uint32_t root_card;              /* the card and state the root list shows */
 
 /* What the root list depends on: whether there's a card, which, and its
@@ -57,15 +79,15 @@ static uint32_t card_key(struct net_status *st)
         memset(st, 0, sizeof(*st));
         st->state = NET_NO_CARD;
     }
-    wifi_available = st->state != NET_NO_CARD && st->kind == GZ_NET_XI825;
+    wifi_available = st->state != NET_NO_CARD && (st->kind == GZ_NET_XI825 || st->kind == GZ_NET_WL54CF);
     return st->state | (uint32_t)st->kind << 8;
 }
-static int wifi_error;
 static const char *wifi_name(uint32_t state)
 {
     switch (state) {
     case WIFI_CONNECTING: return "Connecting" GFX_CH_ELLIPSIS;
-    case WIFI_CONNECTED: return "Associated";
+    case WIFI_CONNECTED: return "Connected";
+    case WIFI_AUTHENTICATING: return "Authenticating" GFX_CH_ELLIPSIS;
     case WIFI_FAILED: return "Connection failed";
     case WIFI_DISCONNECTED: return "Disconnected";
     default: return "No Card";
@@ -562,9 +584,9 @@ static void draw_wifi(gfx_surface *s)
     gfx_rect_intersect(s->clip, area, &c.clip);
     const struct wifi_status *st = &wireless_status;
     unsigned count = MIN(st->count, WIFI_AP_MAX);
-    zone_scroll.content_h = 24 + 2 * UI_ROW_H + 14 + MAX(count, 1u) * UI_ROW_H;
+    zone_scroll.content_h = 38 + 3 * UI_ROW_H + 14 + MAX(count, 1u) * UI_ROW_H;
     if (wifi_error || st->error) zone_scroll.content_h += UI_ROW_H + 14;
-    if (st->state == WIFI_CONNECTED || st->state == WIFI_CONNECTING)
+    if (st->state == WIFI_CONNECTED || st->state == WIFI_CONNECTING || st->state == WIFI_AUTHENTICATING)
         zone_scroll.content_h += 14 + UI_ROW_H;
     if (st->state == WIFI_CONNECTED) zone_scroll.content_h += 14 + 6 * UI_ROW_H;
     if (!zone_scroll.dragging && !zone_scroll.animating)
@@ -576,13 +598,13 @@ static void draw_wifi(gfx_surface *s)
     section_gap();
     if (wifi_error || st->error) {
         int err = wifi_error ? wifi_error : st->error;
-        cell(&c, 0, err == GZ_ETIMEDOUT ? "Connection timed out" : "Wi-Fi request failed", NULL, false, 0);
+        cell(&c, 0, wifi_error_text(err), NULL, false, 0);
         section_gap();
     }
     if (!st->count) cell(&c, 0, st->scanning ? "Searching for networks" : "No networks found", NULL, false, 0);
     for (unsigned i = 0; i < MIN(st->count, WIFI_AP_MAX); i++) {
         char name[33]; wifi_ssid(name, &st->aps[i]);
-        bool enabled = !st->aps[i].privacy && st->state != WIFI_CONNECTING;
+        bool enabled = st->state != WIFI_CONNECTING && st->state != WIFI_AUTHENTICATING;
         cell(&c, st->count == 1 ? 0 : i == 0 ? 1 : i + 1 == st->count ? 3 : 2,
              "", NULL, enabled, enabled ? R_WIFI_AP0 + i : 0);
         /* Clip long SSIDs before the disclosure icon or security label. */
@@ -591,9 +613,9 @@ static void draw_wifi(gfx_surface *s)
         gfx_rect_intersect(c.clip, r, &label.clip);
         gfx_text(&label, r.x, r.y + 7, ui_font(FONT_B13), name, UI_TEXT, 255);
         if (st->aps[i].privacy)
-            gfx_text(&c, 145, r.y + 8, ui_font(FONT_R12), "Unsupported", UI_TEXT_DETAIL, 255);
+            gfx_text(&c, 145, r.y + 8, ui_font(FONT_R12), "Secured", UI_TEXT_DETAIL, 255);
     }
-    if (st->state == WIFI_CONNECTED || st->state == WIFI_CONNECTING) {
+    if (st->state == WIFI_CONNECTED || st->state == WIFI_CONNECTING || st->state == WIFI_AUTHENTICATING) {
         char name[33], text[32]; wifi_ssid(name, &st->current);
         section_gap();
         cell(&c, 0, "Disconnect", NULL, true, R_WIFI_DISCONNECT);
@@ -613,8 +635,58 @@ static void draw_wifi(gfx_surface *s)
             cell(&c, 3, "Rate", text, false, 0);
         }
     }
+    section_gap();
+    cell(&c, 0, "Forget Network", NULL, true, R_WIFI_FORGET);
     ui_draw_navbar(s, "Wi-Fi", "Settings", &back_rect, 0);
     add_hit(back_rect, R_BACK);
+}
+
+static void wifi_button(gfx_surface *s, int y, const char *text, int id)
+{
+    gfx_rect r = gfx_r(10, y, 220, 24);
+    ui_draw_button(s, r, text, pressed == id); add_hit(r, id);
+}
+static void draw_wifi_credentials(gfx_surface *s)
+{
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, 0, UI_W, UI_H));
+    ui_draw_navbar(s, "Join Network", "Wi-Fi", &back_rect, 0); add_hit(back_rect, R_BACK);
+    struct wifi_ap ap = {0}; ap.ssid_len = wifi_entry.network.ssid_len;
+    memcpy(ap.ssid, wifi_entry.network.ssid, ap.ssid_len);
+    char name[33]; wifi_ssid(name, &ap);
+    gfx_text(s, 12, 47, ui_font(FONT_B13), name, UI_TEXT, 255);
+    char password[65]; unsigned n = strlen(wifi_password);
+    memset(password, '*', n); password[n] = 0;
+    if (wifi_show) memcpy(password, wifi_password, n+1);
+    gfx_rect field = gfx_r(10, 66, 220, 29);
+    gfx_round_rect(s, field, 5, 0xFFFFFF, 255);
+    gfx_surface clipped = *s; gfx_rect_intersect(s->clip, gfx_r(16, 68, 207, 25), &clipped.clip);
+    const char *shown = n ? password : "Password / WEP key";
+    /* Keep the end of long keys visible while typing. */
+    int x = 17;
+    if (n) x -= MAX(0, gfx_text_width(ui_font(FONT_R12), shown) - 202);
+    gfx_text(&clipped, x, 74, ui_font(FONT_R12), shown, n ? UI_TEXT : UI_TEXT_DETAIL, 255);
+    if (wifi_editing) {
+        password[MIN((unsigned)wifi_cursor, n)] = 0;
+        int caret = n ? x + gfx_text_width(ui_font(FONT_R12), password) : 17;
+        gfx_line(&clipped, caret, 72, caret, 87, UI_TEXT, 255);
+    }
+    memset(password, 0, sizeof(password)); add_hit(field, R_WIFI_EDIT);
+    if (wifi_editing) {
+        wifi_button(s, 103, wifi_show ? "Hide Password" : "Show Password", R_WIFI_SHOW);
+        wifi_button(s, 130, "Done", R_WIFI_DONE);
+        if (ui_keyboard_height()) ui_draw_keyboard(s, &wifi_keyboard, UI_H - ui_keyboard_height());
+    } else {
+        wifi_button(s, 102, wifi_security_names[wifi_entry.security], R_WIFI_SECURITY);
+        if (wifi_entry.security == WIFI_WEP) {
+            char slot[32]; snprintf(slot, sizeof(slot), "WEP key slot: %u", wifi_entry.key_index+1);
+            wifi_button(s, 136, slot, R_WIFI_KEY_INDEX);
+            wifi_button(s, 170, wifi_entry.shared_auth ? "Authentication: Shared" : "Authentication: Open", R_WIFI_AUTH);
+        } else wifi_button(s, 136, wifi_show ? "Hide Password" : "Show Password", R_WIFI_SHOW);
+        bool supported = wireless_status.capabilities & WIFI_CAP(wifi_entry.security);
+        wifi_button(s, 212, supported ? "Join" : "Security unavailable on this card", R_WIFI_JOIN);
+        if (wifi_error) gfx_text(s, 10, 252, ui_font(FONT_R12), wifi_error_text(wifi_error), UI_TEXT_DETAIL, 255);
+    }
 }
 
 static gfx_rect pin_area(void)
@@ -767,6 +839,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_ABOUT: draw_about(s); break;
     case V_NETWORK: draw_network(s); break;
     case V_WIFI: draw_wifi(s); break;
+    case V_WIFI_CREDENTIALS: draw_wifi_credentials(s); break;
     case V_PASSCODE: draw_passcode(s); break;
     case V_PIN: draw_pin(s); break;
     case V_SOUNDS: draw_sounds(s); break;
@@ -1156,13 +1229,46 @@ static void activate(int id)
         go(V_WIFI, true);
         return;
     }
-    if (view == V_WIFI && (id == R_WIFI_SCAN || id == R_WIFI_DISCONNECT ||
+    if (view == V_WIFI_CREDENTIALS) {
+        if (id == R_BACK) {
+            memset(&wifi_entry, 0, sizeof(wifi_entry)); memset(wifi_password, 0, sizeof(wifi_password));
+            wifi_editing = wifi_show = false; go(V_WIFI, false); return;
+        }
+        if (id == R_WIFI_EDIT) wifi_editing = true;
+        else if (id == R_WIFI_DONE) wifi_editing = false;
+        else if (id == R_WIFI_SHOW) wifi_show = !wifi_show;
+        else if (id == R_WIFI_SECURITY) { wifi_entry.security = (wifi_entry.security+1)%4; wifi_entry.key_index=wifi_entry.shared_auth=0; }
+        else if (id == R_WIFI_KEY_INDEX) wifi_entry.key_index = (wifi_entry.key_index+1)%4;
+        else if (id == R_WIFI_AUTH) wifi_entry.shared_auth = !wifi_entry.shared_auth;
+        else if (id == R_WIFI_JOIN) {
+            wifi_entry.key_len = wifi_entry.security == WIFI_OPEN ? 0 : strlen(wifi_password);
+            memset(wifi_entry.key, 0, sizeof(wifi_entry.key)); memcpy(wifi_entry.key, wifi_password, wifi_entry.key_len);
+            wifi_error = wifi_credentials_validate(&wifi_entry);
+            if (!wifi_error) wifi_error = net_wifi_connect_secure(&wifi_entry);
+            memset(wifi_entry.key, 0, sizeof(wifi_entry.key));
+            if (!wifi_error) {
+                memset(&wifi_entry, 0, sizeof(wifi_entry)); memset(wifi_password, 0, sizeof(wifi_password));
+                wifi_show = wifi_editing = false; net_wifi_status(&wireless_status); go(V_WIFI, false);
+            }
+        }
+        return;
+    }
+    if (view == V_WIFI && (id == R_WIFI_SCAN || id == R_WIFI_DISCONNECT || id == R_WIFI_FORGET ||
                            (id >= R_WIFI_AP0 && id < R_WIFI_AP0 + WIFI_AP_MAX))) {
         if (id == R_WIFI_SCAN) wifi_error = net_wifi_scan();
         else if (id == R_WIFI_DISCONNECT) wifi_error = net_wifi_disconnect();
+        else if (id == R_WIFI_FORGET) wifi_error = net_wifi_forget();
         else {
             unsigned index = id - R_WIFI_AP0;
-            if (index >= wireless_status.count || wireless_status.aps[index].privacy) return;
+            if (index >= wireless_status.count) return;
+            if (wireless_status.aps[index].privacy) {
+                const struct wifi_ap *ap = &wireless_status.aps[index];
+                memset(&wifi_entry, 0, sizeof(wifi_entry)); memset(wifi_password, 0, sizeof(wifi_password));
+                wifi_entry.network.ssid_len = ap->ssid_len; memcpy(wifi_entry.network.ssid, ap->ssid, ap->ssid_len);
+                wifi_entry.security = ap->ie_len ? (ap->ie[0] == 48 ? WIFI_WPA2_PSK : WIFI_WPA_PSK) : WIFI_WEP;
+                wifi_show = false; wifi_editing = true; wifi_cursor = 0; wifi_error = 0;
+                ui_keyboard_init(&wifi_keyboard); go(V_WIFI_CREDENTIALS, true); return;
+            }
             wifi_error = net_wifi_connect(wireless_status.aps[index].ssid, wireless_status.aps[index].ssid_len);
         }
         net_wifi_status(&wireless_status);
@@ -1502,6 +1608,23 @@ int main(void)
             pressed = R_NONE;
             redraw();
             continue;
+        }
+        if (view == V_WIFI_CREDENTIALS && wifi_editing) {
+            bool changed = false;
+            if (ui_edit_input(wifi_password, sizeof(wifi_password), &wifi_cursor, &ev, false)) { redraw(); continue; }
+            if (ui_keyboard_height() && ev.y >= UI_H - ui_keyboard_height() &&
+                (ev.type == GZ_EV_TOUCH_DOWN || ev.type == GZ_EV_TOUCH_MOVE || ev.type == GZ_EV_TOUCH_UP)) {
+                int ch = ui_keyboard_event(&wifi_keyboard, &ev, UI_H-ui_keyboard_height(), &changed);
+                if (ch == '\n') wifi_editing = false;
+                else if (ch) {
+                    struct gz_input_event key = {0};
+                    key.type = ch == '\b' ? GZ_EV_KEY_DOWN : GZ_EV_TEXT;
+                    key.code = ch == '\b' ? GZ_KEY_BACKSPACE : ch;
+                    ui_edit_input(wifi_password, sizeof(wifi_password), &wifi_cursor, &key, false);
+                }
+                if (ch || changed) redraw();
+                continue;
+            }
         }
         if (pin_touch(&ev) || volume_touch(&ev) || zone_touch(&ev))
             continue;

@@ -7,3 +7,10 @@ void exit(int code)
     gz_exit(code);
     for (;;) ;
 }
+
+/* No signals: an abnormal exit, with the status a shell gives SIGABRT. */
+void abort(void)
+{
+    gz_exit(134);
+    __builtin_unreachable();
+}

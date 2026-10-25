@@ -49,6 +49,8 @@ void cf_init(void);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);
+/* The CIS's LAN_NODE_ID (CISTPL_FUNCE): a network card's station address. */
+bool pcmcia_node_id(uint8_t mac[6]);
 int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 int sys_cf_write(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
 
@@ -82,6 +84,7 @@ bool wl54cf_init(void);
 void wl54cf_irq(void);
 void wl54cf_removed(void);
 int wl54cf_send(const uint8_t *frame, uint32_t len);
+int wl54cf_control(uint32_t op, void *buf);   /* Wi-Fi controls (kernel buffer) */
 void xi825_init(void);
 void xi825_removed(void);
 void xi825_irq(void);

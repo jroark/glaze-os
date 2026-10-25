@@ -23,6 +23,7 @@ static uint8_t read_cis(unsigned i)
     return cis[i];
 }
 #define CF_CIS(i) read_cis(i)
+#define NET_TEST
 #include "../kernel/drivers/net.c"
 
 static unsigned ne_probes, wl_probes, xi_probes, ne_irqs, wl_irqs, xi_irqs, notices, removes;
@@ -195,10 +196,16 @@ int main(void)
     net_removed();
     assert(removes == 1 && !net_present() && !net_up() && head == tail);
     assert(sys_net_send(&p, 0, 60) == GZ_ENOENT);
+    assert(sys_wifi_ctl(&p, WIFI_STATUS, 0) == GZ_ENOENT);
+    p.flags = 0;
+    assert(sys_wifi_ctl(&p, WIFI_SCAN, 0) == GZ_EPERM);
+    p.flags = PROC_NET;
     reset(0);
     assert(!net_insert(0x02df, 0x8103) && net_present());   /* failed: still claimed */
     net_removed();
     assert(!net_present());
-    puts("net driver: dispatch, storage, XI-825, frames, insertion and removal OK");
+    puts("net driver: dispatch, storage, XI-825, frames, Wi-Fi controls, insertion and removal OK");
     return 0;
 }
+
+int wl54cf_control(uint32_t op, void *data) { (void)op; (void)data; return GZ_ENOENT; }

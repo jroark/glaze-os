@@ -282,6 +282,7 @@ void xi825_init(void)
     present = true;
     nic.present = 1; nic.kind = GZ_NET_XI825;
     wifi.state = WIFI_DISCONNECTED;
+    wifi.capabilities = WIFI_CAP(WIFI_OPEN) | WIFI_CAP(WIFI_WEP);
     xwrite(INTEN, RX | INFO | INFDROP);
     xenable();
     kprintf("xi825: MAC %02x:%02x:%02x:%02x:%02x:%02x (disconnected)\n",
@@ -426,8 +427,17 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
         if (rv) { wifi.scanning = 0; wifi.error = rv; }
         return rv;
     }
-    if (op != WIFI_CONNECT && op != WIFI_DISCONNECT) return GZ_EINVAL;
+    if (op != WIFI_CONNECT && op != WIFI_CONFIGURE && op != WIFI_DISCONNECT) return GZ_EINVAL;
+    struct wifi_config config = {0};
+    if (op == WIFI_CONFIGURE) {
+        if (copy_from_as(&p->as, &config, buf, sizeof(config))) return GZ_EINVAL;
+        if (config.security > WIFI_WEP) return WIFI_EUNSUPPORTED;
+        if (!config.network.ssid_len || config.network.ssid_len > WIFI_SSID_MAX ||
+            config.key_index > 3 || config.shared_auth > 1 ||
+            (config.security == WIFI_WEP && config.key_len != 5 && config.key_len != 13)) return GZ_EINVAL;
+    }
     struct wifi_request req;
+    if (op == WIFI_CONFIGURE) req = config.network;
     if (op == WIFI_CONNECT) {
         if (copy_from_as(&p->as, &req, buf, sizeof(req))) return GZ_EINVAL;
         if (!req.ssid_len || req.ssid_len > WIFI_SSID_MAX) return GZ_EINVAL;
@@ -439,7 +449,32 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
     memset(&wifi.current, 0, sizeof(wifi.current));
     /* Drain stale association/RX events before beginning another attempt. */
     xi825_irq();
+    /* Erase every firmware key when leaving or replacing a network. */
+    uint8_t zero[14] = {0};
+    for (unsigned i = 0; i < 4; i++) {
+        rv = write_rid(0xfc24 + i, zero, sizeof(zero));
+        if (rv) return rv;
+    }
+    if ((rv = scalar(0xfc28, 0)) || (rv = scalar(0xfc2a, 1))) return rv;
+    wifi.security = WIFI_OPEN;
     if (op == WIFI_DISCONNECT) { notify(); return 0; }
+    if (config.security == WIFI_WEP) {
+        /* PRISM requires all four default-key RIDs to have the same size,
+         * including unused slots (Linux hostap_set_encryption). */
+        uint8_t key[14];
+        unsigned length = config.key_len == 5 ? 6 : 14;
+        for (unsigned i = 0; i < 4 && !rv; i++) {
+            memset(key, 0, sizeof(key));
+            if (i == config.key_index) memcpy(key, config.key, config.key_len);
+            rv = write_rid(0xfc24 + i, key, length);
+        }
+        memset(key, 0, sizeof(key)); memset(config.key, 0, sizeof(config.key));
+        if (!rv) rv = scalar(0xfc23, config.key_index);
+        if (!rv) rv = scalar(0xfc2a, config.shared_auth ? 2 : 1);
+        if (!rv) rv = scalar(0xfc28, 3); /* privacy invoked, exclude unencrypted */
+        if (rv) return rv;
+        wifi.security = WIFI_WEP;
+    }
     uint8_t ssid[34] = {0};
     put16(ssid, req.ssid_len); memcpy(ssid + 2, req.ssid, req.ssid_len);
     if (!(rv = write_rid(0xfc02, ssid, sizeof(ssid)))) rv = command(1, 0);

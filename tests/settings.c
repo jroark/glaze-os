@@ -132,6 +132,8 @@ int net_wifi_connect(const void *ssid, uint32_t length)
     test_wifi.state = WIFI_CONNECTING;
     return test_wifi_error;
 }
+int net_wifi_forget(void) { test_wifi.state = WIFI_DISCONNECTED; return 0; }
+int net_wifi_connect_secure(const struct wifi_credentials *c) { test_wifi_connects++; return test_wifi_error; }
 int net_wifi_disconnect(void)
 {
     test_wifi_disconnects++;
@@ -529,7 +531,15 @@ int main(void)
     test_wifi.aps[0].privacy = 1;
     net_wifi_status(&wireless_status);
     activate(R_WIFI_AP0);
-    require(test_wifi_connects == 1, "secured network must not connect");
+    require(test_wifi_connects == 1 && view == V_WIFI_CREDENTIALS, "secured network must prompt for credentials");
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-wifi-password.bmp", &ui.surf);
+    activate(R_WIFI_DONE); redraw(); compare_full();
+    strcpy(wifi_password, "bad"); activate(R_WIFI_JOIN);
+    require(wifi_error == GZ_EINVAL && test_wifi_connects == 1, "invalid WEP key submitted");
+    activate(R_WIFI_SHOW); redraw(); compare_full();
+    activate(R_BACK);
+    require(view == V_WIFI && !wifi_password[0], "cancel must erase credentials");
     test_wifi_error = GZ_EIO;
     activate(R_WIFI_SCAN);
     redraw(); compare_full();
@@ -543,3 +553,5 @@ int main(void)
     puts("settings: rendering, navigation, scrolling, sliders, calibration and display PASS");
     return 0;
 }
+
+void uisnd_sounded(void) {}

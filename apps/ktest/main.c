@@ -963,6 +963,16 @@ static void test_net(void)
     CHECK(gz_wifi_ctl(WIFI_STATUS, frame) == GZ_EPERM, "wifi syscall denied to apps");
     struct wifi_status ws;
     bool wireless = net_wifi_status(&ws) == 0;
+    uint16_t card = st.kind;
+    /* Rejoin as the image was provisioned: tests/run_wifi_security.py saves
+     * WEP/WPA credentials for secured access points, else open BE300. */
+    static struct wifi_preference provisioned;
+    if (!wireless || pref_get(WIFI_PREF, &provisioned, sizeof(provisioned)) != sizeof(provisioned) ||
+        provisioned.version != 2) {
+        memset(&provisioned, 0, sizeof(provisioned));
+        provisioned.credentials.network.ssid_len = 5;
+        memcpy(provisioned.credentials.network.ssid, "BE300", 5);
+    }
     if (wireless) {
         CHECK(net_wifi_disconnect() == 0 && net_status(&st) == 0 &&
               st.state == NET_DISCONNECTED && !st.addr && !st.dns, "wifi disconnect clears address and DNS");
@@ -974,7 +984,7 @@ static void test_net(void)
         CHECK(ws.count == 1 && ws.aps[0].ssid_len == 5 && !memcmp(ws.aps[0].ssid, "BE300", 5), "wifi scan BE300");
         CHECK(net_wifi_connect("", 0) == GZ_EINVAL && net_wifi_connect("BE300", 33) == GZ_EINVAL,
               "wifi rejects invalid SSID lengths");
-        CHECK(net_wifi_connect("BE300", 5) == 0, "wifi association starts");
+        CHECK(net_wifi_connect_secure(&provisioned.credentials) == 0, "wifi association starts");
     } else CHECK(net_wifi_scan() == GZ_ENOENT, "wifi unsupported without XI825");
     if (st.state == NET_NO_CARD) {
         printf("ktest: SKIP network (no network card; boot with --ne2000, --xi825 or --wl54cf)\n");
@@ -982,6 +992,13 @@ static void test_net(void)
         return;
     }
     CHECK(net_wait_up(15000) == 0 && net_status(&st) == 0 && st.addr, "net address");
+    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF) {
+        struct wifi_status wireless;
+        CHECK(net_wifi_status(&wireless) == 0 && wireless.state == WIFI_CONNECTED,
+              "wifi authenticated before DHCP");
+        printf("ktest: wifi security %u connected\n", wireless.security);
+        CHECK(gz_wifi_ctl(WIFI_SCAN, NULL) == GZ_EPERM, "wifi syscall permissions");
+    }
     printf("ktest: net %s state %u\n", net_ntoa(st.addr, a), st.state);
 
     int rtt = net_ping(st.gateway, 3000);
@@ -1060,6 +1077,12 @@ static void test_net(void)
 
     test_bsd(st.addr);
 
+    struct { uint32_t address; uint16_t port, reserved; } fixture;
+    if (pref_get("test.wifi.http", &fixture, sizeof(fixture)) == sizeof(fixture)) {
+        rv = http_get(fixture.address, fixture.port, "wifi-fixture", page, sizeof(page));
+        CHECK(rv > 0 && strstr(page, "WIFI SECURITY HTTP PASS"), "wifi local HTTP fixture");
+    }
+
     /* An HTTP/1.0 GET through the router; the wider internet may not be
      * reachable from where the emulator runs. */
     if (net_resolve("example.com", &ip, 5000) == 0) {
@@ -1079,15 +1102,23 @@ static void test_net(void)
         struct wifi_preference choice;
         CHECK(pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && !choice.reconnect,
               "wifi explicit disconnect disables reconnect");
-        CHECK(net_wifi_connect("missing", 7) == 0, "wifi unavailable network starts");
-        gz_sleep_ms(11000);
-        CHECK(net_wifi_status(&ws) == 0 && ws.state == WIFI_FAILED && ws.error == GZ_ETIMEDOUT,
-              "wifi unavailable network times out");
+        /* The XI-825 starts associating and times out; the WL54-CF scans for
+         * the network first and refuses one that isn't there. */
+        if (card == GZ_NET_XI825) {
+            CHECK(net_wifi_connect("missing", 7) == 0, "wifi unavailable network starts");
+            gz_sleep_ms(11000);
+            CHECK(net_wifi_status(&ws) == 0 && ws.state == WIFI_FAILED && ws.error == GZ_ETIMEDOUT,
+                  "wifi unavailable network times out");
+        } else {
+            CHECK(net_wifi_connect("missing", 7) == GZ_ENOENT, "wifi unavailable network refused");
+        }
         CHECK(net_status(&st) == 0 && st.state == NET_DISCONNECTED && !st.addr,
               "wifi no DHCP fallback without association");
-        CHECK(net_wifi_connect("BE300", 5) == 0 && net_wait_up(15000) == 0, "wifi reconnect gets address");
-        CHECK(pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && choice.version == 1 &&
-              choice.reconnect && choice.network.ssid_len == 5 && !memcmp(choice.network.ssid, "BE300", 5),
+        CHECK(net_wifi_connect_secure(&provisioned.credentials) == 0 && net_wait_up(15000) == 0,
+              "wifi reconnect gets address");
+        CHECK(pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && choice.version == 2 &&
+              choice.reconnect && choice.credentials.network.ssid_len == 5 &&
+              !memcmp(choice.credentials.network.ssid, "BE300", 5),
               "wifi remembers selected network");
     }
     uint32_t utc;
@@ -1100,6 +1131,24 @@ static void test_net(void)
     } else {
         printf("ktest: INFO ntp %s: %s\n", NTP_SERVER, net_strerror(rv));
     }
+    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF) {
+        struct wifi_preference choice;
+        if (pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && choice.version == 2) {
+            CHECK(net_wifi_disconnect() == 0, "wifi disconnect");
+            CHECK(net_status(&st) == 0 && st.state == NET_DISCONNECTED && !st.addr && !st.dns,
+                  "wifi disconnect clears addresses and DNS");
+            CHECK(net_wifi_connect_secure(&choice.credentials) == 0 && net_wait_up(20000) == 0,
+                  "wifi secured reconnect");
+            CHECK(net_wifi_forget() == 0, "wifi forget");
+            struct wifi_preference erased;
+            CHECK(pref_get(WIFI_PREF, &erased, sizeof(erased)) == GZ_ENOENT, "wifi forget erases preference");
+            CHECK(net_status(&st) == 0 && !st.addr && !st.dns, "wifi forget drops link");
+            CHECK(net_wifi_connect_secure(&choice.credentials) == 0 && net_wait_up(20000) == 0,
+                  "wifi reselect saves credentials for reboot");
+            memset(&choice, 0, sizeof(choice)); memset(&erased, 0, sizeof(erased));
+        }
+    }
+
 }
 
 /* ---- time zones --------------------------------------------------------- */

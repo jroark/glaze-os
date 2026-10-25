@@ -12,10 +12,12 @@
  * The NE2000 and WL54-CF hand received frames to the queue here; the XI-825
  * keeps its own, with its Wi-Fi controls (xi825.c).
  */
+#include <glaze/wifi.h>
 #ifndef NET_TEST
 #include "../drivers.h"
 #include "../hw.h"
 #include "../kernel.h"
+#include "../mips.h"
 #endif
 
 #define QUEUE_LEN 8
@@ -204,9 +206,34 @@ int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max)
     return (int)n;
 }
 
-int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t buf)
+int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t address)
 {
     if (!(p->flags & PROC_NET))
         return GZ_EPERM;
-    return kind == GZ_NET_XI825 ? xi825_control(p, op, buf) : GZ_ENOENT;
+    if (kind == GZ_NET_XI825)
+        return xi825_control(p, op, address);
+    if (kind != GZ_NET_WL54CF || !info.present)
+        return GZ_ENOENT;
+    union { struct wifi_status status; struct wifi_config config; struct wifi_request request;
+            struct wifi_key key; } data;
+    unsigned n = op == WIFI_CONFIGURE ? sizeof(data.config) :
+                 op == WIFI_SET_KEY ? sizeof(data.key) :
+                 op == WIFI_CONNECT ? sizeof(data.request) : 0;
+    memset(&data, 0, sizeof(data));
+    if (n && copy_from_as(&p->as, &data, address, n))
+        return GZ_EINVAL;
+    /* Commands and the runtime IRQ share the command/response FIFO. */
+#ifndef NET_TEST
+    uint32_t flags = irq_save();
+#endif
+    int rv = wl54cf_control(op, &data);
+    if (op == WIFI_CONNECT || op == WIFI_CONFIGURE || op == WIFI_DISCONNECT)
+        head = tail = 0;
+#ifndef NET_TEST
+    irq_restore(flags);
+#endif
+    if (!rv && op == WIFI_STATUS)
+        rv = copy_to_as(&p->as, address, &data.status, sizeof(data.status));
+    memset(&data, 0, sizeof(data));
+    return rv;
 }

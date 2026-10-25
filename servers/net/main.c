@@ -646,7 +646,7 @@ static int handle(const struct gz_msg *m, struct gz_msg *r, int token)
         net_if_status((struct net_status *)sessions[sess].buf);
         return 0;
     }
-    if (op >= NET_WIFI_STATUS && op <= NET_WIFI_DISCONNECT)
+    if (op >= NET_WIFI_STATUS && op <= NET_WIFI_FORGET)
         return net_if_wifi(op - NET_WIFI_STATUS, sessions[sess].buf);
     /* Closing a descriptor remains valid while the interface is down. */
     if (op == NET_CLOSE) {

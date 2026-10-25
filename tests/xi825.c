@@ -137,5 +137,28 @@ int main(void)
     CHECK(xi825_control(&p, WIFI_SCAN, 0) == 0);
     CHECK(xi825_control(&p, 99, 0) == GZ_EINVAL);
     CHECK(notifications > 0);
+    tick = true;
+    CHECK(xi825_control(&p, WIFI_DISCONNECT, 0) == 0);
+    CHECK(wifi_security_configure(&model.security, WIFI_WEP, "12345"));
+    struct wifi_config config = {0}; config.network.ssid_len=5;
+    memcpy(config.network.ssid,"BE300",5);config.security=WIFI_WEP;config.key_len=5;
+    memcpy(config.key,"12345",5);
+    for(unsigned slot=0;slot<4;slot++) {
+        config.key_index=slot;memcpy(user,&config,sizeof(config));
+        CHECK(xi825_control(&p,WIFI_CONFIGURE,0)==0);xi825_irq();
+        CHECK(wifi.state==WIFI_CONNECTED && wifi.security==WIFI_WEP);
+        CHECK(xi825_control(&p,WIFI_DISCONNECT,0)==0);
+        CHECK(!model.security.authorized);
+    }
+    CHECK(wifi_security_configure(&model.security,WIFI_WEP,"1234567890123"));
+    config.key_len=13;memcpy(config.key,"1234567890123",13);
+    memcpy(user,&config,sizeof(config));CHECK(xi825_control(&p,WIFI_CONFIGURE,0)==0);xi825_irq();
+    CHECK(wifi.state==WIFI_CONNECTED);
+    CHECK(xi825_control(&p,WIFI_DISCONNECT,0)==0);
+    config.security=WIFI_WPA_PSK;memcpy(user,&config,sizeof(config));
+    CHECK(xi825_control(&p,WIFI_CONFIGURE,0)==WIFI_EUNSUPPORTED);
+    config.security=WIFI_WEP;config.key[0]^=1;memcpy(user,&config,sizeof(config));
+    CHECK(xi825_control(&p,WIFI_CONFIGURE,0)==0);xi825_irq();
+    now+=11000000;xi825_irq();CHECK(wifi.state==WIFI_FAILED);
     puts("xi825: firmware commands, association, scan, odd TX/RX, reclaim, queue bounds, permissions and timeouts PASS");
 }

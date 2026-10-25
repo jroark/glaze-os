@@ -1,88 +1,118 @@
-# XI-825 Wi-Fi
+# Wi-Fi and network security
 
-Boot a Glaze NAND with the native BE-300 emulator and `--xi825`:
+Glaze provides Settings > Wi-Fi for the Z-Com XI-825 (PRISM) and AmbiCom
+WL54-CF (Marvell CF8385). Select an open network to join, or a secured
+network to enter its key. Passwords are masked; Show Password reveals them.
+Done closes the keyboard and exposes security, WEP options, and Join.
 
-```sh
-/path/to/be300 --nand out/glaze.bin --xi825 --rtc-host-time
-```
+| Card | Open | WEP 40/104 | WPA Personal / TKIP | WPA2 Personal / CCMP |
+| --- | --- | --- | --- | --- |
+| XI-825 | yes | yes | unavailable | unavailable |
+| WL54-CF | yes | yes | yes | yes |
 
-Use a disposable copy of the image for tests. The emulator persists NAND
-changes at shutdown. `--xi825` and `--ne2000` select the same primary socket
-and cannot be combined. No vendor WinCE driver package is needed by Glaze.
+The PRISM station host interface requires host data-cipher processing for
+WPA/TKIP and CCMP; this version uses firmware data encryption only. Settings
+reports unsupported security explicitly. It does not flash firmware or
+silently downgrade a network. WPA Enterprise, WPA3, protected-management-frame
+requirements, ad-hoc mode, and hidden-network entry are not implemented.
+Physical-card interoperability remains unvalidated.
 
-Open **Settings > Wi-Fi**, wait for the scan, and select **BE300**. This is
-an open virtual access point on channel 3. The emulator carries its traffic
-through the same NAT, DHCP, and DNS backend as NE2000. Settings shows the
-SSID, BSSID, firmware signal level, channel, and negotiated rate; scroll for
-connection details. Signal is a raw firmware level, not a dBm measurement.
-**Settings > Network** shows IP configuration and can ping the gateway.
+WEP accepts 5 or 13 printable ASCII bytes, or 10 or 26 hexadecimal digits.
+Key slots 1–4 and open/shared authentication are selectable. WPA accepts an
+8–63 character ASCII passphrase or a 64-digit hexadecimal PSK. WPA2 prefers
+CCMP pairwise encryption and also accepts a TKIP group cipher advertised by
+the access point. Enterprise-only networks are rejected.
 
-The first boot remains disconnected. An explicitly selected SSID is saved
-in `/Library/Preferences/net.wifi` and reconnected at boot. **Disconnect**
-disables this automatic connection, retaining the last choice in the saved
-record. Select a network again to reconnect. An unavailable network times
-out after ten seconds and stays down until another explicit selection.
-DHCP and its ten-second static fallback run only while associated; link
-loss clears addresses and DNS. Wi-Fi controls continue working while down.
-Secured networks are displayed as unsupported. WEP/WPA and ad-hoc networking
-are outside this version. The card can be inserted and pulled at run time
-(`kernel/drivers/cf.c`'s `pcmcia_poll`); on a real BE-300 (station firmware
-1.3.5) it scans with the host scan RID 0xFCE5, which firmware before 1.3.1
-lacks (it falls back to the scan inquiry), and its command deadlines follow
-Linux hostap's. Joining a network is untested on hardware.
+The last explicit choice and its credentials are saved in
+`/Library/Preferences/net.wifi` and reconnected at boot. Disconnect disables
+automatic connection while retaining that record. Forget Network disconnects
+and deletes it, including after a failed connection or explicit disconnect.
+Only one network is remembered. Preferences use the existing local filesystem;
+they are not encrypted at rest. Legacy version-1 open-network preferences are
+migrated to version 2. Credentials never appear in status replies or logs.
 
-## Interfaces and driver
+## Architecture
 
-`glaze/wifi.h` supplies `net_wifi_status`, `net_wifi_scan`,
-`net_wifi_connect(ssid, length)`, and `net_wifi_disconnect`. Scan and connect
-start operations; poll status for completion and errors. SSIDs are at most
-32 bytes with explicit lengths; at most 16 scan results are returned. The
-existing fixed-size `net_status` IPC reply is preserved. Its new states
-identify disconnected and associating wireless links.
+`glaze/wifi.h` supplies status, scan, open connect, secured connect,
+disconnect, and forget operations. SSIDs have explicit lengths up to 32 bytes;
+scan replies contain at most 16 networks. Security capabilities and progress
+are separate from the fixed-size `net_status` reply, whose reserved halfword
+now identifies the device. Existing syscall and request numbers are preserved.
+`SYS_WIFI_CTL` and raw-frame access remain restricted to `PROC_NET`.
 
-The kernel's `SYS_WIFI_CTL` is restricted to `PROC_NET`; applications use
-network-server IPC. Wi-Fi operations on Ethernet or absent cards return
-`GZ_ENOENT`. Existing syscall and network request numbers are unchanged.
-`gz_netif_info.kind` uses the old reserved halfword to identify the card.
+The shared network dispatcher recognizes both wireless identities before
+NE2000 probing and reserves a recognized card even if initialization fails.
+WL54-CF initialization uploads the existing locally extracted firmware and
+leaves the card disconnected. Runtime commands scan, select an AP, configure
+WEP/RSN, associate, and install pairwise/group keys. PRISM uses resident
+station firmware and its WEP RIDs. See [WL54CF.md](WL54CF.md) for firmware
+extraction and register references.
 
-The socket dispatcher identifies supported cards by CIS before NIC writes.
-XI-825 is manufacturer `0xD601`, product `0x0005`, function network; the
-emulator's NE2000 is `0x0149:0x0200`. CF storage keeps its ATA driver.
-PRISM initialization configures open infrastructure mode and uses the
-resident station firmware. RX/TX use bounded BAP/FID transfers with odd-byte
-handling, events, and TX reclaim. Commands have bounded polling deadlines;
-IRQ and syscall register sequences are serialized on the single CPU.
+A minimal PSK-only port of wpa_supplicant 2.11 runs inside the network server.
+It derives the PSK, verifies EAPOL-Key MICs and replay counters, performs the
+four-way and group-key handshakes, and prevents repeated key installation.
+EAPOL frames reach it before lwIP. The kernel permits only EAPOL while WPA
+authentication is incomplete; normal traffic and DHCP start only after
+required keys and authorization. Failure, disconnect, removal, and switching
+networks revoke traffic and clear queued packets, leases, and DNS. The card
+must be rebooted/reinitialized after removal; live replacement is deferred.
 
-Definitions follow the local BE-300 emulator's `docs/XI825.md` and
-`src/hw/xi825.c`, which cite the Linux hostap HFA384x definitions and vendor
-driver observations. The COR uses attribute byte `0x3E0`; it does not write
-the NAND direct-I/O alias at `0xD200`.
+Factory filesystem images receive a private 32-byte seed from the build
+host's CSPRNG. The network server advances and saves it before releasing
+nonce bytes, and refuses authentication if the seed is missing or cannot be
+saved. The seed is not in ROMFS or source control. Copies or rollbacks of NAND
+also copy or roll back its random state; generate separate images/seeds for
+separate devices. Existing images without the seed support open/WEP but need
+a freshly provisioned seed for WPA. The lwIP timing PRNG is never used for
+WPA nonces.
 
 ## Verification
 
+Use the matching be300 security worktree for model tests:
+
 ```sh
-make -C host netdev-test xi825-test settings-test
-# Override XI825_MODEL=/path/to/be300 for the independent PRISM model tests.
-SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy XI825=1 tests/run.sh tests/t_wifi.txt 22
-# Rebuild with a different script but reuse the first run's saved preference:
-SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy XI825=1 \
-  FS_FROM=out/shots/t_wifi/glaze.bin tests/run.sh tests/t_wifi_reboot.txt 15
+make -C host net-driver-test settings-test xi825-test wl54cf-driver-test \
+  wifi-supplicant-test BE300_SOURCE=/path/to/be300-security
 ```
 
-The runner resolves the sibling emulator through Git's original checkout,
-including from a temporary worktree; `BE300` overrides that binary.
-Both logs, disposable NAND, and a screenshot are saved under `out/shots/`.
-The reboot log must show `wifi: saved network association 0` followed by DHCP
-without selecting a scan result. `NO_BUILD=1` reuses an existing build.
+The supplicant test uses an independent OpenSSL authenticator and published
+PBKDF2/AES-wrap vectors. It checks WPA/WPA2, rekey, duplicate messages without
+key reinstallation, malformed input, wrong passwords, bad MICs, and random
+source failure. Override `OPENSSL_FLAGS` and `OPENSSL_LIBS` outside the default
+Homebrew location. Driver tests use structural firmware fixtures, without
+vendor binaries, and run under ASan/UBSan.
 
-`./build.sh INIT=bin/ktest` includes native Wi-Fi integration checks when
-booted with `--xi825`: scan, invalid SSIDs, association, IP/UDP/TCP/DNS,
-disconnect cleanup, close while down, timeout without a DHCP fallback,
-reconnection, and persisted preferences. Internet HTTP and NTP are reported
-as informational checks because host connectivity can vary. Repeat with
-`--ne2000`, no card, and a CF storage image for compatibility validation.
+## Cards inserted at run time and real hardware
 
-Validated with the native emulator: first-use selection and router ping,
-reconnection after reboot (channel 3, 11 Mbps), and Browser loading
-`http://example.com/`. Sanitized host tests pass; guest `ktest` reports
-`ALL PASS` with XI-825, NE2000, CF storage, and no card.
+Either card can be inserted and pulled at run time (`kernel/drivers/cf.c`'s
+`pcmcia_poll`, `net.c`), which is how a GlazeBoot boot gets one: the network
+server attaches to a card that appears and stops the supplicant when it goes.
+On a real BE-300 the XI-825 (station firmware 1.3.5) scans with the host scan
+RID 0xFCE5, which firmware before 1.3.1 lacks (it falls back to the scan
+inquiry), and its command deadlines follow Linux hostap's. The WL54-CF's real
+CIS has CONFIG at attribute 0x200.
+
+For guest tests, extract local firmware as described in WL54CF.md, build the
+emulator with OpenSSL available, then:
+
+```sh
+./build.sh WL54CF=1 INIT=bin/ktest
+make -C host wifi-mkfs
+/usr/bin/python3 tests/run_wifi_security.py \
+  --emulator /path/to/be300-security/build-host/be300 --host-ip <host-LAN-IPv4>
+```
+
+The runner builds disposable filesystems with separate entropy seeds and
+saved choices. It tests XI-825 open/WEP (40/104-bit), legacy preference migration,
+WL54-CF open/WEP (40/104-bit)/WPA/WPA2, Ethernet,
+no card, and CF storage. Wireless cases run again with the persisted NAND.
+Guest checks require authentication before DHCP, gateway/DNS/TCP/UDP, local
+HTTP, disconnect cleanup, Forget Network, and reselection. Logs and shutdown
+screenshots are saved under `out/wifi-security-*`; the source NAND is unchanged.
+On macOS use native Python: an older Intel Python can fail to receive LAN
+connections even when external guest HTTP succeeds.
+
+The virtual AP is an authentication and firmware-key-installation fixture.
+Its Ethernet frames represent already decrypted firmware payloads; it does
+not emulate RF encryption. Real-card testing is needed before claiming
+physical WEP/TKIP/CCMP interoperability.

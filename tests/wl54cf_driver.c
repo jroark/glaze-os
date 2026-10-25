@@ -17,7 +17,7 @@ static unsigned mode, drops, frames;
 static uint64_t clock_us;
 static uint8_t received[1600], station_mac[6];
 static size_t received_len;
-static uint8_t wl_read8(unsigned r) { return (r == 0x1c && mode == 8) ? 0x10 : wl54cf_read(&card, r, 1); }
+static uint8_t wl_read8(unsigned r) { return (r == 0x1c && mode == 8) ? 0x0f : wl54cf_read(&card, r, 1); }
 static uint16_t wl_read16(unsigned r)
 {
     if (r == 0x28 && mode == 7)
@@ -62,6 +62,7 @@ int romfs_read(const struct romfs_entry *e, uint32_t off, void *p, uint32_t n)
     memcpy(p, (e == &helper ? helper_data : firmware_data) + off, n);
     return 0;
 }
+bool pcmcia_node_id(uint8_t mac[6]) { (void)mac; return false; }
 uint64_t time_us(void)
 {
     clock_us += 1000;
@@ -99,13 +100,18 @@ int main(void)
      * via the compile define on this translation unit. */
     for (unsigned fault = 1; fault <= 8; fault++) {
         initialize(fault);
+        if (fault == 6) continue;
         assert(!wl54cf_init());
         assert(!online);
         assert(card.mask == 31); /* failure never leaves an IRQ source active */
     }
     initialize(0);
     assert(wl54cf_init());
-    assert(card.associated && online);
+    assert(!card.associated && online);
+    mode=6;assert(wl54cf_control(WIFI_SCAN, NULL)==GZ_EIO);mode=0;
+    struct wifi_request request={.ssid_len=5};memcpy(request.ssid,"BE300",5);
+    assert(!wl54cf_control(WIFI_CONNECT,&request));
+    assert(card.associated && wifi.state==WIFI_CONNECTED);
     assert(!memcmp(station_mac, card.mac, 6));
     uint8_t packet[61] = {0};
     memcpy(packet, card.mac, 6);
@@ -121,6 +127,23 @@ int main(void)
     assert(!card.rx_count);
     assert(wl54cf_send(packet, sizeof(packet)) == 61);
     assert(!wl54cf_irq_pending(&card));
-    puts("wl54cf driver: OK");
+    assert(!wl54cf_control(WIFI_DISCONNECT,NULL));
+    assert(!authorized && !card.security.authorized);
+    assert(wifi_security_configure(&card.security,WIFI_WEP,"12345"));
+    struct wifi_config config={0};config.network=request;config.security=WIFI_WEP;
+    config.key_len=5;memcpy(config.key,"12345",5);
+    for(unsigned slot=0;slot<4;slot++) {
+        config.key_index=slot;assert(!wl54cf_control(WIFI_CONFIGURE,&config));
+        assert(wifi.state==WIFI_CONNECTED && card.security.authorized);
+        assert(!wl54cf_control(WIFI_DISCONNECT,NULL));
+    }
+    assert(wifi_security_configure(&card.security,WIFI_WEP,"1234567890123"));
+    config.key_len=13;memcpy(config.key,"1234567890123",13);
+    assert(!wl54cf_control(WIFI_CONFIGURE,&config));
+    assert(wifi.state==WIFI_CONNECTED);
+    assert(!wl54cf_control(WIFI_DISCONNECT,NULL));
+    config.key[0]^=1;assert(wl54cf_control(WIFI_CONFIGURE,&config)==WIFI_EAUTH);
+    assert(!authorized && !card.security.authorized);
+    puts("wl54cf driver: open/WEP, slots, wrong key, disconnect and malformed firmware PASS");
     return 0;
 }

@@ -1,8 +1,8 @@
 # WL54-CF wireless networking
 
 Glaze has a native MIPS driver for the AmbiCom WL54-CF's Marvell CF8385
-station interface. The first version targets the be300 emulator's open
-**BE300** access point, channel **3**, BSSID **02:42:45:33:30:30**. It exposes
+station interface. Settings > Wi-Fi selects open, WEP, WPA Personal, and WPA2 Personal networks.
+See [WIFI.md](WIFI.md) for security capabilities, credentials, and validation. It exposes
 ordinary Ethernet frames through the existing `SYS_NET_*` ABI and lwIP
 network server, so applications and Settings > Network use the same network
 APIs as NE2000.
@@ -27,12 +27,13 @@ are ignored and must not be committed. `WL54CF_FW_DIR` overrides their build
 location. Ordinary builds do not need firmware; `WL54CF=1` requires both files
 and packs them into romfs under `firmware/`.
 
-Expected serial milestones:
+After selecting a network or restoring a saved choice, serial milestones include:
 
 ```text
 wl54cf: firmware ready
 wl54cf: MAC ...
-wl54cf: associated BE300 channel 3
+wl54cf: ready (disconnected)
+wifi: associated, starting DHCP
 net: DHCP address 10.0.0.1, router 10.0.0.254, dns 10.0.0.254
 ```
 
@@ -53,8 +54,8 @@ The corresponding emulator's `docs/WL54CF.md` records the firmware offsets,
 SHA-256 values, CIS assumptions and exact emulation boundaries.
 
 The driver configures COR, uploads helper/main firmware through the command
-FIFO, verifies scratch readiness, obtains the station MAC, scans, selects open
-system authentication and associates with the virtual AP. It then enables RX,
+FIFO, verifies scratch readiness, and obtains the station MAC. It starts
+disconnected; runtime Wi-Fi controls scan and associate with a selected AP. It then enables RX,
 TX and broadcast reception. Timeouts, firmware requests, command identity,
 sequence, response size/result, beacon bounds and RxPD lengths are checked.
 FIFO transfers handle odd trailing bytes without unaligned MIPS accesses.
@@ -62,8 +63,7 @@ Runtime RX converts 802.3/LLC/SNAP to Ethernet II before queueing for lwIP.
 
 `kernel/drivers/net.c` owns permissions, the bounded receive queue, IPC
 notifications and statistics for both card drivers. NE2000 remains available
-through the same syscall ABI. Commands are issued during boot; runtime IRQ and
-timer servicing only move frames. A card initialization failure leaves card
+through the same syscall ABI. Runtime commands and IRQ FIFO transfers are serialized. A card initialization failure leaves card
 interrupts masked. Physical removal is outside this version's scope.
 
 **Hardware limitation:** COR uses the existing emulator byte-addressed
@@ -73,11 +73,10 @@ NAND direct I/O on this board. The minimal CIS/B1 revision are model choices,
 not a captured physical card EEPROM. This is not yet a claim that the driver
 operates a real WL54-CF.
 
-SSID selection, Wi-Fi UI/signal icons, WEP/WPA, reassociation and physical
-network access are deferred. The card can be inserted and pulled at run time
-(`kernel/drivers/cf.c`'s `pcmcia_poll`, `net.c`); a GlazeBoot boot swaps it in
-for the CF card (`EMU_ARGS="--cf-eject-after 40 --wl54cf --net-insert-after 45"
-tests/run_ceboot.sh 85 WL54CF=1`). The emulator's station implementation
+Physical-card interoperability remains unvalidated. The card can be inserted
+and pulled at run time (`kernel/drivers/cf.c`'s `pcmcia_poll`, `net.c`); a
+GlazeBoot boot swaps it in for the CF card (`EMU_ARGS="--cf-eject-after 40
+--wl54cf --net-insert-after 45" tests/run_ceboot.sh 85 WL54CF=1`). The emulator's station implementation
 provides the virtual AP and existing NAT backend.
 
 ## Tests

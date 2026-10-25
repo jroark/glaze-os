@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import os
 from pathlib import Path
+import struct
+import secrets
 import re
 import shutil
 import signal
@@ -68,7 +70,19 @@ def main():
                            cwd=root, stdout=log, stderr=subprocess.STDOUT, check=True)
         source = root / 'out/glaze.bin'
         before = digest(source)
-        shutil.copyfile(source, work / 'nand.bin')
+        subprocess.run(['make', '-C', 'host', 'wifi-mkfs'], cwd=root, check=True, stdout=subprocess.DEVNULL)
+        preference = work / 'net.wifi'
+        preference.write_bytes(struct.pack('<III32sIIII64s', 2, 1, 5, b'BE300', 0, 0, 0, 0, b''))
+        seed = work / 'entropy'
+        seed.write_bytes(secrets.token_bytes(32))
+        filesystem = work / 'fs.img'
+        blocks = re.search(r'#define GZ_FLASH_BLOCKS\s+(\d+)', (root / 'lib/include/glaze/abi.h').read_text())[1]
+        subprocess.run([str(root / 'out/host/wifi-mkfs'), str(root / 'userdata'), blocks, str(filesystem),
+                        '/Library/Preferences/net.wifi=' + str(preference),
+                        '/Library/Preferences/net.entropy=' + str(seed)], check=True, stdout=subprocess.DEVNULL)
+        nand = bytearray(source.read_bytes())
+        nand[0x500000:0x500000 + filesystem.stat().st_size] = filesystem.read_bytes()
+        (work / 'nand.bin').write_bytes(nand)
         env = dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy')
         with (work / 'stdout.log').open('w') as stdout, (work / 'stderr.log').open('w') as stderr:
             process = subprocess.Popen([str(emulator), '--nand', 'nand.bin', '--rtc-host-time',
@@ -84,7 +98,7 @@ def main():
         diagnostics = (work / 'stderr.log').read_text(errors='replace')
         if process.returncode not in (0, -signal.SIGTERM):
             raise RuntimeError(f'emulator exit {process.returncode}')
-        for milestone in ('wl54cf: firmware ready', 'wl54cf: associated BE300 channel 3',
+        for milestone in ('wl54cf: firmware ready', 'wl54cf: ready (disconnected)',
                           'net: DHCP address '):
             if milestone not in log:
                 raise RuntimeError(f'missing milestone: {milestone}')

@@ -1,5 +1,5 @@
 /*
- * The lwIP network interface over the kernel's network card driver, address
+ * The lwIP network interface over the kernel's selected network driver, address
  * configuration, and the platform hooks lwIP calls (arch/cc.h).
  *
  * lwIP runs in its tcpip thread. The server's main thread hands it the
@@ -18,6 +18,7 @@
 #include <glaze/sys.h>
 #include <glaze/wifi.h>
 #include <glaze/prefs.h>
+#include <glaze/fs.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -29,6 +30,10 @@
 #include "lwip/timeouts.h"
 #include "netif/ethernet.h"
 #include "server.h"
+#include "wifi_supplicant.h"
+#include "utils/includes.h"
+#include "utils/common.h"
+#include "crypto/sha256.h"
 
 #define DHCP_WAIT_MS    10000u
 #define CARD_CHECK_MS   2000u
@@ -41,7 +46,16 @@ static int bound_port;
 static bool added;          /* netif_add has run (once, for the first card) */
 static bool wireless, associated;
 static struct wifi_preference saved;
+static int auth_error, auth_failure;
+static void seed_from_card(void);
+static int connect_network(const struct wifi_credentials *c);
+static int save_choice(const struct wifi_preference *choice)
+{
+    int rv = fs_write_file(PREFS_DIR "/" WIFI_PREF, choice, sizeof(*choice));
+    return rv == sizeof(*choice) ? 0 : rv < 0 ? rv : GZ_EIO;
+}
 static uint8_t frame[1536] __attribute__((aligned(4)));
+static uint8_t tx_frame[1536] __attribute__((aligned(4)));
 static uint32_t rand_state;
 
 void net_log(const char *fmt, ...)
@@ -75,10 +89,10 @@ uint32_t net_lwip_rand(void)
 
 static err_t link_output(struct netif *n, struct pbuf *p)
 {
-    uint16_t len = pbuf_copy_partial(p, frame, sizeof(frame), 0);
+    uint16_t len = pbuf_copy_partial(p, tx_frame, sizeof(tx_frame), 0);
 
     (void)n;
-    return gz_net_send(frame, len) < 0 ? ERR_IF : ERR_OK;
+    return gz_net_send(tx_frame, len) < 0 ? ERR_IF : ERR_OK;
 }
 
 static err_t nif_init(struct netif *n)
@@ -132,7 +146,7 @@ static int attach(void)
     } else {
         memcpy(nif.hwaddr, info.mac, ETH_HWADDR_LEN);
     }
-    wireless = info.kind == GZ_NET_XI825;
+    wireless = info.kind == GZ_NET_XI825 || info.kind == GZ_NET_WL54CF;
     associated = false;
     netif_set_up(&nif);
     if (!wireless) {
@@ -144,12 +158,17 @@ static int attach(void)
     UNLOCK_TCPIP_CORE();
     gz_net_bind(bound_port);
     if (wireless) {
-        int len = pref_get(WIFI_PREF, &saved, sizeof(saved));
-        if (len == sizeof(saved) && saved.version == 1 && saved.reconnect == 1 &&
-            saved.network.ssid_len > 0 && saved.network.ssid_len <= WIFI_SSID_MAX) {
-            int rv = gz_wifi_ctl(WIFI_CONNECT, &saved.network);
-            net_log("wifi: saved network association %d\n", rv);
-        } else memset(&saved, 0, sizeof(saved));
+        uint8_t record[sizeof(saved)+1];
+        int len = pref_get(WIFI_PREF, record, sizeof(record));
+        memset(&saved, 0, sizeof(saved));
+        if (len > 0 && wifi_preference_decode(record, len, &saved) == 0) {
+            if ((unsigned)len < sizeof(saved)) save_choice(&saved);
+            if (saved.reconnect) {
+                int rv = connect_network(&saved.credentials);
+                net_log("wifi: saved network association %d\n", rv);
+            }
+        }
+        forced_memzero(record, sizeof(record));
     }
     return 0;
 }
@@ -157,6 +176,8 @@ static int attach(void)
 /* The card was pulled: no lease to release, just forget the link. */
 static void detach(void)
 {
+    wifi_supplicant_stop();
+    auth_error = auth_failure = 0;
     LOCK_TCPIP_CORE();
     dhcp_stop(&nif);
     netif_set_link_down(&nif);
@@ -180,6 +201,7 @@ int net_if_init(int port)
     sys_sem_free(&ready);
     bound_port = port;
     card_checked = gz_time_ms();
+    seed_from_card();
     if (gz_net_info(&info) < 0 || !info.present) {
         net_log("net: no network card\n");
         return GZ_ENETDOWN;
@@ -208,38 +230,154 @@ static void wifi_link(void)
         net_log("wifi: link down\n");
     }
     associated = up;
-    if (!up) state = status.state == WIFI_CONNECTING ? NET_ASSOCIATING : NET_DISCONNECTED;
+    if (!up) state = status.state == WIFI_CONNECTING || status.state == WIFI_AUTHENTICATING ? NET_ASSOCIATING : NET_DISCONNECTED;
     UNLOCK_TCPIP_CORE();
 }
 
+/*
+ * A GlazeBoot boot has a fresh RAM disk for /, so no factory seed: take one
+ * from the boot CF card, where the card's writer put 32 bytes from the
+ * host's CSPRNG (glaze.seed beside GlazeBoot), and ratchet it on the card
+ * before using it, so that no two boots start from the same seed. Without
+ * the file, net.entropy stays missing and authentication refuses to run.
+ */
+static const char *const card_seeds[] = { "/Card/CE/R4100/glaze.seed", "/Card/Glaze/glaze.seed" };
+static void seed_from_card(void)
+{
+    uint8_t seed[32], next[32], boot[32];
+    if (pref_get("net.entropy", seed, sizeof(seed)) == sizeof(seed)) {
+        forced_memzero(seed, sizeof(seed));
+        return;
+    }
+    for (unsigned i = 0; i < sizeof(card_seeds) / sizeof(card_seeds[0]); i++) {
+        if (fs_read_file(card_seeds[i], seed, sizeof(seed)) != sizeof(seed)) continue;
+        uint64_t time = gz_time_us();
+        const uint8_t *parts[] = {(const uint8_t *)"card next", (uint8_t *)&time};
+        size_t lengths[] = {9, sizeof(time)};
+        int rv = hmac_sha256_vector(seed, sizeof(seed), 2, parts, lengths, next);
+        parts[0] = (const uint8_t *)"boot seed";
+        if (!rv) rv = hmac_sha256_vector(seed, sizeof(seed), 2, parts, lengths, boot);
+        /* The card's next seed is written before this boot's is used. */
+        if (!rv && fs_write_file(card_seeds[i], next, sizeof(next)) == sizeof(next) &&
+            fs_write_file(PREFS_DIR "/net.entropy", boot, sizeof(boot)) == sizeof(boot))
+            net_log("wifi: random seed from the boot card\n");
+        else
+            net_log("wifi: couldn't ratchet the boot card's seed\n");
+        break;
+    }
+    forced_memzero(seed, sizeof(seed)); forced_memzero(next, sizeof(next)); forced_memzero(boot, sizeof(boot));
+}
+
+/* The seed originates from the host CSPRNG in the factory filesystem image.
+ * Ratchet it durably before releasing bytes, including across guest reboots. */
+static int wifi_random(uint8_t *out, unsigned n)
+{
+    uint8_t seed[32], next[32], block[32];
+    if (pref_get("net.entropy", seed, sizeof(seed)) != sizeof(seed)) return -1;
+    uint64_t time = gz_time_us();
+    const uint8_t *parts[] = {(const uint8_t *)"wifi nonce", (uint8_t *)&time};
+    size_t lengths[] = {10, sizeof(time)};
+    if (hmac_sha256_vector(seed, sizeof(seed), 2, parts, lengths, block) < 0) goto fail;
+    parts[0] = (const uint8_t *)"wifi ratchet"; lengths[0] = 12;
+    if (hmac_sha256_vector(seed, sizeof(seed), 2, parts, lengths, next) < 0 ||
+        fs_write_file(PREFS_DIR "/net.entropy", next, sizeof(next)) != sizeof(next)) goto fail;
+    if (n > sizeof(block)) goto fail;
+    memcpy(out, block, n);
+    forced_memzero(seed, sizeof(seed)); forced_memzero(next, sizeof(next)); forced_memzero(block, sizeof(block));
+    return 0;
+fail:
+    forced_memzero(seed, sizeof(seed)); forced_memzero(next, sizeof(next)); forced_memzero(block, sizeof(block));
+    return -1;
+}
+static int install_key(const struct wifi_key *key)
+{
+    int rv = gz_wifi_ctl(WIFI_SET_KEY, (void *)key);
+    if (rv)
+        net_log("wifi: installing the %s key (cipher %u) failed: %d\n",
+                key->pairwise ? "pairwise" : "group", key->cipher, rv);
+    return rv;
+}
+static int authorize(void) { return gz_wifi_ctl(WIFI_AUTHORIZE, NULL); }
+static int send_eapol(const uint8_t *p, unsigned n) { return gz_net_send(p, n); }
+static uint32_t wifi_time(void) { return gz_time_ms(); }
+static void authentication_failed(int error)
+{
+    net_log("wifi: authentication failed: %d\n", error);
+    auth_failure = error;
+    /* Revoke traffic now; defer freeing the state machine until its callback returns. */
+    gz_wifi_ctl(WIFI_DISCONNECT, NULL);
+}
+static const struct wifi_supplicant_io supplicant_io = {
+    send_eapol, install_key, authorize, authentication_failed, wifi_random, wifi_time
+};
+static int connect_network(const struct wifi_credentials *c)
+{
+    struct wifi_status status;
+    int rv = wifi_credentials_validate(c);
+    if (rv) return rv;
+    rv = gz_wifi_ctl(WIFI_STATUS, &status);
+    if (rv) return rv;
+    if (!(status.capabilities & WIFI_CAP(c->security))) return WIFI_EUNSUPPORTED;
+    /* WL54CF supplies the beacon IE and BSSID needed by the supplicant.
+     * PRISM's older scan format allows explicit WEP selection by SSID. */
+    rv = gz_wifi_ctl(WIFI_SCAN, NULL); if (rv) return rv;
+    rv = gz_wifi_ctl(WIFI_STATUS, &status); if (rv) return rv;
+    struct wifi_ap ap = {0};
+    for (unsigned i=0; i<status.count; i++)
+        if (status.aps[i].ssid_len == c->network.ssid_len &&
+            !memcmp(status.aps[i].ssid, c->network.ssid, c->network.ssid_len)) { ap = status.aps[i]; break; }
+    rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL); wifi_link();
+    if (rv) return rv;
+    wifi_supplicant_stop();
+    struct wifi_config config;
+    rv = wifi_supplicant_prepare(&supplicant_io, c, &ap, info.mac, &config);
+    if (rv) return rv;
+    auth_error = auth_failure = 0;
+    rv = gz_wifi_ctl(WIFI_CONFIGURE, &config);
+    forced_memzero(&config, sizeof(config));
+    if (rv) wifi_supplicant_stop(); else wifi_supplicant_associated();
+    return rv;
+}
 int net_if_wifi(uint32_t op, void *buf)
 {
     if (!wireless) return GZ_ENOENT;
-    if (op == WIFI_STATUS || op == WIFI_SCAN) return gz_wifi_ctl(op, buf);
-    if (op != WIFI_CONNECT && op != WIFI_DISCONNECT) return GZ_EINVAL;
+    if (op == WIFI_STATUS) {
+        int rv = gz_wifi_ctl(op, buf);
+        if (!rv && auth_error) { struct wifi_status *st = buf; st->state = WIFI_FAILED; st->error = auth_error; }
+        return rv;
+    }
+    if (op == WIFI_SCAN) return gz_wifi_ctl(op, buf);
+    if (op == WIFI_FORGET) {
+        int rv = pref_delete(WIFI_PREF);
+        if (rv && rv != GZ_ENOENT) return rv;
+        forced_memzero(&saved, sizeof(saved));
+        wifi_supplicant_stop(); auth_error = auth_failure = 0;
+        rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL); wifi_link(); return rv;
+    }
+    if (op != WIFI_CONNECT && op != WIFI_CONNECT_SECURE && op != WIFI_DISCONNECT) return GZ_EINVAL;
     struct wifi_preference next = saved;
-    if (op == WIFI_CONNECT) {
-        struct wifi_request *req = buf;
-        if (!req->ssid_len || req->ssid_len > WIFI_SSID_MAX) return GZ_EINVAL;
+    if (op != WIFI_DISCONNECT) {
         memset(&next, 0, sizeof(next));
-        next.network = *req;
+        if (op == WIFI_CONNECT) next.credentials.network = *(struct wifi_request *)buf;
+        else { next.credentials = *(struct wifi_credentials *)buf; forced_memzero(buf, sizeof(struct wifi_credentials)); }
+        int rv = wifi_credentials_validate(&next.credentials);
+        if (rv) { forced_memzero(&next, sizeof(next)); return rv; }
+        struct wifi_status status;
+        rv = gz_wifi_ctl(WIFI_STATUS, &status);
+        if (!rv && !(status.capabilities & WIFI_CAP(next.credentials.security))) rv = WIFI_EUNSUPPORTED;
+        if (rv) { forced_memzero(&next, sizeof(next)); return rv; }
     }
-    next.version = 1;
-    next.reconnect = op == WIFI_CONNECT;
-    /* Persist the intent before changing the card: errors remain reviewable. */
-    int rv = pref_put(WIFI_PREF, &next, sizeof(next));
-    if (rv) return rv;
-    saved = next;
-    /* Force the old link down before another association can complete, so
-     * switching networks always discards the previous lease and DNS. */
-    if (op == WIFI_CONNECT) {
-        rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL);
-        wifi_link();
-        if (rv) return rv;
+    next.version = 2; next.reconnect = op != WIFI_DISCONNECT;
+    int rv = save_choice(&next);
+    if (!rv) {
+        saved = next;
+        if (op == WIFI_DISCONNECT) {
+            wifi_supplicant_stop(); auth_error = auth_failure = 0;
+            rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL);
+        } else rv = connect_network(&next.credentials);
     }
-    rv = gz_wifi_ctl(op, buf);
-    wifi_link();
-    return rv;
+    forced_memzero(&next, sizeof(next));
+    wifi_link(); return rv;
 }
 
 void net_if_poll(void)
@@ -259,8 +397,17 @@ void net_if_poll(void)
     }
     if (state == NET_NO_CARD)
         return;
+    wifi_supplicant_poll();
+    if (auth_failure) {
+        auth_error = auth_failure; auth_failure = 0;
+        gz_wifi_ctl(WIFI_DISCONNECT, NULL); wifi_supplicant_stop();
+    }
     wifi_link();
     while ((n = gz_net_recv(frame, sizeof(frame))) > 0) {
+        if (wireless && n >= 14 && frame[12] == 0x88 && frame[13] == 0x8e) {
+            wifi_supplicant_rx(frame, n); continue;
+        }
+        if (wireless && (!associated || auth_failure)) continue;
         struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)n, PBUF_POOL);
         if (!p)
             break;              /* out of buffers; later frames stay queued */

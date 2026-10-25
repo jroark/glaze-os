@@ -37,6 +37,9 @@ mkdir -p "$stage/$folder"
 cp "$dir/kernel.bin" "$dir/romfs.img" "$stage/$folder/"
 [ -f "$dir/GlazeBoot.exe" ] && cp "$dir/GlazeBoot.exe" "$stage/$folder/$exe"
 cp "$dir/glaze.cfg" "$stage/$folder/glaze.cfg"
+# 32 bytes from the host's CSPRNG: the Wi-Fi supplicant's random seed in a
+# RAM boot, ratcheted on the card at every boot (servers/net/netif.c).
+head -c 32 /dev/urandom > "$stage/$folder/glaze.seed"
 for kv in "$@"; do
     printf '%s\n' "$kv" >> "$stage/$folder/glaze.cfg"
 done

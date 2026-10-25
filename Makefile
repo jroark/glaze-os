@@ -72,10 +72,14 @@ FATFS_SRCS := third_party/fatfs/ff.c third_party/fatfs/ffunicode.c
 FSSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(FSSTACK_SRCS) $(FATFS_SRCS))
 
 # lwIP for the network server; its port headers live in servers/net.
-NET_INC := -Ithird_party/lwip/src/include -Iservers/net
+NET_INC := -Ithird_party/lwip/src/include -Iservers/net -Ithird_party/hostap/src \
+    -Ithird_party/hostap/src/utils -include servers/net/wpa/config.h -DGLAZE_HOSTAP
 NETSTACK_SRCS := $(wildcard third_party/lwip/src/core/*.c third_party/lwip/src/core/ipv4/*.c \
     third_party/lwip/src/api/*.c) \
     third_party/lwip/src/netif/ethernet.c
+HOSTAP_SRCS := $(shell find third_party/hostap/src -name '*.c')
+NETSTACK_SRCS += $(HOSTAP_SRCS)
+$(patsubst %.c,$(OUT)/%.o,$(HOSTAP_SRCS)): TP_INC += $(NET_INC)
 NETSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(NETSTACK_SRCS))
 
 $(OUT)/third_party/%.o: third_party/%.c
@@ -483,8 +487,12 @@ $(OUT)/host/mkfsimg: $(MKFSIMG_SRCS) servers/fs/ftl.h servers/fs/folders.h
 	@mkdir -p $(dir $@)
 	$(HOSTCC) -std=gnu11 -O2 -Wall -Iservers/fs $(FS_INC) -o $@ $(MKFSIMG_SRCS)
 
-$(OUT)/fs.img: $(OUT)/host/mkfsimg $(USERDATA_FILES) lib/include/glaze/abi.h
-	$(OUT)/host/mkfsimg userdata $(FS_BLOCKS) $@
+$(OUT)/wifi-entropy:
+	@mkdir -p $(dir $@)
+	$(PYTHON) -c 'import os; open("$@", "wb").write(os.urandom(32))'
+
+$(OUT)/fs.img: $(OUT)/wifi-entropy $(OUT)/host/mkfsimg $(USERDATA_FILES) lib/include/glaze/abi.h
+	$(OUT)/host/mkfsimg userdata $(FS_BLOCKS) $@ /Library/Preferences/net.entropy=$(OUT)/wifi-entropy $(FS_EXTRA)
 
 # ---- NAND image -------------------------------------------------------------
 

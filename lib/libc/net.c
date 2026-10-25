@@ -353,3 +353,19 @@ const char *net_strerror(int err)
     default:                return "Network error";
     }
 }
+
+int net_wifi_connect_secure(const struct wifi_credentials *credentials)
+{
+    SESSION_LOCKED();
+    int rv = wifi_credentials_validate(credentials);
+    if (rv || (rv = connect())) return rv;
+    memcpy(buf, credentials, sizeof(*credentials));
+    rv = call(NET_WIFI_CONNECT_SECURE, 0, 0, 0, 0, NULL);
+    memset(buf, 0, sizeof(*credentials));
+    return rv;
+}
+int net_wifi_forget(void)
+{
+    SESSION_LOCKED();
+    return call(NET_WIFI_FORGET, 0, 0, 0, 0, NULL);
+}
