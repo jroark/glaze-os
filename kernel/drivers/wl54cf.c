@@ -471,21 +471,10 @@ void wl54cf_irq(void)
                     if (authorized || (frame[12] == 0x88 && frame[13] == 0x8e))
                         net_receive(frame, len - 8);
                     else net_rx_drop();
-                } else {
-                    /* DEBUG(hw): what a real card's receive descriptor holds. */
-                    static unsigned logged;
-                    if (logged++ < 8)
-                        kprintf("wl54cf: rx drop: %u bytes, status %x len %u off %u: %02x %02x %02x %02x %02x %02x\n",
-                                n, get16(buf), len, off, off < n ? buf[off] : 0,
-                                off + 12 < n ? buf[off + 12] : 0, off + 13 < n ? buf[off + 13] : 0,
-                                off + 14 < n ? buf[off + 14] : 0, off + 15 < n ? buf[off + 15] : 0,
-                                off + 16 < n ? buf[off + 16] : 0);
+                } else
                     net_rx_drop();
-                }
-            } else {
-                kprintf("wl54cf: rx length %u\n", n);
+            } else
                 net_rx_drop();
-            }
             signal(RX);
         }
         if (cause & EVENT) {
