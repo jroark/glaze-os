@@ -76,6 +76,7 @@ static inline uint16_t *gz_fb_map(void)
 }
 static inline int gz_input_status(void) { return GZ_SC0(SYS_INPUT_STATUS); }
 static inline int gz_display_set(int brightness, int contrast) { return GZ_SC2(SYS_DISPLAY_SET, brightness, contrast); }
+static inline int gz_display_power(bool on) { return GZ_SC1(SYS_DISPLAY_POWER, on); }
 static inline int gz_input_bind(int port) { return GZ_SC1(SYS_INPUT_BIND, port); }
 static inline int gz_input_read(struct gz_input_event *ev, uint32_t max) { return GZ_SC2(SYS_INPUT_READ, ev, max); }
 

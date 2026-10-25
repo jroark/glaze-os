@@ -74,6 +74,8 @@ enum {
 /* To SpringBoard's port: the clock or the NTP settings (glaze/tz.h)
  * changed, so redraw the time and look at the settings again. */
 #define SB_NOTIFY_TIME      0x2u
+/* Settings changed DISPLAY_TIMEOUT_PREF; reload and start a fresh interval. */
+#define SB_NOTIFY_DISPLAY   0x8u
 
 #define SB_RING             64
 

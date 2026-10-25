@@ -1,0 +1,12 @@
+# Select 30 seconds, then hold a brightness preview through timeout. Power
+# wakes, release is swallowed, and unlocking returns to Display. At 51 s
+# brightness must still be the saved level 3, not the previewed level 1.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 tap 120 147
+8000 tap 120 267
+9500 tap 120 73
+11000 down 28 96
+44000 key power
+45000 up 28 96
+46000 drag 40 280 235 280 500

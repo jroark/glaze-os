@@ -6,6 +6,35 @@
 #include <glaze/display.h>
 
 static int brightness_now = -1, contrast_now = -1;
+static bool powered = true;
+static uint32_t saved_control, saved_config, saved_gate;
+
+int display_power(int on)
+{
+    if (on != 0 && on != 1)
+        return GZ_EINVAL;
+    if (powered == (bool)on)
+        return 0;
+    /* Stock ddi.dll 0x01A55900: off writes zero to BLG+0/+4, then
+     * clears CMM+0 bit 0. The inverse enables that gate before configuring
+     * PWM and enabling BLG+0. See docs/DISPLAY.md for the pointer mapping.
+     * Restore the inherited configuration, including its reserved bits;
+     * leave the period and brightness duty untouched. */
+    if (!on) {
+        saved_control = DISP_BL_CONTROL;
+        saved_config = DISP_BL_CONFIG;
+        saved_gate = DISP_BL_GATE & 1u;
+        DISP_BL_CONTROL = 0;
+        DISP_BL_CONFIG = 0;
+        DISP_BL_GATE &= ~1u;
+    } else {
+        DISP_BL_GATE = (DISP_BL_GATE & ~1u) | saved_gate;
+        DISP_BL_CONFIG = saved_config;
+        DISP_BL_CONTROL = saved_control;
+    }
+    powered = on;
+    return 0;
+}
 
 static void delay_edge(void)
 {
