@@ -7,25 +7,49 @@ ordinary Ethernet frames through the existing `SYS_NET_*` ABI and lwIP
 network server, so applications and Settings > Network use the same network
 APIs as NE2000.
 
-## Local firmware and build
+## Firmware and build
 
-The supplied AmbiCom package contains an ARM/Thumb CE 4.1 driver, which cannot
-execute on the MIPS BE-300. Its embedded ARM **card firmware** is independent
-of the host CPU, however, and is uploaded by the new Glaze driver.
+Linux also uploads helper and main firmware into the CF8385; an open source
+host driver does not replace the card's firmware. The pinned Linux pair is
+redistributable in binary form for use **only with Marvell silicon products**,
+provided its copyright, conditions and disclaimer accompany it. No modification,
+reverse engineering, decompilation or disassembly is permitted. Read the full
+[LICENCE.Marvell](../firmware/LICENCE.Marvell).
+
+Glaze pins linux-firmware revision
+[`ba2549fc973076ac1500a9ba5adf8864c130e7f5`](https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware.git/+/ba2549fc973076ac1500a9ba5adf8864c130e7f5/).
+Its [WHENCE](https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware.git/+/ba2549fc973076ac1500a9ba5adf8864c130e7f5/WHENCE)
+identifies both `libertas/cf8385.bin` and `libertas/cf8385_helper.bin` as
+redistributable under that license, extracted with Marvell's permission.
+[The manifest](../firmware/wl54cf-linux.json) records their sizes and SHA-256
+values. Fetch them without a vendor CAB:
 
 ```sh
-python3 tools/extract_wl54cf_firmware.py /path/to/wl54gcfppc41/wince41.cab
-./build.sh WL54CF=1
-cp out/glaze.bin out/wireless-test.bin
-/path/to/be300 --nand out/wireless-test.bin --wl54cf --rtc-host-time
+python3 tools/fetch_wl54cf_firmware.py
+./build.sh glazeboot INIT=bin/springboard INPUT_SCRIPT= GB_APPS=all WL54CF=1
+make glazeboot-exe BE300_DEV=/path/to/be300-dev
 ```
 
-The extractor needs `cabextract` for CAB input; it also accepts the extracted
-`AMWL54G.dll`. It verifies the exact vendor DLL and helper/main image hashes,
-then writes `firmware/wl54cf/cf8385_helper.bin` and `cf8385.bin`. These assets
-are ignored and must not be committed. `WL54CF_FW_DIR` overrides their build
-location. Ordinary builds do not need firmware; `WL54CF=1` requires both files
-and packs them into romfs under `firmware/`.
+The fetcher verifies every download against the pinned manifest before writing
+anything. Binary files remain ignored under `firmware/wl54cf/`.
+`WL54CF_FW_DIR` overrides their build location. Ordinary builds do not need
+firmware; `WL54CF=1` requires both files and packs them under `firmware/`.
+Redistributed builds must include the full license notice and provenance;
+`tools/package_glazeboot.py` enforces the exact pair and adds these notices.
+The public emulator NAND omits firmware: this license is limited to Marvell
+silicon, not an emulated card. Driver/model tests use synthetic fixtures.
+
+The Linux main image (97,128 bytes) is byte-identical to the one extracted from
+AmbiCom's package. Its helper is 2,140 bytes, versus 2,136 bytes in that package,
+and is different; neither is modified to match the other. The Linux pair fits
+Glaze's bounded, even-length helper/main upload interface. Physical-card
+interoperability of the Linux helper remains unvalidated; inclusion in a
+release is not a hardware validation claim.
+
+For comparison with previous private experiments,
+`tools/extract_wl54cf_firmware.py` still accepts the supported vendor CAB or
+`AMWL54G.dll` (CAB input needs `cabextract`) and verifies its exact hashes.
+The public packager rejects that different helper. No vendor DLL is bundled.
 
 After selecting a network or restoring a saved choice, serial milestones include:
 

@@ -26,13 +26,22 @@ publisher = module('publish_site')
 REVISION = 'e4500c1204252cdf37bc8dfd86e8e678bc7b641a'
 
 
-def romfs(firmware=False):
-    names = ['bin/' + name for name in ('springboard', 'appstore', 'browser', 'settings', 'audio', 'net', 'fs')]
+FIRMWARE = {'firmware/cf8385.bin': b'approved main fixture',
+            'firmware/cf8385_helper.bin': b'approved helper fixture'}
+
+
+def romfs(firmware=False, omit=None):
+    entries = {'bin/' + name: b'' for name in (*packager.BUILTIN_APPS, 'springboard', 'audio', 'net', 'fs')}
     if firmware:
-        names.append('firmware/cf8385.bin')
-    offset = 8 + 56 * len(names)
-    return b'GZRF' + struct.pack('<I', len(names)) + b''.join(
-        struct.pack('<48sII', name.encode(), offset, 0) for name in names)
+        entries.update(FIRMWARE)
+    entries.pop(omit, None)
+    offset = 8 + 56 * len(entries)
+    table = b''
+    payload = b''
+    for name, data in entries.items():
+        table += struct.pack('<48sII', name.encode(), offset + len(payload), len(data))
+        payload += data
+    return b'GZRF' + struct.pack('<I', len(entries)) + table + payload
 
 
 class SiteRelease(unittest.TestCase):
@@ -43,9 +52,16 @@ class SiteRelease(unittest.TestCase):
         self.build = self.root / 'build'
         self.site = self.root / 'site'
         self.build.mkdir()
+        manifest = packager.firmware_manifest(ROOT)
+        for name, data in FIRMWARE.items():
+            manifest['files']['libertas/' + Path(name).name] = {
+                'size_bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+        firmware_patch = patch.object(packager, 'firmware_manifest', return_value=manifest)
+        firmware_patch.start()
+        self.addCleanup(firmware_patch.stop)
         self.site.mkdir()
         for name, data in {'GlazeBoot.exe': b'MZfixture', 'kernel.bin': REVISION[:7].encode(),
-                           'romfs.img': romfs(), 'glaze.cfg': b'nand=ro\n',
+                           'romfs.img': romfs(True), 'glaze.cfg': b'nand=ro\n',
                            'glaze.seed': b'private seed must not ship'}.items():
             (self.build / name).write_bytes(data)
         nand = bytearray(16 * 1024 * 1024)
@@ -68,6 +84,11 @@ class SiteRelease(unittest.TestCase):
             self.assertIsNone(z.testzip())
             self.assertIn('Glaze/GlazeBoot.exe', z.namelist())
             self.assertIn('Emulator/glaze.bin', z.namelist())
+            self.assertIn('licenses/firmware/LICENCE.Marvell', z.namelist())
+            self.assertEqual(z.read('licenses/firmware/LICENCE.Marvell'), (ROOT / 'firmware/LICENCE.Marvell').read_bytes())
+            self.assertEqual(set(release['builtin_apps']), set(packager.BUILTIN_APPS))
+            self.assertTrue(release['vendor_firmware_included'])
+            self.assertFalse(release['emulator_firmware_included'])
             self.assertFalse(any('glaze.seed' in name or name.startswith('firmware/') for name in z.namelist()))
             for line in z.read('SHA256SUMS').decode().splitlines():
                 digest, name = line.split('  ', 1)
@@ -84,20 +105,30 @@ class SiteRelease(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'does not match'):
             publisher.check_site(self.site)
 
-    def test_reject_vendor_firmware_and_wrong_build(self):
-        (self.build / 'romfs.img').write_bytes(romfs(True))
-        with self.assertRaisesRegex(ValueError, 'vendor firmware'):
-            self.package()
+    def test_reject_unapproved_firmware_and_wrong_build(self):
         (self.build / 'romfs.img').write_bytes(romfs())
+        with self.assertRaisesRegex(ValueError, 'approved Linux firmware pair'):
+            self.package()
+        (self.build / 'romfs.img').write_bytes(romfs(True).replace(b'approved main fixture', b'tampered main fixture'))
+        with self.assertRaisesRegex(ValueError, 'unapproved firmware bytes'):
+            self.package()
+        (self.build / 'romfs.img').write_bytes(romfs(True))
         nand = bytearray((self.build / 'glaze.bin').read_bytes())
         image = romfs(True)
         nand[0x40000:0x40000 + len(image)] = image
         (self.build / 'glaze.bin').write_bytes(nand)
-        with self.assertRaisesRegex(ValueError, 'NAND image contains vendor firmware'):
+        with self.assertRaisesRegex(ValueError, 'NAND image contains restricted firmware'):
             self.package()
         (self.build / 'kernel.bin').write_bytes(b'wrong revision')
         with self.assertRaisesRegex(ValueError, 'requested revision'):
             self.package()
+
+    def test_all_builtin_apps_are_required(self):
+        for name in packager.BUILTIN_APPS:
+            with self.subTest(app=name):
+                (self.build / 'romfs.img').write_bytes(romfs(True, 'bin/' + name))
+                with self.assertRaisesRegex(ValueError, 'missing a required application'):
+                    self.package()
 
     def test_missing_download_fails_before_publish(self):
         release = self.package()

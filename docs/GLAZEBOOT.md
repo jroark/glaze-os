@@ -282,7 +282,10 @@ on demand. GlazeBoot's `romfs.img` therefore carries only the apps named in
 keeps them all), their icons, the servers, and the test programs. The NAND
 image is unchanged. SpringBoard shows a built-in app only when romfs holds its
 program. The default saves about 580 KiB, leaving about 8.3 MiB free at
-SpringBoard on the emulator.
+SpringBoard on the emulator. The public full download on glaze-os.com uses
+`GB_APPS=all`, restoring Calendar, Photos, Clock, Calculator, Files, Music,
+Videos and Notes alongside Browser, App Store and Settings. The full archive
+uses more RAM; additional packages can still be installed from the App Store.
 
 ## Known gaps
 

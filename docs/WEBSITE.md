@@ -106,16 +106,24 @@ images remain real emulator captures, not hardware photographs.
 The release ZIP contains a `Glaze/` boot folder and `Emulator/glaze.bin`, plus
 setup instructions, per-file checksums, source links and license notices.
 `site/downloads/latest.json` and the external SHA-256 file are tracked; ZIPs
-are generated and ignored. The public build excludes extracted vendor
-firmware and shared Wi-Fi seeds. `prepare-card.py` in the ZIP generates a
-private per-card seed locally and preserves an existing one. A private
-WL54-CF build can include locally extracted firmware with `WL54CF=1`.
+are generated and ignored. The full hardware archive includes every built-in
+app (`GB_APPS=all`) and the unmodified, pinned Linux CF8385 firmware under
+`firmware/LICENCE.Marvell`. Its exact source and hashes are included in the ZIP.
+Only the approved helper/main pair may ship; the different CAB-derived helper
+is rejected. Physical interoperability of the Linux pair is not yet validated.
+The public emulator NAND excludes Marvell firmware because its license permits
+use only with Marvell silicon. Both images omit shared Wi-Fi seeds.
+`prepare-card.py` generates a private per-card seed locally and preserves an
+existing one. See [WL54CF.md](WL54CF.md) for licensing and provenance.
 
 To reproduce the release from the advertised source revision (currently
 `e4500c1204252cdf37bc8dfd86e8e678bc7b641a`):
 
 ```sh
-./build.sh all glazeboot INIT=bin/springboard INPUT_SCRIPT= WL54CF=0 BUILD_ID=e4500c1
+python3 tools/fetch_wl54cf_firmware.py
+# Force romfs regeneration when switching firmware build options.
+./build.sh all INIT=bin/springboard INPUT_SCRIPT= WL54CF=0 BUILD_ID=e4500c1 -W tools/mkromfs.py
+./build.sh glazeboot INIT=bin/springboard INPUT_SCRIPT= WL54CF=1 GB_APPS=all BUILD_ID=e4500c1
 make glazeboot-exe BE300_DEV=/path/to/be300-dev
 mkdir -p out/public-release
 cp out/glazeboot/GlazeBoot.exe out/glazeboot/kernel.bin out/glazeboot/romfs.img out/glazeboot/glaze.cfg out/public-release/
@@ -129,17 +137,22 @@ python3 tools/package_glazeboot.py --build-dir out/public-release \
 python3 tests/site_release.py
 ```
 
-The packaging tool is part of the website update; when rebuilding an older
-advertised OS revision, retain that tool separately. Use fresh build output
+The fetcher, firmware manifest/license and packaging tool are part of the
+website update. When rebuilding an older advertised OS revision, retain
+`tools/fetch_wl54cf_firmware.py`, `tools/package_glazeboot.py`, `firmware/` and
+these instructions from the release tooling revision separately. `SOURCE.txt`
+and `latest.json` link both exact source revisions. Use fresh build output
 for public releases, with no locally imported Windows CE apps or personal
 files. Update the download links and source revision in `site/index.html`
-when preparing a new release.
+when preparing a new release. The full-app/firmware release uses a new
+`-full.zip` URL; the earlier reduced-app ZIP remains available at its original URL.
 
 The publisher refuses a missing ZIP, size/hash mismatch or incorrect checksum
 file before making AWS calls. It uploads downloads before HTML, retains old
 versioned downloads, and checks the public ZIP, MIME type, checksum and release
 metadata after publication. `tests/site_release.py` covers these safeguards,
-firmware exclusion from both archives, per-file hashes and private seed setup.
+approved firmware inclusion with its license, rejection of altered firmware,
+all built-in apps, emulator firmware exclusion, per-file hashes and private seed setup.
 
 ```
 python3 tools/publish_site.py --profile linux4be --dry-run
