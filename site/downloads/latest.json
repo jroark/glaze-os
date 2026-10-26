@@ -1,0 +1,11 @@
+{
+  "date": "2026-10-25",
+  "revision": "e4500c1204252cdf37bc8dfd86e8e678bc7b641a",
+  "build_id": "e4500c1",
+  "filename": "glaze-2026-10-25-e4500c1.zip",
+  "size_bytes": 4430655,
+  "sha256": "cfc599c670c84e683117d698a585926f352ee0a2697084d9a8c71e3d9c580270",
+  "source_url": "https://github.com/jroark/glaze-os/archive/e4500c1204252cdf37bc8dfd86e8e678bc7b641a.zip",
+  "vendor_firmware_included": false,
+  "shared_wifi_seed_included": false
+}

@@ -94,6 +94,53 @@ Certificate validation and the CloudFront deployment take several minutes.
 
 ## Publish
 
+### October 25 hardware update and downloads
+
+The page covers GlazeBoot, physical-device boot/storage/network/audio results,
+master volume, Wi-Fi capabilities, SomaFM, Gmail, console packages,
+multitasking, touch/display controls and Browser scripting/frames. The hardware
+table separates observed real-device results from emulator-only security
+coverage and incomplete WL54-CF physical interoperability. Existing gallery
+images remain real emulator captures, not hardware photographs.
+
+The release ZIP contains a `Glaze/` boot folder and `Emulator/glaze.bin`, plus
+setup instructions, per-file checksums, source links and license notices.
+`site/downloads/latest.json` and the external SHA-256 file are tracked; ZIPs
+are generated and ignored. The public build excludes extracted vendor
+firmware and shared Wi-Fi seeds. `prepare-card.py` in the ZIP generates a
+private per-card seed locally and preserves an existing one. A private
+WL54-CF build can include locally extracted firmware with `WL54CF=1`.
+
+To reproduce the release from the advertised source revision (currently
+`e4500c1204252cdf37bc8dfd86e8e678bc7b641a`):
+
+```sh
+./build.sh all glazeboot INIT=bin/springboard INPUT_SCRIPT= WL54CF=0 BUILD_ID=e4500c1
+make glazeboot-exe BE300_DEV=/path/to/be300-dev
+mkdir -p out/public-release
+cp out/glazeboot/GlazeBoot.exe out/glazeboot/kernel.bin out/glazeboot/romfs.img out/glazeboot/glaze.cfg out/public-release/
+make -C host mkfsimg
+# A public emulator image must not distribute a shared WPA entropy seed.
+host/mkfsimg userdata 704 out/public-release/fs.img
+python3 tools/mk_nand.py --kernel out/kernel.elf --spl out/spl.elf \
+  --romfs out/romfs.img --fs-image out/public-release/fs.img --out out/public-release/glaze.bin
+python3 tools/package_glazeboot.py --build-dir out/public-release \
+  --revision e4500c1204252cdf37bc8dfd86e8e678bc7b641a --date 2026-10-25
+python3 tests/site_release.py
+```
+
+The packaging tool is part of the website update; when rebuilding an older
+advertised OS revision, retain that tool separately. Use fresh build output
+for public releases, with no locally imported Windows CE apps or personal
+files. Update the download links and source revision in `site/index.html`
+when preparing a new release.
+
+The publisher refuses a missing ZIP, size/hash mismatch or incorrect checksum
+file before making AWS calls. It uploads downloads before HTML, retains old
+versioned downloads, and checks the public ZIP, MIME type, checksum and release
+metadata after publication. `tests/site_release.py` covers these safeguards,
+firmware exclusion from both archives, per-file hashes and private seed setup.
+
 ```
 python3 tools/publish_site.py --profile linux4be --dry-run
 python3 tools/publish_site.py --profile linux4be
@@ -107,5 +154,6 @@ distribution and checks the live site:
 - missing pages get the 404 page
 - `www` and plain HTTP redirect to `https://glaze-os.com`
 - the bucket refuses anonymous reads
+- the download ZIP, SHA-256 file and release metadata match the local build
 
 `--verify-only` repeats the checks without uploading.

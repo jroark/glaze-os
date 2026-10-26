@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Glaze, an operating system for the Casio BE-300</title>
-  <meta name="description" content="Glaze is a microkernel OS for the Casio BE-300, with an early iPhone-style interface, an App Store, AIM, Task Manager and support for selected original Windows CE apps.">
+  <meta name="description" content="Glaze runs on a real Casio BE-300. Download GlazeBoot to boot from CompactFlash, with Wi-Fi, headphone audio, internet radio and an early iPhone-style interface.">
   <meta property="og:title" content="Glaze, an operating system for the Casio BE-300">
-  <meta property="og:description" content="An early iPhone-style interface for Casio's MIPS PDA. Explore native apps, AIM, Task Manager and selected original Windows CE apps.">
+  <meta property="og:description" content="Tested on a real Casio BE-300: boot from CompactFlash, browse the web and listen through headphones. Download GlazeBoot and the latest Glaze build.">
   <meta property="og:image" content="https://glaze-os.com/img/og.png">
   <meta property="og:url" content="https://glaze-os.com/">
   <meta name="theme-color" content="#6d84a2">
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="preload" href="fonts/VeraBd.ttf" as="font" type="font/ttf" crossorigin>
-  <link rel="stylesheet" href="style.css?v=20261021">
+  <link rel="stylesheet" href="style.css?v=20261025">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -28,12 +28,13 @@
     <div class="hero">
       <div>
         <h1>A new operating system for an old Casio PDA</h1>
-        <p class="lede">Glaze is a microkernel OS written from scratch for the Casio Cassiopeia BE-300, with a touch interface in the style of the first iPhone. It boots from the device's own flash through the stock boot ROM.</p>
+        <p class="lede">Glaze is a microkernel OS written from scratch for the Casio Cassiopeia BE-300, with a touch interface in the style of the first iPhone. It runs on real hardware from CompactFlash through GlazeBoot, and in the BE-300 emulator.</p>
         <div class="actions">
-          <a class="button button-primary" href="https://linux4be.com/?image=glaze&amp;boot=1&amp;card=none&amp;keyboard=0">Run it in your browser</a>
-          <a class="button button-plain" href="https://github.com/jroark/glaze-os">Get the source</a>
+          <a class="button button-primary" href="#download">Download GlazeBoot</a>
+          <a class="button button-plain" href="https://linux4be.com/?image=glaze&amp;boot=1&amp;card=none&amp;keyboard=0">Run it in your browser</a>
         </div>
-        <p class="hint">Opens the BE-300 emulator on linux4be.com and boots Glaze automatically with the on-screen keyboard. Tap or press a key to enable sound. Networking can be configured in the emulator's settings.</p>
+        <p class="hint">GlazeBoot starts Glaze from a CF card without flashing the device. Or try it on linux4be.com: tap or press a key to enable emulator sound.</p>
+        <p class="hardware-badge">Tested on a real Cassiopeia BE-300 · October 25, 2026</p>
       </div>
 
       <div class="device">
@@ -53,15 +54,55 @@
 
     <section aria-labelledby="latest">
       <h2 id="latest">New in Glaze</h2>
-      <p class="section-note">Updated <time datetime="2026-10-21">October 21, 2026</time>. More apps, original BE-300 software, and improvements throughout the system.</p>
+      <p class="section-note">Updated <time datetime="2026-10-25">October 25, 2026</time>. Real-device booting, networking and audio, plus more ways to use Glaze.</p>
       <dl class="group">
-        <div class="row"><dt>Original apps</dt><dd>Run selected original Windows CE apps alongside native Glaze apps: Calculator, PocketNotepad, Owner and OwnerInfo, plus opt-in Clock, RegEdit and PalmTweak packages. <a href="#compatibility">See what works.</a></dd></div>
+        <div class="row"><dt>GlazeBoot</dt><dd>Start Glaze from Windows CE using a CompactFlash card. Touch, buttons, apps, card storage and read-only access to the original NAND volume work on a real BE-300. <a href="#download">Get the ready-to-boot ZIP.</a></dd></div>
+        <div class="row"><dt>Wi-Fi and Ethernet</dt><dd>Settings now scans and selects networks for Z-Com XI-825 and AmbiCom WL54-CF cards, with saved connections and security options supported by each card. Insert a network card after GlazeBoot loads from the storage card. <a href="#hardware-tested">See the hardware test status.</a></dd></div>
+        <div class="row"><dt>Headphone audio</dt><dd>Music, radio and notification tones now play through the headphone jack after GlazeBoot. Settings → Sounds → Volume controls all playback, including music already playing. Confirmed by listening on real hardware.</dd></div>
+        <div class="row"><dt>SomaFM radio</dt><dd>An unofficial player with a 51-station catalog, favorites and track metadata. Music keeps playing after Home and while using other apps. Install it from the App Store; a network card is required.</dd></div>
+        <div class="row"><dt>More native apps</dt><dd>Gmail adds IMAP and SMTP mail. Game Boy, NES, Master System, Game Gear, Genesis and TurboGrafx-16 emulators are available as App Store packages, with original demo cartridges and support for your own compatible ROMs.</dd></div>
+        <div class="row"><dt>Multitasking</dt><dd>Switch back to apps through the multitasking bar. Background apps can retain their state while their threads and drawing are suspended; radio playback remains with the audio service.</dd></div>
+        <div class="row"><dt>Display and touch</dt><dd>Five-point touch calibration, physical backlight and LCD contrast controls, and a configurable screen timeout. Wake returns to the lock screen. <a href="https://github.com/jroark/glaze-os/blob/main/docs/DISPLAY.md">Display and calibration details.</a></dd></div>
+        <div class="row"><dt>A more capable Browser</dt><dd>JavaScript through JerryScript, DOM events, forms, timers, and independent frames and iframes, alongside HTTPS. It remains a small browser with a limited web API, rather than a modern desktop browser.</dd></div>
+        <div class="row"><dt>Original apps</dt><dd>Run selected original Windows CE apps alongside native Glaze apps: Calculator, PocketNotepad, Owner and OwnerInfo, plus opt-in Clock, RegEdit, PalmTweak and WorldTALK packages. <a href="#compatibility">See what works.</a></dd></div>
         <div class="row"><dt>Task Manager</dt><dd>Watch live CPU and memory history, inspect running tasks and threads, pause the display, and end other managed apps with confirmation. System services stay protected. Available in the App Store; CPU and task monitoring need a current OS build.</dd></div>
         <div class="row"><dt>AIM</dt><dd>Instant messages, buddy lists, online and away status, typing notices, profiles, automatic away replies and familiar door and message sounds. Connect to an AIM revival server or your own OSCAR server over Ethernet; AOL's original service is closed. The session ends when you leave the app.</dd></div>
         <div class="row"><dt>Smoother interaction</dt><dd>Faster buttons, gradients, text fitting and flash verification, with smaller Settings redraws. Lists across Music, Videos, Notes, Files, Browser and App Store now share consistent scrolling and tap behavior. Browser bookmarks ask you to confirm deletion, and App Store rows highlight as you press.</dd></div>
         <div class="row"><dt>More room in RAM</dt><dd>Built-in apps, shared libraries and assets load from flash as their pages are needed. Read-only pages are shared, and unused cached pages can be reclaimed. The whole system archive no longer needs to sit in memory at boot.</dd></div>
       </dl>
       <p class="section-note section-followup">For developers: <a href="https://github.com/jroark/glaze-os/blob/main/docs/PERFORMANCE.md">rendering and flash benchmarks</a>, <a href="https://github.com/jroark/glaze-os/blob/main/docs/TASK_MANAGER.md">task monitoring</a>, and <a href="https://github.com/jroark/glaze-os/blob/main/tests/bench.py">boot, launch and memory measurements with tests/bench.py</a>.</p>
+    </section>
+
+    <section aria-labelledby="hardware-tested">
+      <h2 id="hardware-tested">Tested on a real BE-300</h2>
+      <p class="section-note">These results come from a physical device, serial captures and listening tests. The gallery below shows emulator screenshots.</p>
+      <dl class="group">
+        <div class="row"><dt>Boot and storage</dt><dd>GlazeBoot reaches SpringBoard with touch, buttons and apps. The boot CF card mounts as /Card; the original Windows CE NAND volume mounts read-only as /NAND. Cards inserted after boot are detected.</dd></div>
+        <div class="row"><dt>Ethernet</dt><dd>An AmbiCom AMB8610 NE2000 card obtains DHCP and loads HTTPS pages and App Store downloads. SomaFM streams through the same network stack.</dd></div>
+        <div class="row"><dt>XI-825 Wi-Fi</dt><dd>A Z-Com XI-825 with station firmware 1.3.5 scans and joins an open network, obtains DHCP and loads network content. WEP support is implemented and emulator-tested; secured-network interoperability on physical cards still needs validation.</dd></div>
+        <div class="row"><dt>WL54-CF Wi-Fi</dt><dd>A native driver supports Marvell CF8385 cards, with open, WEP, WPA and WPA2 Personal paths tested in the emulator. Physical-card bring-up is in progress. This card needs separately supplied firmware; the public ZIP does not contain the extracted vendor firmware.</dd></div>
+        <div class="row"><dt>Headphones and volume</dt><dd>Settings tones and music play through the headphone jack. Changing the volume while music plays is confirmed working. The device's internal piezo buzzer uses a separate controller and is outside this PCM audio driver.</dd></div>
+      </dl>
+    </section>
+
+    <section class="download-section" aria-labelledby="download">
+      <h2 id="download">Download GlazeBoot and Glaze</h2>
+      <div class="download-card">
+        <p class="release-label">October 25, 2026 · build <code>e4500c1</code></p>
+        <h3>Ready for your CompactFlash card</h3>
+        <p>The ZIP includes <strong>GlazeBoot.exe</strong>, the matching kernel and system archive, boot settings, setup instructions, licenses, and a Glaze NAND image for the emulator.</p>
+        <div class="actions">
+          <a class="button button-primary" href="downloads/glaze-2026-10-25-e4500c1.zip" download>Download Glaze ZIP</a>
+          <a class="button button-plain" href="downloads/glaze-2026-10-25-e4500c1.zip.sha256">SHA-256 checksum</a>
+        </div>
+        <p class="download-detail"><a href="https://github.com/jroark/glaze-os/tree/e4500c1204252cdf37bc8dfd86e8e678bc7b641a">Source for this build</a> · <a href="downloads/latest.json">Release details</a> · No Windows CE software or vendor firmware is bundled.</p>
+      </div>
+      <ol class="group steps download-steps">
+        <li class="step"><div><p>Extract the ZIP. Copy its <code>Glaze</code> folder to a FAT-formatted CompactFlash card. The included README explains setup and the optional per-card Wi-Fi seed.</p></div></li>
+        <li class="step"><div><p>On the BE-300 in Windows CE, open <code>\Storage Card\Glaze\GlazeBoot.exe</code> and choose Boot. The included configuration keeps Windows CE's NAND volume read-only.</p></div></li>
+        <li class="step"><div><p>Glaze runs from RAM: files and settings in its root filesystem disappear on reset. Keep files you want on <code>/Card</code>. To return to Windows CE, fully power-cycle the device; the README describes the reset procedure.</p></div></li>
+      </ol>
+      <p class="section-note section-followup">The hardware bundle includes App Store, Browser and Settings to leave room in 16 MB of RAM. Install more apps from the App Store. WL54-CF owners must supply their own card firmware and build with <code>WL54CF=1</code>; <a href="https://github.com/jroark/glaze-os/blob/main/docs/WL54CF.md">firmware and build instructions</a>. <a href="https://github.com/jroark/glaze-os/blob/main/docs/GLAZEBOOT.md">Full GlazeBoot guide.</a></p>
     </section>
 
     <section aria-labelledby="screens">
@@ -97,7 +138,7 @@
         <div class="row"><dt>RegEdit · opt-in</dt><dd>Browse, create and edit keys and string values through the original dialogs, with saved settings across boots. It edits its own private registry. File import and export remain unvalidated.</dd></div>
         <div class="row"><dt>PalmTweak · opt-in</dt><dd>General and Power Off pages support checkboxes, numeric spinners, validation, Apply, OK and Cancel. Saved animation and timeout preferences stay in its private registry; they do not change Glaze's animation or power policy. Other pages remain unvalidated.</dd></div>
       </dl>
-      <p class="section-note section-followup">This is support for selected apps, with limited controls and APIs. Networking, multimedia and arbitrary vendor DLLs are not supported. <a href="https://github.com/jroark/glaze-os/blob/main/docs/WINCE.md">Import instructions, supported features and compatibility limits.</a></p>
+      <p class="section-note section-followup">This is support for selected apps, with limited controls and APIs. Selected WorldTALK network workflows are supported; multimedia and arbitrary vendor DLLs remain limited. <a href="https://github.com/jroark/glaze-os/blob/main/docs/WINCE.md">Import instructions, supported features and compatibility limits.</a></p>
     </section>
 
     <section aria-labelledby="inside">
@@ -106,12 +147,12 @@
           <h2 id="inside">What's inside</h2>
           <dl class="group">
             <div class="row"><dt>Kernel</dt><dd>A small microkernel with synchronous message passing, shared memory, threads and paged virtual memory.</dd></div>
-            <div class="row"><dt>Apps</dt><dd>Share their libraries through a dynamic linker. More install as packages from the App Store, onto flash or a memory card: Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manager and AIM.</dd></div>
+            <div class="row"><dt>Apps</dt><dd>Share their libraries through a dynamic linker. More install as packages from the App Store, onto flash or a memory card: Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manager, AIM, Gmail, SomaFM and console emulators.</dd></div>
             <div class="row"><dt>Storage</dt><dd>littlefs on a NAND flash translation layer with error correction and bad-block handling. Built-in system files are demand-paged from NAND. CompactFlash cards appear as /Card.</dd></div>
             <div class="row"><dt>Keyboard</dt><dd>A Stowaway folding keyboard detected at boot supplies physical text input in Notes, Files and Browser, hiding the on-screen keyboard to make more room. The initial layout is US ASCII; live attachment is not supported.</dd></div>
-            <div class="row"><dt>Network</dt><dd>lwIP over an NE2000 PCMCIA Ethernet card: DHCP, DNS, TCP and UDP. The clock sets itself by NTP.</dd></div>
+            <div class="row"><dt>Network</dt><dd>lwIP over NE2000 Ethernet, XI-825 Wi-Fi or WL54-CF Wi-Fi: DHCP, DNS, TCP and UDP. Security depends on the card; see the hardware status above. The clock sets itself by NTP.</dd></div>
             <div class="row"><dt>Web</dt><dd>A browser engine of its own, with HTTPS through wolfSSL.</dd></div>
-            <div class="row"><dt>Sound</dt><dd>MP3 and WAV playback and system sounds through the device's audio DMA.</dd></div>
+            <div class="row"><dt>Sound</dt><dd>MP3, WAV, internet radio and system sounds through headphone PCM output, with a shared volume control. The separate internal piezo buzzer is not driven by this audio path.</dd></div>
           </dl>
         </div>
         <div>

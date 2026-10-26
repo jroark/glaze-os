@@ -42,7 +42,7 @@
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 60px; }
 
 body {
   margin: 0;
@@ -311,7 +311,34 @@ h2 {
   .lock-part, .screen.unlocked .lock-part, .knob.settling { transition: none; }
 }
 
+/* ---- hardware status and downloads -------------------------------------- */
+
+.hardware-badge {
+  display: inline-block;
+  margin: 16px 0 0;
+  padding: 7px 12px;
+  border: 1px solid #6e8871;
+  border-radius: 6px;
+  background: #eef5ee;
+  color: #2e5134;
+  font-size: 13px;
+}
+.download-card {
+  padding: 22px;
+  background: var(--cell);
+  border: 1px solid var(--cell-border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 0 var(--emboss);
+}
+.download-card h3 { margin: 8px 0; font-size: 23px; }
+.download-card p { max-width: 74ch; }
+.release-label { margin: 0; color: var(--ink-soft); font-size: 13px; }
+.download-detail { margin-bottom: 0; color: var(--ink-soft); font-size: 13px; }
+.download-steps { margin-top: 16px; }
+.download-steps .step p { margin-bottom: 0; overflow-wrap: anywhere; }
+
 /* ---- screens gallery ---------------------------------------------------- */
+
 
 .gallery {
   display: grid;

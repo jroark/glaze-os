@@ -26,3 +26,6 @@ host/jerry.o
 host/libjerry.a
 
 /firmware/wl54cf/
+
+# Built website release archives; metadata and checksums remain tracked.
+/site/downloads/*.zip
