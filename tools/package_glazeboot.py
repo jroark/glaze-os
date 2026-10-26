@@ -112,7 +112,8 @@ for use ONLY with Marvell silicon products under licenses/firmware/LICENCE.Marve
 See licenses/firmware/PROVENANCE.txt for the exact source and SHA-256 values.
 The Linux main image matches the previously used vendor image; the helper is
 different. Physical-card interoperability of this pair remains unvalidated.
-WEP/WPA/WPA2 driver paths are emulator-tested using synthetic firmware fixtures.
+WEP/WPA/WPA2 paths have emulator coverage; physical security interoperability
+is not claimed. Native driver tests use synthetic firmware fixtures.
 Windows CE applications, vendor DLLs and commercial game ROMs are not bundled.
 
 EMULATOR
@@ -187,6 +188,9 @@ def package(build_dir, site_dir, revision, release_date, repository):
         'redistributable under LICENCE.Marvell, extracted with Marvell permission.\n'
         'See wl54cf-linux.json for the pinned sizes and SHA-256 checksums.\n'
         'No firmware is included in the emulator NAND image.\n').encode()
+    # Keep the notice with the firmware when users copy just Glaze/ to CF.
+    files['Glaze/LICENCE.Marvell'] = notice
+    files['Glaze/FIRMWARE.txt'] = files['licenses/firmware/PROVENANCE.txt']
     files['licenses/third_party/README.md'] = (repository / 'third_party/README.md').read_bytes()
     files['licenses/fonts/VeraCopyright.txt'] = (repository / 'assets/fonts/VeraCopyright.txt').read_bytes()
     for path in sorted((repository / 'third_party').rglob('*')):
