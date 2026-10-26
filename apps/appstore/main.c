@@ -1,7 +1,6 @@
 /* Native curated App Store, with the two tabs Search and Updates. */
 #include "catalog.h"
-#include "net.h"
-#include "web.h"
+#include "worker.h"
 #include <glaze/fs.h>
 #include <glaze/pkg.h>
 #include <glaze/sys.h>
@@ -9,27 +8,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <wolfssl/wolfcrypt/hash.h>
-#include <wolfssl/wolfcrypt/settings.h>
-#include <wolfssl/wolfcrypt/sha256.h>
-#ifndef APPSTORE_URL
-#define APPSTORE_URL "https://appstore.glaze-os.com"
-#endif
-#define CACHE "/Library/Caches/AppStore"
 #define ROW_H 66
 #define LIST_Y 63
 static const struct ui_tab tabs[] = {{"Search", "tab_search.gzi"}, {"Updates", "tab_updates.gzi"}};
-static struct store_catalog catalog, incoming;
-static struct {
-    char bundle[PKG_BUNDLE_MAX];
-    struct pkg_info info;
-    bool installed, update;
-} local[STORE_MAX_APPS];
-static struct {
-    void *data;
-    gfx_image img;
-    bool ok, tried;
-} icons[STORE_MAX_APPS];
+static struct store_catalog catalog;
+static struct store_local local[STORE_MAX_APPS];
+static struct store_icon icons[STORE_MAX_APPS];
 static struct ui_list list;
 static struct ui_scroll detail_scroll;
 static struct ui_keyboard keyboard;
@@ -37,11 +21,12 @@ static int tab, selected = -1, rows[STORE_MAX_APPS], nrows, cursor;
 static char query[64], message[96];
 static bool editing, armed, all_updates, choose_volume, online, installing;
 static gfx_rect back, action, refresh, all_button, flash_button, card_button;
-static struct http *fetch;
-static int kind, fetch_index, download_fd = -1, download_error, received;
-static char temporary[FS_PATH_MAX], target_root[8];
-static wc_Sha256 hash;
-static bool hash_live;
+/* UI state is never read by the worker. */
+static bool fetch, worker_busy, worker_ok, refresh_pending, scan_pending;
+static bool cache_checked[STORE_MAX_APPS];
+static unsigned generation;
+static int kind, fetch_index, received;
+static char target_root[8];
 static uint32_t last_poll, last_draw;
 static int view_bottom(void)
 {
@@ -62,205 +47,142 @@ static void rebuild(void)
     ui_list_set_area(&list, gfx_r(0, LIST_Y, UI_W, list_height()));
     ui_list_reset(&list, nrows);
 }
-static bool installed(void)
+static void update_badge(void)
 {
-    int updates = 0;
-    bool changed = false;
     static int last_badge = -1;
-    for (int i = 0; i < catalog.count; i++) {
-        bool was_installed = local[i].installed, was_update = local[i].update;
-        local[i].installed = pkg_find(catalog.apps[i].id, local[i].bundle) == 0 &&
-                             pkg_bundle_info(local[i].bundle, &local[i].info) == 0;
-        local[i].update = local[i].installed && store_version_ok(local[i].info.version) &&
-                          store_version_cmp(catalog.apps[i].version, local[i].info.version) > 0;
-        updates += local[i].update;
-        changed |= was_installed != local[i].installed || was_update != local[i].update;
-    }
+    int updates = 0;
+    for (int i = 0; i < catalog.count; i++) updates += local[i].update;
     if (last_badge != updates) {
         ui_set_badge(updates);
         last_badge = updates;
     }
-    return changed;
 }
-static bool cached_catalog(const char *path)
+static void installed(void)
 {
-    struct fs_stat st;
-    if (fs_stat(path, &st) < 0 || !st.size || st.size > STORE_CATALOG_MAX)
-        return false;
-    char *data = malloc(st.size);
-    if (!data)
-        return false;
-    int n = fs_read_file(path, data, st.size);
-    bool ok = n == (int)st.size && store_parse(&incoming, data, n);
-    free(data);
-    if (!ok)
-        return false;
-    for (int i = 0; i < STORE_MAX_APPS; i++) {
-        free(icons[i].data);
-        memset(&icons[i], 0, sizeof(icons[i]));
+    for (int i = 0; i < catalog.count; i++) {
+        local[i].installed = pkg_find(catalog.apps[i].id, local[i].bundle) == 0 &&
+                             pkg_bundle_info(local[i].bundle, &local[i].info) == 0;
+        local[i].update = local[i].installed && store_version_ok(local[i].info.version) &&
+                          store_version_cmp(catalog.apps[i].version, local[i].info.version) > 0;
     }
-    catalog = incoming;
-    installed();
-    rebuild();
-    return true;
-}
-static void icon_path(int i, char *path, size_t n)
-{
-    snprintf(path, n, CACHE "/%s-%.16s.gzi", catalog.apps[i].id, catalog.apps[i].icon_sha256);
-}
-/* Keep the disk cache bounded when publishers replace icons over time. */
-static void prune_cache(void)
-{
-    struct fs_dirent entry;
-    uint32_t skip = 0;
-    while (fs_list(CACHE, skip, &entry, 1) == 1) {
-        size_t len = strlen(entry.name);
-        bool keep = true;
-        if (entry.type == FS_FILE && len > 4 && !strcmp(entry.name + len - 4, ".gzi")) {
-            keep = false;
-            for (int i = 0; i < catalog.count; i++) {
-                char path[FS_PATH_MAX];
-                icon_path(i, path, sizeof(path));
-                if (!strcmp(entry.name, strrchr(path, '/') + 1)) {
-                    keep = true;
-                    break;
-                }
-            }
-        }
-        if (!keep) {
-            char path[FS_PATH_MAX];
-            snprintf(path, sizeof(path), CACHE "/%s", entry.name);
-            if (fs_remove(path) < 0)
-                skip++;
-        } else
-            skip++;
-    }
-}
-static bool digest_matches(const void *data, int n, const char *expected)
-{
-    uint8_t sum[32];
-    char text[65];
-    static const char hex[] = "0123456789abcdef";
-    if (wc_Sha256Hash(data, n, sum))
-        return false;
-    for (int i = 0; i < 32; i++) {
-        text[i * 2] = hex[sum[i] >> 4];
-        text[i * 2 + 1] = hex[sum[i] & 15];
-    }
-    text[64] = 0;
-    return !strcmp(text, expected);
-}
-static bool load_icon(int i)
-{
-    char path[FS_PATH_MAX];
-    struct fs_stat st;
-    icon_path(i, path, sizeof(path));
-    if (fs_stat(path, &st) < 0 || st.size > STORE_ICON_MAX)
-        return false;
-    void *data = malloc(st.size);
-    if (!data)
-        return false;
-    int n = fs_read_file(path, data, st.size);
-    gfx_image img;
-    if (n != (int)st.size || !digest_matches(data, n, catalog.apps[i].icon_sha256) ||
-        !gfx_image_parse(&img, data, n) || img.w != 44 || img.h != 44) {
-        free(data);
-        return false;
-    }
-    free(icons[i].data);
-    icons[i].data = data;
-    icons[i].img = img;
-    icons[i].ok = true;
-    return true;
-}
-static const char *network_error(int e)
-{
-    switch (e) {
-    case WE_NETDOWN:
-        return "Connect an Ethernet card, then Retry.";
-    case WE_DNS:
-        return "Store not found. Check your connection.";
-    case WE_TIMEOUT:
-        return "Connection timed out. Please Retry.";
-    case WE_CERT_DATE:
-        return "Check the date in Settings, then Retry.";
-    case WE_CERT:
-    case WE_CERT_NAME:
-    case WE_TLS:
-        return "Cannot verify the secure store connection.";
-    case WE_TOO_BIG:
-        return "This download is too large.";
-    default:
-        return "Download interrupted. Please Retry.";
-    }
+    update_badge();
 }
 static void stop_fetch(void)
 {
-    http_free(fetch);
-    fetch = NULL;
-    if (download_fd >= 0) {
-        fs_close(download_fd);
-        download_fd = -1;
-    }
-    if (hash_live) {
-        wc_Sha256Free(&hash);
-        hash_live = false;
-    }
-    if (*temporary)
-        fs_remove(temporary);
-    temporary[0] = 0;
+    if (worker_busy && kind == 2 && fetch_index >= 0)
+        icons[fetch_index].tried = false;
+    if (worker_ok)
+        store_worker_cancel();
+    worker_busy = fetch = false;
     kind = 0;
 }
-static int write_bytes(const uint8_t *data, int n, void *arg)
+static void submit(struct store_job *job)
 {
-    (void)arg;
-    if (fs_write(download_fd, data, n) != n) {
-        download_error = GZ_ENOSPC;
-        return WE_TOO_BIG;
-    }
-    if (wc_Sha256Update(&hash, data, n)) {
-        download_error = GZ_EIO;
-        return WE_PROTOCOL;
-    }
-    received += n;
-    return 0;
+    job->generation = generation;
+    store_worker_submit(job);
+    worker_busy = true;
 }
-static bool begin_fetch(int what, int index, const char *asset)
+static bool begin_fetch(int what, int index)
 {
     stop_fetch();
+    if (!worker_ok) {
+        strlcpy(message, "Cannot start loading. Reopen the App Store.", sizeof(message));
+        return false;
+    }
+    struct store_job job = {.kind = what == 1 ? STORE_REFRESH : what == 2 ? STORE_ICON : STORE_DOWNLOAD,
+                            .index = index};
+    if (index >= 0)
+        job.app = catalog.apps[index];
+    strlcpy(job.root, target_root, sizeof(job.root));
+    submit(&job);
     kind = what;
     fetch_index = index;
+    fetch = true;
     received = 0;
-    download_error = 0;
-    if (!store_path_ok(asset)) {
-        kind = 0;
-        return false;
-    }
-    if (what == 3)
-        snprintf(temporary, sizeof(temporary), "%s/Applications/.store-download", target_root);
-    else
-        snprintf(temporary, sizeof(temporary), CACHE "/download.tmp");
-    download_fd = fs_open(temporary, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
-    if (download_fd < 0) {
-        snprintf(message, sizeof(message), "%s", fs_strerror(download_fd));
-        stop_fetch();
-        return false;
-    }
-    if (wc_InitSha256(&hash)) {
-        stop_fetch();
-        return false;
-    }
-    hash_live = true;
-    char url[320];
-    snprintf(url, sizeof(url), "%s/%s", APPSTORE_URL, asset);
-    int max = what == 1 ? STORE_CATALOG_MAX : what == 2 ? STORE_ICON_MAX : (int)catalog.apps[index].size;
-    fetch = http_start_stream(url, max, write_bytes, NULL);
-    if (!fetch) {
-        stop_fetch();
-        strlcpy(message, "Cannot start download. Please Retry.", sizeof(message));
-        return false;
-    }
     return true;
+}
+/* Keep verified pixels when a catalog changes order or metadata. */
+static void accept_catalog(const struct store_catalog *next)
+{
+    struct store_local saved[STORE_MAX_APPS] = {0};
+    int new_selected = -1;
+    for (int i = 0; i < next->count; i++) {
+        for (int j = 0; j < catalog.count; j++)
+            if (!strcmp(next->apps[i].id, catalog.apps[j].id)) {
+                saved[i] = local[j];
+                if (selected == j) new_selected = i;
+                break;
+            }
+    }
+    store_icons_reconcile(&catalog, next, icons);
+    memcpy(local, saved, sizeof(local));
+    memset(cache_checked, 0, sizeof(cache_checked));
+    catalog = *next;
+    generation++;
+    selected = new_selected;
+    if (selected >= 0) {
+        int starts[48], lines = ui_wrap(ui_font(FONT_R12), catalog.apps[selected].description, 216, starts, 48);
+        detail_scroll.content_h = 180 + lines * ui_font(FONT_R12)->line_height;
+        detail_scroll.view_h = view_bottom() - UI_NAV_H;
+        detail_scroll.offset = MIN(detail_scroll.offset, ui_scroll_max(&detail_scroll));
+    }
+    armed = choose_volume = false;
+    int offset = list.sc.offset;
+    rebuild();
+    list.sc.offset = MIN(offset, ui_scroll_max(&list.sc));
+    scan_pending = true;
+}
+static int priorities(int *priority)
+{
+    int n = 0;
+    if (selected >= 0) {
+        priority[n++] = selected;
+        return n;
+    }
+    for (int r = 0; r < nrows; r++) {
+        int y = ui_list_row_y(&list, r);
+        if (y < list.area.y + list.area.h && y + ROW_H > list.area.y)
+            priority[n++] = rows[r];
+    }
+    return n;
+}
+static void schedule(void)
+{
+    if (worker_busy || !worker_ok || all_updates) return;
+    int priority[STORE_MAX_APPS + 1], n = priorities(priority);
+    /* Give the first screen its cached icons before the online refresh. */
+    if (refresh_pending) {
+        for (int p = 0; p < n; p++) {
+            int i = priority[p];
+            if (!icons[i].ok && !cache_checked[i]) {
+                cache_checked[i] = true;
+                struct store_job job = {.kind = STORE_ICON_CACHE, .index = i, .app = catalog.apps[i]};
+                submit(&job);
+                return;
+            }
+        }
+        refresh_pending = false;
+        begin_fetch(1, -1);
+        return;
+    }
+    if (scan_pending) {
+        struct store_catalog *snapshot = malloc(sizeof(*snapshot));
+        if (snapshot) {
+            *snapshot = catalog;
+            struct store_job job = {.kind = STORE_SCAN, .catalog = snapshot};
+            submit(&job);
+        }
+        scan_pending = false;
+        last_poll = gz_time_ms();
+        return;
+    }
+    bool done[STORE_MAX_APPS];
+    for (int i = 0; i < catalog.count; i++) done[i] = icons[i].ok || icons[i].tried;
+    int i = store_icon_next(catalog.count, priority, n, done);
+    if (i >= 0) {
+        icons[i].tried = true;
+        begin_fetch(2, i);
+    }
 }
 static void refresh_catalog(void)
 {
@@ -268,7 +190,12 @@ static void refresh_catalog(void)
     armed = false;
     choose_volume = false;
     strlcpy(message, "Connecting to the App Store...", sizeof(message));
-    begin_fetch(1, -1, "catalog.txt");
+    stop_fetch();
+    refresh_pending = true;
+    for (int i = 0; i < catalog.count; i++) {
+        icons[i].tried = false;
+        cache_checked[i] = false;
+    }
 }
 static void next_update(void)
 {
@@ -282,145 +209,113 @@ static void next_update(void)
     all_updates = false;
     strlcpy(message, "All apps are up to date.", sizeof(message));
 }
-static void step_fetch(void)
+static void finish_install(struct store_result *r)
 {
-    if (!fetch)
-        return;
-    int rv = http_step(fetch);
-    if (!rv)
-        return;
-    int what = kind, i = fetch_index, status = http_status(fetch);
-    printf("appstore: fetch kind=%d result=%d HTTP=%d bytes=%d\n", what, rv, status, received);
-    if (rv < 0 || status != 200) {
-        if (what == 1)
-            online = false;
-        if (what != 2) {
-            if (download_error)
-                strlcpy(message, fs_strerror(download_error), sizeof(message));
-            else if (rv < 0)
-                strlcpy(message, network_error(rv), sizeof(message));
-            else
-                snprintf(message, sizeof(message), "Store returned HTTP %d. Please Retry.", status);
-            all_updates = false;
-        }
-        stop_fetch();
-        redraw();
-        return;
-    }
-    int closed = fs_close(download_fd);
-    download_fd = -1;
-    uint8_t sum[32] = {0};
-    char hex[65];
-    static const char digits[] = "0123456789abcdef";
-    if (wc_Sha256Final(&hash, sum))
-        rv = WE_PROTOCOL;
-    wc_Sha256Free(&hash);
-    hash_live = false;
-    for (int j = 0; j < 32; j++) {
-        hex[2 * j] = digits[sum[j] >> 4];
-        hex[2 * j + 1] = digits[sum[j] & 15];
-    }
-    hex[64] = 0;
-    if (rv < 0 || closed < 0) {
-        printf("appstore: finish error result=%d close=%d\n", rv, closed);
-        strlcpy(message, "Could not save the download. Please Retry.", sizeof(message));
+    int i = r->index;
+    struct store_app *a = &catalog.apps[i];
+    /* Recheck after download in case a card or install changed. */
+    installed();
+    bool on_card = !strncmp(local[i].bundle, "/Card/", 6);
+    if (local[i].installed && (!store_version_ok(local[i].info.version) ||
+                               store_version_cmp(a->version, local[i].info.version) <= 0 ||
+                               on_card != (*target_root != 0))) {
+        strlcpy(message, "Installation changed. Please try again.", sizeof(message));
         all_updates = false;
-        stop_fetch();
-        redraw();
-        return;
-    }
-    if (what == 1) {
-        if (cached_catalog(temporary)) {
-            online = true;
-            fs_rename(temporary, CACHE "/catalog.txt");
-            selected = -1;
-            prune_cache();
-            strlcpy(message, "Browse something new.", sizeof(message));
-            for (int j = 0; j < catalog.count; j++)
-                load_icon(j);
-        } else {
-            online = false;
-            strlcpy(message, "Invalid store catalog. Please Retry.", sizeof(message));
-        }
-    } else if (what == 2) {
-        if (!strcmp(hex, catalog.apps[i].icon_sha256)) {
-            char path[FS_PATH_MAX];
-            icon_path(i, path, sizeof(path));
-            if (!fs_rename(temporary, path))
-                load_icon(i);
-        }
     } else {
-        struct store_app *a = &catalog.apps[i];
-        struct pkg_info info;
-        int info_result = pkg_read_info(temporary, &info);
-        if (received != (int)a->size || strcmp(hex, a->sha256) || info_result || strcmp(info.id, a->id) ||
-            strcmp(info.version, a->version)) {
-            printf("appstore: verification failed size=%d/%u hash=%d info=%d\n", received, a->size,
-                   strcmp(hex, a->sha256), info_result);
-            strlcpy(message, "Package verification failed. Please Retry.", sizeof(message));
+        strlcpy(message, "Installing...", sizeof(message));
+        installing = fetch = true;
+        kind = 3;
+        redraw();
+        char bundle[PKG_BUNDLE_MAX];
+        printf("appstore: installing %s %s\n", a->id, a->version);
+        uint32_t install_started = gz_time_ms();
+        int result = pkg_install(r->package, target_root, bundle);
+        printf("appstore: install %s %s result=%d duration=%u ms\n", a->id, a->version, result,
+               gz_time_ms() - install_started);
+        installing = fetch = false;
+        kind = 0;
+        if (result) {
+            strlcpy(message, fs_strerror(result), sizeof(message));
             all_updates = false;
-        } else {
-            /* Recheck after download in case a card or install changed. */
-            installed();
-            bool on_card = !strncmp(local[i].bundle, "/Card/", 6);
-            if (local[i].installed && (!store_version_ok(local[i].info.version) ||
-                                       store_version_cmp(a->version, local[i].info.version) <= 0 ||
-                                       on_card != (*target_root != 0))) {
-                strlcpy(message, "Installation changed. Please try again.", sizeof(message));
-                all_updates = false;
-            } else {
-                strlcpy(message, "Installing...", sizeof(message));
-                installing = true;
-                redraw();
-                char bundle[PKG_BUNDLE_MAX];
-                printf("appstore: installing %s %s\n", a->id, a->version);
-                uint32_t install_started = gz_time_ms();
-                int result = pkg_install(temporary, target_root, bundle);
-                printf("appstore: install %s %s result=%d duration=%u ms\n", a->id, a->version, result,
-                       gz_time_ms() - install_started);
-                installing = false;
-                if (result) {
-                    strlcpy(message, fs_strerror(result), sizeof(message));
-                    all_updates = false;
-                } else
-                    snprintf(message, sizeof(message), "%s is on the Home screen.", a->name);
-                installed();
-                rebuild();
-            }
-        }
+        } else
+            snprintf(message, sizeof(message), "%s is on the Home screen.", a->name);
+        installed();
+        rebuild();
     }
-    stop_fetch();
-    next_update();
-    redraw();
+    fs_remove(r->package);
+    scan_pending = false;
+    last_poll = gz_time_ms();
+}
+static bool step_worker(void)
+{
+    struct store_result r;
+    int bytes;
+    bool got = store_worker_poll(&r, &bytes);
+    bool changed = fetch && kind == 3 && bytes != received && gz_time_ms() - last_draw >= 150;
+    received = bytes;
+    if (!got) return changed;
+    worker_busy = fetch = false;
+    kind = 0;
+    if (r.generation != generation) {
+        store_result_free(&r);
+        return false;
+    }
+    if (r.kind == STORE_BOOT || r.kind == STORE_REFRESH) {
+        if (r.catalog) accept_catalog(r.catalog);
+        if (r.kind == STORE_REFRESH) {
+            online = r.catalog != NULL;
+            strlcpy(message, online ? "Browse something new." :
+                    (*r.message ? r.message : "Cannot load the store. Please Retry."), sizeof(message));
+        }
+        changed = true;
+    } else if (r.kind == STORE_ICON || r.kind == STORE_ICON_CACHE) {
+        if (r.data && r.index >= 0 && r.index < catalog.count) {
+            free(icons[r.index].data);
+            icons[r.index].data = r.data;
+            icons[r.index].img = r.image;
+            icons[r.index].ok = true;
+            r.data = NULL;
+            int priority[STORE_MAX_APPS + 1], n = priorities(priority);
+            for (int p = 0; p < n; p++) changed |= priority[p] == r.index;
+        }
+    } else if (r.kind == STORE_SCAN && r.local) {
+        bool different = false;
+        for (int i = 0; i < catalog.count; i++) {
+            different |= local[i].installed != r.local[i].installed || local[i].update != r.local[i].update;
+        }
+        memcpy(local, r.local, sizeof(local));
+        update_badge();
+        if (different) {
+            int old_rows[STORE_MAX_APPS], old_n = nrows, offset = list.sc.offset;
+            memcpy(old_rows, rows, sizeof(rows));
+            /* Update labels without resetting an ongoing drag or fling. */
+            nrows = 0;
+            for (int i = 0; i < catalog.count; i++)
+                if (tab ? local[i].update : store_matches(&catalog.apps[i], query)) rows[nrows++] = i;
+            if (old_n != nrows || memcmp(old_rows, rows, nrows * sizeof(*rows))) {
+                ui_list_reset(&list, nrows);
+                list.sc.offset = MIN(offset, ui_scroll_max(&list.sc));
+            }
+            changed = true;
+        }
+    } else if (r.kind == STORE_DOWNLOAD) {
+        if (r.error || !*r.package) {
+            strlcpy(message, *r.message ? r.message : "Download interrupted. Please Retry.", sizeof(message));
+            all_updates = false;
+        } else finish_install(&r);
+        next_update();
+        changed = true;
+    }
+    store_result_free(&r);
+    return changed;
 }
 static void start_install(int i, const char *root)
 {
-    struct fs_stat st;
-    struct fs_info volume;
-    if (*root && fs_stat("/Card", &st)) {
-        strlcpy(message, "Insert the card, then try again.", sizeof(message));
-        all_updates = false;
-        return;
-    }
-    if (fs_statvfs(*root ? root : "/", &volume) ||
-        volume.total - volume.used < catalog.apps[i].size * 2u + 32768u) {
-        strlcpy(message, "Not enough space to download and install.", sizeof(message));
-        all_updates = false;
-        return;
-    }
-    char apps_dir[32];
-    snprintf(apps_dir, sizeof(apps_dir), "%s/Applications", root);
-    int mkdir_result = fs_mkdirs(apps_dir);
-    if (mkdir_result) {
-        strlcpy(message, fs_strerror(mkdir_result), sizeof(message));
-        all_updates = false;
-        return;
-    }
     strlcpy(target_root, root, sizeof(target_root));
     armed = false;
     choose_volume = false;
     snprintf(message, sizeof(message), "Downloading %s...", catalog.apps[i].name);
-    if (!begin_fetch(3, i, catalog.apps[i].package))
+    if (!begin_fetch(3, i))
         all_updates = false;
 }
 static void wrapped(gfx_surface *s, const char *text, int y, int width, const gfx_font *f, uint32_t color)
@@ -571,7 +466,7 @@ static void activate(void)
 {
     if (selected < 0)
         return;
-    installed();
+    scan_pending = true;
     if (local[selected].update)
         start_install(selected, !strncmp(local[selected].bundle, "/Card/", 6) ? "/Card" : "");
     else if (local[selected].installed)
@@ -579,6 +474,8 @@ static void activate(void)
     else if (!armed)
         armed = true;
     else {
+        /* Installation decisions use the current card, including a swap
+         * since the last background scan. */
         struct fs_stat st;
         if (fs_stat("/Card", &st) == 0)
             choose_volume = true;
@@ -591,20 +488,18 @@ int main(void)
     ui_init(SB_STATUS_GRAY);
     ui_keyboard_init(&keyboard);
     ui_list_init(&list, gfx_r(0, LIST_Y, UI_W, list_height()), ROW_H);
-    fs_mkdirs(CACHE);
-    fs_mkdirs("/Applications");
-    fs_remove(CACHE "/download.tmp");
-    fs_remove("/Applications/.store-download");
-    struct fs_stat card;
-    if (fs_stat("/Card", &card) == 0)
-        fs_remove("/Card/Applications/.store-download");
-    if (cached_catalog(CACHE "/catalog.txt"))
-        for (int i = 0; i < catalog.count; i++)
-            load_icon(i);
-    prune_cache();
     rebuild();
-    refresh_catalog();
+    strlcpy(message, "Connecting to the App Store...", sizeof(message));
     redraw();
+    worker_ok = store_worker_start();
+    if (worker_ok) {
+        struct store_job job = {.kind = STORE_BOOT};
+        submit(&job);
+        refresh_pending = true;
+    } else {
+        strlcpy(message, "Cannot start loading. Reopen the App Store.", sizeof(message));
+        redraw();
+    }
     struct gz_input_event e;
     bool dirty = false;
     for (;;) {
@@ -702,6 +597,7 @@ int main(void)
                     if (gfx_rect_contains(refresh, e.x, e.y)) {
                         if (fetch) {
                             stop_fetch();
+                            refresh_pending = false;
                             strlcpy(message, "Download cancelled.", sizeof(message));
                         } else
                             refresh_catalog();
@@ -721,29 +617,19 @@ int main(void)
                     tab = t;
                     selected = -1;
                     armed = false;
-                    installed();
+                    scan_pending = true;
                     rebuild();
                 }
             }
             redraw();
         }
-        step_fetch();
-        if (!fetch && !all_updates)
-            for (int i = 0; i < catalog.count; i++)
-                if (!icons[i].ok && !icons[i].tried) {
-                    icons[i].tried = true;
-                    begin_fetch(2, i, catalog.apps[i].icon);
-                    break;
-                }
-        if (gz_time_ms() - last_poll > 2000 && !(fetch && kind == 3)) {
-            if (installed()) {
-                rebuild();
-                dirty = true;
-            }
-            last_poll = gz_time_ms();
-        }
+        if (worker_ok)
+            dirty |= step_worker();
+        if (gz_time_ms() - last_poll > 2000 && !(fetch && kind == 3))
+            scan_pending = true;
+        schedule();
         dirty |= selected >= 0 ? ui_scroll_step(&detail_scroll) : ui_scroll_step(&list.sc);
-        if (dirty || ((fetch || editing) && gz_time_ms() - last_draw > 150)) {
+        if (dirty || (editing && gz_time_ms() - last_draw > 500)) {
             redraw();
             dirty = false;
         }

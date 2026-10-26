@@ -463,3 +463,12 @@ xi825-test:
 wifi-mkfs:
 	@mkdir -p ../out/host
 	$(CC) $(FS_CFLAGS) -o ../out/host/wifi-mkfs ../host/mkfsimg.c $(FS)
+
+store-worker-test: libwolfssl.a
+	@mkdir -p ../out/host
+	$(CC) $(WEB_CFLAGS) -I../apps/browser -include ../tests/radio_host.h -o ../out/host/store-worker-test \
+	    ../tests/store_worker.c ../apps/appstore/worker.c ../apps/appstore/schedule.c \
+	    ../apps/appstore/catalog.c ../lib/libc/pkg.c ../lib/gfx/gfx.c ../lib/gfx/blit.c \
+	    libwolfssl.a -lpthread
+	../out/host/store-worker-test
+.PHONY: store-worker-test
