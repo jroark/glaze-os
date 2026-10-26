@@ -1,0 +1,18 @@
+{
+  "repository": "https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware.git",
+  "revision": "ba2549fc973076ac1500a9ba5adf8864c130e7f5",
+  "files": {
+    "libertas/cf8385_helper.bin": {
+      "size_bytes": 2140,
+      "sha256": "6ab85bcbffbe2e4242265e6dc9a61a82457beff16f6b7d4ca0620df4779d2fa5"
+    },
+    "libertas/cf8385.bin": {
+      "size_bytes": 97128,
+      "sha256": "f9bf67179e17b0d88d5788f196a71d28c8db3afee3aae298dfffbfb4dc757b86"
+    },
+    "LICENCE.Marvell": {
+      "size_bytes": 1152,
+      "sha256": "2d6062d63b91eb750bf741498691604f75184b9fee97608ec537cd09bd6a42b4"
+    }
+  }
+}
