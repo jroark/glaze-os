@@ -80,7 +80,7 @@
         <div class="row"><dt>Boot and storage</dt><dd>GlazeBoot reaches SpringBoard with touch, buttons and apps. The boot CF card mounts as /Card; the original Windows CE NAND volume mounts read-only as /NAND. Cards inserted after boot are detected.</dd></div>
         <div class="row"><dt>Ethernet</dt><dd>An AmbiCom AMB8610 NE2000 card obtains DHCP and loads HTTPS pages and App Store downloads. SomaFM streams through the same network stack.</dd></div>
         <div class="row"><dt>XI-825 Wi-Fi</dt><dd>A Z-Com XI-825 with station firmware 1.3.5 scans and joins an open network, obtains DHCP and loads network content. WEP support is implemented and emulator-tested; secured-network interoperability on physical cards still needs validation.</dd></div>
-        <div class="row"><dt>WL54-CF Wi-Fi</dt><dd>A native driver supports Marvell CF8385 cards, with open, WEP, WPA and WPA2 Personal paths tested in the emulator. Physical-card bring-up is in progress. This card needs separately supplied firmware; the public ZIP does not contain the extracted vendor firmware.</dd></div>
+        <div class="row"><dt>WL54-CF Wi-Fi</dt><dd>A native driver supports Marvell CF8385 cards, with open, WEP, WPA and WPA2 Personal paths tested in the emulator. Physical-card bring-up is in progress. The hardware ZIP includes unmodified Linux CF8385 firmware under its Marvell license. Interoperability of this firmware pair on physical cards still needs validation.</dd></div>
         <div class="row"><dt>Headphones and volume</dt><dd>Settings tones and music play through the headphone jack. Changing the volume while music plays is confirmed working. The device's internal piezo buzzer uses a separate controller and is outside this PCM audio driver.</dd></div>
       </dl>
     </section>
@@ -90,19 +90,19 @@
       <div class="download-card">
         <p class="release-label">October 25, 2026 · build <code>e4500c1</code></p>
         <h3>Ready for your CompactFlash card</h3>
-        <p>The ZIP includes <strong>GlazeBoot.exe</strong>, the matching kernel and system archive, boot settings, setup instructions, licenses, and a Glaze NAND image for the emulator.</p>
+        <p>The ZIP includes <strong>GlazeBoot.exe</strong>, the matching kernel and system archive with all built-in apps, WL54-CF firmware for physical Marvell chips, boot settings, setup instructions, licenses, and a firmware-free Glaze NAND image for the emulator.</p>
         <div class="actions">
-          <a class="button button-primary" href="downloads/glaze-2026-10-25-e4500c1.zip" download>Download Glaze ZIP</a>
-          <a class="button button-plain" href="downloads/glaze-2026-10-25-e4500c1.zip.sha256">SHA-256 checksum</a>
+          <a class="button button-primary" href="downloads/glaze-2026-10-25-e4500c1-full.zip" download>Download Glaze ZIP</a>
+          <a class="button button-plain" href="downloads/glaze-2026-10-25-e4500c1-full.zip.sha256">SHA-256 checksum</a>
         </div>
-        <p class="download-detail"><a href="https://github.com/jroark/glaze-os/tree/e4500c1204252cdf37bc8dfd86e8e678bc7b641a">Source for this build</a> · <a href="downloads/latest.json">Release details</a> · No Windows CE software or vendor firmware is bundled.</p>
+        <p class="download-detail"><a href="https://github.com/jroark/glaze-os/tree/e4500c1204252cdf37bc8dfd86e8e678bc7b641a">Source for this build</a> · <a href="downloads/latest.json">Release details</a> · Marvell firmware license and provenance included. No original Windows CE apps are bundled.</p>
       </div>
       <ol class="group steps download-steps">
         <li class="step"><div><p>Extract the ZIP. Copy its <code>Glaze</code> folder to a FAT-formatted CompactFlash card. The included README explains setup and the optional per-card Wi-Fi seed.</p></div></li>
         <li class="step"><div><p>On the BE-300 in Windows CE, open <code>\Storage Card\Glaze\GlazeBoot.exe</code> and choose Boot. The included configuration keeps Windows CE's NAND volume read-only.</p></div></li>
         <li class="step"><div><p>Glaze runs from RAM: files and settings in its root filesystem disappear on reset. Keep files you want on <code>/Card</code>. To return to Windows CE, fully power-cycle the device; the README describes the reset procedure.</p></div></li>
       </ol>
-      <p class="section-note section-followup">The hardware bundle includes App Store, Browser and Settings to leave room in 16 MB of RAM. Install more apps from the App Store. WL54-CF owners must supply their own card firmware and build with <code>WL54CF=1</code>; <a href="https://github.com/jroark/glaze-os/blob/main/docs/WL54CF.md">firmware and build instructions</a>. <a href="https://github.com/jroark/glaze-os/blob/main/docs/GLAZEBOOT.md">Full GlazeBoot guide.</a></p>
+      <p class="section-note section-followup">All built-in apps are included: Calendar, Photos, Clock, Calculator, Files, Browser, Music, Videos, App Store, Notes and Settings. Install additional apps from the App Store. The WL54-CF firmware is licensed only for use with physical Marvell chips; <a href="https://github.com/jroark/glaze-os/blob/main/docs/WL54CF.md">firmware and build instructions</a>. <a href="https://github.com/jroark/glaze-os/blob/main/docs/GLAZEBOOT.md">Full GlazeBoot guide.</a></p>
     </section>
 
     <section aria-labelledby="screens">
