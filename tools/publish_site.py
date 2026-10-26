@@ -6,6 +6,7 @@ HTML is served with no-cache so a release shows at once; everything else may
 be cached for an hour. After the upload the whole distribution is invalidated.
 """
 import argparse
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -40,6 +41,28 @@ def check_site(directory):
     for name in REQUIRED:
         if not (directory / name).is_file():
             raise SystemExit(f'site/{name} is missing (images come from tools/mksite.py)')
+    release = release_info(directory)
+    if release:
+        archive = directory / 'downloads' / release['filename']
+        if not archive.is_file():
+            raise SystemExit(f'{archive} is missing; build it with tools/package_glazeboot.py before publishing')
+        data = archive.read_bytes()
+        if len(data) != release['size_bytes'] or hashlib.sha256(data).hexdigest() != release['sha256']:
+            raise SystemExit('download ZIP does not match downloads/latest.json')
+        checksum = directory / 'downloads' / (release['filename'] + '.sha256')
+        if not checksum.is_file() or checksum.read_text() != f"{release['sha256']}  {release['filename']}\n":
+            raise SystemExit('download checksum file does not match downloads/latest.json')
+
+
+def release_info(directory):
+    path = directory / 'downloads/latest.json'
+    if not path.exists():
+        return None
+    release = json.loads(path.read_text())
+    filename = release['filename']
+    if Path(filename).name != filename or not filename.endswith('.zip'):
+        raise SystemExit('release filename must be a ZIP basename')
+    return release
 
 
 def sync(profile, directory, bucket, dry_run):
@@ -47,7 +70,12 @@ def sync(profile, directory, bucket, dry_run):
     dry = ['--dryrun'] if dry_run else []
     # Assets first, then the pages that refer to them.
     aws(profile, 's3', 'sync', str(directory), f's3://{bucket}/', '--delete', *excludes,
-        '--exclude', '*.html', '--cache-control', ASSET_CACHE, *dry, capture=False)
+        '--exclude', '*.html', '--exclude', 'downloads/*', '--cache-control', ASSET_CACHE, *dry, capture=False)
+    # Versioned download links must remain valid after the next release.
+    # Upload archives and metadata before HTML, without deleting old releases.
+    if (directory / 'downloads').is_dir():
+        aws(profile, 's3', 'sync', str(directory / 'downloads'), f's3://{bucket}/downloads/',
+            *excludes, '--cache-control', ASSET_CACHE, *dry, capture=False)
     aws(profile, 's3', 'sync', str(directory), f's3://{bucket}/', *excludes,
         '--exclude', '*', '--include', '*.html', '--content-type', 'text/html; charset=utf-8',
         '--cache-control', HTML_CACHE, *dry, capture=False)
@@ -93,6 +121,17 @@ def verify(site_url, bucket, directory):
     expect(status == 301 and headers.get('Location', '').startswith('https://'), 'http redirects to https')
     status, _, _ = fetch(f'https://{bucket}.s3.amazonaws.com/index.html')
     expect(status == 403, 'the S3 origin denies anonymous reads')
+    release = release_info(directory)
+    if release:
+        status, headers, body = fetch(site_url + '/downloads/' + release['filename'])
+        expect(status == 200 and len(body) == release['size_bytes'] and
+               hashlib.sha256(body).hexdigest() == release['sha256'], 'download ZIP matches the release checksum')
+        expect(headers.get('Content-Type', '').split(';')[0] == 'application/zip', 'download is served as a ZIP')
+        status, _, body = fetch(site_url + '/downloads/' + release['filename'] + '.sha256')
+        expect(status == 200 and body == (directory / 'downloads' / (release['filename'] + '.sha256')).read_bytes(),
+               'published SHA-256 checksum matches')
+        status, _, body = fetch(site_url + '/downloads/latest.json')
+        expect(status == 200 and body == (directory / 'downloads/latest.json').read_bytes(), 'release metadata matches')
     if failures:
         raise SystemExit(f'{len(failures)} check(s) failed; if DNS or the invalidation is still propagating, '
                          'rerun with --verify-only')
