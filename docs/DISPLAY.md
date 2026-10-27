@@ -1,4 +1,48 @@
-# Physical display controls
+# LCD startup and physical display controls
+
+The early kernel initializes the original 240×320 LCD after `timer_init()`
+calibrates CP0 Count against the RTC, before the other drivers and user
+processes start. NAND boots always run the sequence, even when C48 already
+reads `0x030F`: earlier emulator versions seeded that post-boot value
+without software having initialized the panel. The framebuffer stays RGB565 at physical
+`0x0A200000`, with a 512-byte (256-pixel) pitch.
+
+`display_init()` ports the stock WinCE 3.0 SPL (`0x80F034A0`) and kernel
+OAL (`0x80078F38`) sequence, verified against their startup MMIO writes:
+
+| Physical register | Startup value |
+|---|---:|
+| `0x0A001128` (CMM), `0x0A001100`, `0x0A00110C` | `1` each |
+| `0x0A000C00` | `0x20` |
+| `0x0A000C04` | `0x02` |
+| `0x0A000C08` | `0x50` |
+| `0x0A000C0C` | `0xF1` |
+| `0x0A000C10` | `0x02` |
+| `0x0A000C14`, `0x0A000C1C` | `0` |
+| `0x0A000C24` | `0x14` |
+| `0x0A000C2C` | `1`, after C48 reaches `0x0101` |
+
+C48 (`0x0A000C48`) progresses through
+`0 -> 1 -> 0x0101 -> 0x0103 -> 0x010F -> 0x030F`. Waits after 1,
+`0x0103` and `0x010F` are at least 1 ms, 1 ms and 20 ms, respectively.
+Between `0x0101` and `0x0103`, send nominal contrast `0xC1` through C4C,
+MSB first, with at least 5 µs between data/clock/latch edges. All delays
+use calibrated `time_us()` busy waits; startup does not require scheduler
+interrupts. It does not infer units or meanings for individual timing fields.
+
+The backlight also gets explicit startup configuration. Following SPL
+`0x80F038DC`, enable CMM and the LCD gates, disable BLG control, set period
+`0x0F70`, duty zero (maximum brightness), then enable BLG control. The low
+four BLG config bits are set to mode 2 while preserving the upper bits, as
+the stock `ddi.dll:0x01A55900` on path does. Saved user brightness/contrast
+settings take effect when SpringBoard starts. The boot default contrast is
+nominal level 5; no factory EEPROM trim is fabricated or written.
+
+A validated GlazeBoot RAM handoff preserves the existing panel configuration,
+contrast and framebuffer when C48 is `0x030F`, both LCD gates have bit 0
+set, and BLG control and CMM bit 0 are enabled. An incomplete or dark RAM
+handoff receives the full startup sequence instead. The handoff flags and
+framebuffer layout are unchanged.
 
 Settings > Display controls the BE-300's physical backlight and panel
 contrast and contains Wallpaper and Screen Timeout. SpringBoard owns the
@@ -73,7 +117,7 @@ BE-300 Windows CE 3.0 NAND image, using `be300/tools/extract_nk_lzss.py` and
   duty unchanged rather than replacing them with the stock on defaults.
 
 The driver preserves unrelated contrast-register bits and skips unchanged
-levels. The existing boot path leaves the LCD and backlight enabled. Timeout
+levels. The early kernel leaves the LCD and backlight enabled. Timeout
 only powers down the backlight PWM; LCD panel timing and CPU power stay on.
 Repeated power requests are idempotent, so they cannot overwrite the saved
 configuration with the disabled register values.
@@ -83,9 +127,24 @@ configuration with the disabled register values.
 `make -C host display-test settings-test idle-test touch-calibration-test ui-events-test`
 checks the physical duty values, serial bit ordering, latch and edge timing,
 range validation, persistence, rollback, and Settings rendering and gestures.
+`display-test` also runs the production initializer against redirected MMIO
+from reset and emulator-style preconfigured states. It checks the ordered
+enable phases and minimum waits, full contrast command before panel enable,
+untouched undocumented timing words, incomplete RAM-handoff recovery and
+preservation of a running RAM-handoff display. Runtime settings and repeated
+backlight sleep/wake are exercised after initialization.
 
-The emulator latches these registers but does not model their optical effect.
-Emulator tests can verify register writes, UI interaction and persistence;
+An emulator MMIO comparison of the rebuilt NAND boot with the stock WinCE
+3.0 SPL matches all 42 ordered 32-bit panel/contrast writes, including C48
+and the eight-bit `0xC1` command. Tests cover both preserving a fully
+configured RAM handoff and initializing a cold LCD through the RAM-boot
+trampoline. Normal NAND and RAM-trampoline boots reach SpringBoard and save
+orderly-shutdown screenshots. These checks verify the software sequence;
+physical panel startup still needs a real-device test.
+
+The updated emulator models digital panel/backlight power but does not apply
+unmeasured optical brightness/contrast curves. Emulator tests can verify
+register writes, UI interaction and persistence;
 backlight intensity and contrast need confirmation on a physical BE-300.
 Actual backlight shutdown, wake brightness and repeated sleep/wake cycles
 also require physical-device validation; emulator black pixels alone do not

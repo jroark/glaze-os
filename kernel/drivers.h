@@ -24,6 +24,8 @@ void cmcu_tick(void);
 /* input.c: touch panel and buttons. */
 void input_init(void);
 /* display.c: physical backlight and panel contrast, stock BE-300 levels. */
+/* After timer_init(); inherit only for a validated GlazeBoot RAM handoff. */
+void display_init(bool inherit);
 int display_set(int brightness, int contrast);
 int display_power(int on);
 void input_push(uint16_t type, uint16_t code, int x, int y);

@@ -12,16 +12,24 @@
 #define GLAZE_HW_H
 static volatile uint32_t backlight, panel = 0xA5A50000;
 static volatile uint32_t bl_control = 1, bl_config = 0x202, bl_gate = 0xA5A50001;
+static volatile uint32_t bl_period, lcd_clock, lcd_gate, lcd[0x50 / 4];
 #define DISP_BACKLIGHT backlight
 #define DISP_CONTRAST panel
 #define DISP_BL_CONTROL bl_control
 #define DISP_BL_CONFIG bl_config
 #define DISP_BL_GATE bl_gate
+#define DISP_BL_PERIOD bl_period
+#define DISP_LCD_CLOCK lcd_clock
+#define DISP_LCD_GATE lcd_gate
+#define DISP_LCD(off) lcd[(off) / 4]
 #include "../kernel/drivers/display.c"
 
 static uint64_t us;
 static uint32_t previous;
 static unsigned shifted, clocks, latches;
+static bool watch_startup;
+static struct { uint32_t control; uint64_t at; } phases[5];
+static unsigned phase_count;
 uint64_t time_us(void)
 {
     assert((panel & ~7u) == 0xA5A50000);   /* unrelated GPIOs stay intact */
@@ -32,6 +40,25 @@ uint64_t time_us(void)
     if ((panel & 1) && !(previous & 1))
         latches++;
     previous = panel;
+    if (watch_startup) {
+        /* The first delay must follow clock, backlight and parameter setup.
+         * Unspecified timing words are deliberately left alone. */
+        assert(lcd_clock == 1 && lcd_gate == 1);
+        assert(bl_gate == 1 && bl_control == 1 && bl_period == 0xF70 && !backlight);
+        assert(lcd[0] == 0x20 && lcd[1] == 2 && lcd[2] == 0x50 && lcd[3] == 0xF1);
+        assert(lcd[4] == 2 && !lcd[5] && !lcd[7] && lcd[9] == 0x14);
+        assert(lcd[6] == 0xDEADBEEF && lcd[13] == 0xDEADBEEF);
+        if (!phase_count || lcd[0x48 / 4] != phases[phase_count - 1].control) {
+            assert(phase_count < 5);
+            phases[phase_count].control = lcd[0x48 / 4];
+            phases[phase_count++].at = us;
+            if (lcd[0x48 / 4] >= 0x103) {
+                assert(lcd[0x2C / 4] == 1);
+                assert(clocks == 8 && latches == 1 && shifted == 0xC1);
+                assert(!(panel & 7));
+            }
+        }
+    }
     return us++;
 }
 int gz_display_set(int brightness, int contrast) { return display_set(brightness, contrast); }
@@ -178,10 +205,69 @@ static void service_tests(void)
     assert(s.current.brightness == 3 && s.current.contrast == 5);
 }
 
+static void startup_test(bool inherit, uint32_t control, bool backlight_on)
+{
+    for (unsigned i = 0; i < sizeof(lcd) / sizeof(lcd[0]); i++)
+        lcd[i] = 0xDEADBEEF;
+    lcd[0x48 / 4] = control;
+    lcd_clock = lcd_gate = 0;
+    bl_control = backlight_on ? 1 : 0;
+    bl_gate = backlight_on ? 0xA5A50001 : 0xA5A50000;
+    bl_config = 0xA5A5020F;        /* mode bits dirty, unrelated bits retained */
+    bl_period = 0x1234;
+    backlight = 981;
+    panel = previous = 0xA5A50000;
+    clocks = latches = shifted = phase_count = 0;
+    uint64_t start = us;
+    watch_startup = true;
+    display_init(inherit);
+    time_us();                    /* observe final enable write */
+    watch_startup = false;
+    static const uint32_t expected[] = {1, 0x101, 0x103, 0x10F, 0x30F};
+    assert(phase_count == 5 && us - start >= 22095);
+    for (unsigned i = 0; i < phase_count; i++)
+        assert(phases[i].control == expected[i]);
+    assert(phases[1].at - phases[0].at >= 1000);
+    assert(phases[2].at - phases[1].at >= 95); /* eight clocks plus latch */
+    assert(phases[3].at - phases[2].at >= 1000);
+    assert(phases[4].at - phases[3].at >= 20000);
+    assert(bl_config == 0xA5A50202);
+    assert(brightness_now == 5 && contrast_now == 5 && powered);
+    /* Runtime settings and sleep/wake still work from the initialized state. */
+    assert(!display_set(3, 5) && backlight == 1964);
+    assert(!display_power(0) && !bl_control && !bl_config && !bl_gate);
+    assert(!display_power(1) && bl_control == 1 && bl_config == 0xA5A50202 && bl_gate == 1);
+}
+
+static void startup_tests(void)
+{
+    startup_test(false, 0, false);      /* actual reset state */
+    startup_test(false, 0x30F, true);   /* cold boot must not trust emulator seeds */
+    startup_test(true, 0, true);       /* incomplete RAM-handoff panel setup */
+    startup_test(true, 0x30F, false);   /* configured panel, disabled backlight */
+    startup_test(true, 0x30F, true);    /* configured panel, clock gates disabled */
+
+    /* A live GlazeBoot display, including trim, is left untouched. */
+    uint32_t before[sizeof(lcd) / sizeof(lcd[0])];
+    for (unsigned i = 0; i < sizeof(before) / sizeof(before[0]); i++)
+        before[i] = lcd[i];
+    lcd_clock = 0x1235;
+    lcd_gate = 0x5679;
+    panel = previous = 0xA5A50004;
+    uint64_t start = us;
+    display_init(true);
+    assert(us == start && panel == previous && lcd_clock == 0x1235 && lcd_gate == 0x5679);
+    for (unsigned i = 0; i < sizeof(before) / sizeof(before[0]); i++)
+        assert(before[i] == lcd[i]);
+    assert(backlight == 1964 && bl_period == 0xF70 && bl_config == 0xA5A50202 && bl_gate == 1);
+    assert(brightness_now == -1 && contrast_now == -1); /* preferences still apply */
+}
+
 int main(void)
 {
     driver_tests();
     service_tests();
-    puts("display: hardware duty, serial contrast, native ranges, persistence and rollback PASS");
+    startup_tests();
+    puts("display: LCD startup, delays, handoff, duty, contrast, persistence and rollback PASS");
     return 0;
 }

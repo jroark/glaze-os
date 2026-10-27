@@ -187,11 +187,18 @@
 #define UART_LSR_THRE       0x20u
 
 /* Linear framebuffer (doc: Framebuffer). */
+/* Stock WinCE SPL 0x80F034A0 / NK OAL 0x80078F38: original panel
+ * parameter words and its staged power/enable control. The individual
+ * timing fields are undocumented; keep the captured values intact. */
+#define DISP_LCD_CLOCK      REG32(0x0A001100u)
+#define DISP_LCD_GATE       REG32(0x0A00110Cu)
+#define DISP_LCD(offset)    REG32(0x0A000C00u + (offset))
 /* Stock ddi.dll 0x01A56BB0/BD0 (backlight), 0x01A56A5C (contrast).
  * See docs/DISPLAY.md for the register trace and native level tables. */
 #define DISP_BACKLIGHT      REG32(0x0A00098Cu)
 #define DISP_BL_CONTROL     REG32(0x0A000980u)
 #define DISP_BL_CONFIG      REG32(0x0A000984u)
+#define DISP_BL_PERIOD      REG32(0x0A000988u)
 #define DISP_BL_GATE        REG32(0x0A001128u)
 #define DISP_CONTRAST       REG32(0x0A000C4Cu)
 
