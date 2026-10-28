@@ -8,6 +8,8 @@
 struct ui_app ui;
 static uint16_t screen[UI_W * UI_H], full[UI_W * UI_H];
 static uint32_t clock_ms;
+static int boot_mode = GZ_BOOT_MODE_NAND, reboot_requests, reboot_error;
+static uint32_t test_net_kind, test_net_state;
 static int presents;
 static int network_queries, passcode_queries;
 static uint32_t touch_op;
@@ -45,6 +47,7 @@ int gz_sysinfo(struct gz_sysinfo *si)
     si->total_pages = 4096;
     return 0;
 }
+int gz_boot_mode(void) { return boot_mode; }
 int gz_port_lookup(const char *name)
 {
     return !strcmp(name, SB_PORT_NAME) ? 11 : -1;
@@ -62,6 +65,10 @@ int gz_send(int port, const struct gz_msg *msg, struct gz_msg *reply)
     touch_op = msg->w[0];
     memset(reply, 0, sizeof(*reply));
     reply->w[0] = (uint32_t)touch_error;
+    if (touch_op == SB_REBOOT_CE) {
+        reboot_requests++;
+        reply->w[0] = (uint32_t)reboot_error;
+    }
     if (touch_op >= SB_DISPLAY_GET && touch_op <= SB_DISPLAY_RESET) {
         reply->w[0] = (uint32_t)display_error;
         if (touch_op == SB_DISPLAY_CANCEL || (touch_op == SB_DISPLAY_SAVE && display_error))
@@ -119,6 +126,8 @@ int net_status(struct net_status *st)
 {
     network_queries++;
     memset(st, 0, sizeof(*st));
+    st->kind = test_net_kind;
+    st->state = test_net_state;
     return 0;
 }
 static struct wifi_status test_wifi;
@@ -409,6 +418,51 @@ static void timeout_tests(void)
     host_write_bmp("../out/host/settings-timeout.bmp", &ui.surf);
 }
 
+static void reboot_tests(void)
+{
+    view = V_ROOT;
+    boot_mode = GZ_BOOT_MODE_NAND; load(); redraw();
+    require(gfx_rect_empty(hit_rect(R_REBOOT_CE)), "NAND boot exposed CE reboot");
+    activate(R_REBOOT_CE);
+    require(view == V_ROOT && !reboot_requests, "NAND reboot activation was accepted");
+    boot_mode = GZ_EINVAL; load(); redraw();
+    require(gfx_rect_empty(hit_rect(R_REBOOT_CE)), "unknown boot mode exposed CE reboot");
+
+    boot_mode = GZ_BOOT_MODE_CE;
+    test_net_kind = GZ_NET_WL54CF; test_net_state = NET_DISCONNECTED;
+    load(); redraw(); compare_full();
+    require(!gfx_rect_empty(hit_rect(R_REBOOT_CE)), "CE boot omitted reboot row");
+    struct gz_input_event drag = {.type=GZ_EV_TOUCH_DOWN, .x=120, .y=270};
+    require(zone_touch(&drag), "root scroll down not handled");
+    drag.type=GZ_EV_TOUCH_MOVE; drag.y=170; zone_touch(&drag);
+    drag.type=GZ_EV_TOUCH_UP; zone_touch(&drag);
+    require(view == V_ROOT && !reboot_requests, "scroll activated a row");
+    root_scroll.offset = ui_scroll_max(&root_scroll);
+    root_scroll.animating = root_scroll.dragging = false;
+    redraw(); compare_full();
+    gfx_rect row = hit_rect(R_REBOOT_CE);
+    require(row.y >= UI_NAV_H && row.y + row.h <= UI_H, "reboot row is unreachable with Wi-Fi");
+    require(hit_test(120, 5) == R_NONE, "scrolled row leaked into navbar");
+    host_write_bmp("../out/host/settings-reboot-root.bmp", &ui.surf);
+    activate(R_REBOOT_CE);
+    require(view == V_REBOOT && !reboot_requests, "row skipped reboot confirmation");
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-reboot-confirm.bmp", &ui.surf);
+    activate(R_BACK);
+    require(view == V_ROOT && !reboot_requests, "cancel rebooted");
+    activate(R_REBOOT_CE);
+    reboot_error = GZ_EPERM;
+    activate(R_REBOOT_CONFIRM); redraw(); compare_full();
+    require(reboot_requests == 1 && reboot_msg && strstr(reboot_msg, "Could not"), "reboot error was hidden");
+    reboot_error = 0;
+    activate(R_REBOOT_CONFIRM);
+    require(reboot_requests == 2 && touch_op == SB_REBOOT_CE, "confirmation did not request CE reboot");
+    activate(R_BACK);
+    test_net_kind = test_net_state = 0; boot_mode = GZ_BOOT_MODE_NAND;
+    load(); redraw();
+    require(gfx_rect_empty(hit_rect(R_REBOOT_CE)), "NAND reboot row returned after scrolling");
+}
+
 int main(void)
 {
     gfx_surface_init(&ui.surf, screen, UI_W, UI_H, UI_W);
@@ -550,6 +604,7 @@ int main(void)
     calibration_tests();
     display_tests();
     timeout_tests();
+    reboot_tests();
     puts("settings: rendering, navigation, scrolling, sliders, calibration and display PASS");
     return 0;
 }

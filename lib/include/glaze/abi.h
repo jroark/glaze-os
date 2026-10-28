@@ -83,8 +83,13 @@ enum {
     SYS_SERVICE_SET,       /* privileged: service name, enabled (0/1) */
     SYS_NET_HANDLE,        /* PROC_NET: unique opaque socket identity */
     SYS_USB_CTL,           /* kernel-started USB development service only */
+    SYS_BOOT_MODE,         /* read-only GZ_BOOT_MODE_* */
+    SYS_REBOOT_CE,         /* privileged; only valid after a CE RAM boot */
     SYS_COUNT
 };
+
+#define GZ_BOOT_MODE_NAND 0
+#define GZ_BOOT_MODE_CE   1  /* GlazeBoot over CF/USB, including RAM reloads */
 
 /* Error returns (negative). */
 #define GZ_OK           0

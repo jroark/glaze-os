@@ -1,8 +1,22 @@
 /* Return a RAM-booted Glaze device to the stock boot ROM. No NAND writes. */
 #include "kernel.h"
+#ifndef REBOOT_TEST
 #include "hw.h"
+#endif
 #include "drivers.h"
 
+int sys_boot_mode(void)
+{
+    return ram_boot ? GZ_BOOT_MODE_CE : GZ_BOOT_MODE_NAND;
+}
+
+int sys_reboot_ce(struct proc *p)
+{
+    if (!(p->flags & PROC_PRIVILEGED) || !ram_boot) return GZ_EPERM;
+    machine_reboot_ce();
+}
+
+#ifndef REBOOT_TEST
 extern const uint8_t reboot_entry[], reboot_entry_end[];
 
 void machine_reboot_ce(void)
@@ -32,3 +46,4 @@ void machine_reboot_ce(void)
     ((void (*)(void))KSEG1(0x1000u))();
     for (;;) ;
 }
+#endif

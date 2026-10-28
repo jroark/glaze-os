@@ -79,7 +79,10 @@ line of the log names the step that failed.
 `nand` (`off`/`ro`/`rw`, default `off`), `confirm` (`0`/`1`), `countdown`
 (seconds, 0 waits for a tap), `mode` (`boot`/`probe`). Later lines win.
 
-An updated USB build can return to Windows CE with `glaze-usb reboot --ce`,
+On a CF or USB RAM boot, Settings shows **Reboot to Windows CE**, with a
+confirmation before discarding apps and files held in RAM. NAND boots hide
+this action and reject the reboot request in the kernel.
+An updated USB build can also return to Windows CE with `glaze-usb reboot --ce`,
 which clears retained RAM before resetting. A full reset (battery out) also
 works. The reset switch alone warm-boots
 Windows CE into its RAM object store, which Glaze has overwritten, and it loops.

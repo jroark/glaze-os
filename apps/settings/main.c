@@ -16,7 +16,7 @@
 #include <string.h>
 
 enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
-            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS };
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -33,6 +33,7 @@ enum {
     R_WIFI, R_WIFI_SCAN, R_WIFI_DISCONNECT, R_WIFI_AP0,
     R_WIFI_FORGET = R_WIFI_AP0 + WIFI_AP_MAX, R_WIFI_SECURITY, R_WIFI_EDIT, R_WIFI_SHOW,
     R_WIFI_KEY_INDEX, R_WIFI_AUTH, R_WIFI_JOIN, R_WIFI_DONE,
+    R_REBOOT_CE, R_REBOOT_CONFIRM,
 };
 
 struct hit {
@@ -53,6 +54,8 @@ static struct wifi_credentials wifi_entry;
 static char wifi_password[65];
 static int wifi_cursor;
 static bool wifi_show, wifi_editing;
+static bool ce_boot;
+static const char *reboot_msg;
 static struct ui_keyboard wifi_keyboard;
 static const char *const wifi_security_names[] = {"Open", "WEP", "WPA Personal", "WPA2 Personal"};
 static const char *wifi_error_text(int error)
@@ -149,6 +152,7 @@ static int32_t s_zone = TZ_LOS_ANGELES, s_auto = 1;
 static uint32_t s_synced;
 static char sync_msg[40];
 static struct ui_scroll zone_scroll;
+static struct ui_scroll root_scroll;
 static bool zone_drag;
 
 /* Sounds (glaze/audio.h). The tones are, in order, the timer's, calendar
@@ -164,6 +168,7 @@ static int volume_before;           /* restored if the drag is cancelled */
 
 static void load(void)
 {
+    ce_boot = gz_boot_mode() == GZ_BOOT_MODE_CE;
     struct net_status st;
     card_key(&st);
     if (wifi_available)
@@ -315,6 +320,14 @@ static void draw_root(gfx_surface *s)
     if (cell_visible(s))
         root_card = card_key(&st);
     if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
+    root_scroll.content_h = (7 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
+    root_scroll.view_h = UI_H - UI_NAV_H;
+    if (!root_scroll.dragging && !root_scroll.animating)
+        root_scroll.offset = MAX(0, MIN(root_scroll.offset, ui_scroll_max(&root_scroll)));
+    section_y -= root_scroll.offset;
+    gfx_surface body = *s;
+    gfx_rect_intersect(s->clip, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), &body.clip);
+    s = &body;
     cell(s, wifi_available ? 1 : 0, "Network", net_state_name(st.state), true, R_NETWORK);
     if (wifi_available) cell(s, 3, "Wi-Fi", wifi_name(wireless_status.state), true, R_WIFI);
     section_gap();
@@ -327,9 +340,31 @@ static void draw_root(gfx_surface *s)
     cell(s, 2, "Passcode Lock", enabled ? "On" : "Off", true, R_PASSCODE);
     cell(s, 2, "Touch Calibration", NULL, true, R_TOUCH);
     cell(s, 3, "About", NULL, true, R_ABOUT);
+    if (ce_boot) {
+        section_gap();
+        cell(s, 0, "Reboot to Windows CE", NULL, true, R_REBOOT_CE);
+    }
 }
 
 static gfx_rect back_rect;
+
+static void draw_reboot(gfx_surface *s)
+{
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Windows CE", "Settings", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    gfx_text_center(s, 0, 65, UI_W, ui_font(FONT_B14), "Reboot to Windows CE?", UI_TEXT, 255);
+    gfx_text_center(s, 0, 98, UI_W, ui_font(FONT_R12), "Files stored only in memory", UI_TEXT_DETAIL, 255);
+    gfx_text_center(s, 0, 116, UI_W, ui_font(FONT_R12), "will be lost.", UI_TEXT_DETAIL, 255);
+    gfx_rect reboot = gfx_r(20, 160, UI_W - 40, 32), cancel = gfx_r(20, 206, UI_W - 40, 32);
+    ui_draw_button(s, reboot, "Reboot to Windows CE", pressed == R_REBOOT_CONFIRM);
+    ui_draw_button(s, cancel, "Cancel", pressed == R_BACK);
+    add_hit(reboot, R_REBOOT_CONFIRM);
+    add_hit(cancel, R_BACK);
+    if (reboot_msg)
+        gfx_text_center(s, 0, 256, UI_W, ui_font(FONT_R12), reboot_msg, UI_TEXT_DETAIL, 255);
+}
 
 static void draw_wallpaper(gfx_surface *s)
 {
@@ -850,6 +885,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_TOUCH_TEST: draw_touch_test(s); break;
     case V_DISPLAY: draw_display(s); break;
     case V_TIMEOUT: draw_timeout(s); break;
+    case V_REBOOT: draw_reboot(s); break;
     }
 }
 
@@ -1333,6 +1369,21 @@ static void activate(int id)
         return;
     }
     switch (id) {
+    case R_REBOOT_CE:
+        if (!ce_boot) return;
+        reboot_msg = NULL;
+        go(V_REBOOT, true);
+        return;
+    case R_REBOOT_CONFIRM: {
+        if (!ce_boot || view != V_REBOOT) return;
+        reboot_msg = "Rebooting" GFX_CH_ELLIPSIS;
+        redraw();
+        struct gz_msg m = {{0}}, r = {{0}};
+        m.w[0] = SB_REBOOT_CE; m.w[3] = (uint32_t)gz_getpid();
+        if (gz_send(ui.sb_port, &m, &r) < 0 || (int)r.w[0] < 0)
+            reboot_msg = "Could not reboot. Try again.";
+        break;
+    }
     case R_TOUCH:
         touch_msg = NULL;
         go(V_TOUCH, true);
@@ -1495,23 +1546,23 @@ static bool volume_touch(const struct gz_input_event *ev)
 
 static int hit_test(int x, int y);
 
-/* Scrolling and tapping the time zone list; false if the event is not
- * for it (the nav bar's back button). */
+/* Scroll and tap list views; leave navbar events to the normal handler. */
 static bool zone_touch(const struct gz_input_event *ev)
 {
-    if ((view != V_ZONE && view != V_WIFI) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
+    if ((view != V_ZONE && view != V_WIFI && view != V_ROOT) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
                            ev->type != GZ_EV_TOUCH_UP))
         return false;
     if (ev->type == GZ_EV_TOUCH_DOWN)
         zone_drag = ev->y >= UI_NAV_H;
     if (!zone_drag)
         return false;
-    int old_offset = zone_scroll.offset, old_pressed = pressed;
+    struct ui_scroll *scroll = view == V_ROOT ? &root_scroll : &zone_scroll;
+    int old_offset = scroll->offset, old_pressed = pressed;
     gfx_rect old_hit = hit_rect(pressed);
-    ui_scroll_event(&zone_scroll, ev, ev->y - UI_NAV_H);
+    ui_scroll_event(scroll, ev, ev->y - UI_NAV_H);
     if (ev->type == GZ_EV_TOUCH_DOWN)
         pressed = hit_test(ev->x, ev->y);
-    else if (zone_scroll.moved)
+    else if (scroll->moved)
         pressed = R_NONE;
     if (ev->type == GZ_EV_TOUCH_UP) {
         int id = pressed;
@@ -1523,10 +1574,10 @@ static bool zone_touch(const struct gz_input_event *ev)
                 redraw_rect(zone_area());
                 return true;
             }
-            if (view != V_ZONE) return true;
+            if (view != V_ZONE && view != V_ROOT) return true;
         }
     }
-    if (zone_scroll.offset != old_offset)
+    if (scroll->offset != old_offset)
         redraw_rect(zone_area());
     else if (pressed != old_pressed)
         redraw_rect(gfx_rect_union(old_hit, hit_rect(pressed)));
@@ -1535,6 +1586,7 @@ static bool zone_touch(const struct gz_input_event *ev)
 
 static int hit_test(int x, int y)
 {
+    if (view == V_ROOT && y < UI_NAV_H) return R_NONE;
     if (view == V_WIFI && y < UI_NAV_H) return gfx_rect_contains(back_rect, x, y) ? R_BACK : R_NONE;
     /* Later entries (buttons inside cells) take priority. */
     for (int i = nhits - 1; i >= 0; i--) {
@@ -1560,14 +1612,18 @@ int main(void)
             timeout = 250;
         if ((view == V_ZONE || view == V_WIFI) && zone_scroll.animating)
             timeout = 16;
+        if (view == V_ROOT && root_scroll.animating)
+            timeout = 16;
         if (!ui_next_event(&ev, timeout)) {
             if (view == V_TOUCH_TEST) {
                 touch_test_tick();
                 continue;
             }
             if (view == V_ROOT) {
+                int old_offset = root_scroll.offset;
+                ui_scroll_step(&root_scroll);
                 struct net_status st;
-                if (card_key(&st) != root_card)
+                if (card_key(&st) != root_card || root_scroll.offset != old_offset)
                     redraw();       /* a card came or went: rows change */
                 continue;
             }
@@ -1603,7 +1659,7 @@ int main(void)
                 s_volume = volume_before;
             volume_drag = false;
             if (zone_drag)
-                ui_scroll_event(&zone_scroll, &ev, ev.y - UI_NAV_H);
+                ui_scroll_event(view == V_ROOT ? &root_scroll : &zone_scroll, &ev, ev.y - UI_NAV_H);
             zone_drag = false;
             pressed = R_NONE;
             redraw();
