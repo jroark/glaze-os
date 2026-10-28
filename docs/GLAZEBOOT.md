@@ -27,6 +27,12 @@ In a RAM boot:
 
 ## Using it
 
+For USB-only setup, use [`glaze-usb`](USB.md). It stages GlazeBoot and the
+images through stock CE and launches the loader with `--usb-boot`, bypassing
+the confirmation window and serial-console setup. `--usb-probe` runs the
+loader's diagnostic checks unattended and returns to CE; both modes retain
+`glazeboot.log` beside the executable.
+
 ```sh
 ./build.sh glazeboot                      # out/glazeboot: kernel.bin, romfs.img, glaze.cfg, gen/*.h
 make glazeboot-exe                        # out/glazeboot/GlazeBoot.exe, natively with ../be300-dev
@@ -73,7 +79,9 @@ line of the log names the step that failed.
 `nand` (`off`/`ro`/`rw`, default `off`), `confirm` (`0`/`1`), `countdown`
 (seconds, 0 waits for a tap), `mode` (`boot`/`probe`). Later lines win.
 
-Return to Windows CE with a full reset (battery out). The reset switch warm-boots
+An updated USB build can return to Windows CE with `glaze-usb reboot --ce`,
+which clears retained RAM before resetting. A full reset (battery out) also
+works. The reset switch alone warm-boots
 Windows CE into its RAM object store, which Glaze has overwritten, and it loops.
 Anything kept only in that store is lost; `\Nand Disk` and the card are not
 touched.

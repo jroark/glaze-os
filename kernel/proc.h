@@ -37,6 +37,7 @@ void *page_alloc_colour(uint32_t va);
 void *page_alloc_colour_raw(uint32_t va);    /* not zeroed */
 void mm_sync_code(void *kva, uint32_t len);
 void *page_alloc(void);             /* zeroed KSEG0 page, or NULL */
+void *page_alloc_between(uint32_t low, uint32_t high); /* physical [low, high) */
 void *page_alloc_n(uint32_t n);      /* contiguous */
 void page_free(void *kva);
 uint32_t mm_free_pages(void);
@@ -176,6 +177,7 @@ struct proc {
 #define PROC_AUDIO          0x8     /* wave output (kernel-granted, audio server) */
 #define PROC_APP            0x10    /* managed foreground/background app, may be ended */
 #define PROC_BACKGROUND     0x20    /* app is currently in the background (PRIO_LOW) */
+#define PROC_USB            0x40    /* USB transport/reload (kernel-granted) */
 
 extern struct thread *cur;
 extern uint32_t cur_kstack_top;

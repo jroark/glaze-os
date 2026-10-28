@@ -1,6 +1,7 @@
 /* Render SpringBoard screens on the host for review and golden tests. */
 #include "hostres.h"
 #include "../servers/springboard/sb_internal.h"
+#include <glaze/usb_wire.h>
 
 #include <stdio.h>
 
@@ -36,6 +37,18 @@ int main(void)
 
     sb_draw_home(&s, &v);
     host_write_bmp("home.bmp", &s);
+    static const struct { unsigned flags; const char *name; } debug_views[] = {
+        { GU_DEBUG_CONNECTED, "../out/host/usb-connected.bmp" },
+        { GU_DEBUG_CONNECTED | GU_DEBUG_COPY, "../out/host/usb-copying.bmp" },
+        { GU_DEBUG_CONNECTED | GU_DEBUG_RUN, "../out/host/usb-running.bmp" },
+        { GU_DEBUG_CONNECTED | GU_DEBUG_SCRIPT, "../out/host/usb-script.bmp" },
+    };
+    for (unsigned i = 0; i < sizeof(debug_views)/sizeof(debug_views[0]); i++) {
+        v.debugger = debug_views[i].flags;
+        sb_draw_home(&s, &v);
+        host_write_bmp(debug_views[i].name, &s);
+    }
+    v.debugger = 0;
 
     v.pressed = 2;
     v.wallpaper = 1;

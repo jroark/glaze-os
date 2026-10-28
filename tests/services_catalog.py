@@ -14,9 +14,10 @@ spec.loader.exec_module(catalog)
 class CatalogTest(unittest.TestCase):
     def test_shipped_catalog(self):
         data = catalog.build(json.loads((ROOT / 'config/services.json').read_text()))
-        self.assertEqual(struct.unpack_from('<III', data), (0x475a5356, 1, 3))
-        self.assertEqual(len(data), 12 + 3 * 76)
+        self.assertEqual(struct.unpack_from('<III', data), (0x475a5356, 1, 4))
+        self.assertEqual(len(data), 12 + 4 * 76)
         self.assertEqual(struct.unpack_from('<III', data, 12 + 76 + 64), (4, 1, 1))
+        self.assertEqual(struct.unpack_from('<III', data, 12 + 3 * 76 + 64), (65, 0, 1))
 
     def test_bad_catalogs(self):
         cases = [[], [{'name': 'x', 'path': '/bad'}],

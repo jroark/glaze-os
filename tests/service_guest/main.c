@@ -31,7 +31,7 @@ int main(void)
 {
     struct gz_service_info *n = network();
     struct net_status status;
-    CHECK(n && snapshot.count == 3, "catalog");
+    CHECK(n && snapshot.count == 4, "catalog");
     CHECK(gz_net_handle() == GZ_EPERM, "network capability denied to compositor");
     CHECK(gz_service_set("fs", 0) == GZ_EPERM, "required service cannot be disabled");
     CHECK(gz_service_set("unknown", 1) == GZ_ENOENT, "unknown service rejected");

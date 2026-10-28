@@ -12,7 +12,7 @@ def build(entries):
     names = [e['name'] for e in entries]
     if len(set(names)) != len(names):
         raise ValueError('duplicate service name')
-    caps = {'privileged': 1, 'flash': 2, 'network': 4, 'audio': 8}
+    caps = {'privileged': 1, 'flash': 2, 'network': 4, 'audio': 8, 'usb': 64}
     result = []
     for e in entries:
         name, path = e['name'], e['path']

@@ -241,6 +241,7 @@ void input_script_poll(void);
 void input_poll(void)
 {
     stowaway_poll();
+    usb_input_poll();
 #ifdef GLAZE_INPUT_SCRIPT
     input_script_poll();
 #endif

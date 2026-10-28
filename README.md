@@ -62,6 +62,13 @@ swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures
 
 ## Running
 
+For USB development on a stock BE-300, see [USB loading and debugging](docs/USB.md).
+The native `glaze-usb` tool uploads and launches through Windows CE, boots
+Glaze in RAM, then supports files, app launching, console logs, PNG screenshots,
+emulator-style input scripts, kernel reload and reboot targets for Glaze/CE.
+A status bar badge shows
+debugger connection, transfer, app and script activity.
+
 ```sh
 be300 --nand out/glaze.bin --rtc-host-time
 ```

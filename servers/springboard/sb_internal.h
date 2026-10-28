@@ -82,6 +82,7 @@ struct sb_clock {
 struct sb_view {
     struct sb_clock clk;
     bool card_mounted;         /* mounted CF storage or an initialized network card */
+    unsigned debugger;        /* GU_DEBUG_*; hidden when disconnected */
     int wallpaper;              /* index into sb_wallpapers */
     int knob_x;                 /* 0..KNOB_TRAVEL */
     int shimmer_x;              /* centre of the slide-to-unlock highlight */

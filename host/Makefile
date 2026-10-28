@@ -34,6 +34,57 @@ MEDIA_CFLAGS := $(CFLAGS) -Wno-unused-but-set-variable -I../third_party/helix-mp
 
 all: sheet preview fstest fattest mkfsimg browse mediatest
 
+# Native USB development CLI. Prefer the Apple Silicon Homebrew installation.
+USB_PKG_CONFIG ?= $(if $(wildcard /opt/homebrew/bin/pkg-config),/opt/homebrew/bin/pkg-config,pkg-config)
+USB_FLAGS := $(shell $(USB_PKG_CONFIG) --cflags --libs libusb-1.0 2>/dev/null)
+USB_CC ?= $(CC)
+USB_SOURCES := $(wildcard glaze_usb/*.c)
+../out/host/glaze-usb: $(USB_SOURCES) $(wildcard glaze_usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h
+	@mkdir -p ../out/host
+	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(USB_SOURCES) $(USB_FLAGS) -o $@
+glaze-usb: ../out/host/glaze-usb
+.PHONY: glaze-usb
+
+usb-wire-test: ../tests/usb_wire.c ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_wire.c -o ../out/host/usb-wire-test
+	../out/host/usb-wire-test
+usb-driver-test: ../tests/usb_driver.c ../kernel/drivers/usb.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -Wno-pointer-to-int-cast -fsanitize=address,undefined -I$(BE300_SOURCE)/src/hw ../tests/usb_driver.c $(BE300_SOURCE)/src/hw/usbf.c -o ../out/host/usb-driver-test
+	../out/host/usb-driver-test
+.PHONY: usb-wire-test usb-driver-test
+usb-reload-test: ../tests/usb_reload.c ../kernel/usb_reload.c ../out/glazeboot/gen/tramp_blob.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -I../out/glazeboot/gen -fsanitize=address,undefined ../tests/usb_reload.c -o ../out/host/usb-reload-test
+	../out/host/usb-reload-test
+.PHONY: usb-reload-test
+usb-pcconnect-test: ../tests/usb_pcconnect.c glaze_usb/pcconnect.c glaze_usb/pcconnect.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_pcconnect.c glaze_usb/pcconnect.c $(USB_FLAGS) -o ../out/host/usb-pcconnect-test
+	../out/host/usb-pcconnect-test
+.PHONY: usb-pcconnect-test
+usb-input-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_input.c -o ../out/host/usb-input-test
+	../out/host/usb-input-test
+usb-script-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_script.c glaze_usb/script.c glaze_usb/screen.c $(USB_FLAGS) -o ../out/host/usb-script-test
+	../out/host/usb-script-test ../tests/*.txt
+.PHONY: usb-input-test usb-script-test
+usb-cleanup-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_cleanup.c glaze_usb/cleanup.c $(USB_FLAGS) -o ../out/host/usb-cleanup-test
+	../out/host/usb-cleanup-test
+.PHONY: usb-cleanup-test
+
+# Real native CLI, with USB calls forwarded into the emulator by a test peer.
+glaze-usb-emulator: $(USB_SOURCES) ../tests/usb_libusb_stub.c
+	@mkdir -p ../out/host
+	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(USB_SOURCES) ../tests/usb_libusb_stub.c -o ../out/host/glaze-usb-emulator
+.PHONY: glaze-usb-emulator
+
 sheet: sheet.c hostres.c $(GFX)
 	$(CC) $(CFLAGS) -o $@ $^
 

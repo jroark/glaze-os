@@ -240,6 +240,7 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_SERVICE_SET:   rv = sys_service_set(cur->proc, a0, (int)a1); break;
     case SYS_NET_HANDLE:    rv = net_handle(cur->proc); break;
     case SYS_WIFI_CTL:      rv = sys_wifi_ctl(cur->proc, a0, a1); break;
+    case SYS_USB_CTL:       rv = sys_usb_ctl(cur->proc, a0, a1, a2); break;
     case SYS_NET_INFO:      rv = sys_net_info(cur->proc, a0); break;
     case SYS_NET_BIND:      rv = sys_net_bind(cur->proc, (int)a0); break;
     case SYS_NET_SEND:      rv = sys_net_send(cur->proc, a0, a1); break;

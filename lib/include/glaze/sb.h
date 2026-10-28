@@ -62,6 +62,8 @@ enum {
     SB_DISPLAY_SAVE,
     SB_DISPLAY_CANCEL,
     SB_DISPLAY_RESET,
+    SB_DEBUG_LAUNCH,        /* development client: sb_note_req.path -> launch status */
+    SB_DEBUG_STATE,         /* w1 = GU_DEBUG_* activity, w3 = client pid; reply w1 activity, w2 app pid */
 };
 
 enum {

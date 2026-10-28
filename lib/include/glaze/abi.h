@@ -82,6 +82,7 @@ enum {
     SYS_SERVICES,          /* read-only service/driver snapshot */
     SYS_SERVICE_SET,       /* privileged: service name, enabled (0/1) */
     SYS_NET_HANDLE,        /* PROC_NET: unique opaque socket identity */
+    SYS_USB_CTL,           /* kernel-started USB development service only */
     SYS_COUNT
 };
 
