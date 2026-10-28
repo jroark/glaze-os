@@ -421,7 +421,7 @@ $(OUT)/kernel/%.o: lib/libc/%.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
 # These bake in INIT/BUILD_ID/INPUT_SCRIPT; rebuild them every time.
-$(OUT)/kernel/main.o $(OUT)/kernel/drivers/input.o $(OUT)/romfs.img: FORCE
+$(OUT)/kernel/main.o $(OUT)/kernel/syscall.o $(OUT)/kernel/drivers/input.o $(OUT)/romfs.img: FORCE
 
 $(OUT)/kernel/reboot.checked: $(OUT)/kernel/reboot_entry.o
 	@if $(CROSS)objdump -r -j .text.reboot $< | grep -q 'R_MIPS_'; then \
