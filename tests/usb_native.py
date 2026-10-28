@@ -55,6 +55,8 @@ def serve(peer, client):
         elif op == 2:
             ep = a & 255
             body = exact(b) if not ep & 128 else b""
+            if ep == 2 and len(body) == 56 and struct.unpack_from("<II", body) == (0x42555a47, 1 | 23 << 16):
+                peer.host_seeds.append(body[24:])
             # The emulator drops partially received IN data on cancellation.
             # Read one USB packet at a time so the facade never loses a frame
             # prefix when the guest takes longer than the host's read timeout.
@@ -102,7 +104,8 @@ def main():
         control.bind(str(socket_path))
         control.listen(1)
         control.settimeout(1)
-        with (work / "stdout.log").open("wb") as out, (work / "stderr.log").open("wb") as err:
+        with (work / "stdout.log").open("wb") as out, (work / "stderr.log").open("wb") as err, \
+                (work / "cli.log").open("wb") as cli_output:
             emulator = subprocess.Popen([str(args.emulator.resolve()), "--nand", str(work / "nand.img"),
                 "--rtc-host-time", "--speed", args.speed, "--pcconnect-dock", "usb-sync", "--pcconnect-bridge",
                 f"tcp:127.0.0.1:{listener.getsockname()[1]}"] + (["--cf",str(work/"cf.img")] if args.cf else []), cwd=work,
@@ -121,6 +124,7 @@ def main():
                             if time.monotonic()>=end: raise RuntimeError("Glaze USB service did not start")
                             time.sleep(.02)
                     print("USB enumerated; running native CLI", flush=True)
+                    peer.host_seeds = []
                     commands = args.command and [args.command]
                     if args.reboot_test == "ce": commands = [["reboot"], ["ce-probe"]]
                     if args.reboot_test == "glaze": commands = [["boot"], ["reboot"], ["reboot", "--ce"], ["ce-probe"]]
@@ -129,7 +133,8 @@ def main():
                         reconnect_deadline=time.monotonic()+120
                         while True:
                             cli = subprocess.Popen([str(args.cli.resolve()), "--trace"] + command,
-                                env=dict(os.environ, GLAZE_USB_TEST_SOCKET=str(socket_path)))
+                                env=dict(os.environ, GLAZE_USB_TEST_SOCKET=str(socket_path)),
+                                stdout=cli_output, stderr=subprocess.STDOUT)
                             while cli.poll() is None:
                                 try:
                                     client, _ = control.accept()
@@ -150,6 +155,15 @@ def main():
                                 if time.monotonic()>=deadline: raise RuntimeError("reboot did not return to CE shell")
                                 time.sleep(.02)
                             print("Reboot returned to stock CE shell: PASS",flush=True)
+                    if args.cf or args.reboot_test == "glaze":
+                        assert peer.host_seeds
+                    if peer.host_seeds:
+                        trace = (work / "cli.log").read_text()
+                        assert len(set(peer.host_seeds)) == len(peer.host_seeds)
+                        for seed in peer.host_seeds:
+                            assert len(seed) == 32 and any(seed)
+                            assert " ".join(f"{b:02x}" for b in seed) not in trace
+                        print("Native OS CSPRNG: fresh seeds; --trace excludes seed bytes PASS", flush=True)
                     print("usb-native: ALL PASS", flush=True)
             finally:
                 if cli is not None and cli.poll() is None:

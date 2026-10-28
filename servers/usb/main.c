@@ -2,6 +2,7 @@
 #include <glaze/usb.h>
 #include <glaze/fs.h>
 #include <glaze/pkg.h>
+#include <glaze/prefs.h>
 #include <glaze/sb.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,10 +115,26 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r = gz_sysinfo(&si); if (r) return r;
         gu_put32(payload, GU_VERSION);
         gu_put32(payload + 4, GU_CAP_FILES | GU_CAP_RUN | GU_CAP_LOGS | GU_CAP_RELOAD |
-                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE);
+                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY);
         gu_put32(payload + 8, si.free_pages * 4096);
         memcpy(payload + 12, si.build, sizeof(si.build));
         payload[43] = 0; *out = 44; session = true; return 0;
+    }
+    case GU_ENTROPY: {
+        if (n != 32) return GZ_EINVAL;
+        uint8_t existing[33];
+        int size = pref_get("net.entropy", existing, sizeof(existing));
+        volatile uint8_t *wipe = existing;
+        for (unsigned i = 0; i < sizeof(existing); i++) wipe[i] = 0;
+        if (size < 0 && size != GZ_ENOENT) return size;
+        /* Preserve the live ratchet: another debugger connection must not
+         * replace a seed while the network service is authenticating. */
+        if (size != 32) {
+            int r = pref_put("net.entropy", b, n);
+            if (r) return r;
+            puts("usb: entropy seeded from host CSPRNG");
+        }
+        gu_put32(payload, size != 32); *out = 4; return 0;
     }
     case GU_PUT_BEGIN: {
         copying();
@@ -283,6 +300,7 @@ int main(void)
             last_len = out; last_status = status;
             memcpy(last_reply, payload, out);
             int sent = send_frame(op | GU_REPLY, id, status, payload, out);
+            if (op == GU_ENTROPY) memset(parser.bytes, 0, sizeof(parser.bytes));
             if (!status && !sent && op == GU_BOOT_COMMIT) {
                 int r = gz_usb_ctl(GZ_USB_RELOAD_GO, NULL, 0);
                 printf("usb: reload handoff failed (%d)\n", r);

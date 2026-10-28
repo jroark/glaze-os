@@ -7,9 +7,15 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/random.h>
 #include <errno.h>
 
 struct boot_options { uint32_t ramfs_kb, flags; };
+static void erase(void *p, size_t n)
+{
+    volatile uint8_t *b = p;
+    while (n--) *b++ = 0;
+}
 static int boot_options(const char *dir, struct boot_options *o)
 {
     o->ramfs_kb = 2048; o->flags = 2;
@@ -53,6 +59,7 @@ int gu_call(struct gu_client *c, uint32_t op, const void *data, uint32_t n)
     size_t size = gu_encode(out, op, id, 0, data, n);
     if (!size || !id) return -1;
     int r = usb_write(c->usb, out, size, 5000);
+    if (op == GU_ENTROPY) erase(out, size);
     if (r) return r;
     uint64_t end = now() + 10000;
     while (now() < end && !usb_cancelled) {
@@ -90,6 +97,19 @@ int gu_hello(struct gu_client *c, struct usb_link *u)
     const uint8_t *b = c->frame + GU_HEADER;
     c->caps = gu_get32(b + 4);
     fprintf(stderr, "runtime=Glaze build=%.32s free=%u KiB capabilities=0x%x\n", b + 12, gu_get32(b + 8) / 1024, gu_get32(b + 4));
+    if (c->caps & GU_CAP_ENTROPY) {
+        uint8_t seed[32];
+        if (getentropy(seed, sizeof(seed))) {
+            perror("OS CSPRNG"); erase(seed, sizeof(seed)); return -1;
+        }
+        /* Packet tracing must never print the seed, even with --trace. */
+        int trace = u->trace; u->trace = 0;
+        r = gu_call(c, GU_ENTROPY, seed, sizeof(seed));
+        u->trace = trace; erase(seed, sizeof(seed));
+        if (r != 4 || gu_get32(c->frame + GU_HEADER) > 1) return -1;
+        if (gu_get32(c->frame + GU_HEADER))
+            fputs("Wi-Fi entropy seeded from host OS CSPRNG\n", stderr);
+    }
     return 0;
 }
 static int file_crc(const char *path, uint32_t *size, uint32_t *crc)

@@ -41,6 +41,14 @@ and the CF staging copy are preserved. Deletions use CE's filesystem APIs.
 the confirmation/countdown and `mode` settings and leaves the dock serial
 port available for USB. The regular interactive CF loader still works.
 
+On connection, an updated host and USB service supply 32 bytes from the host
+OS CSPRNG when the device has no valid Wi-Fi entropy seed. This also happens
+after RAM reloads, so WPA/WPA2 can work when the storage card has been replaced
+by a Wi-Fi card. An existing seed is preserved for the network service's
+ratchet. Seed packets are excluded from `--trace`; the OS random API failing
+stops the connection rather than substituting a weaker source. Untethered
+boots still use the factory or boot-card seed described in [Wi-Fi](WIFI.md).
+
 The boot runs in RAM. It replaces CE's live RAM, including its object store;
 save anything important there before booting. Files staged through CE remain
 in its filesystem. USB boot does not flash firmware or write raw NAND.

@@ -103,6 +103,22 @@ class Peer:
         status, data = self.call(1)
         assert status == 0 and len(data) == 44 and struct.unpack_from("<I", data)[0] == 1
         print("USB hello:", data[12:].split(b"\0")[0].decode(), flush=True)
+        assert struct.unpack_from("<I", data, 4)[0] & 256
+        self.entropy()
+
+    def entropy(self):
+        path = struct.pack("<I", 0) + b"/Library/Preferences/net.entropy"
+        assert self.call(5, path)[0] < 0  # fresh RAM boot, no card seed
+        for size in (0, 31, 33):
+            assert self.call(23, bytes(size))[0] < 0
+        assert self.call(5, path)[0] < 0
+        seed = os.urandom(32)
+        assert self.call(23, seed) == (0, struct.pack("<I", 1))
+        assert self.call(5, path) == (0, seed)
+        # A new debugger connection must preserve the current Wi-Fi ratchet.
+        assert self.call(23, os.urandom(32)) == (0, struct.pack("<I", 0))
+        assert self.call(5, path) == (0, seed)
+        print("USB entropy: exact size, fresh RAM seeding and ratchet preservation PASS", flush=True)
 
     def files(self):
         for count in (0, 1, 40, 63, 64, 65, 4096, 5000):
