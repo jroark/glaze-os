@@ -168,11 +168,11 @@ the session is active.
 `diag` uses a vendor control request and the interrupt endpoint to report
 controller registers and software ring counters without depending on bulk
 DMA. It is useful when enumeration works but `probe` cannot complete HELLO.
-The boot/reload reconnect path also attempts a bus reset when macOS retains
-the preceding kernel's USB session.
-After the initial CE handover, a running SpringBoard with no USB device on
-the Mac can require unplugging/reconnecting the cable once. RAM reloads have
-been verified to reconnect automatically.
+The boot/reload reconnect path waits up to 90 seconds and retries bus
+re-enumeration when macOS retains the preceding OS's USB session. CE may
+power down USB while GlazeBoot is still reading CF; a reset during that
+interval is retried after Glaze starts. CE-to-Glaze handover and RAM reloads
+have been verified to reconnect automatically with the cable left connected.
 
 ## Implementation
 

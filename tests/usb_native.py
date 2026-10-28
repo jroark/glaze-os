@@ -51,12 +51,18 @@ def serve(peer, client):
             status = -7 if data is None else -9 if data[3] else 0
             if data is not None and rt & 128 and not status:
                 payload = data[10:]
+                if (request, value, length) == (6, 0x100, 18) and len(payload) == 18 and \
+                        payload[12:14] == b"\x00\x01" and time.monotonic() < peer.stale_until:
+                    payload = payload[:12] + b"\x00\x00" + payload[14:]
+                    peer.masked_descriptors += 1
                 done = len(payload)
         elif op == 2:
             ep = a & 255
             body = exact(b) if not ep & 128 else b""
             if ep == 2 and len(body) == 56 and struct.unpack_from("<II", body) == (0x42555a47, 1 | 23 << 16):
                 peer.host_seeds.append(body[24:])
+            if ep == 2 and len(body) == 24 and struct.unpack_from("<II", body) == (0x42555a47, 1 | 10 << 16):
+                peer.stale_until = time.monotonic() + peer.descriptor_delay
             # The emulator drops partially received IN data on cancellation.
             # Read one USB packet at a time so the facade never loses a frame
             # prefix when the guest takes longer than the host's read timeout.
@@ -74,6 +80,9 @@ def serve(peer, client):
             status = -7 if data is None else -1 if data[0] else 0
         elif op == 4:
             peer.send(3)
+            if peer.descriptor_delay:
+                status = -5  # libusb: old descriptor/handle disappeared
+                peer.reset_descriptor_changes += 1
         else:
             raise RuntimeError(f"unknown test RPC {op}")
         client.sendall(struct.pack("<ii", status, done) + payload)
@@ -86,6 +95,7 @@ def main():
     ap.add_argument("--emulator", type=Path, default=Path("../be300/build-host/be300"))
     ap.add_argument("--cli", type=Path, default=Path("out/host/glaze-usb-emulator"))
     ap.add_argument("--speed", default="166", help="emulator target in million instructions/sec")
+    ap.add_argument("--descriptor-delay", type=float, default=0, help="simulate stale CE descriptors after a RAM reload")
     ap.add_argument("--reboot-test", choices=["ce", "glaze"], help="verify reboot and CE recovery in one guest")
     ap.add_argument("command", nargs="*", default=["ce-self-test"])
     args = ap.parse_args()
@@ -125,6 +135,10 @@ def main():
                             time.sleep(.02)
                     print("USB enumerated; running native CLI", flush=True)
                     peer.host_seeds = []
+                    peer.descriptor_delay = args.descriptor_delay
+                    peer.stale_until = 0
+                    peer.masked_descriptors = 0
+                    peer.reset_descriptor_changes = 0
                     commands = args.command and [args.command]
                     if args.reboot_test == "ce": commands = [["reboot"], ["ce-probe"]]
                     if args.reboot_test == "glaze": commands = [["boot"], ["reboot"], ["reboot", "--ce"], ["ce-probe"]]
@@ -157,6 +171,11 @@ def main():
                             print("Reboot returned to stock CE shell: PASS",flush=True)
                     if args.cf or args.reboot_test == "glaze":
                         assert peer.host_seeds
+                    if args.descriptor_delay:
+                        assert peer.masked_descriptors
+                        assert peer.reset_descriptor_changes
+                        assert "USB reset:" not in (work / "cli.log").read_text()
+                        print("Late Glaze descriptors: automatic reconnect PASS", flush=True)
                     if peer.host_seeds:
                         trace = (work / "cli.log").read_text()
                         assert len(set(peer.host_seeds)) == len(peer.host_seeds)

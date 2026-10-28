@@ -5,26 +5,36 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <time.h>
 
 static void stop(int signum) { (void)signum; usb_cancelled = 1; }
+static uint64_t monotonic_ms(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000 + (unsigned)t.tv_nsec / 1000000;
+}
 static int reconnect(struct usb_link *l, const char *device, struct gu_client *c)
 {
     char location[64];
     int n = snprintf(location, sizeof(location), "%u", l->bus);
     for (unsigned j = 0; j < l->port_count; j++) n += snprintf(location + n, sizeof(location) - (size_t)n, ".%u", l->ports[j]);
     usb_close(l);
-    for (int i = 0; i < 40 && !usb_cancelled; i++) {
+    uint64_t until = monotonic_ms() + 90000, reset_at = monotonic_ms() + 3000;
+    fputs("Waiting for Glaze USB (up to 90 seconds)...\n", stderr);
+    while (monotonic_ms() < until && !usb_cancelled) {
         usleep(500000);
-        if (usb_open(l, device ? device : location, 0)) {
-            /* A core reset can leave macOS holding CE's former address
-             * without a disconnect event. Reset without claiming/configuring
-             * the interface, then let normal enumeration configure Glaze. */
-            if (i == 2) usb_reset_link(device ? device : location, l->trace);
-            continue;
+        if (!usb_open(l, device ? device : location, 0)) {
+            if (l->revision == 0x0100 && !gu_hello(c, l)) return 0;
+            usb_close(l);
         }
-        if (l->revision == 0x0100 && !gu_hello(c, l)) return 0;
-        usb_close(l);
-        if (i == 2) usb_reset_link(device ? device : location, l->trace);
+        if (monotonic_ms() >= reset_at) {
+            /* CE can power down USB while GlazeBoot is still reading CF.
+             * Retry re-enumeration after the new kernel has had time to
+             * start, rather than resetting only during the old CE session.
+             * Keep the interface unclaimed during the host reset. */
+            usb_reset_link(device ? device : location, l->trace);
+            reset_at = monotonic_ms() + 5000;
+        }
     }
     fprintf(stderr, "The new Glaze kernel did not reconnect. If SpringBoard is running, replug USB once and run probe.\n"); return -1;
 }

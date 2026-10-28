@@ -85,7 +85,12 @@ int usb_reset_link(const char *location, int trace)
 {
     struct usb_link l = { .trace = trace };
     int r = usb_open_mode(&l, location, 0, 0);
-    if (!r) r = libusb_reset_device(l.dev);
+    if (!r) {
+        r = libusb_reset_device(l.dev);
+        /* A changed CE/Glaze descriptor makes libusb discard its old
+         * handle after re-enumeration. Close it and rediscover normally. */
+        if (r == LIBUSB_ERROR_NOT_FOUND) r = 0;
+    }
     if (r) fprintf(stderr, "USB reset: %s\n", libusb_error_name(r));
     usb_close(&l);
     return r;
