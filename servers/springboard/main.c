@@ -1775,6 +1775,10 @@ static void handle_msg(int token, struct gz_msg *m)
 
     memset(&r, 0, sizeof(r));
     switch (m->w[0]) {
+    case SB_REBOOT_CE:
+        r.w[0] = settings_request_allowed((int)m->w[3]) ?
+            (uint32_t)gz_reboot_ce() : (uint32_t)GZ_EPERM;
+        break;
     case SB_DISPLAY_GET:
     case SB_DISPLAY_PREVIEW:
     case SB_DISPLAY_SAVE:

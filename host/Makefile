@@ -235,6 +235,12 @@ settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main
 	../out/host/settings-test
 .PHONY: settings-test
 
+reboot-test: ../tests/reboot.c ../kernel/reboot.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/reboot-test ../tests/reboot.c
+	../out/host/reboot-test
+.PHONY: reboot-test
+
 touch-calibration-test: ../tests/touch_calibration.c ../lib/libc/touch.c ../servers/springboard/calibration.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/touch-calibration-test $^

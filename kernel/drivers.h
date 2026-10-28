@@ -25,6 +25,8 @@ int usb_input_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
 void usb_input_poll(void);
 void usb_input_cancel(void);
 void machine_reboot_ce(void) __attribute__((noreturn));
+int sys_boot_mode(void);
+int sys_reboot_ce(struct proc *p);
 
 /* rtc.c */
 void rtc_init(void);
