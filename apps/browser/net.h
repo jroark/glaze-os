@@ -49,6 +49,16 @@ struct http;
 /* GET (post == NULL) or POST of url; cookies may be NULL. */
 struct http *http_start(const char *url, const char *post, int post_len, const char *post_type,
                         const char *cookies, int max_body);
+/* Identity-encoded API POST, optionally streamed. Header values are bounded
+ * and reject controls. No redirect handling or cookie jar is involved. */
+struct http_post_options {
+    const char *content_type, *bearer, *account;
+    int max_body, idle_ms;
+    int (*sink)(const uint8_t *, int, void *);
+    void *sink_arg;
+};
+struct http *http_start_post(const char *url, const char *post, int post_len,
+                              const struct http_post_options *options);
 /* A bounded, identity-encoded GET streamed to sink. Nonzero sink result
  * aborts the fetch. The callback receives decoded HTTP transfer bytes. */
 struct http *http_start_stream(const char *url, int max_body,

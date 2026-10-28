@@ -181,6 +181,17 @@ PROG_CFLAGS_gmail := $(WOLFSSL_INC)
 PROG_DEPS_gmail := $(OUT)/pic/libwolfssl.a
 PROG_LDLIBS_gmail := $(OUT)/pic/libwolfssl.a
 
+# ChatGPT uses the Browser's bounded HTTP/TLS transport, without its renderer.
+PROG_EXTRA_chatgpt := apps/browser/http.c apps/browser/conn.c apps/browser/tls.c apps/browser/url.c apps/appstore/inflate.c
+PROG_CFLAGS_chatgpt := -Iapps/browser -Ithird_party/stb $(WOLFSSL_INC)
+PROG_DEPS_chatgpt := $(OUT)/shared/libwolfssl.so.1
+PROG_LDLIBS_chatgpt := -l:libwolfssl.so.1
+# Diagnostic fixtures only; a normal rebuild always removes the override.
+ifneq ($(CHATGPT_TEST_ORIGIN),)
+PROG_CFLAGS_chatgpt += -DCHATGPT_TEST_ORIGIN='"$(CHATGPT_TEST_ORIGIN)"'
+endif
+$(OUT)/dyn/packages/chatgpt/http_io.o: FORCE
+
 # InfoNES is portable C despite upstream's historical .cpp filenames.
 PROG_CFLAGS_nes := -fno-strict-aliasing
 PROG_CFLAGS_gameboy := -fno-strict-aliasing -DIS_LITTLE_ENDIAN

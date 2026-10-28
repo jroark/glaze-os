@@ -49,6 +49,8 @@ struct http {
     int (*sink)(const uint8_t *, int, void *);
     void *sink_arg;
     uint32_t last;              /* ms of the last progress */
+    int idle_ms;
+    bool identity_only;
 };
 
 /* Recent lookups: every image on a page would otherwise ask again (on the
@@ -112,14 +114,25 @@ static int buf_append(struct http *h, const uint8_t *d, int n)
     return 0;
 }
 
-struct http *http_start(const char *url, const char *post, int post_len, const char *post_type,
-                        const char *cookies, int max_body)
+static struct http *start(const char *url, const char *post, int post_len, const char *post_type,
+                          const char *cookies, const char *bearer, const char *account, int max_body, int idle_ms, bool api)
 {
     static struct url u;
     struct http *h;
 
-    if (!url_parse(url, &u) || !u.has_auth || !u.host[0])
+    if (!url_parse(url, &u) || !u.has_auth || !u.host[0] || post_len < 0 || max_body < 1)
         return NULL;
+    if (bearer) {
+        if (!*bearer || strnlen(bearer, 8193) > 8192 || (strcmp(u.scheme, "http") && strcmp(u.scheme, "https")))
+            return NULL;
+        for (const char *p = bearer; *p; p++)
+            if ((unsigned char)*p < 33 || (unsigned char)*p > 126) return NULL;
+    }
+    if (account) {
+        if (!bearer || !*account || strnlen(account, 129) > 128) return NULL;
+        for (const char *p = account; *p; p++)
+            if ((unsigned char)*p < 33 || (unsigned char)*p > 126) return NULL;
+    }
     h = calloc(1, sizeof(*h));
     if (!h)
         return NULL;
@@ -127,12 +140,15 @@ struct http *http_start(const char *url, const char *post, int post_len, const c
     h->resolve_id = -1;
     h->content_length = -1;
     h->max_body = max_body;
+    h->idle_ms = idle_ms;
+    h->identity_only = api;
     strcpy(h->host, u.host);
     h->https = !strcmp(u.scheme, "https");
     h->port = u.port > 0 ? u.port : url_default_port(u.scheme);
 
     size_t cap = strlen(u.path) + strlen(u.query) + strlen(u.host) + (cookies ? strlen(cookies) : 0) +
-                 (size_t)(post ? post_len : 0) + 512;
+                 (size_t)(post ? post_len : 0) + (bearer ? strlen(bearer) + 32 : 0) +
+                 (account ? strlen(account) + 96 : 0) + 1024;
     h->req = malloc(cap);
     if (!h->req) {
         free(h);
@@ -144,12 +160,19 @@ struct http *http_start(const char *url, const char *post, int post_len, const c
     else
         snprintf(hostport, sizeof(hostport), "%s", u.host);
     int n = snprintf(h->req, cap,
-                     "%s %s%s%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " BROWSER_USER_AGENT "\r\n"
-                     "Accept: text/html,application/xhtml+xml,image/png,image/jpeg,image/gif,*/*;q=0.5\r\n"
-                     "Accept-Encoding: gzip, deflate\r\nAccept-Language: " BROWSER_LANGUAGE "\r\nConnection: close\r\n",
-                     post ? "POST" : "GET", u.path[0] ? u.path : "/", u.has_query ? "?" : "", u.query, hostport);
+                     "%s %s%s%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: %s\r\n"
+                     "Accept-Encoding: %s\r\nAccept-Language: " BROWSER_LANGUAGE "\r\nConnection: close\r\n",
+                     post ? "POST" : "GET", u.path[0] ? u.path : "/", u.has_query ? "?" : "", u.query, hostport,
+                     api ? "GlazeChat/1.0" : BROWSER_USER_AGENT,
+                     api ? (account ? "text/event-stream" : "application/json") :
+                           "text/html,application/xhtml+xml,image/png,image/jpeg,image/gif,*/*;q=0.5",
+                     api ? "identity" : "gzip, deflate");
     if (cookies && *cookies)
         n += snprintf(h->req + n, cap - (size_t)n, "Cookie: %s\r\n", cookies);
+    if (bearer)
+        n += snprintf(h->req + n, cap - (size_t)n, "Authorization: Bearer %s\r\n", bearer);
+    if (account)
+        n += snprintf(h->req + n, cap - (size_t)n, "ChatGPT-Account-Id: %s\r\noriginator: glaze_chat\r\n", account);
     if (post)
         n += snprintf(h->req + n, cap - (size_t)n, "Content-Type: %s\r\nContent-Length: %d\r\n",
                       post_type ? post_type : "application/x-www-form-urlencoded", post_len);
@@ -159,6 +182,7 @@ struct http *http_start(const char *url, const char *post, int post_len, const c
         n += post_len;
     }
     h->req_len = n;
+    h->req[n] = 0; /* Header inspection must stop after a POST's byte body. */
     h->last = plat_ms();
 
     uint32_t addr;
@@ -168,6 +192,29 @@ struct http *http_start(const char *url, const char *post, int post_len, const c
         h->have_addr = true;
     } else {
         h->resolve_id = plat_resolve_start(h->host);    /* an error is reported by the first step */
+    }
+    return h;
+}
+
+struct http *http_start(const char *url, const char *post, int post_len, const char *post_type,
+                        const char *cookies, int max_body)
+{
+    return start(url, post, post_len, post_type, cookies, NULL, NULL, max_body, IDLE_MS, false);
+}
+
+struct http *http_start_post(const char *url, const char *post, int post_len,
+                              const struct http_post_options *o)
+{
+    if (!post || !o || !o->content_type || o->idle_ms < 1 || o->idle_ms > 120000 ||
+        strlen(o->content_type) > 128) return NULL;
+    for (const char *p = o->content_type; *p; p++)
+        if ((unsigned char)*p < 32 || (unsigned char)*p > 126) return NULL;
+    struct url u;
+    if (!url_parse(url, &u) || (strcmp(u.scheme, "http") && strcmp(u.scheme, "https"))) return NULL;
+    struct http *h = start(url, post, post_len, o->content_type, NULL,
+                            o->bearer && *o->bearer ? o->bearer : NULL, o->account, o->max_body, o->idle_ms, true);
+    if (h) {
+        h->sink = o->sink; h->sink_arg = o->sink_arg;
     }
     return h;
 }
@@ -332,6 +379,7 @@ static int decode_body(struct http *h)
 {
     if (h->sink) return 0;
     const char *ce = http_header(h, "content-encoding", 0);
+    if (h->identity_only && ce && strcasecmp(ce, "identity")) return WE_PROTOCOL;
 
     if (!ce || !h->body_len || (!strstr(ce, "gzip") && !strstr(ce, "deflate")))
         return 0;
@@ -413,7 +461,7 @@ int http_step(struct http *h)
         case H_SEND:
             rv = conn_write(&h->c, h->req + h->req_off, h->req_len - h->req_off);
             if (rv == -CONN_AGAIN)
-                return (int)(now - h->last) > IDLE_MS ? WE_TIMEOUT : 0;
+                return (int)(now - h->last) > h->idle_ms ? WE_TIMEOUT : 0;
             if (rv < 0)
                 return rv;
             h->req_off += rv;
@@ -429,7 +477,7 @@ int http_step(struct http *h)
         case H_BODY: {
             rv = conn_read(&h->c, buf, sizeof(buf));
             if (rv == -CONN_AGAIN)
-                return (int)(now - h->last) > IDLE_MS ? WE_TIMEOUT : 0;
+                return (int)(now - h->last) > h->idle_ms ? WE_TIMEOUT : 0;
             if (rv < 0)
                 return rv;
             h->last = now;
@@ -501,6 +549,12 @@ void http_progress(const struct http *h, int *got, int *total)
     *total = h->content_length > 0 ? h->content_length : 0;
 }
 
+static void clear_bytes(void *p, size_t n)
+{
+    volatile unsigned char *v = p;
+    if (v) while (n--) *v++ = 0;
+}
+
 void http_free(struct http *h)
 {
     if (!h)
@@ -508,6 +562,11 @@ void http_free(struct http *h)
     if (h->resolve_id >= 0)
         plat_resolve_cancel(h->resolve_id);
     conn_close(&h->c);
+    if (h->identity_only) {
+        clear_bytes(h->req, (size_t)h->req_len);
+        clear_bytes(h->head, HEAD_MAX + 1);
+        clear_bytes(h->body, (size_t)h->body_cap);
+    }
     free(h->req);
     free(h->head);
     free(h->body);

@@ -1,0 +1,15 @@
+# Diagnostic image with a synthetic /Documents/CODEX.AUTH and a card holding
+# only chatgpt.gzp. Install on flash, keep the login, and import it.
+# Run tests/chatgpt_oauth.py --serve PORT --listen HOST_LAN_IP for later chat.
+# Build the package with CHATGPT_TEST_ORIGIN=http://HOST_LAN_IP:PORT.
+# Require "chatgpt: ready", then "chatgpt: signed in". Never use real tokens.
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+6500 tap 120 64
+8500 tap 120 64
+10500 tap 120 242
+25000 tap 120 203
+26500 key home
+29000 tap 90 192
+31000 tap 190 237
+32500 tap 120 200
