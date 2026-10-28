@@ -21,23 +21,46 @@ static void release(struct gz_mutex **m)
 #define SESSION_LOCKED() \
     struct gz_mutex *held_ __attribute__((cleanup(release))) = (gz_mutex_lock(&session_lock), &session_lock)
 
-/* Connects on first use, waiting a little for the server after boot. */
+/* A missing hardware dependency has no service to wait for. This read-only
+ * kernel snapshot also avoids five-second stalls in Settings/status polling. */
+static bool available(void)
+{
+    struct gz_service_snapshot s;
+    if (gz_services(&s) < 0 || !s.network_kind) return false;
+    for (unsigned i = 0; i < s.count; i++)
+        if (!strcmp(s.entries[i].name, "net"))
+            return s.entries[i].state != GZ_SERVICE_DISABLED;
+    return false;
+}
+
+static void disconnect(void)
+{
+    if (buf) gz_shm_unmap(buf);
+    buf = NULL;
+    port = 0;
+    session = -1;
+}
+
+/* Connects on first use, waiting only while a card-backed service starts. */
 static int connect(void)
 {
-    struct gz_msg m, r;
+    struct gz_msg m = {0}, r = {0};
 
-    if (session >= 0)
-        return 0;
+    if (session >= 0) {
+        if (gz_port_lookup(NET_PORT_NAME) == port) return 0;
+        disconnect();
+        return GZ_ENETDOWN; /* abort any request prepared in the old buffer */
+    }
     for (int tries = 0; (port = gz_port_lookup(NET_PORT_NAME)) <= 0; tries++) {
-        if (tries == 100)
+        if (!available() || tries == 100)
             return GZ_ENETDOWN;
         gz_sleep_ms(50);
     }
     memset(&m, 0, sizeof(m));
     m.w[0] = NET_HELLO;
     m.w[1] = (uint32_t)gz_getpid();
-    if (gz_send(port, &m, &r) < 0 || (int)r.w[0] < 0)
-        return r.w[0] ? (int)r.w[0] : GZ_EIO;
+    if (gz_send(port, &m, &r) < 0) { disconnect(); return GZ_ENETDOWN; }
+    if ((int)r.w[0] < 0) return (int)r.w[0];
     buf = gz_shm_map((int)r.w[2]);
     if (!buf)
         return GZ_ENOMEM;
@@ -61,8 +84,10 @@ static int call(uint32_t op, uint32_t a, uint32_t b, uint32_t c, uint32_t d, str
     m.w[3] = b;
     m.w[4] = c;
     m.w[5] = d;
-    if (gz_send(port, &m, &r) < 0)
-        return GZ_EIO;
+    if (gz_send(port, &m, &r) < 0) {
+        disconnect();
+        return GZ_ENETDOWN;
+    }
     if (reply)
         *reply = r;
     return (int)r.w[0];
@@ -77,8 +102,8 @@ int net_status(struct net_status *st)
      * Return the snapshot in the reply, without a shared-buffer session. */
     _Static_assert(sizeof(*st) <= sizeof(r.w) - sizeof(r.w[0]), "status must fit in reply");
     for (int tries = 0; (peer = gz_port_lookup(NET_PORT_NAME)) <= 0; tries++) {
-        if (tries == 100)
-            return GZ_ENETDOWN;
+        if (!available()) { memset(st, 0, sizeof(*st)); return 0; }
+        if (tries == 100) return GZ_ENETDOWN;
         gz_sleep_ms(50);
     }
     m.w[0] = NET_STATUS;

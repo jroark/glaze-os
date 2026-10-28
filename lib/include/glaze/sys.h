@@ -133,6 +133,13 @@ static inline int gz_sem_wait(int sem, int timeout_ms) { return GZ_SC2(SYS_SEM_W
 static inline int gz_sem_post(int sem) { return GZ_SC1(SYS_SEM_POST, sem); }
 static inline int gz_sem_destroy(int sem) { return GZ_SC1(SYS_SEM_DESTROY, sem); }
 
+#include <glaze/service.h>
+static inline int gz_services(struct gz_service_snapshot *s)
+{ return GZ_SC2(SYS_SERVICES, s, sizeof(*s)); }
+static inline int gz_service_set(const char *name, int enabled)
+{ return GZ_SC2(SYS_SERVICE_SET, name, enabled); }
+static inline int gz_net_handle(void) { return GZ_SC0(SYS_NET_HANDLE); }
+
 static inline int gz_sysinfo(struct gz_sysinfo *si) { return GZ_SC1(SYS_SYSINFO, si); }
 static inline int gz_task_snapshot(struct gz_task_snapshot *s)
 { return GZ_SC2(SYS_TASK_SNAPSHOT, s, sizeof(*s)); }

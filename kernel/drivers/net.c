@@ -13,6 +13,7 @@
  * keeps its own, with its Wi-Fi controls (xi825.c).
  */
 #include <glaze/wifi.h>
+#include "../module.h"
 #ifndef NET_TEST
 #include "../drivers.h"
 #include "../hw.h"
@@ -22,22 +23,44 @@
 
 #define QUEUE_LEN 8
 static unsigned kind;           /* GZ_NET_*: the card that owns the socket */
-static bool claimed, wl54cf_up;
+static bool claimed, online;
 static int bound_port;
 static struct gz_netif_info info;
-static struct {
-    uint16_t length;
-    uint8_t data[1536];
-} queue[QUEUE_LEN];
+static struct module image;
+static const struct net_driver *driver;
+static uint32_t generation;
+struct frame { uint16_t length; uint8_t data[1536]; };
+static struct frame *queue;
+static uint8_t *tx_buf;
+#define QUEUE_PAGES ALIGN_UP(QUEUE_LEN * sizeof(struct frame) + 1536u, PAGE_SIZE) / PAGE_SIZE
 static uint32_t head, tail;
-static uint8_t tx_buf[1536];
+
+static int net_access(const struct proc *p)
+{
+    if (!(p->flags & PROC_NET)) return GZ_EPERM;
+    return p->net_generation == generation ? 0 : GZ_EDEAD;
+}
+
+/* IDs survive service restarts; a stale socket can never alias a new one. */
+static uint32_t next_handle = 1;
+int net_handle(struct proc *p)
+{
+    int error = net_access(p);
+    if (error) return error;
+    if (next_handle >= 0x7fffffffu) return GZ_EFULL;
+    return (int)next_handle++;
+}
+
+uint32_t net_generation(void) { return generation; }
+uint32_t net_driver_kind(void) { return driver ? kind : GZ_NET_NONE; }
+uint32_t net_driver_pages(void) { return image.pages + (queue ? QUEUE_PAGES : 0); }
 
 void net_set_mac(const uint8_t mac[6]) { memcpy(info.mac, mac, 6); }
 void net_rx_drop(void) { info.rx_dropped++; }
 void net_overrun(void) { info.overruns++; }
 void net_receive(const uint8_t *frame, uint32_t len)
 {
-    if (len < 14 || len > sizeof(queue[0].data) || head - tail == QUEUE_LEN) {
+    if (!queue || len < 14 || len > sizeof(queue[0].data) || head - tail == QUEUE_LEN) {
         net_rx_drop();
         return;
     }
@@ -51,31 +74,76 @@ void net_receive(const uint8_t *frame, uint32_t len)
 
 bool net_up(void)
 {
-    switch (kind) {
-    case GZ_NET_XI825: return xi825_present();
-    case GZ_NET_WL54CF: return wl54cf_up;
-    case GZ_NET_NE2000: return ne2000_present();
-    default: return false;
+    return online && driver && driver->present();
+}
+
+static void free_queue(void)
+{
+    if (queue) {
+        memset(queue, 0, QUEUE_PAGES * PAGE_SIZE);
+        for (uint32_t i = 0; i < QUEUE_PAGES; i++)
+            page_free((uint8_t *)queue + i * PAGE_SIZE);
     }
+    queue = NULL;
+    tx_buf = NULL;
 }
 
 static void select_card(unsigned manufacturer, unsigned product)
 {
+    if (claimed) net_removed();
     claimed = true;
+    generation++;
     head = tail = 0;
     memset(&info, 0, sizeof(info));
+    const char *path;
     if (manufacturer == 0xd601 && product == 5) {
-        kind = GZ_NET_XI825;
-        xi825_init();
+        kind = GZ_NET_XI825; path = "drivers/xi825.ko";
     } else if (manufacturer == 0x02df && product == 0x8103) {
-        kind = GZ_NET_WL54CF;
-        wl54cf_up = wl54cf_init();
+        kind = GZ_NET_WL54CF; path = "drivers/wl54cf.ko";
     } else {
-        kind = GZ_NET_NE2000;
-        ne2000_init();
+        kind = GZ_NET_NE2000; path = "drivers/ne2000.ko";
     }
-    info.present = net_up();
-    info.kind = info.present ? (uint16_t)kind : GZ_NET_NONE;
+    int error = module_load(path, "glaze_driver", &image);
+    if (error) goto failed;
+    const struct net_driver *d = image.entry;
+    if (((uintptr_t)d & 3u) || !module_contains(&image, d, sizeof(*d)) || d->magic != NET_DRIVER_MAGIC ||
+        d->abi != NET_DRIVER_ABI || d->size != sizeof(*d) || d->kind != kind ||
+        !module_executable(&image, (const void *)d->init) ||
+        !module_executable(&image, (const void *)d->present) ||
+        !module_executable(&image, (const void *)d->stop) ||
+        !module_executable(&image, (const void *)d->irq)) {
+        error = GZ_ECORRUPT; goto failed;
+    }
+    const void *callbacks[] = {
+        d->init, d->present, d->stop, d->irq, d->send_frame, d->control,
+        d->info, d->bind, d->send, d->recv, d->wifi
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(callbacks); i++)
+        if (callbacks[i] && !module_executable(&image, callbacks[i])) {
+            error = GZ_ECORRUPT; goto failed;
+        }
+    if (kind != GZ_NET_XI825) {
+        queue = page_alloc_n(QUEUE_PAGES);
+        if (!queue) { error = GZ_ENOMEM; goto failed; }
+        tx_buf = (uint8_t *)queue + QUEUE_LEN * sizeof(*queue);
+        if (!d->send_frame) { error = GZ_ECORRUPT; goto failed; }
+    } else if (!d->info || !d->bind || !d->send || !d->recv || !d->wifi) {
+        error = GZ_ECORRUPT; goto failed;
+    }
+    driver = d;
+    if (!(online = driver->init())) {
+        driver->stop();
+        error = GZ_EIO; goto failed;
+    }
+    info.present = true;
+    info.kind = (uint16_t)kind;
+    return;
+failed:
+    driver = NULL;
+    online = false;
+    free_queue();
+    module_unload(&image);
+    kprintf("net: %s unavailable (%d); socket reserved\n", path, error);
 }
 
 void net_init(void)
@@ -111,16 +179,17 @@ bool net_insert(unsigned manufacturer, unsigned product)
 /* The card was pulled: its driver forgets it, and its frames go. */
 void net_removed(void)
 {
-    if (kind == GZ_NET_XI825) xi825_removed();
-    else if (kind == GZ_NET_WL54CF) wl54cf_removed();
-    else if (kind == GZ_NET_NE2000) ne2000_removed();
+    if (driver) driver->stop();
+    driver = NULL;
+    online = claimed = false;
+    generation++;
     kind = GZ_NET_NONE;
-    claimed = wl54cf_up = false;
     head = tail = 0;
-    info.present = 0;
-    info.kind = GZ_NET_NONE;
-    if (bound_port > 0)
-        ipc_notify(bound_port, GZ_NOTIFY_NET);
+    memset(&info, 0, sizeof(info));
+    if (bound_port > 0) ipc_notify(bound_port, GZ_NOTIFY_NET);
+    bound_port = 0;
+    free_queue();
+    module_unload(&image);
 }
 
 /* Claimed stays true if a recognized card failed initialization: the ATA
@@ -134,15 +203,13 @@ void net_irq(void)
      * notices the removal itself. */
     if ((PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) != PCMCIA_CARD_IN)
         return;
-    if (kind == GZ_NET_XI825) xi825_irq();
-    else if (kind == GZ_NET_WL54CF) wl54cf_irq();
-    else if (kind == GZ_NET_NE2000) ne2000_irq();
+    if (driver && online) driver->irq();
 }
 
 static int check(struct proc *p)
 {
-    if (!(p->flags & PROC_NET))
-        return GZ_EPERM;
+    int error = net_access(p);
+    if (error) return error;
     return info.present ? 0 : GZ_ENOENT;
 }
 
@@ -151,15 +218,19 @@ int sys_net_info(struct proc *p, uint32_t uout)
     if (!(p->flags & PROC_NET))
         return GZ_EPERM;
     pcmcia_poll();          /* the network server's look at the socket */
-    if (kind == GZ_NET_XI825)
-        return xi825_info(p, uout);
+    int error = net_access(p);
+    if (error) return error;
+    if (driver && driver->info)
+        return driver->info(p, uout);
     return copy_to_as(&p->as, uout, &info, sizeof(info));
 }
 
 int sys_net_bind(struct proc *p, int port)
 {
-    if (kind == GZ_NET_XI825)
-        return xi825_bind(p, port);
+    int error = net_access(p);
+    if (error) return error;
+    if (driver && driver->bind)
+        return driver->bind(p, port);
     int rv = check(p);
     if (rv)
         return rv;
@@ -171,8 +242,10 @@ int sys_net_bind(struct proc *p, int port)
 
 int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len)
 {
-    if (kind == GZ_NET_XI825)
-        return xi825_send(p, ubuf, len);
+    int error = net_access(p);
+    if (error) return error;
+    if (driver && driver->send)
+        return driver->send(p, ubuf, len);
     int rv = check(p);
     if (rv)
         return rv;
@@ -184,7 +257,7 @@ int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len)
         memset(tx_buf + len, 0, 60 - len);
         len = 60;
     }
-    rv = kind == GZ_NET_WL54CF ? wl54cf_send(tx_buf, len) : ne2000_send(tx_buf, len);
+    rv = driver->send_frame(tx_buf, len);
     if (rv >= 0)
         info.tx_frames++;
     return rv;
@@ -192,8 +265,10 @@ int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len)
 
 int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max)
 {
-    if (kind == GZ_NET_XI825)
-        return xi825_recv(p, ubuf, max);
+    int error = net_access(p);
+    if (error) return error;
+    if (driver && driver->recv)
+        return driver->recv(p, ubuf, max);
     int rv = check(p);
     if (rv)
         return rv;
@@ -208,11 +283,11 @@ int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max)
 
 int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t address)
 {
-    if (!(p->flags & PROC_NET))
-        return GZ_EPERM;
-    if (kind == GZ_NET_XI825)
-        return xi825_control(p, op, address);
-    if (kind != GZ_NET_WL54CF || !info.present)
+    int error = net_access(p);
+    if (error) return error;
+    if (driver && driver->wifi)
+        return driver->wifi(p, op, address);
+    if (!driver || !driver->control || !info.present)
         return GZ_ENOENT;
     union { struct wifi_status status; struct wifi_config config; struct wifi_request request;
             struct wifi_key key; } data;
@@ -226,7 +301,7 @@ int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t address)
 #ifndef NET_TEST
     uint32_t flags = irq_save();
 #endif
-    int rv = wl54cf_control(op, &data);
+    int rv = driver->control(op, &data);
     if (op == WIFI_CONNECT || op == WIFI_CONFIGURE || op == WIFI_DISCONNECT)
         head = tail = 0;
 #ifndef NET_TEST

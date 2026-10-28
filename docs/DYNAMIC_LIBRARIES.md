@@ -5,7 +5,8 @@ PIE programs. Their `PT_INTERP` names `/lib/ld-glaze.so.1`. The kernel maps the
 program and this independent, statically linked interpreter; the interpreter
 loads `DT_NEEDED` dependencies, relocates them eagerly and runs constructors
 before entering the program. `fs` and `net` remain static bootstrap services;
-the audio server, which the kernel also starts, is dynamic.
+the audio server is dynamic. The [service manager](DRIVERS_SERVICES.md) starts
+services from the trusted catalog, with `net` conditional on network hardware.
 
 `libc.so.1` owns the allocator, threads, errno, resource mapping, filesystem and
 network and audio clients, and BSD socket wrappers. `libgfx.so.1` owns

@@ -60,8 +60,12 @@ int sys_cf_write(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
  * socket until it is pulled: found at boot, or inserted later (cf.c's
  * pcmcia_poll(), which powers and configures it first). */
 void net_init(void);
+int net_handle(struct proc *p);
 void net_irq(void);
 bool net_present(void);     /* claimed: keep ATA off it even if it failed */
+uint32_t net_generation(void);
+uint32_t net_driver_kind(void);
+uint32_t net_driver_pages(void);
 bool net_up(void);          /* claimed and its driver running */
 bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up */
 void net_removed(void);

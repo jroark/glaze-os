@@ -79,6 +79,9 @@ enum {
     SYS_DISPLAY_POWER,      /* privileged: a0 = backlight on (0 or 1), CPU/input remain active */
     SYS_WIFI_CTL,          /* PROC_NET only: operation, buffer */
     SYS_AUDIO_GAIN,        /* PROC_AUDIO only: a0 = master Q15 gain, 0..32768 */
+    SYS_SERVICES,          /* read-only service/driver snapshot */
+    SYS_SERVICE_SET,       /* privileged: service name, enabled (0/1) */
+    SYS_NET_HANDLE,        /* PROC_NET: unique opaque socket identity */
     SYS_COUNT
 };
 

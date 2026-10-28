@@ -106,6 +106,7 @@ int net_status(struct net_status *st);
 /* Waits up to timeout_ms for an address; returns 0 or GZ_ENETDOWN. */
 int net_wait_up(int timeout_ms);
 int net_resolve(const char *host, uint32_t *addr, int timeout_ms);
+/* Opaque handles; invalid after card/service teardown and never reused per boot. */
 int net_socket(int type);
 int net_connect(int s, uint32_t addr, uint16_t port, int timeout_ms);
 int net_bind(int s, uint16_t port);
