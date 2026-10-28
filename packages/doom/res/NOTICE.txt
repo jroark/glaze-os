@@ -1,0 +1,12 @@
+Doom for Glaze
+
+Port and Glaze integration: GPL-3.0-or-later; see LICENSE.
+DoomGeneric engine by id Software, Simon Howard, ozkl and other contributors:
+GPL-2.0-or-later, elected GPLv3 for this linked application; see CORE-LICENSE.
+Source and exact pin: third_party/doomgeneric/UPSTREAM.md in the Glaze repository.
+https://github.com/jroark/glaze-os
+https://github.com/ozkl/doomgeneric
+
+No WADs, game artwork, sounds, maps, commercial files or shareware game data
+are distributed in this package. Supply your own compatible Doom IWAD.
+Doom is a trademark of id Software. This is an independent source port.

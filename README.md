@@ -345,3 +345,7 @@ See [Sega emulators](docs/SEGA.md) for installation, controls, limits and tests.
 [Game Gear](docs/GAMEGEAR.md) (`gamegear.gzp`) and
 [TurboGrafx-16 / PC Engine HuCard](docs/TURBOGRAFX16.md) (`turbografx16.gzp`) are
 also installable apps, with hardware controls, audio and cartridge RAM saves.
+
+Doom is available as the installable `out/pkg/doom.gzp` package, with physical
+buttons, sound effects and saves. Supply your own IWAD; no game data is included.
+See [Doom for Glaze](docs/DOOM.md).

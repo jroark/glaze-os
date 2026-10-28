@@ -36,6 +36,12 @@ ROM binaries must not be committed, including original demos and uploaded test g
 Generate demo cartridges only under ignored `out/pkg-res/`; keep external ROMs outside
 the source tree or under ignored `out/`. Build and native-test targets generate their own demos.
 
+`make out/pkg/doom.gzp` builds the DoomGeneric port (no WAD is packed or
+fetched). Platform I/O, buttons, indexed video and PCM effects live in
+`packages/doom/`; pinned engine patches are in `third_party/doomgeneric/UPSTREAM.md`.
+`make -C host doom-test` uses synthetic data; `DOOM_WAD=/external/doom1.wad`
+adds real-engine movement/audio/save/load checks. See `docs/DOOM.md`.
+
 ## Running and testing
 
 ```sh

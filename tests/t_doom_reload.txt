@@ -1,0 +1,19 @@
+# Boot with t_doom.txt's filesystem and the same external IWAD card.
+# Reinstall to check that package upgrades keep saves, load from the title
+# screen, then quit using physical OK at Doom's confirmation.
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+6500 tap 120 98
+8500 tap 120 64
+10500 tap 120 242
+25000 tap 120 203
+26500 key home
+29000 tap 90 192
+31000 key down
+32000 key ok
+34000 key ok
+43000 tap 210 31
+45000 tap 175 114
+52000 tap 210 31
+54000 tap 120 272
+56000 key ok
