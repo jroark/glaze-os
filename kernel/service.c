@@ -40,6 +40,7 @@ static void reconcile(void)
         struct proc *p = proc_by_pid(states[i].pid);
         if (p && !(healthy & (1u << i))) {
             if (s->privileges & PROC_AUDIO) sys_audio_stop(p, 1);
+            if (s->privileges & PROC_USB) usb_input_cancel();
             proc_exit(p, 0);
             kprintf("service: stopped %s\n", s->name);
         }
@@ -94,7 +95,7 @@ void services_init(void)
         struct gz_service_spec *s = &manifest.entries[i];
         if (!s->name[0] || !memchr(s->name, 0, sizeof(s->name)) ||
             !memchr(s->path, 0, sizeof(s->path)) || strncmp(s->path, "bin/", 4) ||
-            (s->privileges & ~(PROC_PRIVILEGED | PROC_FLASH | PROC_NET | PROC_AUDIO)) ||
+            (s->privileges & ~(PROC_PRIVILEGED | PROC_FLASH | PROC_NET | PROC_AUDIO | PROC_USB)) ||
             (s->policy & ~(GZ_SERVICE_NETWORK | GZ_SERVICE_REQUIRED)) || (s->after & ~all) ||
             ((s->privileges & PROC_NET) && !(s->policy & GZ_SERVICE_NETWORK)))
             panic("invalid service definition");

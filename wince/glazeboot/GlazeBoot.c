@@ -65,6 +65,7 @@ static SetSystemMemoryDivisionFn pSetSystemMemoryDivision;
 static WCHAR dir[MAX_PATH];     /* GlazeBoot's folder, with a trailing '\' */
 static HANDLE log_file = INVALID_HANDLE_VALUE;
 static HANDLE serial = INVALID_HANDLE_VALUE;
+static BOOL usb_unattended;
 
 static void PathOf(WCHAR *out, const WCHAR *name)
 {
@@ -115,7 +116,8 @@ static void Alert(const WCHAR *fmt, ...)
     wvsprintf(text, fmt, ap);
     va_end(ap);
     Say(L"%s", text);
-    MessageBox(NULL, text, L"GlazeBoot", MB_OK | MB_ICONEXCLAMATION);
+    if (!usb_unattended)
+        MessageBox(NULL, text, L"GlazeBoot", MB_OK | MB_ICONEXCLAMATION);
 }
 
 /* The sync cable's port, opened through Windows CE and left open: its
@@ -750,15 +752,23 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev, LPWSTR cmdline, int show)
     int rv = 1;
 
     app = instance;
+    usb_unattended = cmdline && (!lstrcmp(cmdline, L"--usb-boot") || !lstrcmp(cmdline, L"--usb-probe"));
     DWORD n = GetModuleFileName(instance, dir, MAX_PATH - 1);
     while (n && dir[n - 1] != L'\\')
         n--;
     dir[n] = 0;
     PathOf(path, L"glazeboot.log");
     log_file = CreateFile(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    SerialOpen();
+    if (!usb_unattended)
+        SerialOpen();
     Say(L"GlazeBoot, built " WIDEN(__DATE__));
+    Say(L"boot folder: %s", dir);
     CfgRead();
+    if (usb_unattended) {
+        cfg.confirm = 0;
+        cfg.probe = !lstrcmp(cmdline, L"--usb-probe");
+        Say(L"USB unattended %s", cfg.probe ? L"probe" : L"boot");
+    }
     Say(L"cfg: kernel=%s romfs=%s ramfs_kb=%u nand=%s confirm=%u countdown=%u mode=%s", cfg.kernel,
         cfg.romfs, cfg.ramfs_kb, cfg.nand == NAND_RW ? L"rw" : cfg.nand == NAND_RO ? L"ro" : L"off", cfg.confirm, cfg.countdown, cfg.probe ? L"probe" : L"boot");
 

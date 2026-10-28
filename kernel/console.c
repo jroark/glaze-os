@@ -2,6 +2,7 @@
 
 #include "kernel.h"
 #include "hw.h"
+#include "drivers.h"
 #include <glaze/bootinfo.h>
 
 #include <stdarg.h>
@@ -40,6 +41,7 @@ void console_use_debug_uart(void)
 
 void uart_putc(char c)
 {
+    usb_log_putc(c);
     uint32_t lsr = debug_uart ? 0x0F000825u : UART_BASE + 5 * 4;
     uint32_t thr = debug_uart ? 0x0F000820u : UART_BASE;
     uint32_t n = 0;
@@ -153,5 +155,5 @@ void panic(const char *fmt, ...)
     for (uint32_t n = 24; tracing && n < 36; n++)
         gz_boot_trace(n, GZ_TRACE_RED);
     for (;;)
-        ;
+        usb_panic_poll();
 }

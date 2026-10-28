@@ -88,6 +88,22 @@ void *page_alloc(void)
     return page;
 }
 
+void *page_alloc_between(uint32_t low, uint32_t high)
+{
+    uint32_t first = ALIGN_UP(low, PAGE_SIZE) / PAGE_SIZE;
+    uint32_t end = MIN(high / PAGE_SIZE, NPAGES);
+    for (int retry = 0; retry < 2; retry++) {
+        for (uint32_t i = first; i < end; i++) {
+            if (page_used[i]) continue;
+            page_used[i] = 1; free_count--;
+            void *p = (void *)KSEG0(i * PAGE_SIZE);
+            memset(p, 0, PAGE_SIZE); return p;
+        }
+        if (!romfs_reclaim(RECLAIM_BATCH)) break;
+    }
+    return NULL;
+}
+
 /* VR4131 UM 1.6.3: virtual-indexed 16 KiB, two-way caches (8 KiB/way).
  * Keep the extra index bit (VA bit 12) identical to KSEG0's physical alias. */
 static void *try_page_alloc_colour(uint32_t va)

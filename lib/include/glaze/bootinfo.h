@@ -66,6 +66,8 @@ struct gz_kernel_bin {
  *  16 NE2000       17 CompactFlash      18 audio      19 IPC, scheduler
  *  20 romfs list   21 fs spawned        22 net spawned  23 audio spawned
  *
+ * During handover, third-row blocks 24 and 25 are cyan after stopping
+ * USB DMA and audio DMA, respectively. SpringBoard later covers them.
  * A kernel panic paints the whole third row (24-35) red.
  */
 #define GZ_TRACE_FB         0xAA200000u     /* KSEG1 of the framebuffer */

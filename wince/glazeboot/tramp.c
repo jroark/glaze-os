@@ -115,12 +115,31 @@ void tramp_main(struct gb_control *c)
     ICU_MGIUINTL = 0;
     ICU_MGIUINTH = 0;
 
+    /* CE or the preceding Glaze kernel may still own USB DMA buffers in
+     * pages that are about to move. Stop both channels before relocation;
+     * the new kernel will reinitialize and enumerate the controller. */
+    /* CE may power off USB after the host releases its PC Connect carrier,
+     * while this loader is still reading images. Clock the unit before
+     * touching its registers; an access to a gated block can stall the bus. */
+    REG32(0x0A001114u) = 1;
+    for (volatile uint32_t i = 0; i < 200000u; i++)
+        ;
+    REG32(0x0A001300u) = 1;
+    REG32(0x0A00132Cu) = 0;
+    REG32(0x0A001488u) = 0;
+    REG32(0x0A00130Cu) = 0x10;
+    REG32(0x0A001308u) = 0;
+    /* Keep the companion clocks live while stopping the other engines.
+     * The incoming kernel resets the USB core before reusing its buffers. */
+    gz_boot_trace(24, GZ_TRACE_CYAN);
+
     AUD_ARM = 0;
     AUD_CTRL &= ~0x08u;
     AUD_DMA_RUN &= ~1u;
     AUD_START &= ~2u;
     AUD_ACK0 = 0x11;
     AUD_ACK1 = 0x11;
+    gz_boot_trace(25, GZ_TRACE_CYAN);
 
     /* Let any DMA in flight (NAND, audio) finish: a few ms at any clock. */
     for (volatile uint32_t i = 0; i < 2000000u; i++)

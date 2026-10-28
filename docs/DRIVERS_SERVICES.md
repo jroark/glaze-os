@@ -68,7 +68,8 @@ kernel imports must be explicitly exported by the loader.
   {"name":"fs", "path":"bin/fs", "privileges":["flash"], "required":true},
   {"name":"net", "path":"bin/net", "privileges":["network"],
    "requires":["network"], "after":["fs"]},
-  {"name":"audio", "path":"bin/audio", "privileges":["audio"], "after":["fs"]}
+  {"name":"audio", "path":"bin/audio", "privileges":["audio"], "after":["fs"]},
+  {"name":"usb", "path":"bin/usb", "privileges":["usb","privileged"], "after":["fs"]}
 ]
 ```
 
@@ -79,7 +80,7 @@ the normal build includes server programs automatically.
 
 The catalog supports up to eight services. Names are limited to 15 ASCII
 letters/digits/underscores/hyphens, and paths to `bin/<program>` (47 bytes).
-`privileges` selects `flash`, `network`, `audio` or `privileged` capabilities.
+`privileges` selects `flash`, `network`, `audio`, `usb` or `privileged` capabilities.
 `requires:["network"]` waits for a successfully initialized network driver.
 `after` names live service dependencies: they start first, and their dependents
 stop first if they go away. Missing dependencies, cycles, duplicate names,
@@ -94,7 +95,7 @@ loading follows socket presence; administratively stopping `net` leaves an
 installed card's driver available for a later service restart.
 
 The catalog is trusted boot policy, not user-writable configuration. Ordinary
-app spawning still cannot grant flash, network or audio capabilities.
+app spawning still cannot grant flash, network, audio or USB capabilities.
 
 ## Discovery and control
 

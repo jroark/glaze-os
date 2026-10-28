@@ -224,7 +224,7 @@ $(OUT)/servers/%.o: servers/%.c
 	$(CC) $(USER_CFLAGS) -c -o $@ $<
 
 # Bootstrap services are independent of the dynamic linker and file server.
-STATIC_PROGS := fs net
+STATIC_PROGS := fs net usb
 
 define STATIC_template
 $(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/lib/crt0.o $(USER_LIBS) $$(PROG_STATIC_DEPS_$(notdir $(1))) lib/user.lds
@@ -421,9 +421,14 @@ $(OUT)/kernel/%.o: lib/libc/%.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
 # These bake in INIT/BUILD_ID/INPUT_SCRIPT; rebuild them every time.
-$(OUT)/kernel/main.o $(OUT)/kernel/drivers/input.o $(OUT)/romfs.img: FORCE
+$(OUT)/kernel/main.o $(OUT)/kernel/syscall.o $(OUT)/kernel/drivers/input.o $(OUT)/romfs.img: FORCE
 
-$(OUT)/kernel.elf: $(KERNEL_OBJS) kernel/kernel.lds
+$(OUT)/kernel/reboot.checked: $(OUT)/kernel/reboot_entry.o
+	@if $(CROSS)objdump -r -j .text.reboot $< | grep -q 'R_MIPS_'; then \
+	    echo "reboot_entry.o: the copied reset code must be position independent" >&2; exit 1; fi
+	@touch $@
+
+$(OUT)/kernel.elf: $(KERNEL_OBJS) kernel/kernel.lds $(OUT)/kernel/reboot.checked
 	$(LD) -m elf32ltsmip -T kernel/kernel.lds -o $@ $(KERNEL_OBJS)
 
 # ---- SPL --------------------------------------------------------------------
@@ -536,6 +541,8 @@ all: $(OUT)/glaze.bin $(PKG_FILES)
 # separately, the first in the container and the second natively.
 GB_DIR := $(OUT)/glazeboot
 GB_GEN := $(GB_DIR)/gen
+$(OUT)/kernel/usb_reload.o: $(GB_GEN)/tramp_blob.h
+$(OUT)/kernel/usb_reload.o: KERNEL_CFLAGS += -I$(GB_GEN)
 BE300_DEV ?= ../be300-dev
 GB_CFLAGS := $(ARCHFLAGS) -std=gnu11 -ffreestanding -fno-builtin -nostdlib \
     -fno-stack-protector -fno-tree-loop-distribute-patterns -Os -Wall -Wextra -Ilib/include -MMD
@@ -613,6 +620,13 @@ $(GB_DIR)/GlazeBoot.exe: $(GB_DIR)/GlazeBoot.o
 
 glazeboot-exe: $(GB_DIR)/GlazeBoot.exe
 .PHONY: glazeboot glazeboot-exe
+
+$(GB_DIR)/UsbProbe.exe: wince/usb_probe/main.c $(BE300_RT)
+	@mkdir -p $(GB_DIR)
+	$(BE300_DEV)/tools/be300-cc -Os -Wall -Wextra -c -o $(GB_DIR)/UsbProbe.o $<
+	$(BE300_DEV)/tools/be300-ld -o $@ $(GB_DIR)/UsbProbe.o $(BE300_RT) -L $(BE300_DEV)/sdk/Lib -l coredll
+usb-probe-exe: $(GB_DIR)/UsbProbe.exe
+.PHONY: usb-probe-exe
 
 # RAM-boot test image (tests/run_ramboot.sh): an SPL that hands over the way
 # GlazeBoot does, through its trampoline, and optionally a FAT volume

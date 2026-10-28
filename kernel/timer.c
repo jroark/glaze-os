@@ -138,6 +138,7 @@ void timer_irq(void)
     cmcu_tick();
     sched_timer_tick(time_us());
     input_poll();
+    usb_poll();
     net_irq();
     audio_irq();
 }

@@ -18,6 +18,7 @@
 #include <glaze/prefs.h>
 #include <glaze/res.h>
 #include <glaze/sys.h>
+#include <glaze/usb_wire.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,9 @@ static int sb_port;
 static struct sb_calibration calibration;
 static struct sb_display display_controls;
 static struct sb_idle idle;
+static unsigned debug_activity;
+static uint32_t debug_until;
+static int debug_app_pid;
 
 /* Running app slots (one foreground + background apps, each with its own shm). */
 struct sb_running {
@@ -1553,6 +1557,15 @@ static void handle_input(void)
     while ((n = gz_input_read(evs, 16)) > 0) {
         for (int i = 0; i < n; i++) {
             struct gz_input_event *e = &evs[i];
+            if (e->type == GZ_EV_TOUCH_CANCEL) {
+                if (state == ST_APP) send_event(e);
+                idle.touch_down = idle.swallow_touch = false;
+                touching = dragging_knob = swiping = banner_touch = card_icon_touch = false;
+                view.pressed = -1; view.knob_x = 0;
+                if (state == ST_LOCK) render_lock();
+                else if (state == ST_HOME) render_home();
+                continue;
+            }
             enum sb_idle_input action = sb_idle_input(&idle, e, now_ms());
             if (action == SB_IDLE_WAKE)
                 screen_wake();
@@ -1828,6 +1841,52 @@ static void handle_msg(int token, struct gz_msg *m)
     }
     case SB_SET_STATUS:
         break;
+    case SB_DEBUG_LAUNCH: {
+        struct sb_note_req *req = client_req((int)m->w[3], false, NULL);
+        r.w[0] = (uint32_t)GZ_EINVAL;
+        if (!req || !memchr(req->path, 0, sizeof(req->path)))
+            break;
+        if (state != ST_HOME && state != ST_APP) {
+            r.w[0] = (uint32_t)GZ_EPERM;
+            break;
+        }
+        apps_scan(false);
+        for (int i = 0; i < sb_num_apps; i++) {
+            if (!strcmp(sb_apps[i].path, req->path) && sb_apps[i].present) {
+                launch(i);
+                int slot = find_slot_by_app(i);
+                r.w[0] = slot >= 0 ? 0 : (uint32_t)GZ_ENOMEM;
+                if (slot >= 0) {
+                    debug_app_pid = running[slot].pid;
+                    r.w[1] = (uint32_t)debug_app_pid;
+                }
+                break;
+            }
+        }
+        break;
+    }
+    case SB_DEBUG_STATE: {
+        if (!client_req((int)m->w[3], false, NULL)) { r.w[0] = (uint32_t)GZ_EPERM; break; }
+        if ((m->w[1] & GU_DEBUG_SCRIPT) && !(debug_activity & GU_DEBUG_SCRIPT)) {
+            if (idle.dark) { idle.dark = false; screen_wake(); }
+            idle.last_activity = now_ms();
+        }
+        debug_activity = m->w[1] & (GU_DEBUG_CONNECTED | GU_DEBUG_COPY | GU_DEBUG_SCRIPT);
+        debug_until = now_ms() + 2000;
+        if (debug_app_pid && !gz_proc_alive(debug_app_pid)) debug_app_pid = 0;
+        r.w[1] = debug_activity | (debug_app_pid ? GU_DEBUG_RUN : 0);
+        r.w[2] = (uint32_t)debug_app_pid;
+        if (view.debugger != r.w[1]) {
+            view.debugger = r.w[1];
+            /* Paint before replying: a following screenshot must see the
+             * activity state that its preceding request just established. */
+            if (state == ST_LOCK) render_lock();
+            else if (state == ST_PASSCODE) render_passcode();
+            else if (state == ST_HOME) render_home();
+            else if (state == ST_APP) render_app_status();
+        }
+        break;
+    }
     case SB_BADGE_SET:
     case SB_NOTE_POST:
     case SB_NOTE_CANCEL:
@@ -1982,6 +2041,7 @@ int main(void)
     for (;;) {
         uint32_t t = now_ms();
         int timeout = ms_to_next_minute();
+        if (debug_activity) timeout = MIN(timeout, 250);
 
         if (anim.active) {
             int wait = (int)(next_frame - t);
@@ -2034,6 +2094,10 @@ int main(void)
         }
 
         t = now_ms();
+        unsigned debug_before = view.debugger;
+        if ((int32_t)(t - debug_until) >= 0) debug_activity = 0;
+        if (debug_app_pid && !gz_proc_alive(debug_app_pid)) debug_app_pid = 0;
+        view.debugger = debug_activity | (debug_app_pid ? GU_DEBUG_RUN : 0);
         if (sb_idle_wait(&idle, t) == 0)
             screen_sleep();
         if (calibration.owner && calibration.preview && (int32_t)(t - calibration.until) >= 0)
@@ -2129,7 +2193,7 @@ int main(void)
             card_dialog.touching = card_dialog.pressed = false;
             render_card_dialog();
         }
-        if (minute_shown != old_minute || card_changed) {
+        if (minute_shown != old_minute || card_changed || view.debugger != debug_before) {
             if (state == ST_LOCK)
                 render_lock();
             else if (state == ST_PASSCODE)

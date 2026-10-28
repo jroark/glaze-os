@@ -67,6 +67,7 @@ void kmain(const struct gz_bootinfo *bi)
 
     trap_init();
     mm_init();
+    usb_init();
     TRACE(8, GZ_TRACE_GRAY);
     romfs_init();               /* reads the archive's table from NAND or RAM */
     TRACE(9, GZ_TRACE_PINK);

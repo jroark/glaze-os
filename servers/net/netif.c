@@ -239,7 +239,9 @@ static void wifi_link(void)
  * from the boot CF card, where the card's writer put 32 bytes from the
  * host's CSPRNG (glaze.seed beside GlazeBoot), and ratchet it on the card
  * before using it, so that no two boots start from the same seed. Without
- * the file, net.entropy stays missing and authentication refuses to run.
+ * the file, an attached USB debugger can instead supply fresh host CSPRNG
+ * bytes through the USB service. Authentication refuses to run until a
+ * seed is present; clocks and card identifiers are not entropy substitutes.
  */
 static const char *const card_seeds[] = { "/Card/CE/R4100/glaze.seed", "/Card/Glaze/glaze.seed" };
 static void seed_from_card(void)

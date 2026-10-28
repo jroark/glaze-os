@@ -12,6 +12,20 @@
 void irq_init(void);
 void irq_dispatch_ip2(void);
 
+/* USB device transport and the kernel-started development service. */
+void usb_init(void);
+void usb_poll(void);
+void usb_stop(void);
+bool usb_tx_idle(void);
+void usb_log_putc(char c);
+void usb_panic_poll(void);
+int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
+int usb_reload_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
+int usb_input_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
+void usb_input_poll(void);
+void usb_input_cancel(void);
+void machine_reboot_ce(void) __attribute__((noreturn));
+
 /* rtc.c */
 void rtc_init(void);
 int sys_rtc_get(struct addrspace *as, uint32_t uout);
