@@ -328,6 +328,22 @@ endif
 
 include tests/dynamic/Makefile.inc
 
+# Standalone native app SDK. This does not build or package a NAND image.
+SDK_DIR ?= $(OUT)/sdk/glaze-sdk
+SDK_ARCHIVE ?= $(OUT)/sdk/glaze-sdk.tar.gz
+.PHONY: sdk sdk-archive sdk-test
+ifeq ($(DYNAMIC),1)
+sdk: $(SHARED_LIBS) $(OUT)/shared/libmedia.so.1 $(OUT)/shared/ld-glaze.so.1 $(OUT)/pic/crt0.o $(OUT)/pic/start.o
+	$(PYTHON) tools/mksdk.py --build-dir $(OUT) --output $(SDK_DIR) --revision '$(BUILD_ID)' --cross '$(CROSS)'
+sdk-archive: sdk
+	$(PYTHON) tools/mksdk.py --output $(SDK_DIR) --archive $(SDK_ARCHIVE) --archive-only
+sdk-test: sdk
+	$(PYTHON) tests/sdk.py --sdk $(SDK_DIR) --cross '$(CROSS)'
+else
+sdk sdk-archive sdk-test:
+	$(error The app SDK requires DYNAMIC=1; use a separate OUT directory for static builds)
+endif
+
 # Keep debugging symbols in link artifacts, not in the shipped library archive.
 ROMFS_LIBRARY_FILES := $(foreach l,$(ROMFS_LIBS),$(OUT)/romfs/lib/$(notdir $(l)))
 define PACKAGE_LIBRARY
