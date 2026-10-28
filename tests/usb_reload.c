@@ -41,6 +41,7 @@ static void begin(struct proc *p, const uint8_t *kernel, unsigned ks, const uint
     struct gz_usb_boot b = {ks,rs,2048,GZ_BOOT_NAND_OFF,~gu_crc(~0u,kernel,ks),~gu_crc(~0u,romfs,rs)};
     memcpy(input, &b, sizeof(b));
     assert(!usb_reload_ctl(p, GZ_USB_RELOAD_BEGIN, 0, sizeof(b)));
+    assert(!allocated && !pages); /* BEGIN must not allocate the entire image */
 }
 static void send_data(struct proc *p, const uint8_t *image, unsigned n)
 {
@@ -71,6 +72,12 @@ int main(void)
     uint8_t *image = calloc(1, size); assert(image);
     memcpy(image, kernel, ks); memcpy(image + padded, romfs, rs);
     struct proc p = {0};
+    begin(&p, kernel, ks, romfs, rs);
+    allocation_limit = 0;
+    gu_put32(input, 0); input[4] = image[0];
+    assert(usb_reload_ctl(&p, GZ_USB_RELOAD_DATA, 0, 5) == GZ_ENOMEM);
+    assert(!allocated && !pages && !total);
+    allocation_limit = 4096;
     begin(&p, kernel, ks, romfs, rs);
     assert(usb_reload_ctl(&p, GZ_USB_RELOAD_PREPARE, 0, 0) == GZ_EINVAL && !allocated);
     begin(&p, kernel, ks, romfs, rs);

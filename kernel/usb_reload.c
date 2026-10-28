@@ -136,11 +136,9 @@ int usb_reload_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
         total = ALIGN_UP(manifest.kernel_bytes, PAGE_SIZE) + manifest.romfs_bytes;
         uint32_t want = ALIGN_UP(total, PAGE_SIZE) / PAGE_SIZE;
         if (want + 32 > mm_free_pages()) { total = 0; return GZ_ENOMEM; }
-        while (pages < want) {
-            void *s = page_alloc();
-            if (!s) { abort_reload(); return GZ_ENOMEM; }
-            stage[pages++] = s;
-        }
+        /* Reserve staging pages as DATA arrives. A multi-megabyte BEGIN
+         * allocation otherwise monopolizes the non-preemptive kernel;
+         * each DATA syscall now allocates at most two pages. */
         return 0;
     }
     if (op == GZ_USB_RELOAD_DATA) {
@@ -148,6 +146,12 @@ int usb_reload_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
         if (!total || prepared || len < 5 || len > sizeof(b) || copy_from_as(&p->as, b, buf, len)) return GZ_EINVAL;
         uint32_t off = gu_get32(b), n = len - 4;
         if (off != received || n > total - received) return GZ_EINVAL;
+        uint32_t want = ALIGN_UP(received + n, PAGE_SIZE) / PAGE_SIZE;
+        while (pages < want) {
+            void *s = page_alloc();
+            if (!s) { abort_reload(); return GZ_ENOMEM; }
+            stage[pages++] = s;
+        }
         while (n) {
             uint32_t k = MIN(n, PAGE_SIZE - received % PAGE_SIZE);
             memcpy((uint8_t *)stage[received / PAGE_SIZE] + received % PAGE_SIZE, b + len - n, k);
