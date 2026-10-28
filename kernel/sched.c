@@ -143,6 +143,17 @@ struct thread *thread_create_user(struct proc *p, uint32_t entry, uint32_t sp, u
     return t;
 }
 
+struct thread *thread_create_kernel(void (*entry)(void), int priority)
+{
+    struct thread *t = thread_setup(NULL, priority, ST_IM2 | ST_IM7 | ST_EXL | ST_IE,
+                                    (uint32_t)entry, 0);
+    if (t) {
+        t->tf->regs[R_SP] = (uint32_t)t->tf - 64;
+        thread_make_runnable(t);
+    }
+    return t;
+}
+
 static void idle_loop(void)
 {
     for (;;) {

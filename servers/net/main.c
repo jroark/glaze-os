@@ -44,6 +44,7 @@ struct session {
 
 struct sock {
     bool used;
+    int handle;
     bool closing;               /* close when the last worker lets go */
     int session;
     int type;
@@ -117,16 +118,17 @@ static void set_addr(struct sockaddr_in *sa, uint32_t addr, uint16_t port)
 
 /* ---- sockets (table lock held) -------------------------------------------- */
 
-static int sock_index(const struct sock *s)
+static int sock_handle(const struct sock *s)
 {
-    return (int)(s - socks);
+    return s->handle;
 }
 
 static struct sock *sock_get(int sess, uint32_t h)
 {
-    if (h >= MAX_SOCKETS || !socks[h].used || socks[h].closing || socks[h].session != sess)
-        return NULL;
-    return &socks[h];
+    for (int i = 0; i < MAX_SOCKETS; i++)
+        if (socks[i].used && !socks[i].closing && socks[i].session == sess && (uint32_t)socks[i].handle == h)
+            return &socks[i];
+    return NULL;
 }
 
 static struct sock *sock_alloc(int sess, int type, int fd)
@@ -135,6 +137,8 @@ static struct sock *sock_alloc(int sess, int type, int fd)
         if (!socks[i].used) {
             struct sock *s = &socks[i];
             memset(s, 0, sizeof(*s));
+            s->handle = gz_net_handle();
+            if (s->handle < 0) return NULL;
             s->used = true;
             s->session = sess;
             s->type = type;
@@ -226,7 +230,7 @@ static int op_socket(int sess, uint32_t type)
         lwip_close(fd);
         return GZ_EFULL;
     }
-    return sock_index(s);
+    return sock_handle(s);
 }
 
 static int op_bind(struct sock *s, uint32_t port)
@@ -569,7 +573,7 @@ static void run_job(struct job *j, uint8_t *data)
             lwip_close(rv);
             rv = buf ? GZ_EFULL : GZ_EPERM;
         } else {
-            rv = sock_index(c);
+            rv = sock_handle(c);
         }
     }
     if (buf && rv > 0 && (m->w[0] == NET_RECV || m->w[0] == NET_RECVFROM))

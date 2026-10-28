@@ -5,6 +5,7 @@
 #include "mips.h"
 #include "proc.h"
 #include "drivers.h"
+#include "service.h"
 #include <glaze/bootinfo.h>
 
 /* First user process: the compositor/SpringBoard once it exists. */
@@ -91,16 +92,7 @@ void kmain(const struct gz_bootinfo *bi)
     romfs_list();
     TRACE(20, GZ_TRACE_WHITE);
 
-    /* The file server owns the flash above the kernel (in a RAM boot, the
-     * RAM disk and the whole NAND). */
-    if (!proc_spawn("bin/fs", 0, PROC_FLASH))
-        kputs("fs: no file server\n");
-    TRACE(21, GZ_TRACE_WHITE);
-    if (!proc_spawn("bin/net", 0, PROC_NET))
-        kputs("net: no network server\n");
-    TRACE(22, GZ_TRACE_WHITE);
-    if (!proc_spawn("bin/audio", 0, PROC_AUDIO))
-        kputs("audio: no audio server\n");
+    services_init();
     TRACE(23, GZ_TRACE_WHITE);
     if (!proc_spawn(GLAZE_INIT, 0, PROC_PRIVILEGED))
         panic("cannot start %s", GLAZE_INIT);

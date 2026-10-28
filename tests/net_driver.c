@@ -6,6 +6,7 @@
 #include "../kernel/kernel.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #define GLAZE_HW_H
 static uint32_t bridge, socket_status;
@@ -87,6 +88,52 @@ int copy_from_as(struct addrspace *as, void *p, uint32_t addr, uint32_t n)
     memcpy(p, userspace + addr, n);
     return 0;
 }
+static bool ne_start(void) { ne2000_init(); return ne2000_present(); }
+static bool wl_present(void) { return wl_ok; }
+static bool xi_start(void) { xi825_init(); return xi825_present(); }
+static const struct net_driver fake_ne = {
+    .magic = NET_DRIVER_MAGIC, .abi = NET_DRIVER_ABI, .size = sizeof(struct net_driver), .kind = GZ_NET_NE2000,
+    .init = ne_start, .present = ne2000_present, .irq = ne2000_irq, .stop = ne2000_removed, .send_frame = ne2000_send
+};
+static const struct net_driver fake_wl = {
+    .magic = NET_DRIVER_MAGIC, .abi = NET_DRIVER_ABI, .size = sizeof(struct net_driver), .kind = GZ_NET_WL54CF,
+    .init = wl54cf_init, .present = wl_present, .irq = wl54cf_irq, .stop = wl54cf_removed,
+    .send_frame = wl54cf_send, .control = wl54cf_control
+};
+static const struct net_driver fake_xi = {
+    NET_DRIVER_MAGIC, NET_DRIVER_ABI, sizeof(struct net_driver), GZ_NET_XI825,
+    xi_start, xi825_present, xi825_irq, xi825_removed, NULL, NULL,
+    xi825_info, xi825_bind, xi825_send, xi825_recv, xi825_control
+};
+static unsigned loads, allocations;
+static void *allocation;
+static unsigned remaining;
+static bool load_fail;
+void *page_alloc_n(uint32_t n)
+{
+    assert(!allocation);
+    allocation = calloc(n, PAGE_SIZE); assert(allocation);
+    remaining = n; allocations += n;
+    return allocation;
+}
+void page_free(void *p)
+{
+    assert(p >= allocation && (uint8_t *)p < (uint8_t *)allocation + QUEUE_PAGES * PAGE_SIZE);
+    allocations--; if (!--remaining) { free(allocation); allocation = NULL; }
+}
+int module_load(const char *path, const char *entry, struct module *m)
+{
+    loads++;
+    if (load_fail) return GZ_ECORRUPT;
+    const struct net_driver *d = strstr(path, "xi825") ? &fake_xi : strstr(path, "wl54cf") ? &fake_wl : &fake_ne;
+    m->base = m->entry = (void *)d; m->bytes = sizeof(*d); m->pages = 1;
+    return 0;
+}
+void module_unload(struct module *m) { memset(m, 0, sizeof(*m)); }
+bool module_contains(const struct module *m, const void *p, uint32_t n) { return p != NULL; }
+bool module_executable(const struct module *m, const void *p) { return p != NULL; }
+void kprintf(const char *format, ...) {}
+
 /* A card with MANFID man:product and FUNCID function in the socket. */
 static void card(unsigned man, unsigned product, unsigned function)
 {
@@ -96,8 +143,9 @@ static void card(unsigned man, unsigned product, unsigned function)
 }
 static void reset(int which)  /* 0 none, 1 WL54-CF, 2 NE2000 */
 {
+    if (claimed || driver) net_removed();
     kind = GZ_NET_NONE;
-    claimed = wl54cf_up = false;
+    claimed = online = false;
     bound_port = 0;
     head = tail = 0;
     memset(&info, 0, sizeof(info));
@@ -110,29 +158,31 @@ static void reset(int which)  /* 0 none, 1 WL54-CF, 2 NE2000 */
     ne_probes = wl_probes = xi_probes = ne_irqs = wl_irqs = xi_irqs = notices = removes = reads = 0;
     ne_ok = wl_ok = false;
     copy_fail = false;
+    loads = 0; load_fail = false;
 }
 int main(void)
 {
     struct proc p = {0};
     reset(0);
-    net_init();
-    assert(!net_present() && !reads);
+    net_init(); p.net_generation = generation;
+    assert(!net_present() && !reads && !loads && !allocations && !net_driver_pages());
     assert(sys_net_info(&p, 0) == GZ_EPERM);
     assert(sys_net_send(&p, 0, 60) == GZ_EPERM);
     assert(sys_net_bind(&p, 7) == GZ_EPERM);
     assert(sys_net_recv(&p, 0, 60) == GZ_EPERM);
-    p.flags = PROC_NET;
+    p.flags = PROC_NET; p.net_generation = generation;
+    assert(net_handle(&p) > 0);
     assert(sys_net_info(&p, 0) == 0);
     assert(!((struct gz_netif_info *)userspace)->present);
     assert(sys_net_send(&p, 0, 60) == GZ_ENOENT);
     reset(1);
-    net_init();
+    net_init(); p.net_generation = generation;
     assert(net_present() && !info.present);
     assert(wl_probes == 1 && ne_probes == 0); /* recognized failed Wi-Fi is never ATA/NE2000 */
     for (int wireless = 0; wireless < 2; wireless++) {
         reset(wireless ? 1 : 2);
         ne_ok = wl_ok = true;
-        net_init();
+        net_init(); p.net_generation = generation;
         assert(info.present && !memcmp(info.mac, address, 6));
         assert(ne_probes == (unsigned)!wireless && wl_probes == (unsigned)wireless);
         net_irq();
@@ -166,7 +216,7 @@ int main(void)
         net_receive(frame, 13);
         assert(info.rx_dropped == 2);
     }
-    p.flags = PROC_NET;
+    p.flags = PROC_NET; p.net_generation = generation;
 
     /* Storage, and cards whose CIS doesn't parse, are never probed. */
     reset(0); card(0x45, 0x401, 4); net_init();
@@ -179,31 +229,37 @@ int main(void)
     reset(0); card(0x1234, 5, 6); net_init();
     assert(net_present() && ne_probes == 1 && !wl_probes && !xi_probes);
     /* The XI-825 keeps its own syscalls and has Wi-Fi controls. */
-    reset(0); card(0xd601, 5, 6); ne_ok = true; net_init();
+    reset(0); card(0xd601, 5, 6); ne_ok = true; net_init(); p.net_generation = generation;
     assert(xi_probes == 1 && net_up() && info.kind == GZ_NET_XI825);
     assert(sys_net_info(&p, 0) == 825 && sys_net_send(&p, 0, 60) == 825);
     assert(sys_wifi_ctl(&p, 0, 0) == 825);
     net_irq(); assert(xi_irqs == 1 && !ne_irqs);
     socket_status = 0; net_irq(); assert(xi_irqs == 1);    /* pulled */
-    reset(2); ne_ok = true; net_init();
+    reset(2); ne_ok = true; net_init(); p.net_generation = generation;
     assert(sys_wifi_ctl(&p, 0, 0) == GZ_ENOENT);
     /* Hot insertion and removal. */
     reset(0); ne_ok = true;
     assert(net_insert(0x149, 0x200) && net_present() && info.kind == GZ_NET_NE2000);
+    assert(sys_net_send(&p, 0, 60) == GZ_EDEAD); /* old server cannot drive a replacement */
+    p.net_generation = generation;
     assert(sys_net_bind(&p, 7) == 0);
     uint8_t frame[60] = {0};
     net_receive(frame, sizeof(frame));
     net_removed();
     assert(removes == 1 && !net_present() && !net_up() && head == tail);
-    assert(sys_net_send(&p, 0, 60) == GZ_ENOENT);
-    assert(sys_wifi_ctl(&p, WIFI_STATUS, 0) == GZ_ENOENT);
+    assert(sys_net_send(&p, 0, 60) == GZ_EDEAD);
+    assert(sys_wifi_ctl(&p, WIFI_STATUS, 0) == GZ_EDEAD);
     p.flags = 0;
     assert(sys_wifi_ctl(&p, WIFI_SCAN, 0) == GZ_EPERM);
-    p.flags = PROC_NET;
+    p.flags = PROC_NET; p.net_generation = generation;
     reset(0);
     assert(!net_insert(0x02df, 0x8103) && net_present());   /* failed: still claimed */
     net_removed();
     assert(!net_present());
+    net_removed();
+    assert(!allocations && !net_driver_pages());
+    reset(2); ne_ok = true; load_fail = true; net_init();
+    assert(net_present() && !net_up() && !ne_probes && !allocations && !net_driver_pages());
     puts("net driver: dispatch, storage, XI-825, frames, Wi-Fi controls, insertion and removal OK");
     return 0;
 }

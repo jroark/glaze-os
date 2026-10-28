@@ -25,6 +25,11 @@ boot ROM from NAND. The project site is [glaze-os.com](https://glaze-os.com)
 | `third_party/` | littlefs, Dhara and lwIP, unmodified (see `third_party/README.md`) |
 | `tools/` | NAND image packer, romfs and package builder, Swift asset generator, PNG-to-GZI converter |
 
+Optional network drivers are separate loadable modules. With no network card,
+Glaze loads none of them and does not start the network service; insertion and
+removal update both automatically. The service catalog also controls startup
+order, hardware dependencies and restarts. See [Drivers and services](docs/DRIVERS_SERVICES.md).
+
 All artwork is original. The device has no internal radios. Optional CF
 network cards (NE2000, XI-825 and WL54-CF) appear in Settings; the XI-825
 adds Settings > Wi-Fi.

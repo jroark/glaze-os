@@ -1,0 +1,5 @@
+[
+  {"name": "fs", "path": "bin/fs", "privileges": ["flash"], "required": true},
+  {"name": "net", "path": "bin/net", "privileges": ["network"], "requires": ["network"], "after": ["fs"]},
+  {"name": "audio", "path": "bin/audio", "privileges": ["audio"], "after": ["fs"]}
+]

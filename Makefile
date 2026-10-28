@@ -195,6 +195,9 @@ USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)
 # ---- user programs ----------------------------------------------------------
 
 PROG_DIRS := $(wildcard apps/* servers/*)
+ifeq ($(SERVICE_TESTS),1)
+PROG_DIRS += tests/service_guest tests/service_hotplug
+endif
 ifeq ($(RADIO_TESTS),1)
 PROG_DIRS += tests/radio_guest
 RADIO_TEST_URL ?= https://somafm.com/groovesalad.pls
@@ -360,12 +363,31 @@ ifeq ($(WL54CF),1)
 WL54CF_FW := $(WL54CF_FW_DIR)/cf8385_helper.bin $(WL54CF_FW_DIR)/cf8385.bin
 endif
 
+# Optional card drivers are independent relocatable kernel images. Only the
+# CIS-selected image is read into RAM; the dispatcher stays in the kernel.
+DRIVER_NAMES := ne2000 xi825 wl54cf
+DRIVER_FILES := $(foreach d,$(DRIVER_NAMES),$(OUT)/drivers/$(d).ko)
+$(OUT)/modules/%.o: modules/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_COMMON) -O2 -Ikernel -MMD -c -o $@ $<
+$(OUT)/drivers/%.ko: $(OUT)/modules/%.o $(OUT)/kernel/drivers/%.o
+	@mkdir -p $(dir $@)
+	$(LD) -m elf32ltsmip -r -o $@ $^
+	$(OBJCOPY) --strip-debug --remove-section=.reginfo --remove-section=.MIPS.abiflags \
+	    --remove-section=.pdr --remove-section=.gnu.attributes $@
+
+$(OUT)/services.bin: config/services.json tools/mkservices.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/mkservices.py $< $@
+
 # ---- romfs ------------------------------------------------------------------
 
 ROMFS_BINS := $(foreach p,$(PROGS),$(OUT)/romfs/bin/$(p))
 
 # mkromfs arguments for programs $(1) and assets $(2).
-ROMFS_ARGS = $(foreach p,$(1),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
+ROMFS_ARGS = etc/services=$(OUT)/services.bin \
+	    $(foreach d,$(DRIVER_FILES),drivers/$(notdir $(d))=$(d)) \
+	    $(foreach p,$(1),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
 	    $(foreach l,$(ROMFS_LIBRARY_FILES),lib/$(notdir $(l))=$(l)) \
 	    $(foreach a,$(2),res/$(notdir $(a))=$(a)) \
 	    $(foreach w,$(WEB_FILES),web/$(notdir $(w))=$(w)) \
@@ -374,12 +396,12 @@ ROMFS_ARGS = $(foreach p,$(1),bin/$(p)=$(OUT)/romfs/bin/$(p)) \
 	    $(foreach f,$(WL54CF_FW),firmware/$(notdir $(f))=$(f)) \
 	    $(if $(INPUT_SCRIPT),test/input.txt=$(INPUT_SCRIPT))
 
-$(OUT)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py
+$(OUT)/romfs.img: $(DRIVER_FILES) $(OUT)/services.bin $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py
 	$(PYTHON) tools/mkromfs.py $@ $(call ROMFS_ARGS,$(PROGS),$(ASSET_FILES))
 
 # ---- kernel -----------------------------------------------------------------
 
-KERNEL_SRCS := $(wildcard kernel/*.c kernel/*.S kernel/drivers/*.c)
+KERNEL_SRCS := $(filter-out $(foreach d,$(DRIVER_NAMES),kernel/drivers/$(d).c),$(wildcard kernel/*.c kernel/*.S kernel/drivers/*.c))
 KERNEL_OBJS := $(patsubst %,$(OUT)/%.o,$(basename $(KERNEL_SRCS))) $(OUT)/kernel/string.o $(OUT)/kernel/divdi3.o
 KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -Ikernel -MMD \
     -DGLAZE_BUILD='"$(BUILD_ID)"' -DGLAZE_INIT='"$(INIT)"' \
@@ -564,7 +586,7 @@ GB_PROGS := $(filter-out $(GB_DROP),$(PROGS))
 GB_ASSETS := $(filter-out $(foreach a,$(GB_DROP),assets/gen/icon_$(a).gzi) \
     $(if $(filter clock,$(GB_DROP)),assets/gen/tab_%.gzi),$(ASSET_FILES))
 
-$(GB_DIR)/romfs.img: $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py FORCE
+$(GB_DIR)/romfs.img: $(DRIVER_FILES) $(OUT)/services.bin $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py FORCE
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/mkromfs.py $@ $(call ROMFS_ARGS,$(GB_PROGS),$(GB_ASSETS))
 

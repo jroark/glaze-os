@@ -444,7 +444,7 @@ browser-google: $(WEB_OBJS) libwolfssl.a libjerry.a ../out/host/browser-platform
 .PHONY: net-driver-test
 net-driver-test: ../tests/net_driver.c ../kernel/drivers/net.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/net-driver-test ../tests/net_driver.c
+	$(CC) $(CFLAGS) -falign-functions=16 -fsanitize=address,undefined -o ../out/host/net-driver-test ../tests/net_driver.c
 	../out/host/net-driver-test
 
 # Optional peer-model tests; point at the matching be300 worktree.
@@ -484,3 +484,15 @@ store-worker-test: libwolfssl.a
 	    libwolfssl.a -lpthread
 	../out/host/store-worker-test
 .PHONY: store-worker-test
+
+.PHONY: module-test
+module-test: ../tests/module.c ../kernel/module.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/module-test ../tests/module.c
+	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko
+
+.PHONY: service-test
+service-test: ../tests/service.c ../kernel/service.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/service-test ../tests/service.c
+	../out/host/service-test
