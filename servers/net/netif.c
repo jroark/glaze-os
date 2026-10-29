@@ -389,6 +389,16 @@ void net_if_poll(void)
 
     if (now - card_checked >= CARD_CHECK_MS) {
         card_checked = now;
+        if (wireless && state==NET_DISCONNECTED && !saved.reconnect) {
+            /* The debugger restores a RAM-reload profile after fs starts.
+             * It may arrive just after the initial card attachment. */
+            uint8_t record[sizeof(saved)+1]; struct wifi_preference choice;
+            int len=pref_get(WIFI_PREF,record,sizeof record);
+            if (len>0 && !wifi_preference_decode(record,len,&choice) && choice.reconnect) {
+                saved=choice; connect_network(&saved.credentials);
+            }
+            forced_memzero(record,sizeof record); forced_memzero(&choice,sizeof choice);
+        }
         bool present = gz_net_info(&info) >= 0 && info.present;
         if (state == NET_NO_CARD && present) {
             net_log("net: network card inserted\n");

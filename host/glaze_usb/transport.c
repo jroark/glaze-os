@@ -1,4 +1,5 @@
 #include "transport.h"
+#include "network.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -97,6 +98,7 @@ int usb_reset_link(const char *location, int trace)
 }
 void usb_close(struct usb_link *l)
 {
+    debug_host_close(l);
     if (l->dev) {
         if (l->lines_active) libusb_control_transfer(l->dev, 0x21, 0x22, 0, 0, NULL, 0, 1000);
         l->lines_active = 0;
@@ -108,6 +110,7 @@ void usb_close(struct usb_link *l)
 }
 int usb_lines(struct usb_link *l, int value)
 {
+    if (l->network) return 0;
     int r = libusb_control_transfer(l->dev, 0x21, 0x22, (uint16_t)value, 0, NULL, 0, 2000);
     if (r >= 0) l->lines_active = value;
     if (l->trace) fprintf(stderr, "control lines=%d result=%d\n", value, r);
@@ -128,6 +131,7 @@ int usb_lines(struct usb_link *l, int value)
 }
 int usb_write(struct usb_link *l, const void *vp, size_t n, unsigned timeout)
 {
+    if (l->network) { if (l->trace) fprintf(stderr,"NET H>D %zu encrypted payload bytes\n",n); return debug_host_write(l,vp,n,timeout); }
     const uint8_t *p = vp;
     while (n) {
         int done = 0, want = n > 16384 ? 16384 : (int)n;
@@ -144,6 +148,7 @@ int usb_write(struct usb_link *l, const void *vp, size_t n, unsigned timeout)
 }
 int usb_read(struct usb_link *l, void *p, size_t n, unsigned timeout)
 {
+    if (l->network) return debug_host_read(l,p,n,timeout);
     /* wceusbsh continuously consumes EP3 serial/data notifications. Keep
      * that endpoint moving alongside bulk IN, and avoid starving CE's
      * shared RX/TX DMA engine with an unpaced stream of one-byte wake INs. */

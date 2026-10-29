@@ -1,5 +1,7 @@
 /* USB development service. All filesystem work runs in userspace. */
 #include <glaze/usb.h>
+#include <glaze/debug_net.h>
+#include "network.h"
 #include <glaze/fs.h>
 #include <glaze/pkg.h>
 #include <glaze/prefs.h>
@@ -8,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+_Static_assert(sizeof(struct gz_msg)==GD_CONFIG_BYTES,"pairing IPC record size");
 static struct gu_parser parser;
 static uint8_t output[GU_FRAME], payload[GU_PAYLOAD];
 static int upload = -1;
@@ -18,6 +21,7 @@ static uint8_t last_reply[GU_PAYLOAD];
 static uint32_t last_len;
 static int last_status;
 static bool session, have_last;
+static bool network;
 static uint32_t activity;
 static uint8_t *screen;
 static uint32_t copy_until, report_next;
@@ -27,7 +31,7 @@ static uint32_t script_state;
 
 static int debugger_state(unsigned *flags, unsigned *pid)
 {
-    unsigned f = session ? GU_DEBUG_CONNECTED : 0;
+    unsigned f = session ? GU_DEBUG_CONNECTED | (network ? GU_DEBUG_NETWORK : 0) : 0;
     if (session && (upload >= 0 || screen || reloading || (int32_t)(gz_time_ms() - copy_until) < 0)) f |= GU_DEBUG_COPY;
     if (session && script_state == GU_SCRIPT_RUNNING) f |= GU_DEBUG_SCRIPT;
     int sb = gz_port_lookup(SB_PORT_NAME);
@@ -58,12 +62,19 @@ static void abort_transfer(void)
     gz_usb_ctl(GZ_USB_SCRIPT_CANCEL, NULL, 0);
     gz_usb_ctl(GZ_USB_RELOAD_ABORT, NULL, 0);
 }
+static void wipe_request(uint32_t op)
+{
+    if (op != GU_ENTROPY && (op != GU_PUT_DATA || strcmp(destination,PREFS_DIR "/" GD_CONFIG))) return;
+    volatile uint8_t *p=parser.bytes;
+    for (unsigned i=0;i<sizeof(parser.bytes);i++) p[i]=0;
+}
 static int send_frame(uint32_t op, uint32_t id, int status, const void *data, uint32_t n)
 {
     uint32_t size = gu_encode(output, op, id, status, data, n), pos = 0;
     uint32_t end = gz_time_ms() + 3000;
     while (pos < size) {
-        int r = gz_usb_ctl(GZ_USB_WRITE, output + pos, size - pos);
+        int r = network ? debug_net_write(output + pos,size - pos) :
+                          gz_usb_ctl(GZ_USB_WRITE, output + pos, size - pos);
         if (r < 0) return r;
         pos += (uint32_t)r;
         if ((int32_t)(gz_time_ms() - end) >= 0) return GZ_ETIMEDOUT;
@@ -115,10 +126,19 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r = gz_sysinfo(&si); if (r) return r;
         gu_put32(payload, GU_VERSION);
         gu_put32(payload + 4, GU_CAP_FILES | GU_CAP_RUN | GU_CAP_LOGS | GU_CAP_RELOAD |
-                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY);
+                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK);
         gu_put32(payload + 8, si.free_pages * 4096);
         memcpy(payload + 12, si.build, sizeof(si.build));
         payload[43] = 0; *out = 44; session = true; return 0;
+    }
+    case GU_NET_ENABLE: {
+        if (n!=4 || gu_get32(b)>1) return GZ_EINVAL;
+        if (gu_get32(b)) {
+            uint8_t c[GD_CONFIG_BYTES+1];
+            int size=pref_get(GD_CONFIG,c,sizeof c); memset(c,0,sizeof c);
+            if (size!=GD_CONFIG_BYTES) return GZ_EINVAL;
+        }
+        return pref_put(GD_ENABLED,b,n);
     }
     case GU_ENTROPY: {
         if (n != 32) return GZ_EINVAL;
@@ -257,6 +277,7 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         return gz_usb_ctl(GZ_USB_RELOAD_DATA, (void *)b, n);
     case GU_BOOT_COMMIT:
         if (n) return GZ_EINVAL;
+        { int r=debug_net_handoff(); if (r) return r; }
         return gz_usb_ctl(GZ_USB_RELOAD_PREPARE, NULL, 0);
     case GU_ABORT:
         if (n) return GZ_EINVAL;
@@ -270,20 +291,49 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
 int main(void)
 {
     uint8_t b[256]; uint32_t connection = ~0u;
+    int pairing=gz_port_create();
+    if (pairing<0 || gz_port_register(pairing,GD_PAIR_PORT)<0) return 1;
+    uint32_t transport=0; gz_usb_ctl(GZ_USB_DEBUG_TRANSPORT,&transport,4);
+    debug_net_restore();
     printf("usb: development service ready\n");
     for (;;) {
         int state = gz_usb_ctl(GZ_USB_STATE, NULL, 0);
         if (state < 0) return 1;
-        if ((uint32_t)state != connection) {
+        struct gz_msg request,response={{0}};
+        int token=gz_recv(pairing,&request,0);
+        if (token>0) {
+            /* This process is the sole legitimate writer of pairing records:
+             * importing cannot overwrite or race its seed ratchet. */
+            abort_transfer(); debug_net_drop(); network=false;
+            parser.used=0; session=have_last=false;
+            uint32_t off=0;
+            int status=pref_put(GD_ENABLED,&off,4);
+            if (!status) status=pref_put(GD_CONFIG,&request,GD_CONFIG_BYTES);
+            volatile uint8_t *wipe=(uint8_t *)&request;
+            for (unsigned j=0;j<sizeof request;j++) wipe[j]=0;
+            response.w[0]=(uint32_t)status; gz_reply(token,&response);
+            debugger_state(NULL,NULL);
+        }
+        int net=debug_net_poll(!network && session);
+        if ((network && net<0) || (!network && net>0)) {
+            abort_transfer(); parser.used=0; session=have_last=false;
+            network=net>0; transport=network; gz_usb_ctl(GZ_USB_DEBUG_TRANSPORT,&transport,4); activity=gz_time_ms(); debugger_state(NULL,NULL);
+        }
+        if (!network && (uint32_t)state != connection) {
             abort_transfer(); parser.used = 0; session = have_last = false;
             debugger_state(NULL,NULL);
             connection = (uint32_t)state;
         }
-        if (session && gz_time_ms() - activity >= 30000) {
+        if ((session || network) && gz_time_ms() - activity >= 30000) {
             abort_transfer(); parser.used = 0; session = have_last = false;
+            if (network) { debug_net_drop(); network=false; }
             debugger_state(NULL,NULL);
         }
-        int n = gz_usb_ctl(GZ_USB_READ, b, sizeof(b));
+        int n = network ? debug_net_read(b,sizeof b) : gz_usb_ctl(GZ_USB_READ, b, sizeof(b));
+        if (network && n<0) {
+            abort_transfer(); parser.used=0; session=have_last=false;
+            network=false; debugger_state(NULL,NULL);
+        }
         for (int i = 0; i < n; i++) {
             if (gu_feed(&parser, b[i]) != 1) continue;
             const uint8_t *f = parser.bytes;
@@ -292,7 +342,7 @@ int main(void)
             if (!id || (op & GU_REPLY) || gu_get32(f + 16)) continue;
             activity = gz_time_ms();
             if (have_last && id == last_id && op == last_op && request_crc == last_crc) {
-                send_frame(op | GU_REPLY, id, last_status, last_reply, last_len); continue;
+                send_frame(op | GU_REPLY, id, last_status, last_reply, last_len); wipe_request(op); continue;
             }
             int status = (!session && op != GU_HELLO) || (have_last && id <= last_id && op != GU_HELLO) ?
                          GZ_EINVAL : dispatch(op, f + GU_HEADER, len, &out);
@@ -300,18 +350,21 @@ int main(void)
             last_len = out; last_status = status;
             memcpy(last_reply, payload, out);
             int sent = send_frame(op | GU_REPLY, id, status, payload, out);
-            if (op == GU_ENTROPY) memset(parser.bytes, 0, sizeof(parser.bytes));
+            wipe_request(op);
             if (!status && !sent && op == GU_BOOT_COMMIT) {
+                if (network) gz_sleep_ms(250); /* let lwIP transmit the acknowledged TLS reply */
                 int r = gz_usb_ctl(GZ_USB_RELOAD_GO, NULL, 0);
                 printf("usb: reload handoff failed (%d)\n", r);
                 abort_transfer();
             }
             if (!status && !sent && op == GU_REBOOT_CE) {
+                if (network) gz_sleep_ms(250);
                 int r = gz_usb_ctl(GZ_USB_REBOOT_CE, NULL, 0);
                 printf("usb: CE reboot failed (%d)\n", r);
             }
         }
-        unsigned wanted = session ? GU_DEBUG_CONNECTED : 0;
+        transport=network; gz_usb_ctl(GZ_USB_DEBUG_TRANSPORT,&transport,4);
+        unsigned wanted = session ? GU_DEBUG_CONNECTED | (network ? GU_DEBUG_NETWORK : 0) : 0;
         if (session && (upload >= 0 || screen || reloading || (int32_t)(gz_time_ms() - copy_until) < 0)) wanted |= GU_DEBUG_COPY;
         if (session && script_state == GU_SCRIPT_RUNNING) wanted |= GU_DEBUG_SCRIPT;
         if (wanted != reported || (session && (int32_t)(gz_time_ms() - report_next) >= 0)) debugger_state(NULL,NULL);

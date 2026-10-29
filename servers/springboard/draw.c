@@ -163,7 +163,7 @@ void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool pad
                          v->debugger & GU_DEBUG_SCRIPT ? 0x783CAA :
                          v->debugger & GU_DEBUG_RUN ? 0x23763B : 0x236AB3;
         gfx_round_rect(s, gfx_r(48, 1, 32, 13), 3, color, 255);
-        gfx_text(s, 50, 2, f, "USB", 0xFFFFFF, 255);
+        gfx_text(s, 50, 2, f, v->debugger & GU_DEBUG_NETWORK ? "NET" : "USB", 0xFFFFFF, 255);
         if (v->debugger & GU_DEBUG_COPY) {
             gfx_fill(s, gfx_r(74, 4, 1, 7), 0xFFFFFF);
             gfx_fill(s, gfx_r(72, 8, 5, 1), 0xFFFFFF);

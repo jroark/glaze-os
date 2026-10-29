@@ -33,3 +33,6 @@ host/libjerry.a
 
 # Built website release archives; metadata and checksums remain tracked.
 /site/downloads/*.zip
+
+# Network debugger pairing exports contain a PSK and RNG seed.
+[Dd][Ee][Bb][Uu][Gg].[Kk][Ee][Yy]

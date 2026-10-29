@@ -1,8 +1,8 @@
 /*
  * wolfSSL configuration for the browser (built with -DWOLFSSL_USER_SETTINGS).
  *
- * A TLS 1.2/1.3 client with certificate verification and nothing else: no
- * server, no file system, no threads, no OpenSSL compatibility layer. Math
+ * TLS 1.2/1.3 clients with certificate verification and the paired TLS 1.2
+ * PSK debugger server; no file system, threads or OpenSSL compatibility. Math
  * is sp_int with 32-bit digits, since the VR4131 runs 32-bit code only
  * (products use multu; 64-bit division comes from lib/libc/divdi3.c).
  * The same file configures the native build in host/ (__STDC_HOSTED__).
@@ -62,7 +62,7 @@ int glaze_tls_seed(unsigned char *out, unsigned int n);
 
 /* ---- protocol ---------------------------------------------------------- */
 
-#define NO_WOLFSSL_SERVER
+/* Server support is used only by the opt-in paired network debugger. */
 #define WOLFSSL_TLS13
 #define NO_OLD_TLS              /* TLS 1.2 and 1.3 only */
 #define HAVE_TLS_EXTENSIONS
@@ -74,7 +74,7 @@ int glaze_tls_seed(unsigned char *out, unsigned int n);
 #define HAVE_SESSION_TICKET
 #define HAVE_HKDF
 #define SMALL_SESSION_CACHE
-#define NO_PSK
+/* PSK suites require explicit callbacks; Browser continues to verify certs. */
 #define WOLFSSL_NO_TLS12_RENEGOTIATION
 #define HAVE_SERVER_RENEGOTIATION_INFO
 /* A server may include a cross-signed root whose issuer isn't in our store.

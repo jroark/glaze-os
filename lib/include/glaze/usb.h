@@ -2,13 +2,14 @@
 #define GLAZE_USB_H
 #include <glaze/abi.h>
 #include <glaze/usb_wire.h>
-/* SYS_USB_CTL is restricted to the kernel-started USB service. */
+/* SYS_USB_CTL is restricted to the trusted USB/network development service. */
 enum {
     GZ_USB_READ = 1, GZ_USB_WRITE, GZ_USB_LOG_READ, GZ_USB_STATE,
     GZ_USB_RELOAD_BEGIN, GZ_USB_RELOAD_DATA, GZ_USB_RELOAD_PREPARE,
     GZ_USB_RELOAD_GO, GZ_USB_RELOAD_ABORT, GZ_USB_SCREEN_COPY,
     GZ_USB_SCRIPT_BEGIN, GZ_USB_SCRIPT_DATA, GZ_USB_SCRIPT_START,
-    GZ_USB_SCRIPT_STATUS, GZ_USB_SCRIPT_CANCEL, GZ_USB_REBOOT_CE
+    GZ_USB_SCRIPT_STATUS, GZ_USB_SCRIPT_CANCEL, GZ_USB_REBOOT_CE,
+    GZ_USB_RELOAD_DEBUG, GZ_USB_DEBUG_RESTORE, GZ_USB_DEBUG_TRANSPORT
 };
 #if defined(__mips__)
 #include <glaze/sys.h>

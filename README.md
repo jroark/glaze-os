@@ -360,3 +360,7 @@ also installable apps, with hardware controls, audio and cartridge RAM saves.
 Doom is available as the installable `out/pkg/doom.gzp` package, with physical
 buttons, sound effects and saves. Supply your own IWAD; no game data is included.
 See [Doom for Glaze](docs/DOOM.md).
+
+Paired [network debugging](docs/NETWORK_DEBUG.md) supports the USB debugger
+commands over TLS, including screenshots, input scripts and RAM reloads.
+Enable it in Settings → Debugging after importing a private pairing key.

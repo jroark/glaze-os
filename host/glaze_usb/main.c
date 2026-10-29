@@ -1,6 +1,8 @@
 #include "transport.h"
 #include "pcconnect.h"
 #include "client.h"
+#include "network.h"
+#include <glaze/debug_net.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -13,8 +15,19 @@ static uint64_t monotonic_ms(void)
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint64_t)t.tv_sec * 1000 + (unsigned)t.tv_nsec / 1000000;
 }
-static int reconnect(struct usb_link *l, const char *device, struct gu_client *c)
+static int reconnect(struct usb_link *l, const char *device, struct gu_client *c, const char *host, const char *key)
 {
+    if (host) {
+        usb_close(l);
+        uint64_t end=monotonic_ms()+90000;
+        fputs("Waiting for paired network debugger (up to 90 seconds)...\n",stderr);
+        while (!usb_cancelled && monotonic_ms()<end) {
+            usleep(500000);
+            if (!debug_host_open(l,host,key) && !gu_hello(c,l)) return 0;
+            usb_close(l);
+        }
+        return -1;
+    }
     char location[64];
     int n = snprintf(location, sizeof(location), "%u", l->bus);
     for (unsigned j = 0; j < l->port_count; j++) n += snprintf(location + n, sizeof(location) - (size_t)n, ".%u", l->ports[j]);
@@ -40,7 +53,10 @@ static int reconnect(struct usb_link *l, const char *device, struct gu_client *c
 }
 static int usage(void)
 {
-    fputs("usage: glaze-usb [--trace] [--device BUS.PORT] COMMAND [ARGS]\n"
+    fputs("usage: glaze-usb [--trace] [--device BUS.PORT | --host HOST[:PORT] --key FILE] COMMAND [ARGS]\n"
+          "  net-keygen KEYFILE             create a private pairing record offline\n"
+          "  net-enable KEYFILE             provision and enable network debugging over USB\n"
+          "  net-disable                    disable the network listener\n"
           "  probe                         descriptors and runtime\n"
           "  ce-probe                      stock CE handshake\n"
           "  ce-info                       report CE staging-volume space\n"
@@ -63,18 +79,21 @@ static int usage(void)
 }
 int main(int argc, char **argv)
 {
-    struct usb_link l = {0}; const char *device = NULL;
+    struct usb_link l = {0}; const char *device = NULL, *host=NULL, *key=NULL;
     int i = 1;
     while (i < argc && argv[i][0] == '-') {
         if (!strcmp(argv[i], "--trace")) l.trace = 1;
+        else if (!strcmp(argv[i], "--host") && i+1<argc) host=argv[++i];
+        else if (!strcmp(argv[i], "--key") && i+1<argc) key=argv[++i];
         else if (!strcmp(argv[i], "--device") && i + 1 < argc) device = argv[++i];
         else break;
         i++;
     }
-    if (i == argc) return usage();
+    if (i == argc || (device && host) || (key && !host)) return usage();
     const char *cmd = argv[i++]; int left = argc - i;
-    if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect")) ? left != 0 :
-        !strcmp(cmd, "screenshot") ? left != 1 :
+    if (!strcmp(cmd,"net-keygen")) return left==1 && !host && !device ? (debug_host_keygen(argv[i]) ? 1 : 0) : usage();
+    if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect") || !strcmp(cmd,"net-disable")) ? left != 0 :
+        (!strcmp(cmd, "screenshot") || !strcmp(cmd,"net-enable")) ? left != 1 :
         !strcmp(cmd, "script") ? (left < 1 || left > 2) :
         !strcmp(cmd, "reboot") ? (left > 1 || (left == 1 && strcmp(argv[i], "--ce") && strcmp(argv[i], "--glaze"))) :
         !strcmp(cmd, "ce-clean-nand") ? (left > 1 || (left == 1 && strcmp(argv[i], "--dry-run"))) :
@@ -83,8 +102,12 @@ int main(int argc, char **argv)
         (!strcmp(cmd, "boot") || !strcmp(cmd, "reload") || !strcmp(cmd, "ce-self-test")) ? left > 1 :
         !strcmp(cmd, "logs") ? (left > 1 || (left == 1 && strcmp(argv[i], "--once"))) : 1) return usage();
     signal(SIGINT, stop); signal(SIGTERM, stop);
+    signal(SIGPIPE,SIG_IGN);
+    if (host && (!strncmp(cmd,"ce-",3) || !strcmp(cmd,"reset-link") || !strcmp(cmd,"diag") || !strcmp(cmd,"net-enable"))) {
+        fputs("This command requires the USB transport.\n",stderr); return 2;
+    }
     if (!strcmp(cmd, "reset-link")) return usb_reset_link(device, l.trace) ? 1 : 0;
-    if (usb_open(&l, device, !strcmp(cmd, "probe"))) return 1;
+    if (host ? debug_host_open(&l,host,key) : usb_open(&l, device, !strcmp(cmd, "probe"))) return 1;
     struct gu_client c; int r = 0;
     if (!strcmp(cmd, "diag")) {
         r = -1;
@@ -109,7 +132,7 @@ int main(int argc, char **argv)
             r = gu_hello(&c, &l);
             if (!r && glaze) {
                 r = gu_reload(&c, "out/glazeboot");
-                if (!r) r = reconnect(&l, device, &c);
+                if (!r) r = reconnect(&l, device, &c, host, key);
                 if (!r) r = gu_logs(&c, 1);
             } else if (!r) {
                 if (!(c.caps & GU_CAP_REBOOT_CE)) {
@@ -121,7 +144,7 @@ int main(int argc, char **argv)
             }
         } else if (glaze) {
             r = ce_boot(&l, "out/glazeboot");
-            if (!r) r = reconnect(&l, device, &c);
+            if (!r) r = reconnect(&l, device, &c, host, key);
             if (!r) r = gu_logs(&c, 1);
         } else {
             struct pc_link p; r = pc_connect(&p, &l);
@@ -157,12 +180,21 @@ int main(int argc, char **argv)
         r = l.revision == 0x0100 ? -1 : ce_self_test(&l, left ? argv[i] : "out/glazeboot");
     } else if (!strcmp(cmd, "boot") && l.revision != 0x0100) {
         r = ce_boot(&l, left ? argv[i] : "out/glazeboot");
-        if (!r) r = reconnect(&l, device, &c);
+        if (!r) r = reconnect(&l, device, &c, host, key);
         if (!r) r = gu_logs(&c, 1);
     } else if (l.revision == 0x0100) {
         r = gu_hello(&c, &l);
         if (!r) {
-            if (!strcmp(cmd, "put")) r = gu_upload(&c, argv[i], argv[i + 1]);
+            if (!strcmp(cmd,"net-enable")) {
+                r=debug_host_key_valid(argv[i]);
+                int trace=l.trace; l.trace=0; /* pairing material is never packet-traced */
+                if (!r) r=gu_upload(&c,argv[i],"/Library/Preferences/" GD_CONFIG);
+                l.trace=trace;
+                uint8_t on[4]; gu_put32(on,1);
+                if (!r) r=gu_call(&c,GU_NET_ENABLE,on,4);
+            } else if (!strcmp(cmd,"net-disable")) {
+                uint8_t off[4]={0}; r=gu_call(&c,GU_NET_ENABLE,off,4);
+            } else if (!strcmp(cmd, "put")) r = gu_upload(&c, argv[i], argv[i + 1]);
             else if (!strcmp(cmd, "get")) r = gu_download(&c, argv[i], argv[i + 1]);
             else if (!strcmp(cmd, "run")) {
                 r = left == 1 || !strcmp(argv[i+1], "--wait") ? gu_call(&c, GU_RUN, argv[i], (uint32_t)strlen(argv[i])) : -1;
@@ -191,7 +223,7 @@ int main(int argc, char **argv)
             }
             else if (!strcmp(cmd, "boot") || !strcmp(cmd, "reload")) {
                 r = gu_reload(&c, left ? argv[i] : "out/glazeboot");
-                if (!r) r = reconnect(&l, device, &c);
+                if (!r) r = reconnect(&l, device, &c, host, key);
                 if (!r) r = gu_logs(&c, 1);
             } else if (!strcmp(cmd, "logs")) {
                 if (left) r = gu_logs(&c, 1);

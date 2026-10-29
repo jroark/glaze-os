@@ -30,7 +30,8 @@ int copy_from_as(struct addrspace *as, void *p, uint32_t uva, uint32_t n)
 { (void)as; if (uva > sizeof(user) || n > sizeof(user) - uva) return -1; memcpy(p, user + uva, n); return 0; }
 int usb_reload_ctl(struct proc *p, uint32_t op, uint32_t b, uint32_t n)
 { (void)p; (void)op; (void)b; (void)n; return GZ_EINVAL; }
-void usb_input_cancel(void) {}
+static unsigned input_cancels;
+void usb_input_cancel(void) { input_cancels++; }
 void machine_reboot_ce(void) { rebooted++; longjmp(reboot_return, 1); }
 uint64_t time_us(void) { static uint64_t now; now += 100000; return now; }
 int usb_input_ctl(struct proc *p, uint32_t op, uint32_t b, uint32_t n)
@@ -105,6 +106,11 @@ int main(void)
     uint32_t old = generation; set_lines(0); assert(configured && generation != old);
     set_lines(3); assert(lines == 3);
     usbf_host_bus_reset(&model); usb_poll(); assert(!configured && !tx_busy && rh == rt);
+    uint32_t cancels=input_cancels;
+    gu_put32(user,1); assert(sys_usb_ctl(&p,GZ_USB_DEBUG_TRANSPORT,0,4)==0);
+    clear_session(); assert(input_cancels==cancels); /* cable reset cannot cancel network input */
+    gu_put32(user,0); assert(sys_usb_ctl(&p,GZ_USB_DEBUG_TRANSPORT,0,4)==0);
+    clear_session(); assert(input_cancels==cancels+1);
     usb_stop(); assert(!active);
     puts("usb-driver: ALL PASS"); return 0;
 }

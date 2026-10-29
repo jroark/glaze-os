@@ -9,6 +9,7 @@
 #include <glaze/bootinfo.h>
 #include <glaze/usb.h>
 #include <glaze/usb_boot.h>
+#include <glaze/debug_net.h>
 #include "../wince/glazeboot/plan.h"
 typedef uint32_t DWORD;
 #include "tramp_blob.h"
@@ -21,6 +22,7 @@ static struct gu_layout layout;
 static struct gb_control *control;
 static void *code, *info;
 static bool prepared;
+static struct gd_boot debugger;
 
 static void abort_reload(void)
 {
@@ -35,6 +37,7 @@ static void abort_reload(void)
     if (info) { page_free(info); info = NULL; }
     while (pages) { page_free(stage[--pages]); stage[pages] = NULL; }
     total = received = 0; prepared = false;
+    memset(&debugger, 0, sizeof(debugger));
 }
 static void stage_read(uint32_t off, void *vp, uint32_t n)
 {
@@ -104,6 +107,10 @@ static int prepare(void)
     struct gz_bootinfo *bi = info;
     bi->magic = GZ_BOOTINFO_MAGIC; bi->version = GZ_BOOTINFO_VERSION;
     bi->flags = manifest.flags; bi->romfs_pa = layout.romfs; bi->romfs_size = manifest.romfs_bytes;
+    if (debugger.enabled) {
+        bi->reserved = GD_BOOT_MAGIC;
+        memcpy((uint8_t *)info + GD_BOOT_OFFSET, &debugger, sizeof(debugger));
+    }
     bi->ramfs_pa = layout.ramfs; bi->ramfs_blocks = layout.ramfs_len / 16384;
     struct gb_move *m = gb_move_at(control, 0);
     m->src = PHYS(info) >> 12; m->dst = GZ_BOOTINFO_PA >> 12;
@@ -125,6 +132,22 @@ static int prepare(void)
 }
 int usb_reload_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
 {
+    if (op == GZ_USB_DEBUG_RESTORE) {
+        if (len != sizeof(debugger)) return GZ_EINVAL;
+        const struct gz_bootinfo *bi = ram_boot;
+        if (!bi || bi->reserved != GD_BOOT_MAGIC) return GZ_ENOENT;
+        void *source = (void *)KSEG0(GZ_BOOTINFO_PA + GD_BOOT_OFFSET);
+        if (((struct gd_boot *)source)->version != 1) return GZ_ENOENT;
+        if (copy_to_as(&p->as, buf, source, len)) return GZ_EINVAL;
+        memset(source, 0, len); /* secrets are consumed once */
+        return (int)len;
+    }
+    if (op == GZ_USB_RELOAD_DEBUG) {
+        if (!total || prepared || len != sizeof(debugger)) return GZ_EINVAL;
+        struct gd_boot b;
+        if (copy_from_as(&p->as, &b, buf, len) || b.version != 1 || b.enabled > 1 || b.wifi_size > sizeof(b.wifi)) return GZ_EINVAL;
+        debugger = b; memset(&b,0,sizeof(b)); return 0;
+    }
     if (op == GZ_USB_RELOAD_ABORT) { abort_reload(); return 0; }
     if (op == GZ_USB_RELOAD_BEGIN) {
         if (len != sizeof(manifest) || total) return GZ_EINVAL;

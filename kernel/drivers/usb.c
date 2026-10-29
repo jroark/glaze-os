@@ -19,6 +19,7 @@ static uint8_t rx[RING], tx[RING], logs[RING];
 static uint32_t rh, rt, th, tt, lh, lt, dropped;
 static uint8_t *dma;
 static uint32_t dma_len;
+static bool network_debugger;
 static bool active, configured, tx_busy, short_pending, zlp, status_pending;
 static uint8_t lines, pending_lines;
 static uint8_t diagnostic;
@@ -66,7 +67,7 @@ void usb_init(void)
 }
 static void clear_session(void)
 {
-    usb_input_cancel();
+    if (!network_debugger) usb_input_cancel();
     rh = rt = th = tt = 0;
     tx_busy = short_pending = zlp = status_pending = false;
     diagnostic = 0;
@@ -181,7 +182,13 @@ bool usb_tx_idle(void)
 int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
 {
     if (!(p->flags & PROC_USB)) return GZ_EPERM;
-    if (op >= GZ_USB_RELOAD_BEGIN && op <= GZ_USB_RELOAD_ABORT) return usb_reload_ctl(p, op, buf, len);
+    if ((op >= GZ_USB_RELOAD_BEGIN && op <= GZ_USB_RELOAD_ABORT) ||
+        op == GZ_USB_RELOAD_DEBUG || op == GZ_USB_DEBUG_RESTORE) return usb_reload_ctl(p, op, buf, len);
+    if (op == GZ_USB_DEBUG_TRANSPORT) {
+        uint32_t value;
+        if (len!=4 || copy_from_as(&p->as,&value,buf,4) || value>1) return GZ_EINVAL;
+        network_debugger=value; return 0;
+    }
     usb_poll();
     if (op == GZ_USB_STATE) return (int)((generation << 2) | (configured ? 1u : 0u) | (lines & 1 ? 2u : 0u));
     if (op == GZ_USB_LOG_READ) {
@@ -193,7 +200,6 @@ int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
         if (copy_to_as(&p->as, buf, b, n + 4)) return GZ_EINVAL;
         lt += n; dropped = 0; return n + 4;
     }
-    if (!configured || !(lines & 1)) return GZ_EDEAD;
     if (op == GZ_USB_REBOOT_CE) {
         if (len) return GZ_EINVAL;
         uint64_t end = time_us() + 2000000u;
@@ -213,6 +219,7 @@ int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
                            USB_FRAMEBUFFER + y * GZ_FB_STRIDE, GZ_FB_WIDTH * 2)) return GZ_EINVAL;
         return 0;
     }
+    if (!configured || !(lines & 1)) return GZ_EDEAD;
     uint8_t b[256];
     uint32_t n = MIN(len, sizeof(b));
     if (op == GZ_USB_READ) {

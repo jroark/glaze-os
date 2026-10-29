@@ -3,11 +3,13 @@
 #include "../kernel/drivers.h"
 #include <glaze/usb.h>
 #include <glaze/bootinfo.h>
+#include <glaze/wifi.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 static uint8_t *memory;
+const struct gz_bootinfo *ram_boot;
 static uint8_t used[4096], input[4096];
 static unsigned allocated, allocation_limit = 4096;
 #define SDRAM_SIZE (16u * 1024u * 1024u)
@@ -33,6 +35,8 @@ uint32_t romfs_reclaim(uint32_t n) { (void)n; return 0; }
 void mm_sync_code(void *p, uint32_t n) { (void)p; (void)n; }
 int copy_from_as(struct addrspace *as, void *p, uint32_t va, uint32_t n)
 { (void)as; if (va > sizeof(input) || n > sizeof(input) - va) return -1; memcpy(p, input + va, n); return 0; }
+int copy_to_as(struct addrspace *as,uint32_t va,const void *p,uint32_t n)
+{ (void)as; if (va>sizeof(input) || n>sizeof(input)-va) return -1; memcpy(input+va,p,n); return 0; }
 bool usb_tx_idle(void) { return true; }
 void usb_stop(void) {}
 uint64_t time_us(void) { return 0; }
@@ -89,6 +93,10 @@ int main(void)
     assert(usb_reload_ctl(&p, GZ_USB_RELOAD_PREPARE, 0, 0) == GZ_ENOMEM && !allocated);
     allocation_limit = 4096;
     begin(&p, kernel, ks, romfs, rs); send_data(&p, image, size);
+    struct gd_boot debug={.version=1,.enabled=1,.wifi_size=sizeof(struct wifi_preference)};
+    memset(debug.config,0xa5,sizeof debug.config); memset(debug.entropy,0x5a,sizeof debug.entropy);
+    memcpy(input,&debug,sizeof debug);
+    assert(!usb_reload_ctl(&p,GZ_USB_RELOAD_DEBUG,0,sizeof debug));
     assert(!usb_reload_ctl(&p, GZ_USB_RELOAD_PREPARE, 0, 0) && prepared);
     for (unsigned i = 0; i < control->count; i++) {
         struct gb_move *m = gb_move_at(control, i);
@@ -100,6 +108,11 @@ int main(void)
     assert(!memcmp(memory + layout.romfs, romfs, rs));
     struct gz_bootinfo *bi = (struct gz_bootinfo *)(memory + GZ_BOOTINFO_PA);
     assert(bi->magic == GZ_BOOTINFO_MAGIC && bi->flags == GZ_BOOT_NAND_OFF && bi->ramfs_pa == layout.ramfs);
+    assert(bi->reserved==GD_BOOT_MAGIC);
+    ram_boot=bi;
+    assert(usb_reload_ctl(&p,GZ_USB_DEBUG_RESTORE,0,sizeof debug)==sizeof debug);
+    assert(!memcmp(input,&debug,sizeof debug));
+    assert(usb_reload_ctl(&p,GZ_USB_DEBUG_RESTORE,0,sizeof debug)==GZ_ENOENT);
     abort_reload(); assert(!allocated);
     free(image); free(kernel); free(romfs); free(memory);
     puts("usb-reload: ALL PASS"); return 0;
