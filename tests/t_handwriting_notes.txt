@@ -1,0 +1,23 @@
+# Normal Notes app: switch to handwriting, enter "Al", save, and reopen it.
+# Coordinates include the 16-pixel status bar. Each letter is explicitly
+# accepted from the candidate bar; no recognition timeout/auto-commit.
+3000 drag 40 280 235 280 500
+4500 tap 90 285
+6500 tap 220 30
+7200 tap 70 298
+8000 down 66 268
+8100 move 81 238
+8200 move 96 208
+8300 move 111 238
+8400 up 126 268
+8700 down 79 246
+8900 up 113 246
+9300 tap 20 185
+9900 down 66 208
+10100 move 66 238
+10300 move 66 268
+10500 up 116 268
+10900 tap 20 185
+11600 tap 220 30
+12300 tap 30 30
+13200 tap 100 65

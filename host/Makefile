@@ -3,6 +3,7 @@ CC ?= cc
 CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -I../lib/include -I.
 GFX := ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c ../lib/gfx/res.c
 SB := ../servers/springboard/draw.c ../lib/ui/keypad.c
+KEYBOARD := ../lib/ui/keyboard.c ../lib/ui/handwriting.c ../lib/ui/recognize.c
 
 # The file server's flash stack, against a fault-injecting RAM NAND.
 FS := ../servers/fs/ftl.c ../third_party/littlefs/lfs.c ../third_party/littlefs/lfs_util.c \
@@ -259,7 +260,7 @@ settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/settings_sys.h \
 	    -o ../out/host/settings-test ../tests/settings.c hostres.c $(GFX) \
-	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/wifi.c ../lib/ui/input.c ../lib/ui/keyboard.c
+	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/wifi.c ../lib/ui/input.c $(KEYBOARD)
 	../out/host/settings-test
 .PHONY: settings-test
 
@@ -296,13 +297,19 @@ taskmanager-test: ../tests/taskmanager.c ../tests/taskmanager_sys.h ../packages/
 	../out/host/taskmanager-test
 .PHONY: taskmanager-test
 
-ui-events-test: ../tests/ui_events.c ../tests/ui_events_sys.h ../lib/ui/app.c ../lib/ui/list.c ../lib/ui/keyboard.c
+ui-events-test: ../tests/ui_events.c ../tests/ui_events_sys.h ../lib/ui/app.c ../lib/ui/list.c $(KEYBOARD)
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/ui_events_sys.h \
 	    -o ../out/host/ui-events-test ../tests/ui_events.c ../lib/ui/app.c ../lib/ui/list.c \
-	    ../lib/ui/keyboard.c ../lib/ui/widgets.c hostres.c $(GFX)
+	    $(KEYBOARD) ../lib/ui/widgets.c hostres.c $(GFX)
 	../out/host/ui-events-test
 .PHONY: ui-events-test
+
+handwriting-test: ../tests/handwriting.c $(KEYBOARD) ../lib/ui/input.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/ui_events_sys.h -o ../out/host/handwriting-test $^ ../lib/ui/widgets.c hostres.c $(GFX)
+	../out/host/handwriting-test
+.PHONY: handwriting-test
 
 aim-test: ../tests/aim.c ../packages/aim/oscar.c ../packages/aim/md5.c ../packages/aim/text.c ../packages/aim/oscar.h
 	@mkdir -p ../out/host
@@ -315,7 +322,7 @@ gmail-test: ../tests/gmail.c ../tests/settings_sys.h ../packages/gmail/main.c ..
 	@mkdir -p ../out/host
 	$(CC) $(WEB_CFLAGS) -include ../tests/settings_sys.h -o ../out/host/gmail-test ../tests/gmail.c \
 	    ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c \
-	    hostres.c $(GFX) ../lib/ui/widgets.c ../lib/ui/list.c ../lib/ui/keyboard.c \
+	    hostres.c $(GFX) ../lib/ui/widgets.c ../lib/ui/list.c $(KEYBOARD) \
 	    ../lib/ui/text.c ../lib/ui/input.c ../lib/ui/transition.c ../lib/libc/tz.c libwolfssl.a
 	../out/host/gmail-test
 .PHONY: gmail-test

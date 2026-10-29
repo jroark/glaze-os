@@ -18,7 +18,7 @@
 #include <string.h>
 
 enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
-            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG };
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -36,6 +36,7 @@ enum {
     R_WIFI_FORGET = R_WIFI_AP0 + WIFI_AP_MAX, R_WIFI_SECURITY, R_WIFI_EDIT, R_WIFI_SHOW,
     R_WIFI_KEY_INDEX, R_WIFI_AUTH, R_WIFI_JOIN, R_WIFI_DONE,
     R_REBOOT_CE, R_REBOOT_CONFIRM, R_DEBUG, R_DEBUG_TOGGLE, R_DEBUG_IMPORT,
+    R_INPUT_METHOD, R_INPUT_KEYS, R_INPUT_WRITE,
 };
 
 struct hit {
@@ -60,6 +61,10 @@ static bool ce_boot;
 static const char *debug_message;
 static const char *reboot_msg;
 static struct ui_keyboard wifi_keyboard;
+static struct ui_keyboard input_preview;
+static char input_sample[32];
+static const char *input_message;
+static bool input_preview_touch;
 static const char *const wifi_security_names[] = {"Open", "WEP", "WPA Personal", "WPA2 Personal"};
 static const char *wifi_error_text(int error)
 {
@@ -323,7 +328,7 @@ static void draw_root(gfx_surface *s)
     if (cell_visible(s))
         root_card = card_key(&st);
     if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
-    root_scroll.content_h = (8 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
+    root_scroll.content_h = (9 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
     root_scroll.view_h = UI_H - UI_NAV_H;
     if (!root_scroll.dragging && !root_scroll.animating)
         root_scroll.offset = MAX(0, MIN(root_scroll.offset, ui_scroll_max(&root_scroll)));
@@ -343,6 +348,7 @@ static void draw_root(gfx_surface *s)
     cell(s, 2, "Passcode Lock", enabled ? "On" : "Off", true, R_PASSCODE);
     cell(s, 2, "Touch Calibration", NULL, true, R_TOUCH);
     cell(s, 2, "Debugging", NULL, true, R_DEBUG);
+    cell(s, 2, "Input Method", NULL, true, R_INPUT_METHOD);
     cell(s, 3, "About", NULL, true, R_ABOUT);
     if (ce_boot) {
         section_gap();
@@ -351,6 +357,19 @@ static void draw_root(gfx_surface *s)
 }
 
 static gfx_rect back_rect;
+
+static void draw_input_method(gfx_surface *s)
+{
+    nhits=0;ui_draw_pinstripes(s,gfx_r(0,UI_NAV_H,UI_W,UI_H-UI_NAV_H));
+    ui_draw_navbar(s,"Input Method","Settings",&back_rect,0);add_hit(back_rect,R_BACK);
+    section_y=UI_NAV_H+12;int method=ui_input_method_default();
+    cell(s,1,"Keyboard",method==UI_INPUT_QWERTY?"Selected":NULL,true,R_INPUT_KEYS);
+    cell(s,3,"Handwriting",method==UI_INPUT_HANDWRITING?"Selected":NULL,true,R_INPUT_WRITE);
+    gfx_text_center(s,0,UI_H-UI_KB_H-19,UI_W,ui_font(FONT_R12),
+        input_message?input_message:input_sample[0]?input_sample:"Try the input method below.",
+        input_message?0x9B3434:UI_TEXT_DETAIL,255);
+    ui_draw_keyboard(s,&input_preview,UI_H-UI_KB_H);
+}
 
 static void draw_reboot(gfx_surface *s)
 {
@@ -900,6 +919,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_ABOUT: draw_about(s); break;
     case V_NETWORK: draw_network(s); break;
     case V_DEBUG: draw_debug(s); break;
+    case V_INPUT_METHOD: draw_input_method(s); break;
     case V_WIFI: draw_wifi(s); break;
     case V_WIFI_CREDENTIALS: draw_wifi_credentials(s); break;
     case V_PASSCODE: draw_passcode(s); break;
@@ -1396,6 +1416,18 @@ static void activate(int id)
         return;
     }
     switch (id) {
+    case R_INPUT_METHOD:
+        input_sample[0]=0;input_message=NULL;input_preview_touch=false;
+        ui_keyboard_init(&input_preview);go(V_INPUT_METHOD,true);return;
+    case R_INPUT_KEYS:case R_INPUT_WRITE: {
+        int method=id==R_INPUT_KEYS?UI_INPUT_QWERTY:UI_INPUT_HANDWRITING;
+        if(ui_input_method_save(method)<0)input_message="Could not save input method.";
+        else{
+            input_message=NULL;input_sample[0]=0;input_preview.shift=true;input_preview.numbers=false;
+            ui_keyboard_set_method(&input_preview,method);
+        }
+        return;
+    }
     case R_REBOOT_CE:
         if (!ce_boot) return;
         reboot_msg = NULL;
@@ -1573,6 +1605,24 @@ static bool pin_touch(const struct gz_input_event *ev)
         redraw();
     return true;
 }
+static bool input_method_touch(const struct gz_input_event *ev)
+{
+    if(view!=V_INPUT_METHOD)return false;
+    int y=UI_H-UI_KB_H;bool changed=false;
+    if(ev->type==GZ_EV_TOUCH_CANCEL){
+        input_preview_touch=false;ui_keyboard_event(&input_preview,ev,y,&changed);return true;
+    }
+    if(ev->type<GZ_EV_TOUCH_DOWN || ev->type>GZ_EV_TOUCH_UP)return false;
+    if(ev->type==GZ_EV_TOUCH_DOWN)input_preview_touch=ev->y>=y;
+    if(!input_preview_touch)return false;
+    int ch=ui_keyboard_event(&input_preview,ev,y,&changed),n=(int)strlen(input_sample);
+    if(ch=='\b' && n)input_sample[n-1]=0;
+    else if(ch>=' ' && ch<127 && n<(int)sizeof(input_sample)-1){input_sample[n]=(char)ch;input_sample[n+1]=0;}
+    if(ch)input_message=NULL;
+    if(ev->type==GZ_EV_TOUCH_UP)input_preview_touch=false;
+    if(ch || changed)redraw();
+    return true;
+}
 
 /* Dragging the volume slider; false if the event is not for it. Lifting
  * off saves the level and plays the notification tone at it. */
@@ -1707,6 +1757,7 @@ int main(void)
         }
         if (touch_calibration_event(&ev))
             continue;
+        if(input_method_touch(&ev))continue;
         if (display_touch(&ev))
             continue;
         if (ev.type == GZ_EV_TOUCH_CANCEL) {

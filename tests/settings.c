@@ -10,6 +10,8 @@ static uint16_t screen[UI_W * UI_H], full[UI_W * UI_H];
 static uint32_t clock_ms;
 static int boot_mode = GZ_BOOT_MODE_NAND, reboot_requests, reboot_error;
 static uint32_t test_net_kind, test_net_state;
+static uint32_t input_disk;
+static int input_len,input_error;
 static int presents;
 static int network_queries, passcode_queries;
 static uint32_t touch_op;
@@ -92,6 +94,10 @@ int gz_send(int port, const struct gz_msg *msg, struct gz_msg *reply)
 }
 int pref_get(const char *key, void *buf, uint32_t len)
 {
+    if(!strcmp(key,UI_INPUT_PREF)){
+        if(input_len>0)memcpy(buf,&input_disk,MIN(len,sizeof(input_disk)));
+        return input_len;
+    }
     if (!strcmp(key, DISPLAY_TIMEOUT_PREF)) {
         if (timeout_len > 0)
             memcpy(buf, &timeout_disk, MIN(len, sizeof(timeout_disk)));
@@ -101,6 +107,10 @@ int pref_get(const char *key, void *buf, uint32_t len)
 }
 int pref_put(const char *key, const void *buf, uint32_t len)
 {
+    if(!strcmp(key,UI_INPUT_PREF)){
+        if(input_error)return input_error;
+        memcpy(&input_disk,buf,sizeof(input_disk));input_len=len;
+    }
     if (!strcmp(key, DISPLAY_TIMEOUT_PREF)) {
         if (timeout_error)
             return timeout_error;
@@ -114,6 +124,7 @@ bool passcode_enabled(void)
     passcode_queries++;
     return true;
 }
+int fs_read_file(const char *path,void *out,uint32_t cap){(void)path;(void)out;(void)cap;return GZ_ENOENT;}
 bool passcode_check(const char *code)
 {
     return true;
@@ -303,10 +314,13 @@ static void calibration_tests(void)
 static void display_tests(void)
 {
     view = V_ROOT;
+    root_scroll.offset=0;
     redraw();
-    for (int i = 0; i < nhits; i++)
-        require(hits[i].r.y + hits[i].r.h <= UI_H, "root row extends beyond screen");
+    require(hit_rect(R_DISPLAY).y+UI_ROW_H<=UI_H,"Display row is not initially visible");
+    root_scroll.offset=ui_scroll_max(&root_scroll);redraw();
+    require(hit_rect(R_ABOUT).y+UI_ROW_H<=UI_H,"last root row is unreachable by scrolling");
     host_write_bmp("../out/host/settings-root.bmp", &ui.surf);
+    root_scroll.offset=0;redraw();
     activate(R_DISPLAY);
     require(view == V_DISPLAY && touch_op == SB_DISPLAY_GET, "Display did not query current levels");
     require(display_values.brightness == 3 && display_values.contrast == 5, "wrong display defaults");
@@ -605,7 +619,25 @@ int main(void)
     display_tests();
     timeout_tests();
     reboot_tests();
-    puts("settings: rendering, navigation, scrolling, sliders, calibration and display PASS");
+    activate(R_INPUT_METHOD);require(view==V_INPUT_METHOD,"input method navigation");
+    activate(R_INPUT_WRITE);redraw();compare_full();
+    require(input_disk==UI_INPUT_HANDWRITING && input_len==4 && input_preview.method==UI_INPUT_HANDWRITING,"handwriting default persistence");
+    static const struct {unsigned type;int x,y;} input_events[]={
+        {GZ_EV_TOUCH_DOWN,66,98},{GZ_EV_TOUCH_MOVE,96,38},{GZ_EV_TOUCH_UP,126,98},
+        {GZ_EV_TOUCH_DOWN,79,76},{GZ_EV_TOUCH_UP,113,76},
+    };
+    for(unsigned i=0;i<ARRAY_SIZE(input_events);i++){
+        struct gz_input_event e={.type=input_events[i].type,.x=input_events[i].x,.y=UI_H-UI_KB_H+input_events[i].y};
+        require(input_method_touch(&e),"practice pad did not take ink event");
+    }
+    host_write_bmp("../out/host/settings-handwriting.bmp",&ui.surf);
+    struct gz_input_event e={.type=GZ_EV_TOUCH_DOWN,.x=20,.y=UI_H-UI_KB_H+15};
+    input_method_touch(&e);e.type=GZ_EV_TOUCH_UP;input_method_touch(&e);
+    require(!strcmp(input_sample,"A"),"practice character not inserted");
+    activate(R_INPUT_KEYS);require(input_disk==UI_INPUT_QWERTY && input_preview.method==UI_INPUT_QWERTY,"keyboard default persistence");
+    input_error=GZ_EIO;activate(R_INPUT_WRITE);require(input_message && input_disk==UI_INPUT_QWERTY,"save error was hidden");input_error=0;
+    activate(R_BACK);require(view==V_ROOT,"input method back navigation");
+    puts("settings: rendering, navigation, scrolling, sliders, calibration, display and input methods PASS");
     return 0;
 }
 

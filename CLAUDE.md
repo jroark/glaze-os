@@ -71,6 +71,14 @@ capability-gated and shares timed input's disconnect release state. Use
 fixture also checks complete mirror CRCs and live input. No capture buffer
 exists until a viewer connects; no VNC listener is opened on the device.
 
+Handwriting input (`docs/HANDWRITING.md`) is shared by the existing keyboard
+API: `lib/ui/handwriting.c` renders/captures ink and `recognize.c` performs
+bounded integer point-cloud recognition using original `ink_shapes.h` data.
+The new method byte uses `ui_keyboard`'s former padding; size and old field
+offsets stay unchanged. Do not extend this structure without considering SDK
+clients. Use `make -C host handwriting-test ui-events-test settings-test` and
+`make sdk-test`; `tests/t_handwriting_notes.txt` checks Notes with scripted input.
+
 ## Running and testing
 
 `make out/pkg/chatgpt.gzp` builds the direct Codex chat package. Its device-code
