@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #define ICON_MAX    (16 * 1024)
 
@@ -106,7 +107,7 @@ void apps_scan(bool card_only)
     pkg_list("/Card", found, NULL);
     for (int i = 0; i < sb_num_apps; i++) {
         struct sb_app_info *a = &sb_apps[i];
-        if (!a->installed || !a->path[0] || seen[i] || (card_only && !on_card(i)))
+        if (a->wince || !a->installed || !a->path[0] || seen[i] || (card_only && !on_card(i)))
             continue;
         if (on_card(i)) {
             if (a->present) {
@@ -140,9 +141,53 @@ uint32_t apps_reinstalled_mask(void)
     return m;
 }
 
+/* A direct CE app uses the built-in runner and a small writable context.
+ * No executable, DLL or data file is copied onto the original NAND. */
+int apps_wince(const char *source)
+{
+    if(!source||strncmp(source,"/NAND/",6)||strlen(source)>=FS_PATH_MAX)return GZ_EINVAL;
+    for(const char *p=source+6;*p;){
+        const char *end=strchr(p,'/');if(!end)end=p+strlen(p);
+        if(end==p||(end-p==1&&*p=='.')||(end-p==2&&p[0]=='.'&&p[1]=='.')||memchr(p,':',end-p)||memchr(p,'\\',end-p))return GZ_EINVAL;
+        p=*end?end+1:end;
+    }
+    struct fs_stat st;int rv=fs_stat(source,&st);if(rv)return rv;
+    if(st.type!=FS_FILE||!st.size||st.size>4u*1024u*1024u)return GZ_EINVAL;
+    uint32_t runner_bytes;if(!gz_romfs_map("bin/wince",&runner_bytes))return GZ_ENOENT;
+    uint32_t hash=2166136261u;
+    for(const char *p=source;*p;p++)hash=(hash^(uint8_t)*p)*16777619u;
+    char context[48],path[FS_PATH_MAX],existing[FS_PATH_MAX];
+    bool found=false;
+    for(unsigned collision=0;collision<32;collision++){
+        snprintf(context,sizeof context,"/Library/WinCE/%08x-%u.app",hash,collision);
+        snprintf(path,sizeof path,"%s/source",context);
+        int n=fs_read_file(path,existing,sizeof existing-1);
+        if(n>=0){existing[n]=0;if(!strcmp(existing,source)){found=true;break;}continue;}
+        if(n!=GZ_ENOENT)return n;
+        rv=fs_mkdirs(context);if(rv)return rv;
+        char tmp[FS_PATH_MAX];snprintf(tmp,sizeof tmp,"%s/source.tmp",context);
+        rv=fs_write_file(tmp,source,strlen(source));if(rv!=(int)strlen(source)){fs_remove(tmp);return rv<0?rv:GZ_EIO;}
+        rv=fs_rename(tmp,path);if(rv){fs_remove(tmp);return rv;}
+        found=true;break;
+    }
+    if(!found)return GZ_ENOSPC;
+    for(int i=0;i<sb_num_apps;i++)if(sb_apps[i].wince&&!strcmp(sb_apps[i].path,context))return i;
+    int index=-1;
+    for(int i=0;i<sb_num_apps;i++)if(sb_apps[i].installed&&!sb_apps[i].path[0]){index=i;break;}
+    if(index<0){if(sb_num_apps==SB_MAX_APPS)return GZ_ENOSPC;index=sb_num_apps++;}
+    struct sb_app_info *a=&sb_apps[index];memset(a,0,sizeof *a);
+    strlcpy(a->path,context,sizeof a->path);snprintf(a->id,sizeof a->id,"wince.%08x",hash);
+    char label[FS_NAME_MAX];const char *leaf=strrchr(source,'/');strlcpy(label,leaf?leaf+1:source,sizeof label);
+    size_t len=strlen(label);if(len>4&&!strcasecmp(label+len-4,".cpk"))label[len-4]=0;
+    strlcpy(a->label,label,sizeof a->label);strlcpy(a->exec,"wince",sizeof a->exec);
+    a->installed=a->present=a->wince=true;a->status_style=SB_STATUS_FULLSCREEN;
+    sb_set_icon(index,NULL);changed=true;return index;
+}
+
 int apps_launch(int app)
 {
     struct sb_app_info *a = &sb_apps[app];
+    if(a->wince)return gz_spawn("bin/wince",GZ_SPAWN_APP);
     char path[FS_PATH_MAX];
     struct fs_stat st;
 
@@ -172,7 +217,7 @@ bool apps_replaced(int app)
 {
     struct sb_app_info *a = &sb_apps[app];
 
-    return a->installed && pkg_install_id(a->path) != a->install_id;
+    return a->installed && !a->wince && pkg_install_id(a->path) != a->install_id;
 }
 
 int apps_uninstall(int app)

@@ -37,6 +37,7 @@ enum {
     FS_STATFS,              /* w2 = 1: buf: path of the volume -> buf: struct fs_info */
     FS_FORMAT,              /* erase everything */
     FS_SET_END,             /* w2 = handle; truncate/extend at current position */
+    FS_NAND_READ,           /* read-only CE logical NAND: w2 byte offset, w3 bytes <= FS_IO_MAX */
 };
 
 #define FS_O_READ       0x1
@@ -72,6 +73,9 @@ struct fs_info {
 
 /* ---- client API (libc) --------------------------------------------------- */
 
+/* Read the original NAND through the RAM-boot CE block map/ECC path.
+ * Refused by the kernel in ordinary NAND boots or with nand=off. */
+int fs_nand_read(uint32_t offset, void *dst, uint32_t len);
 int fs_open(const char *path, int flags);
 int fs_read(int fd, void *buf, uint32_t len);
 int fs_write(int fd, const void *buf, uint32_t len);

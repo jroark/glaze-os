@@ -7,11 +7,13 @@
 
 #include <glaze/fs.h>
 #include <glaze/pkg.h>
+#include <glaze/notify.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #define MAX_ENTRIES     128
 #define ROW_H           36
@@ -23,7 +25,7 @@
 #define TEXT_LINE_H     17
 
 enum view { V_LIST, V_NAME, V_TEXT, V_IMAGE, V_INFO, V_PACKAGE };
-enum kind { K_FOLDER, K_TEXT, K_IMAGE, K_PACKAGE, K_OTHER };
+enum kind { K_FOLDER, K_TEXT, K_IMAGE, K_PACKAGE, K_WINCE, K_OTHER };
 
 static enum view view = V_LIST;
 
@@ -119,12 +121,17 @@ static enum kind kind_of(const struct fs_dirent *e)
         return K_IMAGE;
     if (has_ext(e->name, "gzp"))
         return K_PACKAGE;
+    if(has_ext(e->name,"exe"))return K_WINCE;
+    if(has_ext(e->name,"cpk")){
+        size_t n=strlen(e->name);
+        if(n>=8&&!strncasecmp(e->name+n-8,".exe.cpk",8))return K_WINCE;
+    }
     return K_OTHER;
 }
 
 static const char *kind_name(enum kind k)
 {
-    static const char *const names[] = { "Folder", "Text Document", "Picture", "App Package", "Document" };
+    static const char *const names[] = { "Folder", "Text Document", "Picture", "App Package", "Windows CE App", "Document" };
     return names[k];
 }
 
@@ -647,6 +654,12 @@ static void open_entry(int row)
     case K_TEXT: load_text(row); go(V_TEXT, true); return;
     case K_IMAGE: load_image(row); go(V_IMAGE, true); return;
     case K_PACKAGE: load_package(row); go(V_PACKAGE, true); return;
+    case K_WINCE: {
+        char path[FS_PATH_MAX];join(path,cwd,ents[row].name);
+        int rv=sb_wince_launch(path);
+        if(rv<0)show_alert("Cannot Open WinCE App",rv==GZ_ENOENT?"The CE runner or source is unavailable.":fs_strerror(rv));
+        return;
+    }
     case K_OTHER: go(V_INFO, true); return;
     }
 }

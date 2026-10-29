@@ -623,7 +623,7 @@ $(GB_DIR)/kernel.bin: $(OUT)/kernel.elf tools/mkkernelbin.py
 # A RAM boot holds all of romfs in RAM, so GlazeBoot's carries only the apps
 # in GB_APPS (SpringBoard shows the built-ins it finds), with their icons;
 # servers and test programs always go in. GB_APPS=all keeps every app.
-GB_APPS ?= appstore browser settings
+GB_APPS ?= appstore browser files settings wince
 GB_TEST_PROGS := ktest ktest_pong ldtest ldtest_peer ldtest_ro ldtest_oom ldmem
 ifeq ($(GB_APPS),all)
 GB_DROP :=

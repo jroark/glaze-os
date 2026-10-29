@@ -221,7 +221,9 @@ WinCE `\Documents`, `\My Documents` and `\Nand Disk\Documents` map to Glaze's
 root, `\Windows`, `\Program Files` and `\Temp` exist there as they do on a
 device; their backing directories are created on first use. Typed
 registry values are stored in `data/registry` for each app. Path traversal is
-rejected. This does not expose a shared original-OS registry or filesystem.
+rejected. Packaged apps do not expose a shared original-OS registry or filesystem.
+Direct NAND launches add a read-only original-file fallback and directory
+searches while retaining private registry and writable overlay state.
 Registry streams retain the `GZCE` typed-value records and append a `GZCK`
 key directory. The runtime also accepts older value-only streams and infers
 their parent keys. The store is bounded to 128 keys, 128 values, 64 KiB per value
@@ -236,6 +238,16 @@ The PE structures follow Microsoft's
 CPK decoding was derived from the local CCFS driver's block dispatch and reads
 its Huffman word dictionary from the supplied image. `cbeaExplorer/CbeaFile.cpp`
 and `dumpcbea` were consulted for the `.cbea` installer archive format.
+
+## Direct launch from NAND
+
+After a USB/GlazeBoot RAM start with `nand=ro`, Files can launch `.exe` and
+`.exe.cpk` files directly from `/NAND`. The built-in runner recovers matching
+ordinal names and the CCFS dictionary locally, loads adjacent NAND libraries,
+and keeps mutable state in a private Glaze context. See
+[WINCE_NAND.md](WINCE_NAND.md) for the launch steps, memory requirements,
+filesystem overlay, and validation. Packaged apps continue to use their existing
+resources and private state.
 
 ## Converting `.cbea` installer archives (`tools/cbea2gzp.py`)
 

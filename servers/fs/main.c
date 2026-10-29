@@ -364,6 +364,21 @@ static int op_format(void)
     return mount_err;
 }
 
+/* Read-only access for recovering CE exports/CCFS metadata. The existing
+ * kernel syscall enforces RAM boot, nand=off, logical mapping and ECC. */
+static int op_nand_read(struct session *s,uint32_t offset,uint32_t len)
+{
+    uint8_t page[512] __attribute__((aligned(4)));
+    if(offset>16u*1024u*1024u || len>FS_IO_MAX || len>16u*1024u*1024u-offset)return GZ_EINVAL;
+    uint32_t done=0;
+    while(done<len){
+        uint32_t at=offset+done,n=MIN(len-done,512u-at%512u);
+        int rv=gz_nand_read(at/512u,page);if(rv<0)return rv;
+        memcpy(s->buf+done,page+at%512u,n);done+=n;
+    }
+    return (int)done;
+}
+
 static int dispatch(const struct gz_msg *m, struct gz_msg *r)
 {
     uint32_t op = m->w[0];
@@ -375,6 +390,7 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
         return GZ_EPERM;
     struct session *s = &sessions[sess];
     card_check();
+    if (op == FS_NAND_READ) return op_nand_read(s,m->w[2],m->w[3]);
     if (op == FS_STATFS)
         return op_statfs(s, m->w[2]);
     if (op == FS_FORMAT)
