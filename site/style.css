@@ -141,6 +141,18 @@ h2 {
 }
 .section-followup { margin-top: 16px; }
 .compatibility-details { margin-top: 24px; }
+.section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 32px;
+  padding: 14px 16px;
+  border: 1px solid var(--cell-border);
+  border-radius: var(--radius);
+  background: var(--cell);
+  font-size: 14px;
+}
+.section-nav a { padding: 4px 0; }
 
 /* ---- hero -------------------------------------------------------------- */
 
@@ -336,6 +348,14 @@ h2 {
 .download-detail { margin-bottom: 0; color: var(--ink-soft); font-size: 13px; }
 .download-steps { margin-top: 16px; }
 .download-steps .step p { margin-bottom: 0; overflow-wrap: anywhere; }
+.release-notice {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid #b6a26b;
+  border-radius: var(--radius);
+  background: #fff8e5;
+  color: #514523;
+}
 
 /* ---- screens gallery ---------------------------------------------------- */
 

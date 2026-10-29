@@ -52,6 +52,37 @@ selected original WinCE apps, shared list behavior, graphics/text/flash
 performance improvements, demand-paged romfs and developer benchmarks. The
 hardware overview also documents the existing Stowaway keyboard support.
 
+### October 29 app and developer update
+
+The page now covers all native app packages in `packages/`, including Chat
+and Doom, handwriting input, browser Web APIs and ES modules, direct WinCE
+NAND launches, loadable network drivers and conditional services, the C SDK,
+USB networking, paired network debugging and VNC screen mirroring. Each new
+feature links to its usage guide. Physical-device results retain their
+October 25 date and are separate from protocol/emulator test coverage.
+
+The feature overview describes current source, not a new binary release.
+The download card and `downloads/latest.json` still identify the unchanged
+October 25 `e4500c1` archive. The page explicitly tells visitors to build
+current source for the newer features; it does not assume that the hosted
+emulator or App Store has been redeployed with those features.
+
+These additional images are real 240×320 emulator captures, converted from
+BMP to PNG without resizing or altering pixels:
+
+| Website image | Capture |
+| --- | --- |
+| `img/handwriting.png` | `out/site-handwriting/screenshot_20261029_212917.bmp`, Notes with the handwriting pad open, captured from the `tests/t_handwriting_notes.txt` image with `BE300_AUTOSTOP_SEC=9` and `--speed 166` before letter entry; see `docs/HANDWRITING.md` |
+| `img/browser-web-apis.png` | `out/browser-web-offline/screenshot_20261029_182926.bmp`, the bundled `res:apis.html` example; see `docs/BROWSER_WEB_APIS.md` |
+| `img/chat.png` | `/workspace/setup/chatgpt-oauth-guest/chat/screenshot_20261028_203008.bmp`, native Chat UI exchanging messages with a local Codex protocol fixture, not a live service conversation; see `docs/CHATGPT.md` |
+| `img/doom.png` | `/workspace/setup/doom-guest/screenshot_20261028_210329.bmp`, the Doom port running a user-supplied test WAD; see `docs/DOOM.md` |
+| `img/ce-nand.png` | `out/wince-nand-original/screenshot_20261029_191815.bmp`, original Calculator launched through Files after a RAM boot against the user's NAND, displaying 2 + 3 = 5; see `docs/WINCE_NAND.md` |
+
+The capture paths above are local test artifacts, not checked-in inputs.
+Only the screenshots belong in `site/`; keep ROMs, WADs, vendor binaries,
+NAND images and credentials out of Git. The original `ce-calculator.png`
+remains available at its previous URL.
+
 The emulator button uses
 `https://linux4be.com/?image=glaze&boot=1&card=none&keyboard=0` to start Glaze
 directly, without requiring the network bridge or a physical keyboard.
