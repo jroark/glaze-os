@@ -4,6 +4,7 @@
 #include "kernel.h"
 #include <glaze/sb.h>
 #include <glaze/usb.h>
+#include <glaze/mirror.h>
 
 struct event {
     uint32_t ms;
@@ -57,6 +58,30 @@ int usb_input_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
     if (!(p->flags & PROC_USB))
         return GZ_EPERM;
     uint8_t b[GU_PAYLOAD];
+    if (op == GZ_USB_LIVE_INPUT) {
+        if (state != GU_SCRIPT_EMPTY && state != GU_SCRIPT_DONE) return GZ_EBUSY;
+        if (!len || len % 8 || len > GM_INPUT_BATCH * 8 || copy_from_as(&p->as,b,buf,len)) return GZ_EINVAL;
+        /* Validate the entire batch before emitting any events. Reuse held
+         * state so the existing disconnect/reset watchdog releases it. */
+        for (unsigned i=0;i<len;i+=8) {
+            unsigned type=b[i]|(unsigned)b[i+1]<<8, code=b[i+2]|(unsigned)b[i+3]<<8;
+            int x=(int16_t)(b[i+4]|(unsigned)b[i+5]<<8),y=(int16_t)(b[i+6]|(unsigned)b[i+7]<<8);
+            if (type < GZ_EV_TOUCH_DOWN || type > GZ_EV_TEXT ||
+                (type <= GZ_EV_TOUCH_UP && (code || x<0 || x>=(int)GM_WIDTH || y<0 || y>=(int)GM_HEIGHT)) ||
+                ((type==GZ_EV_KEY_DOWN || type==GZ_EV_KEY_UP) && (!code || code>GZ_KEY_PAGEDOWN)) ||
+                (type==GZ_EV_TEXT && (!code || code>127))) return GZ_EINVAL;
+        }
+        for (unsigned i=0;i<len;i+=8) {
+            unsigned type=b[i]|(unsigned)b[i+1]<<8,code=b[i+2]|(unsigned)b[i+3]<<8;
+            int x=(int16_t)(b[i+4]|(unsigned)b[i+5]<<8),y=(int16_t)(b[i+6]|(unsigned)b[i+7]<<8);
+            input_push(type,code,x,y);
+            if(type==GZ_EV_TOUCH_DOWN)touch=true;
+            if(type==GZ_EV_TOUCH_UP)touch=false;
+            if(type==GZ_EV_KEY_DOWN)keys|=1u<<code;
+            if(type==GZ_EV_KEY_UP)keys&=~(1u<<code);
+        }
+        return 0;
+    }
     if (op == GZ_USB_SCRIPT_CANCEL) {
         if (len)
             return GZ_EINVAL;

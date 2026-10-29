@@ -63,6 +63,14 @@ utun (IPv4 plus an AF_INET prefix, ARP adaptation); Linux uses TAP. Native
 packet framing, backpressure/replay and lifecycle. USB takes routing precedence
 while the host helper runs; changing transport restarts the network service.
 
+Screen mirroring (`docs/MIRRORING.md`) adds a localhost-only VNC bridge to
+`glaze-usb mirror`. Device snapshots/deltas are in `servers/usb/mirror.c`;
+the host bridge/RFB engine are `host/glaze_usb/mirror.c` and `rfb.c`. Input is
+capability-gated and shares timed input's disconnect release state. Use
+`make -C host mirror-test usb-input-test usb-driver-test`; the network guest
+fixture also checks complete mirror CRCs and live input. No capture buffer
+exists until a viewer connects; no VNC listener is opened on the device.
+
 ## Running and testing
 
 `make out/pkg/chatgpt.gzp` builds the direct Codex chat package. Its device-code

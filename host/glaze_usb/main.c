@@ -58,6 +58,7 @@ static int usage(void)
           "  net-enable KEYFILE             provision and enable network debugging over USB\n"
           "  net-disable                    disable the network listener\n"
           "  usb-net [INTERFACE]            USB IP link (macOS utun / Linux TAP)\n"
+          "  mirror [--view-only] [--port N] [--fps N]  local VNC screen sharing\n"
           "  probe                         descriptors and runtime\n"
           "  ce-probe                      stock CE handshake\n"
           "  ce-info                       report CE staging-volume space\n"
@@ -97,6 +98,7 @@ int main(int argc, char **argv)
         (!strcmp(cmd, "screenshot") || !strcmp(cmd,"net-enable")) ? left != 1 :
         !strcmp(cmd, "script") ? (left < 1 || left > 2) :
         !strcmp(cmd, "usb-net") ? left > 1 :
+        !strcmp(cmd, "mirror") ? 0 :
         !strcmp(cmd, "reboot") ? (left > 1 || (left == 1 && strcmp(argv[i], "--ce") && strcmp(argv[i], "--glaze"))) :
         !strcmp(cmd, "ce-clean-nand") ? (left > 1 || (left == 1 && strcmp(argv[i], "--dry-run"))) :
         (!strcmp(cmd, "put") || !strcmp(cmd, "get")) ? left != 2 :
@@ -187,7 +189,8 @@ int main(int argc, char **argv)
     } else if (l.revision == 0x0100) {
         r = gu_hello(&c, &l);
         if (!r) {
-            if (!strcmp(cmd,"usb-net")) r=gu_usb_net(&c,left ? argv[i] : NULL);
+            if (!strcmp(cmd,"mirror")) r=gu_mirror(&c,left,argv+i);
+            else if (!strcmp(cmd,"usb-net")) r=gu_usb_net(&c,left ? argv[i] : NULL);
             else if (!strcmp(cmd,"net-enable")) {
                 r=debug_host_key_valid(argv[i]);
                 int trace=l.trace; l.trace=0; /* pairing material is never packet-traced */

@@ -1873,11 +1873,11 @@ static void handle_msg(int token, struct gz_msg *m)
     }
     case SB_DEBUG_STATE: {
         if (!client_req((int)m->w[3], false, NULL)) { r.w[0] = (uint32_t)GZ_EPERM; break; }
-        if ((m->w[1] & GU_DEBUG_SCRIPT) && !(debug_activity & GU_DEBUG_SCRIPT)) {
+        if ((m->w[1] & GU_DEBUG_MIRROR) || ((m->w[1] & GU_DEBUG_SCRIPT) && !(debug_activity & GU_DEBUG_SCRIPT))) {
             if (idle.dark) { idle.dark = false; screen_wake(); }
             idle.last_activity = now_ms();
         }
-        debug_activity = m->w[1] & (GU_DEBUG_CONNECTED | GU_DEBUG_COPY | GU_DEBUG_SCRIPT | GU_DEBUG_NETWORK);
+        debug_activity = m->w[1] & (GU_DEBUG_CONNECTED | GU_DEBUG_COPY | GU_DEBUG_SCRIPT | GU_DEBUG_NETWORK | GU_DEBUG_MIRROR);
         debug_until = now_ms() + 2000;
         if (debug_app_pid && !gz_proc_alive(debug_app_pid)) debug_app_pid = 0;
         r.w[1] = debug_activity | (debug_app_pid ? GU_DEBUG_RUN : 0);

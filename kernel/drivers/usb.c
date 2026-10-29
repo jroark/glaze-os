@@ -213,7 +213,8 @@ int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
         while (!usb_tx_idle()) if (time_us() >= end) return GZ_ETIMEDOUT;
         machine_reboot_ce();
     }
-    if (op >= GZ_USB_SCRIPT_BEGIN && op <= GZ_USB_SCRIPT_CANCEL) return usb_input_ctl(p, op, buf, len);
+    if ((op >= GZ_USB_SCRIPT_BEGIN && op <= GZ_USB_SCRIPT_CANCEL) || op == GZ_USB_LIVE_INPUT)
+        return usb_input_ctl(p, op, buf, len);
     if (op == GZ_USB_SCREEN_COPY) {
         if (len != GU_SCREEN_BYTES || buf > 0x80000000u - len) return GZ_EINVAL;
 #ifndef USB_FRAMEBUFFER

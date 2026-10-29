@@ -70,6 +70,14 @@ usb-driver-test: ../tests/usb_driver.c ../kernel/drivers/usb.c
 	../out/host/usb-driver-test
 .PHONY: usb-wire-test usb-driver-test
 .PHONY: usb-net-test
+.PHONY: mirror-test
+../out/host/mirror-fixture: ../tests/mirror_fixture.c glaze_usb/mirror.c glaze_usb/rfb.c ../servers/usb/mirror.c glaze_usb/rfb.h ../servers/usb/mirror.h ../lib/include/glaze/mirror.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) -fsanitize=address,undefined $(filter %.c,$^) -o $@
+mirror-test: ../out/host/mirror-fixture
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/mirror_frame.c ../servers/usb/mirror.c -o ../out/host/mirror-frame
+	../out/host/mirror-frame
+	python3 ../tests/mirror.py
 usb-net-test: ../tests/usb_ethernet.c ../servers/usb/ethernet.c glaze_usb/ethernet.c glaze_usb/ethernet_packet.c ../lib/include/glaze/usb_net.h ../servers/usb/ethernet.h glaze_usb/ethernet_packet.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) -fsanitize=address,undefined $(filter %.c,$^) -o ../out/host/usb-net-test

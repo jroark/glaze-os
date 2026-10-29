@@ -137,6 +137,21 @@ int main(void)
     clock_ms += 100;
     usb_input_poll();
     assert(state == GU_SCRIPT_DONE && count == 0);
+    usb_input_cancel();
+    assert(usb_input_ctl(&denied,GZ_USB_LIVE_INPUT,0,8)==GZ_EPERM);
+    assert(call(GZ_USB_LIVE_INPUT,0)==GZ_EINVAL);
+    assert(call(GZ_USB_LIVE_INPUT,257)==GZ_EINVAL);
+    assert(usb_input_ctl(&usb,GZ_USB_LIVE_INPUT,sizeof(user),8)==GZ_EINVAL);
+    memset(user,0,16);user[0]=GZ_EV_TOUCH_DOWN;user[4]=10;user[6]=20;
+    user[8]=GZ_EV_KEY_DOWN;user[10]=255;before=emitted;
+    assert(call(GZ_USB_LIVE_INPUT,16)==GZ_EINVAL && emitted==before && !touch);
+    user[10]=GZ_KEY_ENTER;
+    assert(!call(GZ_USB_LIVE_INPUT,16) && emitted==before+2 && touch && (keys&(1u<<GZ_KEY_ENTER)));
+    usb_input_cancel();assert(!touch && !keys && output[emitted-2].type==GZ_EV_TOUCH_CANCEL && output[emitted-1].type==GZ_EV_KEY_UP);
+    user[0]=GZ_EV_TOUCH_DOWN;user[4]=240;before=emitted;
+    assert(call(GZ_USB_LIVE_INPUT,8)==GZ_EINVAL && emitted==before);
+    gu_put32(user,1);assert(!call(GZ_USB_SCRIPT_BEGIN,4));
+    assert(call(GZ_USB_LIVE_INPUT,8)==GZ_EBUSY);usb_input_cancel();
     puts("usb-input: ALL PASS");
     return 0;
 }

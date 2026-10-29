@@ -73,6 +73,8 @@ int main(void)
     assert(sys_usb_ctl(&denied, GZ_USB_REBOOT_CE, 0, 0) == GZ_EPERM);
     assert(sys_usb_ctl(&p, GZ_USB_REBOOT_CE, 0, 1) == GZ_EINVAL && !rebooted);
     assert(sys_usb_ctl(&denied, GZ_USB_SCREEN_COPY, 0, GU_SCREEN_BYTES) == GZ_EPERM);
+    assert(sys_usb_ctl(&denied, GZ_USB_LIVE_INPUT, 0, 8) == GZ_EPERM);
+    assert(sys_usb_ctl(&p, GZ_USB_LIVE_INPUT, 0, 8) == 123);
     for (unsigned y=0;y<GZ_FB_HEIGHT;y++) for(unsigned x=0;x<GZ_FB_STRIDE;x++)
         framebuffer[y*GZ_FB_STRIDE+x]=(uint16_t)(x ^ y<<8);
     assert(sys_usb_ctl(&p,GZ_USB_SCREEN_COPY,0,GU_SCREEN_BYTES-1)==GZ_EINVAL);

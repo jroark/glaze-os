@@ -73,6 +73,7 @@ app-running and script activity colors as the USB badge.
 | Validated fresh-RAM reload / Glaze restart | Yes | Yes |
 | Return to Windows CE | Yes | Yes |
 | Host CSPRNG entropy provisioning | Yes | Yes |
+| Live VNC mirroring and immediate input through the host bridge | Yes | Yes |
 
 The filesystem boundaries, locked-screen launch restrictions, image validation,
 script limits and request replay handling are shared with [USB](USB.md).
