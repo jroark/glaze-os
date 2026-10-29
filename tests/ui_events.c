@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <glaze/ui.h>
+#include "../lib/ui/ink_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,6 +64,8 @@ void uisnd_sounded(void) {}
 void uitr_release(void) {}
 void audio_sound(int sound) {}
 void res_set_bundle(const char *bundle) {}
+int pref_get(const char *key,void *out,uint32_t size){return GZ_ENOENT;}
+int pref_put(const char *key,const void *value,uint32_t size){return 0;}
 
 static struct gz_input_event next(int timeout)
 {
@@ -179,6 +182,23 @@ int main(void)
     key.type = GZ_EV_TOUCH_CANCEL;
     assert(ui_keyboard_event(&kb, &key, kb_y, &changed) == 0 && kb.pressed < 0 && changed);
     printf("list and keyboard cancel: PASS\n");
+
+    reset();ui_keyboard_init(&kb);ui_keyboard_set_method(&kb,UI_INPUT_HANDWRITING);
+    key=(struct gz_input_event){.type=GZ_EV_TOUCH_DOWN,.x=66,.y=kb_y+98};
+    ui_keyboard_event(&kb,&key,kb_y,&changed);assert(uikb_ink_down());
+    push(GZ_EV_TOUCH_MOVE,80,kb_y+70);push(GZ_EV_TOUCH_MOVE,96,kb_y+38);
+    e=next(0);assert(e.x==80);ui_keyboard_event(&kb,&e,kb_y,&changed);
+    e=next(0);assert(e.x==96);ui_keyboard_event(&kb,&e,kb_y,&changed);
+    push(GZ_EV_TOUCH_CANCEL,96,kb_y+38);e=next(0);assert(!uikb_ink_down());
+    ui_keyboard_event(&kb,&e,kb_y,&changed);
+    push(GZ_EV_TOUCH_MOVE,10,10);push(GZ_EV_TOUCH_MOVE,20,20);assert(next(0).x==20);
+    key=(struct gz_input_event){.type=GZ_EV_TOUCH_DOWN,.x=66,.y=kb_y+98};
+    ui_keyboard_event(&kb,&key,kb_y,&changed);assert(uikb_ink_down());
+    push(GZ_EV_TOUCH_UP,5,5);assert(next(0).type==GZ_EV_TOUCH_UP);
+    /* An app which routes only keyboard-area events ignores that lift. */
+    push(GZ_EV_TOUCH_MOVE,10,10);push(GZ_EV_TOUCH_MOVE,20,20);
+    assert(next(0).x==20 && !uikb_ink_down());
+    printf("handwriting preserves stroke samples and cancels safely: PASS\n");
 
     printf("ui events: PASS\n");
     free(sh);

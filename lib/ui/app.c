@@ -2,6 +2,7 @@
 
 #include "sound.h"
 #include "transition.h"
+#include "ink_internal.h"
 #include <glaze/sys.h>
 #include <glaze/ui.h>
 #include <stdio.h>
@@ -15,6 +16,7 @@ static bool touching;           /* a touch is down */
 static int16_t touch_x, touch_y;
 static bool deactivate_held;    /* DEACTIVATE waits behind a cancelled touch */
 static bool suspend_next;       /* the next ui_next_event waits for ACTIVATE */
+static bool ink_lift_pending;   /* discard ink if an app did not route the lift */
 
 void ui_init(int status_style)
 {
@@ -81,6 +83,11 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
 {
     uint32_t start = gz_time_ms();
 
+    if(ink_lift_pending){
+        ink_lift_pending=false;
+        if(uikb_ink_down())uikb_release();
+    }
+
     if (deactivate_held) {
         deactivate_held = false;
         *ev = (struct gz_input_event){.type = GZ_EV_APP_DEACTIVATE, .time_ms = gz_time_ms()};
@@ -99,11 +106,15 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
             sh->tail++;
             /* A drag is only as smooth as the app can draw: skip to the
              * newest of consecutive moves rather than fall behind. */
-            while (ev->type == GZ_EV_TOUCH_MOVE && sh->tail != sh->head &&
+            while (ev->type == GZ_EV_TOUCH_MOVE && !uikb_ink_down() && sh->tail != sh->head &&
                    sh->ev[sh->tail % SB_RING].type == GZ_EV_TOUCH_MOVE) {
                 *ev = sh->ev[sh->tail % SB_RING];
                 sh->tail++;
             }
+            if(ev->type==GZ_EV_TOUCH_UP && uikb_ink_down())ink_lift_pending=true;
+            if(ev->type==GZ_EV_TOUCH_CANCEL || ev->type==GZ_EV_APP_DEACTIVATE ||
+               ev->type==GZ_EV_TEXT || ev->type==GZ_EV_KEY_DOWN ||
+               (ev->type==GZ_EV_TOUCH_DOWN && uikb_ink_down()))uikb_release();
             if (ev->type == GZ_EV_TOUCH_DOWN || ev->type == GZ_EV_TOUCH_MOVE) {
                 touching = true;
                 touch_x = ev->x;

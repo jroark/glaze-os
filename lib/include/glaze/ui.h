@@ -183,10 +183,13 @@ int ui_tabbar_hit(int n, int x, int y);
 /* ---- keyboard ----------------------------------------------------------- */
 
 #define UI_KB_H     150
+#define UI_INPUT_PREF "ui.input_method"
+enum { UI_INPUT_QWERTY, UI_INPUT_HANDWRITING };
 
 struct ui_keyboard {
     bool shift, numbers;
     bool url;               /* web address layout: / . .com Go */
+    uint8_t method;          /* occupies the original padding byte; size remains 8 */
     int pressed;            /* key index, or -1 */
 };
 
@@ -194,6 +197,10 @@ struct ui_keyboard {
 #define UI_KEY_DOTCOM   0x100
 
 void ui_keyboard_init(struct ui_keyboard *kb);
+/* Default for newly initialized panels; changing a panel does not save it. */
+int ui_input_method_default(void);
+int ui_input_method_save(int method);
+void ui_keyboard_set_method(struct ui_keyboard *kb,int method);
 void ui_draw_keyboard(gfx_surface *s, const struct ui_keyboard *kb, int y);
 /* Returns a character ('\b' backspace, '\n' return, UI_KEY_DOTCOM) when a
  * key is released, 0 otherwise; redraw if *changed is set. */

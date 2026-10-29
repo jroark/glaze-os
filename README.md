@@ -372,3 +372,8 @@ paired debugging on the same cable and normal socket access for Glaze apps.
 [Screen mirroring](docs/MIRRORING.md) exposes Glaze's display and live stylus/
 keyboard input to a local VNC viewer on your computer with `glaze-usb mirror`,
 over USB or paired TLS. macOS can use its built-in Screen Sharing viewer.
+
+[Handwriting input](docs/HANDWRITING.md) is available alongside the on-screen
+keyboard. Tap Write, print a letter or digit, and choose a candidate; Settings
+→ Input Method selects the default and includes a practice pad. Recognition
+runs offline on the device.

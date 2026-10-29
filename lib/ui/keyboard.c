@@ -3,11 +3,16 @@
 #include "sound.h"
 #include <glaze/audio.h>
 #include <glaze/ui.h>
+#include <glaze/prefs.h>
+#include "ink_internal.h"
 #include <string.h>
 
 #define KEY_SHIFT   1
 #define KEY_MODE    2
 #define KEY_DOTCOM  3
+#define KEY_INPUT   4
+
+_Static_assert(sizeof(struct ui_keyboard)==8 && offsetof(struct ui_keyboard,pressed)==4,"keyboard ABI");
 
 struct key {
     int16_t x, y, w, h;
@@ -69,14 +74,15 @@ static void build(const struct ui_keyboard *kb)
         add(6, 78, 28, KEY_SHIFT, "^");
     }
     add(206, 78, 28, '\b', GFX_CH_LARROW);
-    add(6, 114, 52, KEY_MODE, kb->numbers ? "ABC" : ".?123");
+    add(6, 114, 44, KEY_MODE, kb->numbers ? "ABC" : ".?123");
+    add(54, 114, 36, KEY_INPUT, "Write");
     if (kb->url) {
-        add(62, 114, 36, '/', NULL);
-        add(102, 114, 36, '.', NULL);
-        add(142, 114, 36, KEY_DOTCOM, ".com");
+        add(94, 114, 24, '/', NULL);
+        add(122, 114, 24, '.', NULL);
+        add(150, 114, 28, KEY_DOTCOM, ".com");
         add(182, 114, 52, '\n', "Go");
     } else {
-        add(62, 114, 116, ' ', "space");
+        add(94, 114, 84, ' ', "space");
         add(182, 114, 52, '\n', "return");
     }
 }
@@ -86,16 +92,38 @@ void ui_keyboard_init(struct ui_keyboard *kb)
     memset(kb, 0, sizeof(*kb));
     kb->pressed = -1;
     kb->shift = true;           /* sentence starts capitalized */
+    kb->method=(uint8_t)ui_input_method_default();
+    uihw_reset(NULL);
     nkeys = 0;
 }
+int ui_input_method_default(void)
+{
+    uint32_t method=0;uint8_t record[5];
+    if(pref_get(UI_INPUT_PREF,record,sizeof(record))!=sizeof(method))return UI_INPUT_QWERTY;
+    memcpy(&method,record,sizeof(method));return method==UI_INPUT_HANDWRITING?UI_INPUT_HANDWRITING:UI_INPUT_QWERTY;
+}
+int ui_input_method_save(int method)
+{
+    if(method!=UI_INPUT_QWERTY && method!=UI_INPUT_HANDWRITING)return GZ_EINVAL;
+    uint32_t value=(uint32_t)method;return pref_put(UI_INPUT_PREF,&value,sizeof(value));
+}
+void ui_keyboard_set_method(struct ui_keyboard *kb,int method)
+{
+    kb->method=method==UI_INPUT_HANDWRITING?UI_INPUT_HANDWRITING:UI_INPUT_QWERTY;
+    kb->pressed=-1;nkeys=0;uihw_reset(NULL);
+}
+void uikb_release(void){uihw_reset(NULL);}
+bool uikb_ink_down(void){return uihw_down();}
 
 static bool special(const struct key *k)
 {
-    return k->ch == KEY_SHIFT || k->ch == KEY_MODE || k->ch == '\b' || k->ch == '\n' || k->ch == KEY_DOTCOM;
+    return k->ch == KEY_SHIFT || k->ch == KEY_MODE || k->ch == KEY_INPUT || k->ch == '\b' || k->ch == '\n' || k->ch == KEY_DOTCOM;
 }
 
 void ui_draw_keyboard(gfx_surface *s, const struct ui_keyboard *kb, int y)
 {
+    if(kb->method==UI_INPUT_HANDWRITING){uihw_draw(s,kb,y);return;}
+    uihw_reset(NULL);
     const gfx_font *lf = ui_font(FONT_R17), *sf = ui_font(FONT_B11);
 
     build(kb);
@@ -156,6 +184,7 @@ static int hit(int x, int y)
 
 int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, int y, bool *changed)
 {
+    if(kb->method==UI_INPUT_HANDWRITING)return uihw_event(kb,e,y,changed);
     int ky = e->y - y;
     int old = kb->pressed;
 
@@ -182,6 +211,7 @@ int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
         if (k < 0)
             return 0;
         char ch = keys[k].ch;
+        if(ch==KEY_INPUT){ui_keyboard_set_method(kb,UI_INPUT_HANDWRITING);*changed=true;return 0;}
         if (ch == KEY_SHIFT) {
             kb->shift = !kb->shift;
             return 0;

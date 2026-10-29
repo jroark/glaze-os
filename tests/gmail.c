@@ -1029,6 +1029,7 @@ int gz_rtc_get(struct gz_datetime *dt)
     return 0;
 }
 int pref_get(const char *key, void *buf, uint32_t len) { (void)key; (void)buf; (void)len; return GZ_ENOENT; }
+int pref_put(const char *key,const void *buf,uint32_t len){(void)key;(void)buf;(void)len;return 0;}
 int ui_set_badge(int count) { last_badge = count; return 0; }
 static bool fake_background;
 static char last_note[160];
