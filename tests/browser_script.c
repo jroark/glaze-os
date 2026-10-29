@@ -506,8 +506,54 @@ static void transport(const char *base)
     page_free(p);
     free(ld.url);
 }
+static void api_transport(const char *base)
+{
+    const char *paths[]={"/api-page","/modules","/module-fail","/module-bare","/api-connect-denied","/module-nonce","/module-redirect","/module-limit"};
+    for(unsigned i=0;i<sizeof paths/sizeof *paths;i++){
+        struct load ld={0};char url[256];snprintf(url,sizeof url,"%s%s",base,paths[i]);
+        struct page *p=fetch(&ld,url);CHECK(p!=NULL);
+        uint32_t start=plat_ms();while(plat_ms()-start<1800){load_step(&ld);usleep(1000);}
+        if(i==0)CHECK(js(p,"if(!fetchDone||fetchError||fetchChecks<25)throw Error('fetch suite: '+fetchError+' checks='+fetchChecks);"));
+        if(i==1)CHECK(js(p,"if(moduleAnswer!==42||entryRuns!==1||!dynamicDone||!externalDynamicDone||dynamicError||metaURL.indexOf('/module/entry.js')<0)throw Error('modules: '+dynamicError);"));
+        if(i==2)CHECK(js(p,"if(!afterBadModule||typeof badMimeExecuted!=='undefined')throw Error('module MIME');"));
+        if(i==3)CHECK(js(p,"if(!afterBare||typeof bareExecuted!=='undefined')throw Error('bare import');"));
+        if(i==4)CHECK(js(p,"if(!cspDenied)throw Error('connect-src');"));
+        if(i==5)CHECK(js(p,"if(nonceModule!==42)throw Error('nonce module graph');"));
+        if(i==6)CHECK(js(p,"if(redirectModule!==42)throw Error('redirect module base');"));
+        if(i==7)CHECK(js(p,"if(!afterModuleLimit||typeof overLimitExecuted!=='undefined')throw Error('module graph cap');"));
+        /* Retiring a page cancels requests and owns already-completed bodies. */
+        CHECK(js(p,"fetch('/api-slow').catch(function(){});"));
+        load_stop(&ld);load_forget(&ld,p);page_free(p);free(ld.url);
+    }
+}
+static void api_utilities(void)
+{
+    struct page *p=blank("http://api.test/index");uint8_t *code=NULL;int len=0;
+    CHECK(plat_read_file("../tests/web/browser_apis.js",&code,&len)==0);
+    if(code){CHECK(script_eval(p,(const char *)code,len,NULL));free(code);}
+    script_tick(p);usleep(20000);script_tick(p);
+    CHECK(js(p,"apiCheck(fragmentDone&&rafCalls===2&&rafTime>=0,'animation scheduling');"));
+    page_free(p);
+    p=blank("http://api.test/next");
+    CHECK(js(p,"if(sessionStorage.count!=='42'||localStorage.getItem('utf8')!=='\\ud83d\\ude00\\u00e9')throw Error('navigation storage');"));
+    page_free(p);p=blank("http://other-api.test/");
+    CHECK(js(p,"if(sessionStorage.length||localStorage.length)throw Error('origin storage isolation');"));
+    page_free(p);p=blank("file:///private.html");
+    CHECK(js(p,"var denied=false;try{localStorage;}catch(e){denied=e.name==='SecurityError';}if(!denied)throw Error('opaque storage');"));
+    page_free(p);
+}
+static int storage_process(bool write)
+{
+    struct page *p=blank("https://persist.test/");
+    bool ok=js(p,write?"localStorage.setItem('persist','saved');sessionStorage.setItem('volatile','gone');":
+        "if(localStorage.getItem('persist')!=='saved'||sessionStorage.getItem('volatile')!==null)throw Error('persistence');");
+    page_free(p);script_shutdown();return ok?0:1;
+}
 int main(int argc, char **argv)
 {
+    if(argc==2&&!strcmp(argv[1],"--storage-write"))return storage_process(true);
+    if(argc==2&&!strcmp(argv[1],"--storage-read"))return storage_process(false);
+    api_utilities();
     noscript();
     engine();
     navigator_identity();
@@ -520,6 +566,7 @@ int main(int argc, char **argv)
         platform_transport(argv[1]);
         noscript_transport(argv[1]);
         transport(argv[1]);
+        api_transport(argv[1]);
     }
     script_shutdown();
     printf("browser scripts/frames: %s (%d failures)\n", failures ? "FAIL" : "PASS", failures);

@@ -32,4 +32,9 @@ void plat_noise(uint8_t *buf, int n);
 void plat_load_seed(uint8_t *seed);
 void plat_save_seed(const uint8_t *seed);
 
+/* Browser local storage: eight bounded, atomically replaced origin records.
+ * read returns length, 0 if absent, -1 on I/O failure. */
+int plat_storage_read(int slot, void *data, int cap);
+int plat_storage_write(int slot, const void *data, int len);
+
 #endif

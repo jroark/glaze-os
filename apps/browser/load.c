@@ -197,6 +197,7 @@ static bool route(struct page *p, struct fetch_result *r)
 {
     if (!p)
         return false;
+    if (script_response(p,r)) return true;
     for (int i = 0; i < p->nsheets; i++)
         if (p->sheets[i].fetch == r->id) {
             struct sheet_slot *s = &p->sheets[i];
@@ -228,11 +229,15 @@ static bool route(struct page *p, struct fetch_result *r)
         if (p->scripts[i].fetch == r->id) {
             struct script_slot *s = &p->scripts[i];
             s->fetch = 0;
-            if (!r->err && r->status < 400 && r->len && script_allowed(p, r->url, s->node)) {
+            if (!r->err && r->status>=200 && r->status < 300 &&
+                (!s->module || script_module_mime(r->ctype)) && script_allowed(p, r->url, s->node)) {
                 s->source = malloc((size_t)r->len + 1);
                 if (s->source) {
                     memcpy(s->source, r->data, (size_t)r->len);
                     s->source[r->len] = 0;
+                    /* Imports in scripts resolve relative to the final URL. */
+                    char *final_url=r->url?strdup(r->url):NULL;
+                    if(final_url){free(s->url);s->url=final_url;}
                     s->len = r->len;
                     s->state = RES_READY;
                     return true;
@@ -310,7 +315,10 @@ static void schedule(struct page *p, int *flags)
             continue;
         }
         if (ld_can_start()) {
-            s->fetch = ld_start(s->url, F_SCRIPT, i, NULL, NULL, false);
+            if(s->module){
+                /* Module entry fetches, like imports, require CORS. */
+                s->fetch=script_module_fetch(p,s->url,s->node);
+            }else s->fetch = ld_start(s->url, F_SCRIPT, i, NULL, NULL, false);
             s->state = s->fetch > 0 ? RES_LOADING : RES_FAILED;
         }
     }
@@ -443,8 +451,13 @@ static void execute(struct page *p, int *quota, int *flags, bool wait_css)
         if (s->state == RES_READY) {
             int len = s->len;
             char *source = s->url ? s->source : inline_source(s->node, &len);
-            if (source)
-                script_eval(p, source, len, s->node);
+            int result=1;
+            if (source) {
+                if(s->module)result=script_module(p,source,len,s->node,s->url);
+                else if(!script_eval(p,source,len,s->node))result=-1;
+            }else result=-1;
+            if(s->module && result==0){if(!s->url)free(source);break;}
+            if(s->module && result<0)s->state=RES_FAILED;
             if (!s->url)
                 free(source);
         }

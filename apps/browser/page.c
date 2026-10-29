@@ -202,11 +202,12 @@ void page_collect(struct page *p)
                     exists = true;
             const char *type = node_attr(n, "type");
             if (exists || p->nscripts == PAGE_MAX_SCRIPTS ||
-                (type && *type && strcasecmp(type, "text/javascript") &&
+                (type && *type && strcasecmp(type,"module") && strcasecmp(type, "text/javascript") &&
                  strcasecmp(type, "application/javascript") && strcasecmp(type, "text/ecmascript")))
                 continue;
             struct script_slot *sl = &p->scripts[p->nscripts++];
             sl->node = n;
+            sl->module = type && !strcasecmp(type,"module");
             const char *src = node_attr(n, "src");
             sl->url = src ? url_resolve(p->base, src) : NULL;
             sl->state = src ? RES_WAIT : RES_READY;

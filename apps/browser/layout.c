@@ -1198,10 +1198,10 @@ static int layout_box(struct lay *L, struct node *n, int x, int y, int bw, int c
     int bt = st->border_w[0], br = st->border_w[1], bb = st->border_w[2], bl = st->border_w[3];
     int pt = resolve(&st->padding[0], cb_w), pr = resolve(&st->padding[1], cb_w);
     int pb = resolve(&st->padding[2], cb_w), pl = resolve(&st->padding[3], cb_w);
-    int bg = -1;
+    int bg = add_item(L, st->bg && !st->hidden ? DI_RECT : DI_BOX);
+    if (bg>=0){L->p->items[bg].node=n;L->p->items[bg].link=link;}
 
     if (st->bg && !st->hidden) {
-        bg = add_item(L, DI_RECT);
         if (bg >= 0)
             L->p->items[bg].color = st->bg & 0xFFFFFF;
         if(bg>=0)L->p->items[bg].node=n;
@@ -1593,6 +1593,7 @@ struct ditem *page_hit(struct page *p, int x, int y)
 
     for (int i = p->nitems - 1; i >= 0; i--) {
         struct ditem *d = &p->items[i];
+        if(d->kind==DI_BOX && d->node && d->node->st && d->node->st->hidden)continue;
         if(d->kind==DI_FRAME) {
             struct frame_slot *f=d->u.frame;
             if(f && f->page && x>=f->x && y>=f->y && x<f->x+f->w && y<f->y+f->h) {

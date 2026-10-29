@@ -168,6 +168,31 @@ void plat_save_seed(const uint8_t *seed)
     (void)seed;
 }
 
+/* Opt-in directory; no persistent writes from previews/tests by default. */
+int plat_storage_read(int slot, void *data, int cap)
+{
+    const char *dir=getenv("BROWSE_STORAGE");
+    if (!dir) return 0;
+    char path[1024];snprintf(path,sizeof path,"%s/storage%d",dir,slot);
+    FILE *f=fopen(path,"rb");if(!f)return 0;
+    int n=(int)fread(data,1,(size_t)cap,f);
+    int extra=fgetc(f), err=ferror(f);fclose(f);
+    return extra!=EOF || err ? -1 : n;
+}
+int plat_storage_write(int slot, const void *data, int len)
+{
+    const char *dir=getenv("BROWSE_STORAGE");
+    if (!dir) return -1;
+    char path[1024],tmp[1024];
+    snprintf(path,sizeof path,"%s/storage%d",dir,slot);
+    snprintf(tmp,sizeof tmp,"%s/storage%d.tmp",dir,slot);
+    FILE *f=fopen(tmp,"wb");if(!f)return -1;
+    bool ok=fwrite(data,1,(size_t)len,f)==(size_t)len;
+    if(fclose(f))ok=false;
+    if(!ok || rename(tmp,path)) { remove(tmp);return -1; }
+    return 0;
+}
+
 /* ---- debugging ---------------------------------------------------------------- */
 
 static void dump(const struct node *n, int depth)

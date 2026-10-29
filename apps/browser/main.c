@@ -212,6 +212,25 @@ void plat_save_seed(const uint8_t *seed)
     fs_write_file(SEED_PATH, seed, PLAT_SEED_LEN);
 }
 
+int plat_storage_read(int slot, void *data, int cap)
+{
+    char path[48]; struct fs_stat st;
+    snprintf(path,sizeof path,"/Browser/storage%d",slot);
+    if (fs_stat(path,&st)<0) return 0;
+    if (st.type!=FS_FILE || st.size>(uint32_t)cap) return -1;
+    return fs_read_file(path,data,(uint32_t)cap);
+}
+int plat_storage_write(int slot, const void *data, int len)
+{
+    char path[48], tmp[48];
+    fs_mkdir("/Browser");
+    snprintf(path,sizeof path,"/Browser/storage%d",slot);
+    snprintf(tmp,sizeof tmp,"/Browser/storage%d.tmp",slot);
+    if (fs_write_file(tmp,data,(uint32_t)len)!=len) return -1;
+    if (fs_rename(tmp,path)<0) { fs_remove(tmp);return -1; }
+    return 0;
+}
+
 /* ---- persistence ---------------------------------------------------------------- */
 
 static int view_h(void)
@@ -1259,6 +1278,7 @@ int main(void)
             free(url);free(post);
         }
         if (ld.state != LS_IDLE || ld.shown) {
+            if(page)page->scroll_y=sc.offset;
             int f = load_step(&ld);
             if (f & LF_CONTEXT) {
                 pressed = P_NONE;

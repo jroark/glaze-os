@@ -57,6 +57,8 @@ struct http_post_options {
     int (*sink)(const uint8_t *, int, void *);
     void *sink_arg;
 };
+struct http *http_start_web(const char *url, const char *post, int post_len,
+    const char *type, const char *cookies, const char *origin, int max_body);
 struct http *http_start_post(const char *url, const char *post, int post_len,
                               const struct http_post_options *options);
 /* A bounded, identity-encoded GET streamed to sink. Nonzero sink result
@@ -77,11 +79,12 @@ uint8_t *web_inflate(const uint8_t *in, int len, bool zlib_header, int *out_len)
 
 /* ---- loader ------------------------------------------------------------------ */
 
-enum { F_DOC, F_FRAME, F_SCRIPT, F_CSS, F_IMG };
+enum { F_DOC, F_FRAME, F_SCRIPT, F_CSS, F_IMG, F_API, F_MODULE };
 
 struct fetch_result {
     int id, kind, tag;
     int err;                    /* 0 or WE_* */
+    bool redirected, cors;
     int status;                 /* HTTP status (200 for local schemes) */
     uint8_t *data;              /* malloc'd; the receiver frees it */
     int len;
@@ -92,6 +95,10 @@ struct fetch_result {
 
 /* Queues a fetch; tag is the caller's (image slot, sheet index). */
 int ld_start(const char *url, int kind, int tag, const char *post, const char *post_type, bool reload);
+/* Script requests: HTTP(S), bounded, uncached, CORS-checked at every hop.
+ * credentials: 0 omit, 1 same-origin, 2 include. */
+int ld_start_web(const char *url, int kind, const char *origin, const char *post,
+                 const char *type, int credentials, bool same_origin);
 bool ld_can_start(void);
 void ld_cancel(int id);
 void ld_cancel_all(void);

@@ -75,6 +75,10 @@ bool dom_insert(struct page *p, struct node *parent, struct node *child, struct 
             if (++d >= HTML_MAX_DEPTH)
                 return false;
     }
+    if (child->type==N_FRAGMENT) {
+        while(child->first) if(!dom_insert(p,parent,child->first,before)) return false;
+        return true;
+    }
     if (child == before)
         return true;
     dom_remove(p, child);
@@ -91,6 +95,21 @@ bool dom_insert(struct page *p, struct node *parent, struct node *child, struct 
         parent->last = child;
     changed(p);
     return true;
+}
+struct node *dom_clone(struct page *p, struct node *n, bool deep)
+{
+    if (!n || n->owner!=p || n->type==N_DOC) return NULL;
+    struct node *copy=dom_create(p,n->type,n->name,n->text);
+    if(!copy)return NULL;
+    for(struct attr *a=n->attrs;a;a=a->next)
+        if(!dom_attr(p,copy,a->name,a->value))return NULL;
+    /* Cloned scripts are inert if the original has already been processed. */
+    if(n->tag==T_SCRIPT)copy->collected=n->collected & 4;
+    if(deep)for(struct node *c=n->first;c;c=c->next) {
+        struct node *child=dom_clone(p,c,true);
+        if(!child || !dom_insert(p,copy,child,NULL))return NULL;
+    }
+    return copy;
 }
 bool dom_attr(struct page *p, struct node *n, const char *name, const char *value)
 {
