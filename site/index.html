@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Glaze, an operating system for the Casio BE-300</title>
-  <meta name="description" content="Glaze runs on a real Casio BE-300. Download GlazeBoot to boot from CompactFlash, with Wi-Fi, headphone audio, internet radio and an early iPhone-style interface.">
+  <meta name="description" content="Glaze for the Casio BE-300: native apps, Chat, Doom, six console emulators, handwriting, JavaScript, Windows CE apps, USB networking and a C app SDK.">
   <meta property="og:title" content="Glaze, an operating system for the Casio BE-300">
-  <meta property="og:description" content="Tested on a real Casio BE-300: boot from CompactFlash, browse the web and listen through headphones. Download GlazeBoot and the latest Glaze build.">
+  <meta property="og:description" content="Explore Glaze's native apps, Chat, Doom, console emulators, handwriting and developer tools. Boot a real BE-300 with GlazeBoot or try the web emulator.">
   <meta property="og:image" content="https://glaze-os.com/img/og.png">
   <meta property="og:url" content="https://glaze-os.com/">
   <meta name="theme-color" content="#6d84a2">
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="preload" href="fonts/VeraBd.ttf" as="font" type="font/ttf" crossorigin>
-  <link rel="stylesheet" href="style.css?v=20261025">
+  <link rel="stylesheet" href="style.css?v=20261029">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -52,25 +52,55 @@
       </div>
     </div>
 
+    <nav class="section-nav" aria-label="Explore Glaze">
+      <a href="#latest">What's new</a>
+      <a href="#apps">Apps &amp; games</a>
+      <a href="#connect">Connect &amp; mirror</a>
+      <a href="#screens">Screenshots</a>
+      <a href="#compatibility">Windows CE apps</a>
+      <a href="#develop">App SDK</a>
+      <a href="#download">Download</a>
+    </nav>
+
     <section aria-labelledby="latest">
       <h2 id="latest">New in Glaze</h2>
-      <p class="section-note">Updated <time datetime="2026-10-25">October 25, 2026</time>. Real-device booting, networking and audio, plus more ways to use Glaze.</p>
+      <p class="section-note">Updated <time datetime="2026-10-29">October 29, 2026</time>. These features are in <a href="https://github.com/jroark/glaze-os">current source</a>. The <a href="#download">October 25 download</a> predates this update; build current source for the newer features. The hosted emulator may also run an older image.</p>
       <dl class="group">
-        <div class="row"><dt>GlazeBoot</dt><dd>Start Glaze from Windows CE using a CompactFlash card. Touch, buttons, apps, card storage and read-only access to the original NAND volume work on a real BE-300. <a href="#download">Get the ready-to-boot ZIP.</a></dd></div>
-        <div class="row"><dt>Wi-Fi and Ethernet</dt><dd>Settings now scans and selects networks for Z-Com XI-825 and AmbiCom WL54-CF cards, with saved connections and security options supported by each card. Insert a network card after GlazeBoot loads from the storage card. <a href="#hardware-tested">See the hardware test status.</a></dd></div>
-        <div class="row"><dt>Headphone audio</dt><dd>Music, radio and notification tones now play through the headphone jack after GlazeBoot. Settings → Sounds → Volume controls all playback, including music already playing. Confirmed by listening on real hardware.</dd></div>
-        <div class="row"><dt>SomaFM radio</dt><dd>An unofficial player with a 51-station catalog, favorites and track metadata. Music keeps playing after Home and while using other apps. Install it from the App Store; a network card is required.</dd></div>
-        <div class="row"><dt>More native apps</dt><dd>Gmail adds IMAP and SMTP mail. Game Boy, NES, Master System, Game Gear, Genesis and TurboGrafx-16 emulators are available as App Store packages, with original demo cartridges and support for your own compatible ROMs.</dd></div>
-        <div class="row"><dt>Multitasking</dt><dd>Switch back to apps through the multitasking bar. Background apps can retain their state while their threads and drawing are suspended; radio playback remains with the audio service.</dd></div>
-        <div class="row"><dt>Display and touch</dt><dd>Five-point touch calibration, physical backlight and LCD contrast controls, and a configurable screen timeout. Wake returns to the lock screen. <a href="https://github.com/jroark/glaze-os/blob/main/docs/DISPLAY.md">Display and calibration details.</a></dd></div>
-        <div class="row"><dt>A more capable Browser</dt><dd>JavaScript through JerryScript, DOM events, forms, timers, and independent frames and iframes, alongside HTTPS. It remains a small browser with a limited web API, rather than a modern desktop browser.</dd></div>
-        <div class="row"><dt>Original apps</dt><dd>Run selected original Windows CE apps alongside native Glaze apps: Calculator, PocketNotepad, Owner and OwnerInfo, plus opt-in Clock, RegEdit, PalmTweak and WorldTALK packages. <a href="#compatibility">See what works.</a></dd></div>
-        <div class="row"><dt>Task Manager</dt><dd>Watch live CPU and memory history, inspect running tasks and threads, pause the display, and end other managed apps with confirmation. System services stay protected. Available in the App Store; CPU and task monitoring need a current OS build.</dd></div>
-        <div class="row"><dt>AIM</dt><dd>Instant messages, buddy lists, online and away status, typing notices, profiles, automatic away replies and familiar door and message sounds. Connect to an AIM revival server or your own OSCAR server over Ethernet; AOL's original service is closed. The session ends when you leave the app.</dd></div>
-        <div class="row"><dt>Smoother interaction</dt><dd>Faster buttons, gradients, text fitting and flash verification, with smaller Settings redraws. Lists across Music, Videos, Notes, Files, Browser and App Store now share consistent scrolling and tap behavior. Browser bookmarks ask you to confirm deletion, and App Store rows highlight as you press.</dd></div>
-        <div class="row"><dt>More room in RAM</dt><dd>Built-in apps, shared libraries and assets load from flash as their pages are needed. Read-only pages are shared, and unused cached pages can be reclaimed. The whole system archive no longer needs to sit in memory at boot.</dd></div>
+        <div class="row"><dt>Handwriting input</dt><dd>Tap <strong>Write</strong> on the keyboard to print one letter or digit at a time, then tap a candidate to insert it. Recognition runs entirely on the device, with a shape guide and Settings practice pad. Switch back to keys whenever you like. <a href="https://github.com/jroark/glaze-os/blob/main/docs/HANDWRITING.md">Handwriting guide.</a></dd></div>
+        <div class="row"><dt>Browser Web APIs</dt><dd>JerryScript JavaScript, frames and iframes now have asynchronous <code>fetch</code> for GET/POST, URL and UTF-8 tools, origin-scoped local/session storage, more DOM and event APIs, animation callbacks and ES modules. Designed for small web apps within the BE-300's memory; many modern sites still require unsupported APIs. <a href="https://github.com/jroark/glaze-os/blob/main/docs/BROWSER_WEB_APIS.md">Supported Web APIs and limits.</a></dd></div>
+        <div class="row"><dt>Launch apps from NAND</dt><dd>After a USB or GlazeBoot RAM boot, open <strong>Files → NAND → ProgramFiles</strong> and select a supported original <code>.exe</code> or <code>.exe.cpk</code>. Glaze recovers matching runtime metadata from your device and keeps the source NAND read-only. <a href="#compatibility">Compatibility and setup.</a></dd></div>
+        <div class="row"><dt>Chat and Doom</dt><dd>A native text chat app with ChatGPT account sign-in for Codex, and a single-player Doom port with physical buttons, sound effects and saved games. <a href="#apps">Explore the app catalog.</a></dd></div>
+        <div class="row"><dt>USB networking</dt><dd>A macOS or Linux host helper gives Glaze an IPv4 link over the existing USB connection, without a CF network card. Host forwarding and NAT can provide internet access. <a href="#connect">Networking and connection options.</a></dd></div>
+        <div class="row"><dt>Screen mirroring</dt><dd>View and control Glaze from a computer's VNC viewer through USB or a paired TLS network connection. The same transports support file transfer, app installation, logs and debugging. <a href="#connect">Mirror and develop remotely.</a></dd></div>
+        <div class="row"><dt>Drivers on demand</dt><dd>Network drivers are loadable MIPS modules. With no network card or active USB network link, Glaze leaves the network drivers and service unloaded. Inserting supported hardware starts the needed driver and service; removing it releases resources. <a href="https://github.com/jroark/glaze-os/blob/main/docs/DRIVERS_SERVICES.md">Driver and service lifecycle.</a></dd></div>
+        <div class="row"><dt>Native app SDK</dt><dd>A relocatable C SDK includes headers, shared libraries, a project generator, package validation, resource tools and examples. Build apps outside the OS checkout, then install and debug them over USB or the network. <a href="#develop">Get started with the SDK.</a></dd></div>
       </dl>
       <p class="section-note section-followup">For developers: <a href="https://github.com/jroark/glaze-os/blob/main/docs/PERFORMANCE.md">rendering and flash benchmarks</a>, <a href="https://github.com/jroark/glaze-os/blob/main/docs/TASK_MANAGER.md">task monitoring</a>, and <a href="https://github.com/jroark/glaze-os/blob/main/tests/bench.py">boot, launch and memory measurements with tests/bench.py</a>.</p>
+    </section>
+
+    <section aria-labelledby="apps">
+      <h2 id="apps">Apps and games</h2>
+      <p class="section-note">Built in: Calendar, Photos, Clock, Calculator, Files, Browser, Music, Videos, App Store, Notes and Settings. Additional native apps install as <code>.gzp</code> packages from Files or the App Store. The catalog below describes current source packages; store availability and the OS version each app needs can differ. <a href="https://github.com/jroark/glaze-os/tree/main/packages">Package sources and build targets.</a></p>
+      <dl class="group">
+        <div class="row"><dt>Chat</dt><dd>Text conversations using Codex access associated with your ChatGPT account. Approve a device code on another device, or import a one-time official Codex CLI browser login. No API key or continuously running relay is needed. Account eligibility and Codex usage limits apply; free access is not guaranteed, and ChatGPT website conversations do not sync. <a href="https://github.com/jroark/glaze-os/blob/main/docs/CHATGPT.md">Sign-in and installation.</a></dd></div>
+        <div class="row"><dt>Doom</dt><dd>A DoomGeneric port with single-player gameplay, physical button controls, sound effects, automap and save/load. Supply your own compatible Doom WAD; no game data is bundled. <a href="https://github.com/jroark/glaze-os/blob/main/docs/DOOM.md">Supported WADs and controls.</a></dd></div>
+        <div class="row"><dt>Console emulators</dt><dd><a href="https://github.com/jroark/glaze-os/blob/main/docs/NES.md">NES, including supported NES 2.0 images</a>; <a href="https://github.com/jroark/glaze-os/blob/main/docs/GAMEBOY.md">Game Boy and Game Boy Color</a>; <a href="https://github.com/jroark/glaze-os/blob/main/docs/SEGA.md">Sega Master System and Genesis / Mega Drive</a>; <a href="https://github.com/jroark/glaze-os/blob/main/docs/GAMEGEAR.md">Game Gear</a>; and <a href="https://github.com/jroark/glaze-os/blob/main/docs/TURBOGRAFX16.md">TurboGrafx-16 / PC Engine</a>. Use the BE-300's physical buttons, with no on-screen gameplay controller. Bring your own compatible ROMs; mapper support and performance vary by system and game.</dd></div>
+        <div class="row"><dt>Gmail</dt><dd>IMAP mail and SMTP sending over TLS, using a Gmail App Password or a custom mail server. <a href="https://github.com/jroark/glaze-os/tree/main/packages/gmail">Mail app source.</a></dd></div>
+        <div class="row"><dt>AIM</dt><dd>Messages, buddy lists, online/away status, typing notices, profiles and classic sounds. Connect to a revival or self-hosted OSCAR server; AOL's original service is closed. The session ends when you leave the app. <a href="https://github.com/jroark/glaze-os/tree/main/packages/aim">AIM app source.</a></dd></div>
+        <div class="row"><dt>SomaFM</dt><dd>An unofficial internet radio player with 51 stations, favorites and track metadata. Playback continues after Home while you use other apps. Requires an internet connection through a supported network card or a forwarded USB network link. <a href="https://github.com/jroark/glaze-os/blob/main/docs/SOMAFM.md">Radio guide.</a></dd></div>
+        <div class="row"><dt>Task Manager</dt><dd>Live CPU and memory history, running tasks and threads, plus controls to end other managed apps with confirmation. System services stay protected. <a href="https://github.com/jroark/glaze-os/blob/main/docs/TASK_MANAGER.md">Task monitoring.</a></dd></div>
+        <div class="row"><dt>More to try</dt><dd>Minesweeper, Klondike Solitaire, the Fifteen sliding puzzle, Sketch for drawing, and Hello, a small example app for developers.</dd></div>
+      </dl>
+    </section>
+
+    <section aria-labelledby="connect">
+      <h2 id="connect">Connect, mirror and debug</h2>
+      <p class="section-note">The <code>glaze-usb</code> host tools connect a macOS or Linux computer to Glaze. New USB networking and mirroring paths have emulator and protocol test coverage; physical-device interoperability still needs validation.</p>
+      <dl class="group">
+        <div class="row"><dt>USB network link</dt><dd>Run <code>sudo glaze-usb usb-net</code> to create a macOS utun or Linux TAP interface. This uses Glaze's USB protocol and requires the host helper. The direct link works without a network card; internet access additionally requires host forwarding and NAT configuration. <a href="https://github.com/jroark/glaze-os/blob/main/docs/USB_NETWORK.md">Host setup.</a></dd></div>
+        <div class="row"><dt>VNC screen mirror</dt><dd>Run <code>glaze-usb mirror</code>, then connect your computer's VNC viewer, including macOS Screen Sharing, to the localhost bridge. See Glaze's 240×320 screen and send mouse/stylus and keyboard input, or choose view-only mode. Works over USB or paired network transport; audio and clipboard are not mirrored. <a href="https://github.com/jroark/glaze-os/blob/main/docs/MIRRORING.md">Mirroring guide.</a></dd></div>
+        <div class="row"><dt>Network debugging</dt><dd>The USB development command set also works over paired TLS: transfer files, install and run packages, capture screenshots, send input, read logs and reload or reboot. Network debugging is off by default and requires a pairing key. <a href="https://github.com/jroark/glaze-os/blob/main/docs/NETWORK_DEBUG.md">Pairing and commands.</a></dd></div>
+      </dl>
     </section>
 
     <section aria-labelledby="hardware-tested">
@@ -87,6 +117,7 @@
 
     <section class="download-section" aria-labelledby="download">
       <h2 id="download">Download GlazeBoot and Glaze</h2>
+      <p class="release-notice"><strong>This is the October 25 release.</strong> Newer features described above, including handwriting, Chat, Doom, USB networking, mirroring, the SDK, expanded Web APIs and direct NAND app launching, require a build from <a href="#build">current source</a>. This ZIP has not been rebuilt for the October 29 update.</p>
       <div class="download-card">
         <p class="release-label">October 25, 2026 · build <code>e4500c1</code></p>
         <h3>Ready for your CompactFlash card</h3>
@@ -109,10 +140,14 @@
       <h2 id="screens">On the screen</h2>
       <p class="section-note">Every picture here is a screenshot of Glaze running in the BE-300 emulator, shown pixel for pixel at the device's 240 by 320.</p>
       <ul class="gallery">
-        <li><figure><img src="img/notes.png" width="240" height="320" alt="Notes, showing a list with one note" loading="lazy"><figcaption><strong>Notes</strong>Saved as you type, on the device's flash.</figcaption></figure></li>
+        <li><figure><img src="img/handwriting.png" width="240" height="320" alt="Notes with the offline handwriting pad open, showing a white drawing area, candidate buttons and Keys, Clear, Space and Return controls" loading="lazy"><figcaption><strong>Handwriting</strong>Print a letter, choose a candidate, or switch back to keys.</figcaption></figure></li>
+        <li><figure><img src="img/browser-web-apis.png" width="240" height="320" alt="Browser's offline Web APIs demo reporting ready for text and URLs, DOM, animation and modules" loading="lazy"><figcaption><strong>Browser Web APIs</strong>The bundled offline demo exercises URLs, DOM, animation and ES modules.</figcaption></figure></li>
+        <li><figure><img src="img/chat.png" width="240" height="320" alt="Chat showing Hello and a reply from a local Codex protocol test server" loading="lazy"><figcaption><strong>Chat · test conversation</strong>The native chat interface, using a local protocol fixture for this capture.</figcaption></figure></li>
+        <li><figure><img src="img/doom.png" width="240" height="320" alt="Glaze's Doom port running a level with its status bar and physical-button hints" loading="lazy"><figcaption><strong>Doom</strong>Single-player gameplay with physical buttons. Supply your own WAD.</figcaption></figure></li>
+        <li><figure><img src="img/notes.png" width="240" height="320" alt="Notes, showing a list with one note" loading="lazy"><figcaption><strong>Notes</strong>Saved as you type in Glaze's filesystem.</figcaption></figure></li>
         <li><figure><img src="img/photos.png" width="240" height="320" alt="Photos, showing a picture of a pine forest" loading="lazy"><figcaption><strong>Photos</strong>A camera roll with cached thumbnails.</figcaption></figure></li>
         <li><figure><img src="img/music.png" width="240" height="320" alt="Music, playing a track called Glaze Demo" loading="lazy"><figcaption><strong>Music</strong>MP3 and WAV, decoded on the device.</figcaption></figure></li>
-        <li><figure><img src="img/browser.png" width="240" height="320" alt="Browser, showing its start page" loading="lazy"><figcaption><strong>Browser</strong>Its own HTML and CSS engine, with HTTPS.</figcaption></figure></li>
+        <li><figure><img src="img/browser.png" width="240" height="320" alt="Browser, showing its start page" loading="lazy"><figcaption><strong>Browser</strong>Its own HTML and CSS engine, HTTPS, JavaScript and frames.</figcaption></figure></li>
         <li><figure><img src="img/calendar.png" width="240" height="320" alt="Calendar, showing October 2026" loading="lazy"><figcaption><strong>Calendar</strong>Month view with reminders.</figcaption></figure></li>
         <li><figure><img src="img/appstore.png" width="240" height="320" alt="App Store, listing Hello, Fifteen and Sketch" loading="lazy"><figcaption><strong>App Store</strong>Free apps that install over the network.</figcaption></figure></li>
         <li><figure><img src="img/taskmanager.png" width="240" height="320" alt="Task Manager, showing CPU and memory history with uptime" loading="lazy"><figcaption><strong>Task Manager</strong>Live CPU, memory and running tasks.</figcaption></figure></li>
@@ -125,9 +160,10 @@
 
     <section aria-labelledby="compatibility">
       <h2 id="compatibility">Original BE-300 apps, in Glaze</h2>
-      <p class="section-note">The original MIPS application code runs in an ordinary Glaze process through a userspace WinCE compatibility runtime. Import the apps from your own local BeShell NAND image; vendor software is not bundled or offered in the App Store.</p>
+      <p class="section-note">The original MIPS application code runs in an ordinary Glaze process through a userspace WinCE compatibility runtime. With current source, a USB or GlazeBoot RAM boot can launch supported apps straight from your own device's NAND: <strong>Files → NAND → ProgramFiles → an .exe or .exe.cpk</strong>. Original NAND files stay read-only; changes go into private Glaze app contexts. <a href="https://github.com/jroark/glaze-os/blob/main/docs/WINCE_NAND.md">Direct NAND launch guide.</a></p>
+      <p class="section-note">The first launch recovers matching runtime metadata and needs several megabytes of free memory; close large apps first. Selected apps can also be imported as packages from your own local BeShell NAND image. Vendor software is not bundled or offered in the App Store. New direct launches are emulator-tested; this does not establish compatibility with arbitrary Windows CE software.</p>
       <ul class="gallery">
-        <li><figure><img src="img/ce-calculator.png" width="240" height="320" alt="Original Casio Calculator, displaying the result 5" loading="lazy"><figcaption><strong>Casio Calculator</strong>The original keypad and arithmetic engine.</figcaption></figure></li>
+        <li><figure><img src="img/ce-nand.png" width="240" height="320" alt="Original Casio Calculator launched from NAND after a Glaze RAM boot, displaying 5" loading="lazy"><figcaption><strong>Casio Calculator · from NAND</strong>Launched through Files after a RAM boot; 2 + 3 = 5.</figcaption></figure></li>
         <li><figure><img src="img/ce-notepad.png" width="240" height="320" alt="Original PocketNotepad with a document containing Hello from Glaze" loading="lazy"><figcaption><strong>PocketNotepad</strong>Edit and save documents with Glaze's keyboard.</figcaption></figure></li>
         <li><figure><img src="img/ce-palmtweak.png" width="240" height="320" alt="Original PalmTweak Power Off page, with a six-minute battery timeout stored in its private settings" loading="lazy"><figcaption><strong>PalmTweak</strong>Original property pages, controls and saved preferences.</figcaption></figure></li>
       </ul>
@@ -138,7 +174,7 @@
         <div class="row"><dt>RegEdit · opt-in</dt><dd>Browse, create and edit keys and string values through the original dialogs, with saved settings across boots. It edits its own private registry. File import and export remain unvalidated.</dd></div>
         <div class="row"><dt>PalmTweak · opt-in</dt><dd>General and Power Off pages support checkboxes, numeric spinners, validation, Apply, OK and Cancel. Saved animation and timeout preferences stay in its private registry; they do not change Glaze's animation or power policy. Other pages remain unvalidated.</dd></div>
       </dl>
-      <p class="section-note section-followup">This is support for selected apps, with limited controls and APIs. Selected WorldTALK network workflows are supported; multimedia and arbitrary vendor DLLs remain limited. <a href="https://github.com/jroark/glaze-os/blob/main/docs/WINCE.md">Import instructions, supported features and compatibility limits.</a></p>
+      <p class="section-note section-followup">This is support for selected apps, with limited controls and APIs. Selected WorldTALK network workflows are supported; multimedia and arbitrary vendor DLLs remain limited. App data and preferences follow Glaze's storage: a RAM boot loses root-filesystem changes on reset, so copy documents you want to keep to a card. <a href="https://github.com/jroark/glaze-os/blob/main/docs/WINCE.md">Import instructions, supported features and compatibility limits.</a></p>
     </section>
 
     <section aria-labelledby="inside">
@@ -147,11 +183,13 @@
           <h2 id="inside">What's inside</h2>
           <dl class="group">
             <div class="row"><dt>Kernel</dt><dd>A small microkernel with synchronous message passing, shared memory, threads and paged virtual memory.</dd></div>
-            <div class="row"><dt>Apps</dt><dd>Share their libraries through a dynamic linker. More install as packages from the App Store, onto flash or a memory card: Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manager, AIM, Gmail, SomaFM and console emulators.</dd></div>
-            <div class="row"><dt>Storage</dt><dd>littlefs on a NAND flash translation layer with error correction and bad-block handling. Built-in system files are demand-paged from NAND. CompactFlash cards appear as /Card.</dd></div>
-            <div class="row"><dt>Keyboard</dt><dd>A Stowaway folding keyboard detected at boot supplies physical text input in Notes, Files and Browser, hiding the on-screen keyboard to make more room. The initial layout is US ASCII; live attachment is not supported.</dd></div>
-            <div class="row"><dt>Network</dt><dd>lwIP over NE2000 Ethernet, XI-825 Wi-Fi or WL54-CF Wi-Fi: DHCP, DNS, TCP and UDP. Security depends on the card; see the hardware status above. The clock sets itself by NTP.</dd></div>
-            <div class="row"><dt>Web</dt><dd>A browser engine of its own, with HTTPS through wolfSSL.</dd></div>
+            <div class="row"><dt>Multitasking</dt><dd>Apps share libraries through a dynamic linker. Return to apps through the multitasking bar; background apps can retain their state while threads and drawing are suspended. Radio playback remains with the audio service.</dd></div>
+            <div class="row"><dt>Storage</dt><dd>NAND boots use littlefs on a flash translation layer with error correction and bad-block handling. USB and GlazeBoot RAM boots keep the original Windows CE NAND volume available read-only at /NAND. CompactFlash cards appear as /Card.</dd></div>
+            <div class="row"><dt>Text input</dt><dd>Use the on-screen keyboard or offline handwriting pad in apps using Glaze's shared text controls. A Stowaway folding keyboard detected at boot supplies US ASCII physical text input and hides the on-screen panel; live attachment is not supported.</dd></div>
+            <div class="row"><dt>Network</dt><dd>lwIP over NE2000 Ethernet, XI-825 Wi-Fi, WL54-CF Wi-Fi or the USB host link: DHCP, DNS, TCP and UDP. Settings scans and saves Wi-Fi connections; security depends on the card. See the hardware status above. The clock sets itself by NTP.</dd></div>
+            <div class="row"><dt>Web</dt><dd>A browser engine of its own, with HTTPS through wolfSSL and bounded JavaScript through JerryScript. Small pages and web apps fit its scope; it is not a full modern desktop browser.</dd></div>
+            <div class="row"><dt>Display and touch</dt><dd>Original LCD initialization, five-point touch calibration, physical backlight and LCD contrast controls, and a configurable timeout that returns to the lock screen on wake. <a href="https://github.com/jroark/glaze-os/blob/main/docs/DISPLAY.md">Display guide.</a></dd></div>
+            <div class="row"><dt>Memory and UI</dt><dd>On NAND boots, built-in apps and assets are demand-paged from flash, with shared read-only pages and reclaimable cache. GlazeBoot instead keeps the system archive in RAM. Consistent scrolling, tap feedback and smaller redraws help keep the touch interface responsive.</dd></div>
             <div class="row"><dt>Sound</dt><dd>MP3, WAV, internet radio and system sounds through headphone PCM output, with a shared volume control. The separate internal piezo buzzer is not driven by this audio path.</dd></div>
           </dl>
         </div>
@@ -166,6 +204,24 @@
           </dl>
         </div>
       </div>
+    </section>
+
+    <section aria-labelledby="develop">
+      <h2 id="develop">Develop native apps</h2>
+      <p class="section-note">The standalone C SDK builds installable Glaze apps outside the OS checkout. It includes headers, shared libraries, startup objects, a project generator, package checks, resource tools, an example and USB client source. The MIPS cross-compiler, emulator and OS images are separate dependencies.</p>
+      <ol class="group steps">
+        <li class="step"><div><p>Export the SDK with the repository's Docker toolchain.</p>
+<pre><code>./build.sh sdk-archive
+# Extract out/sdk/glaze-sdk.tar.gz where you want to work.</code></pre></div></li>
+        <li class="step"><div><p>With the MIPS cross-compiler installed, create and check an app.</p>
+<pre><code>export GLAZE_SDK="$PWD/glaze-sdk"
+"$GLAZE_SDK/bin/glaze-sdk" doctor
+"$GLAZE_SDK/bin/glaze-sdk" new my-app --id my-app --name "My App"
+make -C my-app
+make -C my-app check</code></pre></div></li>
+        <li class="step"><div><p>Install the generated <code>my-app/build/app.gzp</code> through Files, or transfer and run it with <code>glaze-usb</code>. Mirror the screen while developing, then inspect logs and capture screenshots over USB or paired network transport.</p></div></li>
+      </ol>
+      <p class="section-note section-followup">Use an SDK and OS image from the same source revision; the app ABI is not yet stable across releases. Linux is the reference build host; macOS can use the Docker toolchain. <a href="https://github.com/jroark/glaze-os/blob/main/docs/SDK.md">Full SDK setup, APIs, packaging and host instructions.</a> <a href="https://github.com/jroark/glaze-os/blob/main/docs/USB.md">USB development commands.</a></p>
     </section>
 
     <section aria-labelledby="build">
