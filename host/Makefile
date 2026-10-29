@@ -34,6 +34,20 @@ MEDIA_CFLAGS := $(CFLAGS) -Wno-unused-but-set-variable -I../third_party/helix-mp
 
 all: sheet preview fstest fattest mkfsimg browse mediatest
 
+CHATGPT_SOURCES := ../packages/chatgpt/protocol.c ../apps/browser/url.c
+CHATGPT_AUTH := $(addprefix ../packages/chatgpt/,json.c tokens.c oauth.c responses.c http_io.c)
+../out/host/chatgpt-protocol: ../tests/chatgpt.c $(CHATGPT_SOURCES) ../packages/chatgpt/json.c ../packages/chatgpt/tokens.c $(wildcard ../packages/chatgpt/*.h)
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -I../packages/chatgpt -I../apps/browser -fsanitize=address,undefined $(filter %.c,$^) -o $@
+../out/host/chatgpt-client: chatgpt.c $(CHATGPT_SOURCES) $(CHATGPT_AUTH) ../apps/browser/http.c ../apps/browser/conn.c ../apps/browser/tls.c ../apps/appstore/inflate.c libwolfssl.a $(wildcard ../packages/chatgpt/*.h)
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -I../packages/chatgpt -I../apps/browser -I../third_party/stb -I../third_party/wolfssl \
+	    -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS -fsanitize=address,undefined $(filter %.c,$^) libwolfssl.a -o $@
+.PHONY: chatgpt-test
+chatgpt-test: ../out/host/chatgpt-protocol ../out/host/chatgpt-client
+	../out/host/chatgpt-protocol
+	python3 ../tests/chatgpt_oauth.py --client ../out/host/chatgpt-client
+
 # Native USB development CLI. Prefer the Apple Silicon Homebrew installation.
 USB_PKG_CONFIG ?= $(if $(wildcard /opt/homebrew/bin/pkg-config),/opt/homebrew/bin/pkg-config,pkg-config)
 USB_FLAGS := $(shell $(USB_PKG_CONFIG) --cflags --libs libusb-1.0 2>/dev/null)

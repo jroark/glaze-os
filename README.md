@@ -212,6 +212,13 @@ An opt-in PalmTweak package supports its General and Power Off pages with privat
 See [Original BE-300 applications](docs/WINCE.md) for importing, supported
 functions and tests.
 
+## Chat
+
+The installable **Chat** app supports ChatGPT account sign-in for direct
+Codex chat through device-code authorization or a one-time Codex CLI login
+import. It needs no chat relay or API key; account eligibility and Codex
+limits apply. See [Chat and OAuth](docs/CHATGPT.md).
+
 ## App Store
 
 The native **App Store** offers Search and Updates in the early iPhone OS style.

@@ -1,0 +1,11 @@
+# Boot the installed diagnostic package with --ne2000 and the OAuth fixture.
+# Starting from a remembered login, sign out, use on-device authorization,
+# then send a message. Require a new "chatgpt: signed in" and reply received.
+3000 drag 40 280 235 280 500
+4500 tap 90 192
+6500 tap 120 158
+10000 tap 120 158
+22000 tap 210 30
+24000 tap 80 277
+25000 text Device login works
+27000 key enter

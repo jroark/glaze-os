@@ -44,6 +44,12 @@ the source tree or under ignored `out/`. Build and native-test targets generate 
 
 ## Running and testing
 
+`make out/pkg/chatgpt.gzp` builds the direct Codex chat package. Its device-code
+OAuth, login import, token refresh and SSE client live in `packages/chatgpt/`;
+`tools/chatgpt_signin.py` uses a dedicated official Codex CLI login for browser
+authorization. `make -C host chatgpt-test` runs native protocol/TLS fixtures.
+See `docs/CHATGPT.md`. Credentials and `CODEX.AUTH` exports must never be committed.
+
 ```sh
 be300 --nand out/glaze.bin --rtc-host-time > stdout.log 2> stderr.log
 be300 --nand out/glaze.bin --rtc-host-time --ne2000   # with the PCMCIA Ethernet card

@@ -6,6 +6,9 @@ host/nand-ecc-test
 
 __pycache__/
 
+# One-time Codex login exports contain credentials.
+[Cc][Oo][Dd][Ee][Xx].[Aa][Uu][Tt][Hh]
+
 # ROM binaries stay external or in ignored build/test output.
 *.[nN][eE][sS]
 *.[gG][bB]
