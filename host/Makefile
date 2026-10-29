@@ -617,3 +617,9 @@ debug-net-test: ../out/host/debug-net-fixture ../out/host/glaze-usb
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(USB_TLS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(filter %.c,$^) libwolfssl.a -o $@
 debug-net-test: ../out/host/debug-net-client
+
+wince-nand-test: ../tests/wince_assets_native.c ../tests/wince_nand_assets.py ../apps/wince/assets.c ../apps/wince/assets.h ../apps/wince/pe.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/wince-assets-native ../tests/wince_assets_native.c ../apps/wince/assets.c ../apps/wince/pe.c
+	python3 ../tests/wince_nand_assets.py
+.PHONY: wince-nand-test

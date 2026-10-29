@@ -289,11 +289,13 @@ None of these showed in the emulator:
 
 A RAM boot copies all of romfs into RAM, unlike a NAND boot, which pages it in
 on demand. GlazeBoot's `romfs.img` therefore carries only the apps named in
-`GB_APPS` (default `appstore browser settings`; `make glazeboot GB_APPS=all`
+`GB_APPS` (default `appstore browser files settings wince`; `make glazeboot GB_APPS=all`
 keeps them all), their icons, the servers, and the test programs. The NAND
 image is unchanged. SpringBoard shows a built-in app only when romfs holds its
-program. The default saves about 580 KiB, leaving about 8.3 MiB free at
-SpringBoard on the emulator. The public full download on glaze-os.com uses
+program. The default leaves about 7.9 MiB free at SpringBoard in the current emulator
+fixture; available memory changes with the build and running services. Files
+can launch supported CE executables directly from `/NAND`; see
+[WINCE_NAND.md](WINCE_NAND.md). The public full download on glaze-os.com uses
 `GB_APPS=all`, restoring Calendar, Photos, Clock, Calculator, Files, Music,
 Videos and Notes alongside Browser, App Store and Settings. The full archive
 uses more RAM; additional packages can still be installed from the App Store.

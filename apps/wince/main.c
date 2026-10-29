@@ -3,6 +3,7 @@
  * O32 PIC prologue requires the destination in t9 to establish gp. */
 #include "runtime.h"
 #include "ordinals.h"
+#include "source.h"
 #include <glaze/vm.h>
 
 struct ce_module ce_main;
@@ -132,6 +133,7 @@ static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, vo
 {
     (void)arg;
     char ordinal_symbol[256];
+    if(!name&&!ordinals&&ce_source_active()){const char *map=ce_source_ordinals(&ordinal_size);ordinals=(char *)map;}
     if (!name && ordinals && ce_ordinal_find(ordinals, ordinal_size, dll, ordinal,
             ordinal_symbol, sizeof(ordinal_symbol)))
         name = ordinal_symbol;
@@ -274,7 +276,8 @@ CW ce_load_library(const char *name)
         if (!strcasecmp(library_names[i], base))
             return libraries[i].base;
     uint32_t size = 0;
-    const void *file = res_map(base, &size);
+    void *owned=ce_source_active()?ce_source_library(base,&size):NULL;
+    const void *file=owned?owned:res_map(base,&size);
     char mapped[48];
     if (!file && ce_bundled_res_name(base, mapped))
         file = res_map(mapped, &size);
@@ -292,6 +295,7 @@ CW ce_load_library(const char *name)
     if (!libraries[i].pe.dll)
         ce_fatal("Expected a WinCE library");
     finish_module(&libraries[i], base);
+    if(owned){free(owned);libraries[i].pe.file=NULL;}
     publish_bridges();
     if (!library_initialized[i]) {
         library_initialized[i] = true;
@@ -307,6 +311,7 @@ CW ce_load_library(const char *name)
 CW ce_find_ordinal(CW handle, uint16_t ordinal)
 {
     if (handle == 0x73000000u) {
+        if(!ordinals&&ce_source_active())ordinals=(char *)ce_source_ordinals(&ordinal_size);
         char name[256];
         if (ce_ordinal_find(ordinals, ordinal_size, "coredll.dll", ordinal, name, sizeof(name)))
             return ce_import_address("coredll.dll", name);
@@ -417,17 +422,24 @@ int main(void)
     if (ui.surf.h != 320)
         ce_fatal("This Glaze build does not support full-screen compatibility apps");
     ordinal_size = 0;
-    const void *map = res_map("ordinals.txt", &ordinal_size);
-    if (!map || ordinal_size > 128 * 1024)
+    bool direct=ce_source_init();
+    const void *map = direct?NULL:res_map("ordinals.txt", &ordinal_size);
+    if (!direct && (!map || ordinal_size > 128 * 1024))
         ce_fatal("Missing matching WinCE export names");
-    ordinals = malloc(ordinal_size);
-    if (!ordinals)
-        ce_fatal("Out of memory reading WinCE export names");
-    memcpy(ordinals, map, ordinal_size);
+    if(map){
+        ordinals = malloc(ordinal_size);
+        if (!ordinals)ce_fatal("Out of memory reading WinCE export names");
+        memcpy(ordinals, map, ordinal_size);
+    }
     if (gz_vm_map(CE_BRIDGE_BASE, CE_BRIDGE_BYTES))
         ce_fatal("Cannot allocate WinCE call bridges");
     bridges = PTR(uint32_t, CE_BRIDGE_BASE);
-    load(&ce_main, "program.exe");
+    if(direct){
+        uint32_t size=0;void *file=ce_source_program(&size);
+        if(!file)ce_fatal("Cannot read the selected NAND executable");
+        map_module(&ce_main,file,size);finish_module(&ce_main,ce_source_name());
+        free(file);ce_main.pe.file=NULL;
+    }else load(&ce_main, "program.exe");
     if (ce_main.pe.dll)
         ce_fatal("Expected a WinCE application");
     if (published != bridge_count)

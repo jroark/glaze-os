@@ -65,6 +65,7 @@ enum {
     SB_DEBUG_LAUNCH,        /* development client: sb_note_req.path -> launch status */
     SB_DEBUG_STATE,         /* w1 = GU_DEBUG_* activity, w3 = client pid; reply w1 activity, w2 app pid */
     SB_REBOOT_CE,           /* foreground built-in Settings only; w3 = pid */
+    SB_WINCE_LAUNCH,        /* client page: struct sb_wince_req; reply w0 status */
 };
 
 enum {
@@ -88,6 +89,9 @@ struct sb_note_req {
     char title[32];
     char body[96];
 };
+
+/* Fits in the existing client request page without changing sb_shared ABI. */
+struct sb_wince_req { char path[128]; };
 
 struct sb_shared {
     volatile uint32_t head;         /* written by SpringBoard */

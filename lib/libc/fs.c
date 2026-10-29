@@ -81,6 +81,22 @@ static int path_call(uint32_t op, const char *path, uint32_t a)
     return rv ? rv : call(op, a, 0, 0, NULL);
 }
 
+int fs_nand_read(uint32_t offset, void *dst, uint32_t len)
+{
+    SESSION_LOCKED();
+    if (offset > 16u*1024u*1024u || len > 16u*1024u*1024u-offset) return GZ_EINVAL;
+    int rv=connect();if(rv)return rv;
+    uint32_t done=0;
+    while(done<len){
+        uint32_t n=MIN(len-done,FS_IO_MAX);
+        rv=call(FS_NAND_READ,offset+done,n,0,NULL);
+        if(rv<0)return rv;
+        if((uint32_t)rv!=n)return GZ_EIO;
+        memcpy((uint8_t *)dst+done,buf,n);done+=n;
+    }
+    return (int)done;
+}
+
 int fs_open(const char *path, int flags)
 {
     SESSION_LOCKED();

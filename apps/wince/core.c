@@ -2,6 +2,7 @@
 #include "registry.h"
 #include "runtime.h"
 #include "text.h"
+#include "source.h"
 #include <glaze/thread.h>
 
 
@@ -115,7 +116,7 @@ void ce_widen(WCHAR *dst, uint32_t capacity, const char *src)
 
 static bool ce_canonical_path(char canonical[FS_PATH_MAX], const WCHAR *input)
 {
-    char raw[FS_PATH_MAX], norm[FS_PATH_MAX];
+    char raw[FS_PATH_MAX+16], norm[FS_PATH_MAX+16];
     ce_narrow(raw, sizeof(raw), input);
     unsigned n = 0;
     for (const char *p = raw; *p && n + 1 < sizeof(norm); p++) {
@@ -588,18 +589,22 @@ CE_API(GetModuleFileNameW)
         return 0;
     }
     uint32_t length;
-    char module_path[FS_PATH_MAX];
+    char module_path[256];
     const char *source;
     if (a0 && a0 != ce_main.base) {
         const char *module = ce_module_name(a0);
-        if (!module || !bundled_module_path(module, module_path)) {
+        const char *external=module?ce_source_module_name(module):NULL;
+        if(external)strlcpy(module_path,external,sizeof module_path);
+        if (!module || (!external&&!bundled_module_path(module, module_path))) {
             ce_error = 126;
             return 0;
         }
         source = module_path;
         length = strlen(source);
-    } else
-        source = res_map("source.txt", &length);
+    } else {
+        source=ce_source_name();
+        if(source)length=strlen(source);else source=res_map("source.txt",&length);
+    }
     const char *fallback = "\\Program Files\\program.exe";
     if (!source) {
         source = fallback;
@@ -1194,6 +1199,7 @@ static bool bundled_module_path(const char *leaf, char out[FS_PATH_MAX])
 
 static bool ce_bundled_file(const char *canonical, char res_path[FS_PATH_MAX])
 {
+    if(ce_source_file(canonical,res_path))return true;
     load_bundled_files();
     if (!res_bundle()[0])
         return false;
@@ -1208,6 +1214,8 @@ static bool ce_bundled_file(const char *canonical, char res_path[FS_PATH_MAX])
 
 static bool ce_bundled_dir(const char *canonical)
 {
+    char original[FS_PATH_MAX];
+    if(ce_source_directory(canonical,original))return true;
     load_bundled_files();
     if (!strcmp(canonical, "/"))
         return bundled_count > 0;
@@ -1317,8 +1325,8 @@ static CW file_error(int error)
     return 0;
 }
 struct find_handle {
-    bool active, fs_done;
-    uint32_t index, bundled_index;
+    bool active, fs_done, source_done;
+    uint32_t index, bundled_index, source_index;
     char path[FS_PATH_MAX], canonical_dir[FS_PATH_MAX], pattern[FS_NAME_MAX];
 };
 static struct find_handle searches[8];
@@ -1374,6 +1382,28 @@ static CW find_next(struct find_handle *search, CW out)
         ce_put32(PTR(uint8_t, out) + 32, entry.size);
         ce_widen(PTR(WCHAR, out + 40), 260, entry.name);
         return 1;
+    }
+    while(!search->source_done){
+        char original[FS_PATH_MAX];
+        if(!ce_source_directory(search->canonical_dir,original)){search->source_done=true;break;}
+        int count=fs_list(original,search->source_index++,&entry,1);
+        if(count<=0){search->source_done=true;break;}
+        char physical[FS_PATH_MAX],overlay[FS_PATH_MAX];struct fs_stat st;
+        int n=snprintf(physical,sizeof physical,"%s/%s",original,entry.name);
+        if(n<0||n>=FS_PATH_MAX)continue;
+        size_t length=strlen(entry.name);
+        if(entry.type==FS_FILE&&length>4&&!strcasecmp(entry.name+length-4,".cpk")){
+            entry.name[length-4]=0;
+            char plain[FS_PATH_MAX];
+            if(snprintf(plain,sizeof plain,"%s/%s",original,entry.name)<FS_PATH_MAX&&!fs_stat(plain,&st))continue;
+            uint8_t header[52];int fd=fs_open(physical,FS_O_READ);
+            if(fd>=0){if(fs_read(fd,header,sizeof header)==sizeof header&&!memcmp(header,"CASIO.$&%-Z\1",12))entry.size=ce_u32(header+44);fs_close(fd);}
+        }
+        if(!match_name(search->pattern,entry.name))continue;
+        n=snprintf(overlay,sizeof overlay,"%s/%s",search->path,entry.name);
+        if(n>0&&n<FS_PATH_MAX&&!fs_stat(overlay,&st))continue;
+        memset(PTR(void,out),0,560);ce_put32(PTR(void,out),(entry.type==FS_DIR?16:128)|1);
+        ce_put32(PTR(uint8_t,out)+32,entry.size);ce_widen(PTR(WCHAR,out+40),260,entry.name);return 1;
     }
     load_bundled_files();
     size_t dlen = strcmp(search->canonical_dir, "/") ? strlen(search->canonical_dir) : 0;

@@ -1847,6 +1847,17 @@ static void handle_msg(int token, struct gz_msg *m)
     }
     case SB_SET_STATUS:
         break;
+    case SB_WINCE_LAUNCH: {
+        const struct sb_wince_req *req=(const void *)client_req((int)m->w[3],false,NULL);
+        r.w[0]=(uint32_t)GZ_EINVAL;
+        if(!req||!memchr(req->path,0,sizeof req->path))break;
+        if(state!=ST_HOME&&state!=ST_APP){r.w[0]=(uint32_t)GZ_EBUSY;break;}
+        char path[sizeof req->path];memcpy(path,req->path,sizeof path);
+        int index=apps_wince(path);
+        if(index<0){r.w[0]=(uint32_t)index;break;}
+        launch(index);int slot=find_slot_by_app(index);
+        r.w[0]=slot>=0?0:(uint32_t)GZ_ENOMEM;break;
+    }
     case SB_DEBUG_LAUNCH: {
         struct sb_note_req *req = client_req((int)m->w[3], false, NULL);
         r.w[0] = (uint32_t)GZ_EINVAL;

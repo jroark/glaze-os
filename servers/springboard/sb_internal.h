@@ -44,6 +44,7 @@ struct sb_app_info {
     int status_style;
     bool dock;
     bool installed;
+    bool wince;                /* direct NAND runner; path is writable context */
     bool present;
 };
 
@@ -157,6 +158,7 @@ void notify_attach(int app);
 void apps_scan(bool card_only);     /* updates sb_apps[] */
 bool apps_changed(void);            /* since the last call: redraw */
 uint32_t apps_reinstalled_mask(void); /* bitmask of slots updated/removed */
+int apps_wince(const char *path); /* direct NAND context -> app index/error */
 int apps_launch(int app);           /* pid, or an error */
 bool apps_replaced(int app);        /* reinstalled since apps_launch */
 int apps_uninstall(int app);
