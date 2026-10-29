@@ -54,7 +54,7 @@ USB_FLAGS := $(shell $(USB_PKG_CONFIG) --cflags --libs libusb-1.0 2>/dev/null)
 USB_CC ?= $(CC)
 USB_SOURCES := $(wildcard glaze_usb/*.c)
 USB_TLS := -I../third_party/wolfssl -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS
-../out/host/glaze-usb: $(USB_SOURCES) $(wildcard glaze_usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h ../lib/include/glaze/debug_net.h libwolfssl.a
+../out/host/glaze-usb: $(USB_SOURCES) $(wildcard glaze_usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h ../lib/include/glaze/debug_net.h ../lib/include/glaze/usb_net.h libwolfssl.a
 	@mkdir -p ../out/host
 	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(USB_TLS) $(USB_SOURCES) libwolfssl.a $(USB_FLAGS) -o $@
 glaze-usb: ../out/host/glaze-usb
@@ -69,6 +69,11 @@ usb-driver-test: ../tests/usb_driver.c ../kernel/drivers/usb.c
 	$(CC) $(CFLAGS) -Wno-pointer-to-int-cast -fsanitize=address,undefined -I$(BE300_SOURCE)/src/hw ../tests/usb_driver.c $(BE300_SOURCE)/src/hw/usbf.c -o ../out/host/usb-driver-test
 	../out/host/usb-driver-test
 .PHONY: usb-wire-test usb-driver-test
+.PHONY: usb-net-test
+usb-net-test: ../tests/usb_ethernet.c ../servers/usb/ethernet.c glaze_usb/ethernet.c glaze_usb/ethernet_packet.c ../lib/include/glaze/usb_net.h ../servers/usb/ethernet.h glaze_usb/ethernet_packet.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) -fsanitize=address,undefined $(filter %.c,$^) -o ../out/host/usb-net-test
+	../out/host/usb-net-test
 usb-reload-test: ../tests/usb_reload.c ../kernel/usb_reload.c ../out/glazeboot/gen/tramp_blob.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -I../out/glazeboot/gen -fsanitize=address,undefined ../tests/usb_reload.c -o ../out/host/usb-reload-test

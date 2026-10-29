@@ -31,6 +31,10 @@ int copy_from_as(struct addrspace *as, void *p, uint32_t uva, uint32_t n)
 int usb_reload_ctl(struct proc *p, uint32_t op, uint32_t b, uint32_t n)
 { (void)p; (void)op; (void)b; (void)n; return GZ_EINVAL; }
 static unsigned input_cancels;
+static unsigned net_stops, net_calls;
+void usbnet_stop(void) { net_stops++; }
+int usbnet_ctl(struct proc *p, uint32_t op, uint32_t b, uint32_t n)
+{ net_calls++; return 456; }
 void usb_input_cancel(void) { input_cancels++; }
 void machine_reboot_ce(void) { rebooted++; longjmp(reboot_return, 1); }
 uint64_t time_us(void) { static uint64_t now; now += 100000; return now; }
@@ -64,6 +68,8 @@ int main(void)
     assert(answer[0] == 'G' && answer[1] == 'Z');
     struct proc p = { .flags = PROC_USB }, denied = {0};
     assert(sys_usb_ctl(&denied, GZ_USB_STATE, 0, 0) == GZ_EPERM);
+    assert(sys_usb_ctl(&denied, GZ_USB_NET_OPEN, 0, 0) == GZ_EPERM && !net_calls);
+    assert(sys_usb_ctl(&p, GZ_USB_NET_OPEN, 0, 0) == 456 && net_calls == 1);
     assert(sys_usb_ctl(&denied, GZ_USB_REBOOT_CE, 0, 0) == GZ_EPERM);
     assert(sys_usb_ctl(&p, GZ_USB_REBOOT_CE, 0, 1) == GZ_EINVAL && !rebooted);
     assert(sys_usb_ctl(&denied, GZ_USB_SCREEN_COPY, 0, GU_SCREEN_BYTES) == GZ_EPERM);
@@ -106,6 +112,8 @@ int main(void)
     uint32_t old = generation; set_lines(0); assert(configured && generation != old);
     set_lines(3); assert(lines == 3);
     usbf_host_bus_reset(&model); usb_poll(); assert(!configured && !tx_busy && rh == rt);
+    assert(net_stops && sys_usb_ctl(&p,GZ_USB_NET_OPEN,0,0)==GZ_EDEAD);
+    assert(sys_usb_ctl(&p,GZ_USB_NET_CLOSE,0,0)==456); /* cleanup works after unplug */
     uint32_t cancels=input_cancels;
     gu_put32(user,1); assert(sys_usb_ctl(&p,GZ_USB_DEBUG_TRANSPORT,0,4)==0);
     clear_session(); assert(input_cancels==cancels); /* cable reset cannot cancel network input */

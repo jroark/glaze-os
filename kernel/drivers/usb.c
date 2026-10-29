@@ -32,6 +32,7 @@ void usb_log_putc(char c)
 }
 void usb_stop(void)
 {
+    usbnet_stop();
     if (!active) return;
     W(0x132c, 0); W(0x1488, 0); W(0x130c, 0x10);
     W(0x1308, 0);
@@ -67,6 +68,7 @@ void usb_init(void)
 }
 static void clear_session(void)
 {
+    usbnet_stop();
     if (!network_debugger) usb_input_cancel();
     rh = rt = th = tt = 0;
     tx_busy = short_pending = zlp = status_pending = false;
@@ -182,6 +184,11 @@ bool usb_tx_idle(void)
 int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
 {
     if (!(p->flags & PROC_USB)) return GZ_EPERM;
+    if (op >= GZ_USB_NET_OPEN && op <= GZ_USB_NET_CLOSE) {
+        usb_poll();
+        if (op != GZ_USB_NET_CLOSE && (!configured || !(lines & 1))) return GZ_EDEAD;
+        return usbnet_ctl(p, op, buf, len);
+    }
     if ((op >= GZ_USB_RELOAD_BEGIN && op <= GZ_USB_RELOAD_ABORT) ||
         op == GZ_USB_RELOAD_DEBUG || op == GZ_USB_DEBUG_RESTORE) return usb_reload_ctl(p, op, buf, len);
     if (op == GZ_USB_DEBUG_TRANSPORT) {

@@ -82,7 +82,17 @@ bool net_present(void);     /* claimed: keep ATA off it even if it failed */
 uint32_t net_generation(void);
 uint32_t net_driver_kind(void);
 uint32_t net_driver_pages(void);
-bool net_up(void);          /* claimed and its driver running */
+bool net_up(void);          /* card driver running, or an enabled USB tunnel */
+void net_usb_changed(void);
+bool usbnet_up(void);
+uint32_t usbnet_pages(void);
+void usbnet_stop(void);     /* IRQ safe; invalidate before deferred teardown */
+void usbnet_collect(void);  /* deferred reclamation after reset/service death */
+int usbnet_info(struct proc *p, uint32_t out);
+int usbnet_bind(int port);
+int usbnet_send(struct proc *p, uint32_t buf, uint32_t len);
+int usbnet_recv(struct proc *p, uint32_t buf, uint32_t max);
+int usbnet_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
 bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up */
 void net_removed(void);
 void net_set_mac(const uint8_t mac[6]);

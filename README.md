@@ -364,3 +364,7 @@ See [Doom for Glaze](docs/DOOM.md).
 Paired [network debugging](docs/NETWORK_DEBUG.md) supports the USB debugger
 commands over TLS, including screenshots, input scripts and RAM reloads.
 Enable it in Settings → Debugging after importing a private pairing key.
+
+The sync cable can also carry a [USB network interface](docs/USB_NETWORK.md)
+through the `glaze-usb usb-net` host helper (macOS utun or Linux TAP), including
+paired debugging on the same cable and normal socket access for Glaze apps.

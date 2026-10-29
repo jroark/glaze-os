@@ -7,7 +7,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/stat.h>
-#include <sys/random.h>
 #include <errno.h>
 
 struct boot_options { uint32_t ramfs_kb, flags; };

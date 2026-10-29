@@ -26,9 +26,10 @@ static uint8_t read_cis(unsigned i)
 #define CF_CIS(i) read_cis(i)
 #define NET_TEST
 #include "../kernel/drivers/net.c"
+#include "../kernel/drivers/usbnet.c"
 
 static unsigned ne_probes, wl_probes, xi_probes, ne_irqs, wl_irqs, xi_irqs, notices, removes;
-static bool ne_ok, wl_ok, copy_fail;
+static bool ne_ok, wl_ok, copy_fail, copy_out_fail;
 static uint8_t userspace[4096];
 static uint8_t sent[1600];
 static unsigned sent_len;
@@ -76,7 +77,7 @@ int ipc_notify(int port, uint32_t bits)
 }
 int copy_to_as(struct addrspace *as, uint32_t addr, const void *p, uint32_t n)
 {
-    if (copy_fail || addr > sizeof(userspace) || n > sizeof(userspace) - addr)
+    if (copy_fail || copy_out_fail || addr > sizeof(userspace) || n > sizeof(userspace) - addr)
         return -1;
     memcpy(userspace + addr, p, n);
     return 0;
@@ -106,20 +107,26 @@ static const struct net_driver fake_xi = {
     xi825_info, xi825_bind, xi825_send, xi825_recv, xi825_control
 };
 static unsigned loads, allocations;
-static void *allocation;
-static unsigned remaining;
+static struct { void *base; unsigned pages, remaining; } blocks[4];
+static bool alloc_fail;
 static bool load_fail;
 void *page_alloc_n(uint32_t n)
 {
-    assert(!allocation);
-    allocation = calloc(n, PAGE_SIZE); assert(allocation);
-    remaining = n; allocations += n;
-    return allocation;
+    if (alloc_fail) return NULL;
+    for (unsigned i=0;i<4;i++) if (!blocks[i].base) {
+        blocks[i].base=calloc(n,PAGE_SIZE); assert(blocks[i].base);
+        blocks[i].pages=blocks[i].remaining=n; allocations+=n;
+        return blocks[i].base;
+    }
+    abort();
 }
 void page_free(void *p)
 {
-    assert(p >= allocation && (uint8_t *)p < (uint8_t *)allocation + QUEUE_PAGES * PAGE_SIZE);
-    allocations--; if (!--remaining) { free(allocation); allocation = NULL; }
+    for(unsigned i=0;i<4;i++) if(blocks[i].base && (uintptr_t)p>=(uintptr_t)blocks[i].base &&
+            (uintptr_t)p<(uintptr_t)blocks[i].base+blocks[i].pages*PAGE_SIZE) {
+        allocations--; if(!--blocks[i].remaining){free(blocks[i].base);blocks[i].base=NULL;}return;
+    }
+    abort();
 }
 int module_load(const char *path, const char *entry, struct module *m)
 {
@@ -143,6 +150,7 @@ static void card(unsigned man, unsigned product, unsigned function)
 }
 static void reset(int which)  /* 0 none, 1 WL54-CF, 2 NE2000 */
 {
+    usbnet_stop(); usbnet_collect();
     if (claimed || driver) net_removed();
     kind = GZ_NET_NONE;
     claimed = online = false;
@@ -260,7 +268,64 @@ int main(void)
     assert(!allocations && !net_driver_pages());
     reset(2); ne_ok = true; load_fail = true; net_init();
     assert(net_present() && !net_up() && !ne_probes && !allocations && !net_driver_pages());
-    puts("net driver: dispatch, storage, XI-825, frames, Wi-Fi controls, insertion and removal OK");
+    /* USB is a real raw-frame backend, requires no card module and takes
+     * priority without confusing PCMCIA's claimed/storage decision. */
+    reset(0); p.flags=PROC_NET; p.net_generation=generation;
+    alloc_fail=true;
+    assert(usbnet_ctl(&p,GZ_USB_NET_OPEN,0,0)==GZ_ENOMEM && !usbnet_up() && !allocations);
+    alloc_fail=false;
+    assert(!usbnet_ctl(&p,GZ_USB_NET_OPEN,0,0));
+    assert(usbnet_up() && net_up() && !net_present() && !loads && net_driver_kind()==GZ_NET_USB);
+    assert(net_driver_pages()==USBNET_PAGES);
+    assert(sys_net_info(&p,0)==GZ_EDEAD);
+    p.net_generation=generation;
+    assert(!sys_net_info(&p,0) && ((struct gz_netif_info *)userspace)->kind==GZ_NET_USB);
+    assert(!sys_net_bind(&p,7));
+    assert(sys_wifi_ctl(&p,WIFI_STATUS,0)==GZ_ENOENT);
+    assert(usbnet_ctl(&p,GZ_USB_NET_OPEN,0,0)==GZ_EBUSY);
+    assert(usbnet_ctl(&p,GZ_USB_NET_EXCHANGE,0,13)==GZ_EINVAL);
+    assert(usbnet_ctl(&p,GZ_USB_NET_EXCHANGE,0,GUN_FRAME_MAX+1)==GZ_EINVAL);
+    for(unsigned i=0;i<GUN_QUEUE;i++) {
+        memset(userspace,0x35,60); userspace[59]=i;
+        assert(usbnet_ctl(&p,GZ_USB_NET_EXCHANGE,0,60)==4 && gu_get32(userspace)==1);
+    }
+    assert(usbnet_ctl(&p,GZ_USB_NET_EXCHANGE,0,60)==4 && gu_get32(userspace)==0); /* backpressure */
+    copy_fail=true; assert(sys_net_recv(&p,0,1514)==GZ_EINVAL);copy_fail=false;
+    assert(sys_net_recv(&p,0,14)==GZ_EINVAL); /* cannot truncate */
+    for(unsigned i=0;i<GUN_QUEUE;i++) {
+        assert(sys_net_recv(&p,0,1514)==60 && userspace[59]==i);
+    }
+    assert(!sys_net_recv(&p,0,1514));
+    memset(userspace,0x54,60);assert(sys_net_send(&p,0,60)==60);
+    uint32_t rx_before=storage->rx.head,tx_before=storage->tx.tail;
+    copy_out_fail=true;
+    assert(usbnet_ctl(&p,GZ_USB_NET_EXCHANGE,0,60)==GZ_EINVAL);
+    assert(storage->rx.head==rx_before && storage->tx.tail==tx_before);
+    copy_out_fail=false;
+    assert(usbnet_ctl(&p,GZ_USB_NET_EXCHANGE,0,60)==64 && gu_get32(userspace)==1);
+    assert(sys_net_recv(&p,0,1514)==60 && userspace[59]==0x54);
+    memset(userspace,0x62,1514);
+    for(unsigned i=0;i<GUN_QUEUE;i++) assert(sys_net_send(&p,0,1514)==1514);
+    assert(sys_net_send(&p,0,60)==GZ_EFULL);
+    copy_fail=true; assert(usbnet_ctl(&p,GZ_USB_NET_EXCHANGE,0,0)==GZ_EINVAL);copy_fail=false;
+    for(unsigned i=0;i<GUN_QUEUE;i++) {
+        assert(usbnet_ctl(&p,GZ_USB_NET_EXCHANGE,0,0)==1518 && !gu_get32(userspace) && userspace[1517]==0x62);
+    }
+    assert(usbnet_ctl(&p,GZ_USB_NET_EXCHANGE,0,0)==4);
+    usbnet_stop(); assert(!net_up() && !usbnet_up());
+    assert(sys_net_send(&p,0,60)==GZ_EDEAD);
+    usbnet_collect(); assert(!allocations);
+    reset(2);ne_ok=true;net_init();unsigned card_pages=allocations;
+    assert(!usbnet_ctl(&p,GZ_USB_NET_OPEN,0,0));p.net_generation=generation;
+    unsigned old_head=head; uint8_t card_frame[60]={0};net_receive(card_frame,60);
+    assert(head==old_head && net_driver_kind()==GZ_NET_USB);
+    assert(!usbnet_ctl(&p,GZ_USB_NET_CLOSE,0,0) && net_driver_kind()==GZ_NET_NE2000);
+    assert(net_up() && allocations==card_pages); /* card survives USB teardown */
+    ne_ok=false;assert(!usbnet_ctl(&p,GZ_USB_NET_OPEN,0,0));
+    assert(!net_insert(0x149,0x200) && net_up() && net_driver_kind()==GZ_NET_USB);
+    /* A working USB link must not turn a failed card probe into success. */
+    reset(0);assert(!allocations);
+    puts("net driver: card/USB dispatch, queues, copy faults, allocation failure, precedence and removal OK");
     return 0;
 }
 

@@ -2,6 +2,7 @@
 #include <glaze/usb.h>
 #include <glaze/debug_net.h>
 #include "network.h"
+#include "ethernet.h"
 #include <glaze/fs.h>
 #include <glaze/pkg.h>
 #include <glaze/prefs.h>
@@ -126,7 +127,7 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r = gz_sysinfo(&si); if (r) return r;
         gu_put32(payload, GU_VERSION);
         gu_put32(payload + 4, GU_CAP_FILES | GU_CAP_RUN | GU_CAP_LOGS | GU_CAP_RELOAD |
-                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK);
+                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET);
         gu_put32(payload + 8, si.free_pages * 4096);
         memcpy(payload + 12, si.build, sizeof(si.build));
         payload[43] = 0; *out = 44; session = true; return 0;
@@ -140,6 +141,9 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         }
         return pref_put(GD_ENABLED,b,n);
     }
+    case GU_USB_NET_OPEN:
+        if (network || n || upload >= 0 || reloading || screen) return GZ_EINVAL;
+        return usb_ethernet_open(gu_get32(parser.bytes + 8), gu_get32(parser.bytes + 20));
     case GU_ENTROPY: {
         if (n != 32) return GZ_EINVAL;
         uint8_t existing[33];
@@ -294,11 +298,13 @@ int main(void)
     int pairing=gz_port_create();
     if (pairing<0 || gz_port_register(pairing,GD_PAIR_PORT)<0) return 1;
     uint32_t transport=0; gz_usb_ctl(GZ_USB_DEBUG_TRANSPORT,&transport,4);
+    gz_usb_ctl(GZ_USB_NET_CLOSE,NULL,0); /* clean up a crashed predecessor */
     debug_net_restore();
     printf("usb: development service ready\n");
     for (;;) {
         int state = gz_usb_ctl(GZ_USB_STATE, NULL, 0);
         if (state < 0) return 1;
+        usb_ethernet_poll((uint32_t)state);
         struct gz_msg request,response={{0}};
         int token=gz_recv(pairing,&request,0);
         if (token>0) {
@@ -329,7 +335,7 @@ int main(void)
             if (network) { debug_net_drop(); network=false; }
             debugger_state(NULL,NULL);
         }
-        int n = network ? debug_net_read(b,sizeof b) : gz_usb_ctl(GZ_USB_READ, b, sizeof(b));
+        int n = network ? debug_net_read(b,sizeof b) : usb_ethernet_active() ? 0 : gz_usb_ctl(GZ_USB_READ, b, sizeof(b));
         if (network && n<0) {
             abort_transfer(); parser.used=0; session=have_last=false;
             network=false; debugger_state(NULL,NULL);
@@ -351,6 +357,13 @@ int main(void)
             memcpy(last_reply, payload, out);
             int sent = send_frame(op | GU_REPLY, id, status, payload, out);
             wipe_request(op);
+            if (!status && op == GU_USB_NET_OPEN) {
+                /* The physical link now has a dedicated Ethernet parser.
+                 * Release debugger ownership so TLS can use this IP link. */
+                abort_transfer(); parser.used=0; session=have_last=false;
+                debugger_state(NULL,NULL);
+                break;
+            }
             if (!status && !sent && op == GU_BOOT_COMMIT) {
                 if (network) gz_sleep_ms(250); /* let lwIP transmit the acknowledged TLS reply */
                 int r = gz_usb_ctl(GZ_USB_RELOAD_GO, NULL, 0);

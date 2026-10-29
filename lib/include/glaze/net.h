@@ -1,6 +1,6 @@
 /*
  * Networking: client API and the protocol of the network server
- * (servers/net), which runs lwIP over the kernel's NE2000 driver.
+ * (servers/net), which runs lwIP over the selected card or USB Ethernet tunnel.
  *
  * Sessions work like the file server's: a client sends NET_HELLO with its
  * pid and gets a session index plus a shared-memory buffer, which carries
@@ -84,10 +84,10 @@ enum { NET_SHUT_RD, NET_SHUT_WR, NET_SHUT_RDWR };
 enum { NET_TCP = 1, NET_UDP = 2 };
 
 enum {
-    NET_NO_CARD = 0,    /* no supported network card */
+    NET_NO_CARD = 0,    /* no supported card or active USB tunnel */
     NET_CONFIGURING,    /* waiting for DHCP */
     NET_UP,             /* address from DHCP */
-    NET_UP_STATIC,      /* no DHCP answer; using the fallback address */
+    NET_UP_STATIC,      /* configured address (USB) or card DHCP fallback */
     NET_DISCONNECTED,   /* wireless card, no association */
     NET_ASSOCIATING,    /* wireless association pending */
 };
