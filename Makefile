@@ -485,6 +485,8 @@ $(OUT)/spl.elf: $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o boot/spl.lds
 # Installed apps run on the dynamic linker, so there are none in a DYNAMIC=0
 # build.
 
+include packages/doom/build.mk
+
 PKG_DIRS := $(wildcard packages/*)
 PKG_NAMES := $(notdir $(PKG_DIRS))
 ifeq ($(DYNAMIC),1)

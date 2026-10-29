@@ -22,6 +22,7 @@ __pycache__/
 *.[sS][mM][dD]
 *.[pP][cC][eE]
 *.[sS][gG][xX]
+*.[wW][aA][dD]
 
 # Browser native objects and private JavaScript archive.
 host/browser.o/

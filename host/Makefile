@@ -567,3 +567,21 @@ service-test: ../tests/service.c ../kernel/service.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/service-test ../tests/service.c
 	../out/host/service-test
+
+# Doom's real engine and Glaze I/O/audio/video glue; no WAD in the repository.
+DOOM_VENDOR := $(wildcard ../third_party/doomgeneric/*.c)
+DOOM_GLUE := $(addprefix ../packages/doom/,files.c input.c keys.c sound.c system.c video.c wad.c)
+DOOM_NATIVE_FLAGS := $(CFLAGS) -I../third_party/doomgeneric -fno-strict-aliasing -fwrapv -Wno-unused-function -Wno-unused-variable -Wno-sign-compare -Wno-type-limits -Wno-missing-field-initializers -Wno-implicit-fallthrough -Wno-unused-but-set-parameter -Wno-enum-conversion -Wno-format-truncation -Wno-pointer-to-int-cast -Wno-absolute-value -fsanitize=address,undefined -fno-sanitize=shift,signed-integer-overflow
+DOOM_NATIVE_OBJS := $(patsubst ../%.c,../out/host/doom/%.o,$(DOOM_VENDOR) $(DOOM_GLUE))
+../out/host/doom/%.o: ../%.c $(wildcard ../packages/doom/*.h ../third_party/doomgeneric/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(DOOM_NATIVE_FLAGS) -include ../packages/doom/compat.h -c $< -o $@
+../out/host/doom/host.o: doom.c
+	@mkdir -p $(dir $@)
+	$(CC) $(DOOM_NATIVE_FLAGS) -c $< -o $@
+../out/host/doom-test: $(DOOM_NATIVE_OBJS) ../out/host/doom/host.o
+	$(CC) $(DOOM_NATIVE_FLAGS) $^ -o $@
+.PHONY: doom-test
+doom-test: ../out/host/doom-test
+	../out/host/doom-test
+	$(if $(DOOM_WAD),ASAN_OPTIONS=detect_leaks=0 ../out/host/doom-test "$(DOOM_WAD)",@echo "Optional full engine test: make doom-test DOOM_WAD=/absolute/path/doom1.wad")

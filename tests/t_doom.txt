@@ -1,0 +1,29 @@
+# Card contains only doom.gzp and an externally supplied doom1.wad.
+# Install on flash, launch, select Card, and start a game using hardware OK.
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+6500 tap 120 64
+8500 tap 120 64
+10500 tap 120 242
+25000 tap 120 203
+26500 key home
+29000 tap 90 192
+31000 key down
+32000 key ok
+34000 key ok
+# Allow WAD initialization, then enter New Game / episode / skill.
+40000 key ok
+42000 key ok
+44000 key ok
+46000 key ok
+50000 key up
+51000 key right
+52000 key ok
+53000 key esc
+# Save, pause/resume, load; Home and return to exercise suspension.
+56000 tap 210 31
+58000 tap 60 114
+62000 tap 210 31
+64000 tap 175 114
+68000 key home
+71000 tap 90 192
