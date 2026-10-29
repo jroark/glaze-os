@@ -11,6 +11,7 @@
 #define KEY_MODE    2
 #define KEY_DOTCOM  3
 #define KEY_INPUT   4
+#define KEY_EDIT    5
 
 _Static_assert(sizeof(struct ui_keyboard)==8 && offsetof(struct ui_keyboard,pressed)==4,"keyboard ABI");
 
@@ -25,6 +26,9 @@ static struct key keys[MAX_KEYS];
 static int nkeys;
 static bool built_numbers = true, built_shift = true, built_url;
 static char letter_labels[MAX_KEYS][2];
+static struct ui_keyboard *editable;
+static unsigned edit_flags;
+static bool edit_open, built_editable;
 
 static void add(int x, int y, int w, char ch, const char *label)
 {
@@ -56,11 +60,13 @@ static void row(const char *chars, int x, int y, bool upper)
 
 static void build(const struct ui_keyboard *kb)
 {
-    if (built_numbers == kb->numbers && built_shift == kb->shift && built_url == kb->url && nkeys)
+    bool editing = editable == kb;
+    if (built_numbers == kb->numbers && built_shift == kb->shift && built_url == kb->url && built_editable == editing && nkeys)
         return;
     built_numbers = kb->numbers;
     built_shift = kb->shift;
     built_url = kb->url;
+    built_editable = editing;
     nkeys = 0;
     if (kb->numbers) {
         row("1234567890", 6, 6, false);
@@ -76,6 +82,19 @@ static void build(const struct ui_keyboard *kb)
     add(206, 78, 28, '\b', GFX_CH_LARROW);
     add(6, 114, 44, KEY_MODE, kb->numbers ? "ABC" : ".?123");
     add(54, 114, 36, KEY_INPUT, "Write");
+    if (editing) {
+        add(94, 114, 34, KEY_EDIT, "Edit");
+        if (kb->url) {
+            add(132, 114, 16, '/', NULL);
+            add(152, 114, 16, '.', NULL);
+            add(172, 114, 28, KEY_DOTCOM, ".com");
+            add(204, 114, 30, '\n', "Go");
+        } else {
+            add(132, 114, 46, ' ', "space");
+            add(182, 114, 52, '\n', "return");
+        }
+        return;
+    }
     if (kb->url) {
         add(94, 114, 24, '/', NULL);
         add(122, 114, 24, '.', NULL);
@@ -94,7 +113,16 @@ void ui_keyboard_init(struct ui_keyboard *kb)
     kb->shift = true;           /* sentence starts capitalized */
     kb->method=(uint8_t)ui_input_method_default();
     uihw_reset(NULL);
+    editable = NULL;
+    edit_open = false;
+    ui_edit_reset();
     nkeys = 0;
+}
+void ui_keyboard_edit_init(struct ui_keyboard *kb, unsigned flags)
+{
+    ui_keyboard_init(kb);
+    editable = kb;
+    edit_flags = flags;
 }
 int ui_input_method_default(void)
 {
@@ -111,17 +139,68 @@ void ui_keyboard_set_method(struct ui_keyboard *kb,int method)
 {
     kb->method=method==UI_INPUT_HANDWRITING?UI_INPUT_HANDWRITING:UI_INPUT_QWERTY;
     kb->pressed=-1;nkeys=0;uihw_reset(NULL);
+    edit_open=false;
 }
 void uikb_release(void){uihw_reset(NULL);}
 bool uikb_ink_down(void){return uihw_down();}
 
 static bool special(const struct key *k)
 {
-    return k->ch == KEY_SHIFT || k->ch == KEY_MODE || k->ch == KEY_INPUT || k->ch == '\b' || k->ch == '\n' || k->ch == KEY_DOTCOM;
+    return k->ch == KEY_SHIFT || k->ch == KEY_MODE || k->ch == KEY_INPUT || k->ch == KEY_EDIT || k->ch == '\b' || k->ch == '\n' || k->ch == KEY_DOTCOM;
+}
+
+static gfx_rect edit_rect(int i, int y)
+{
+    if (i < 2) return gfx_r(6 + i * 116, y + 22, 112, 27);
+    if (i < 5) return gfx_r(6 + (i - 2) * 79, y + 55, 70, 27);
+    if (i < 8) return gfx_r(6 + (i - 5) * 79, y + 88, 70, 27);
+    return gfx_r(6, y + 121, 228, 24);
+}
+static bool edit_disabled(int i)
+{
+    return ((i == 2 || i == 3) && (edit_flags & UI_EDIT_SECRET)) ||
+           ((i == 1 || i == 3) && (edit_flags & UI_EDIT_READONLY));
+}
+static void draw_edit(gfx_surface *s, const struct ui_keyboard *kb, int y)
+{
+    static const char *labels[] = {"Select all", "Paste", "Copy", "Cut", "Clear clip", "<", "Select", ">", "Keys"};
+    gfx_vgradient(s, gfx_r(0, y, UI_W, UI_KB_H), 0xB7BDC7, 0x7E8696, 255);
+    gfx_text_center(s, 0, y + 4, UI_W, ui_font(FONT_R10), ui_edit_notice(), 0x172134, 255);
+    for (int i = 0; i < 9; i++) {
+        gfx_rect r = edit_rect(i, y);
+        bool pressed = kb->pressed == i || (i == 6 && ui_edit_selecting());
+        gfx_round_rect(s, gfx_r(r.x, r.y + 1, r.w, r.h), 5, 0x3C424D, 200);
+        gfx_round_rect_vgradient(s, r, 5, pressed ? 0x6784AB : 0xFFFFFF, pressed ? 0x385A88 : 0xDDE2EA, 255);
+        gfx_text_center(s, r.x, r.y + (r.h - ui_font(FONT_B11)->line_height) / 2, r.w,
+                        ui_font(FONT_B11), labels[i], edit_disabled(i) ? 0x8B9199 : pressed ? 0xFFFFFF : 0x172134, 255);
+    }
+}
+static int edit_event(struct ui_keyboard *kb, const struct gz_input_event *e, int y, bool *changed)
+{
+    static const int commands[] = { UI_KEY_SELECT_ALL, UI_KEY_PASTE, UI_KEY_COPY, UI_KEY_CUT,
+        UI_KEY_CLEAR_CLIP, UI_KEY_LEFT, UI_KEY_SELECT, UI_KEY_RIGHT };
+    *changed = false;
+    if (e->type == GZ_EV_TOUCH_CANCEL || e->type == GZ_EV_APP_DEACTIVATE) {
+        kb->pressed = -1; edit_open = false; *changed = true; return 0;
+    }
+    int hit = -1;
+    for (int i = 0; i < 9; i++) if (gfx_rect_contains(edit_rect(i, y), e->x, e->y)) hit = i;
+    if (e->type == GZ_EV_TOUCH_DOWN) {
+        kb->pressed = hit; *changed = true;
+    } else if (e->type == GZ_EV_TOUCH_MOVE && hit != kb->pressed) {
+        kb->pressed = -1; *changed = true;
+    } else if (e->type == GZ_EV_TOUCH_UP) {
+        int old = kb->pressed; kb->pressed = -1; *changed = true;
+        if (old < 0 || old != hit || edit_disabled(old)) return 0;
+        if (old == 8) { edit_open = false; nkeys = 0; return 0; }
+        return commands[old];
+    }
+    return 0;
 }
 
 void ui_draw_keyboard(gfx_surface *s, const struct ui_keyboard *kb, int y)
 {
+    if (editable == kb && edit_open) { draw_edit(s, kb, y); return; }
     if(kb->method==UI_INPUT_HANDWRITING){uihw_draw(s,kb,y);return;}
     uihw_reset(NULL);
     const gfx_font *lf = ui_font(FONT_R17), *sf = ui_font(FONT_B11);
@@ -184,6 +263,7 @@ static int hit(int x, int y)
 
 int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, int y, bool *changed)
 {
+    if (editable == kb && edit_open) return edit_event(kb, e, y, changed);
     if(kb->method==UI_INPUT_HANDWRITING)return uihw_event(kb,e,y,changed);
     int ky = e->y - y;
     int old = kb->pressed;
@@ -211,6 +291,7 @@ int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
         if (k < 0)
             return 0;
         char ch = keys[k].ch;
+        if (ch == KEY_EDIT) { uihw_reset(NULL); edit_open = true; kb->pressed = -1; *changed = true; return 0; }
         if(ch==KEY_INPUT){ui_keyboard_set_method(kb,UI_INPUT_HANDWRITING);*changed=true;return 0;}
         if (ch == KEY_SHIFT) {
             kb->shift = !kb->shift;

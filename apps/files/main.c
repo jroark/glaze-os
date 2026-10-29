@@ -427,6 +427,7 @@ static void draw_name(gfx_surface *s)
     /* Keep the end of a long name (and the cursor) in view. */
     gfx_set_clip(s, gfx_r(field.x + 4, field.y, field.w - 8, field.h));
     int shift = w > maxw ? w - maxw : 0;
+    ui_draw_edit_selection(s, f, name_buf, name_cursor, 0, strlen(name_buf), tx - shift, ty, f->line_height);
     if (name_buf[0])
         gfx_text(s, tx - shift, ty, f, name_buf, UI_TEXT, 255);
     else
@@ -670,7 +671,7 @@ static void start_naming(bool is_new, int row)
     naming_row = row;
     strlcpy(name_buf, is_new ? "" : ents[row].name, sizeof(name_buf));
     name_cursor = (int)strlen(name_buf);
-    ui_keyboard_init(&kb);
+    ui_keyboard_edit_init(&kb, UI_EDIT_FILENAME);
     kb.shift = is_new;
     confirm_row = -1;
     go(V_NAME, true);
@@ -817,7 +818,7 @@ static void name_input(const struct gz_input_event *e)
     if (ch == '\n') {
         if (name_valid()) finish_naming(true);
     } else if (ch != '/') {
-        ui_edit_input(name_buf, sizeof(name_buf), &name_cursor, e, false);
+        ui_edit_event(name_buf, sizeof(name_buf), &name_cursor, e, UI_EDIT_FILENAME);
         if (ch >= ' ') kb.shift = false;
     }
 }

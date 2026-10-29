@@ -6,6 +6,8 @@
 #include <glaze/usb.h>
 #include <glaze/mirror.h>
 
+_Static_assert(GZ_KEY_LAST < 32, "debug input held-key bitmap");
+
 struct event {
     uint32_t ms;
     uint16_t type, code;
@@ -19,7 +21,7 @@ void usb_input_cancel(void)
 {
     if (touch)
         input_push(GZ_EV_TOUCH_CANCEL, 0, 0, 0);
-    for (unsigned k = GZ_KEY_OK; k <= GZ_KEY_PAGEDOWN; k++)
+    for (unsigned k = GZ_KEY_OK; k <= GZ_KEY_LAST; k++)
         if (keys & (1u << k))
             input_push(GZ_EV_KEY_UP, k, 0, 0);
     touch = false;
@@ -68,7 +70,7 @@ int usb_input_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
             int x=(int16_t)(b[i+4]|(unsigned)b[i+5]<<8),y=(int16_t)(b[i+6]|(unsigned)b[i+7]<<8);
             if (type < GZ_EV_TOUCH_DOWN || type > GZ_EV_TEXT ||
                 (type <= GZ_EV_TOUCH_UP && (code || x<0 || x>=(int)GM_WIDTH || y<0 || y>=(int)GM_HEIGHT)) ||
-                ((type==GZ_EV_KEY_DOWN || type==GZ_EV_KEY_UP) && (!code || code>GZ_KEY_PAGEDOWN)) ||
+                ((type==GZ_EV_KEY_DOWN || type==GZ_EV_KEY_UP) && (!code || code>GZ_KEY_LAST)) ||
                 (type==GZ_EV_TEXT && (!code || code>127))) return GZ_EINVAL;
         }
         for (unsigned i=0;i<len;i+=8) {
@@ -126,7 +128,7 @@ int usb_input_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
         struct event e = {gu_get32(q), q[4] | (uint16_t)q[5] << 8, q[6] | (uint16_t)q[7] << 8,
                           (int16_t)(q[8] | (uint16_t)q[9] << 8), (int16_t)(q[10] | (uint16_t)q[11] << 8)};
         if (e.ms < previous || e.ms > GU_SCRIPT_MS || e.type < GZ_EV_TOUCH_DOWN || e.type > GZ_EV_TEXT ||
-            ((e.type == GZ_EV_KEY_DOWN || e.type == GZ_EV_KEY_UP) && (!e.code || e.code > GZ_KEY_PAGEDOWN)) ||
+            ((e.type == GZ_EV_KEY_DOWN || e.type == GZ_EV_KEY_UP) && (!e.code || e.code > GZ_KEY_LAST)) ||
             (e.type == GZ_EV_TEXT && (!e.code || e.code > 127)))
             return GZ_EINVAL;
         events[loaded + i] = e;

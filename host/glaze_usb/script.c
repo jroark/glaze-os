@@ -65,7 +65,11 @@ int usb_script_compile(const char *text, uint8_t *out, unsigned *n, unsigned *li
                 {"delete", GZ_KEY_DELETE},
                 {"end", GZ_KEY_END},
                 {"pageup", GZ_KEY_PAGEUP},
-                {"pagedown", GZ_KEY_PAGEDOWN}};
+                {"pagedown", GZ_KEY_PAGEDOWN},
+                {"selectall", GZ_KEY_SELECT_ALL}, {"copy", GZ_KEY_COPY},
+                {"cut", GZ_KEY_CUT}, {"paste", GZ_KEY_PASTE},
+                {"selectleft", GZ_KEY_SELECT_LEFT}, {"selectright", GZ_KEY_SELECT_RIGHT},
+                {"selecthome", GZ_KEY_SELECT_HOME}, {"selectend", GZ_KEY_SELECT_END}};
     *n = 0;
     *line = 0;
     while (*text) {

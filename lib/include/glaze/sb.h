@@ -66,6 +66,16 @@ enum {
     SB_DEBUG_STATE,         /* w1 = GU_DEBUG_* activity, w3 = client pid; reply w1 activity, w2 app pid */
     SB_REBOOT_CE,           /* foreground built-in Settings only; w3 = pid */
     SB_WINCE_LAUNCH,        /* client page: struct sb_wince_req; reply w0 status */
+    /* Foreground text clipboard, chunked through sb_shared.req. w3 = pid.
+     * BEGIN: w1 total bytes, reply w2 transaction. WRITE: w1 offset, w2 count,
+     * w4 transaction. COMMIT: w4 transaction. READ: w1 offset, w2 capacity,
+     * w4 version; reply w1 total, w2 version, w4 count. A zero-capacity READ
+     * probes the current size/version. CLEAR discards text. */
+    SB_CLIPBOARD_BEGIN,
+    SB_CLIPBOARD_WRITE,
+    SB_CLIPBOARD_COMMIT,
+    SB_CLIPBOARD_READ,
+    SB_CLIPBOARD_CLEAR,
 };
 
 enum {
@@ -92,6 +102,8 @@ struct sb_note_req {
 
 /* Fits in the existing client request page without changing sb_shared ABI. */
 struct sb_wince_req { char path[128]; };
+
+#define SB_CLIPBOARD_MAX 8192
 
 struct sb_shared {
     volatile uint32_t head;         /* written by SpringBoard */

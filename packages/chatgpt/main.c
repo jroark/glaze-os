@@ -64,6 +64,7 @@ static void text_field(gfx_rect r, const char *text, int index, const char *hint
     gfx_rect old = s->clip, clip;
     if (!gfx_rect_intersect(old, gfx_r(r.x + 5, r.y, r.w - 10, r.h), &clip)) clip = gfx_r(0, 0, 0, 0);
     gfx_set_clip(s, clip);
+    if (editing && focus == index) ui_draw_edit_selection(s, f, text, cursor[index], 0, strlen(text), r.x + 6 - shift, r.y + 7, f->line_height);
     gfx_text(s, r.x + 6 - shift, r.y + 7, f, *text ? text : hint, *text ? UI_TEXT : 0x858B94, 255);
     if (editing && focus == index) gfx_fill(s, gfx_r(r.x + 6 + x - shift, r.y + 6, 1, 17), 0x2A6CD9);
     s->clip = old;
@@ -144,7 +145,7 @@ static void draw(void)
 }
 static void focus_field(int index)
 {
-    editing = true; focus = index; keyboard.url = false; keyboard.pressed = -1;
+    editing = true; focus = index; ui_keyboard_edit_init(&keyboard, 0); keyboard.url = false;
     if (index == 1) cursor[1] = (int)strlen(config.model);
     layout(true);
 }

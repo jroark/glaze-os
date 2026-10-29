@@ -361,6 +361,9 @@ void input_script_load(void)
         { "ok", GZ_KEY_OK }, { "esc", GZ_KEY_ESC }, { "up", GZ_KEY_UP }, { "down", GZ_KEY_DOWN },
         { "left", GZ_KEY_LEFT }, { "right", GZ_KEY_RIGHT }, { "home", GZ_KEY_HOME }, { "power", GZ_KEY_POWER },
         { "enter", GZ_KEY_ENTER }, { "backspace", GZ_KEY_BACKSPACE },
+        { "selectall", GZ_KEY_SELECT_ALL }, { "copy", GZ_KEY_COPY }, { "cut", GZ_KEY_CUT }, { "paste", GZ_KEY_PASTE },
+        { "selectleft", GZ_KEY_SELECT_LEFT }, { "selectright", GZ_KEY_SELECT_RIGHT },
+        { "selecthome", GZ_KEY_SELECT_HOME }, { "selectend", GZ_KEY_SELECT_END },
     };
     const struct romfs_entry *e = romfs_lookup("test/input.txt");
     char *text = e ? page_alloc_n(ALIGN_UP(e->size + 1, PAGE_SIZE) / PAGE_SIZE) : NULL;

@@ -343,6 +343,12 @@ struct field {
     gfx_rect r;
 };
 
+static unsigned field_flags(const struct field *f)
+{
+    return (f->secret ? UI_EDIT_SECRET : 0) | (f->digits ? UI_EDIT_DIGITS : 0) |
+           (f->url ? UI_EDIT_URL : 0) | (f->multiline ? UI_EDIT_MULTILINE : 0);
+}
+
 static struct field f_email = { acct.email, MAIL_USER_MAX, 0, false, true, false, false, false, "user@gmail.com", { 0 } };
 static struct field f_pass  = { password, MAIL_PASS_MAX, 0, true, false, false, false, false, "App Password", { 0 } };
 static struct field f_ihost = { acct.imap_host, MAIL_HOST_MAX, 0, false, true, false, false, false, "imap.gmail.com", { 0 } };
@@ -538,7 +544,7 @@ static void set_focus(struct field *f)
         int len = (int)strlen(f->buf);
         if (f->cursor > len || !f->multiline)
             f->cursor = len;
-        ui_keyboard_init(&kb);
+        ui_keyboard_edit_init(&kb, field_flags(f));
         kb.url = f->url;
         kb.numbers = f->digits;
         kb.shift = f->caps && (f->cursor == 0 || (f->multiline && f->buf[f->cursor - 1] == '\n'));
@@ -705,6 +711,7 @@ static void draw_field_value(gfx_surface *s, struct field *f, int x, int y, int 
 
     gfx_rect prev_clip = s->clip;
     gfx_set_clip(s, gfx_r(x, y, w, CELL_H));
+    if (f == focus && !f->secret) ui_draw_edit_selection(s, font, f->buf, f->cursor, 0, strlen(f->buf), x - scroll_x, ty, font->line_height);
     gfx_text(s, x - scroll_x, ty, font, shown, UI_TEXT_DETAIL, 255);
     if (f == focus)
         gfx_fill(s, gfx_r(x + cur_x - scroll_x, ty + 1, 2, font->line_height - 2), 0x2A6CD9);
@@ -1118,6 +1125,8 @@ static void draw_message_view(gfx_surface *s)
             int ly = body_top + l * LINE_H;
             if (ly + LINE_H < area.y || ly > area.y + area.h)
                 continue;
+            if (focus == &f_body) ui_draw_edit_selection(s, bf, draft.body, f_body.cursor, comp_lines[l],
+                ui_line_len(draft.body, comp_lines, ncomp_lines, l), MARGIN, ly, LINE_H);
             const char *lp = m->body + msg_lines[l];
             int llen = ui_line_len(m->body, msg_lines, nmsg_lines, l);
             uint32_t col = (llen > 0 && lp[0] == '>') ? C_QUOTE_TEXT : UI_TEXT;
@@ -1996,44 +2005,14 @@ static void field_return(struct field *f)
     }
 }
 
-static void insert_into_field(struct field *f, const char *s)
-{
-    for (; *s; s++) {
-        int len = (int)strlen(f->buf);
-        if (len + 1 >= f->cap)
-            break;
-        memmove(f->buf + f->cursor + 1, f->buf + f->cursor, (size_t)(len - f->cursor + 1));
-        f->buf[f->cursor++] = *s;
-    }
-    field_changed(f);
-}
 
 static void field_key(int ch)
 {
     struct field *f = focus;
-    if (!f)
-        return;
-    if (ch == '\n' && !f->multiline) {
-        field_return(f);
-        return;
-    }
-    if (ch == UI_KEY_DOTCOM) {
-        insert_into_field(f, ".com");
-        return;
-    }
-    if (f->digits && ch != '\b' && (ch < '0' || ch > '9'))
-        return;
-    int len = (int)strlen(f->buf);
-    if (ch == '\b') {
-        if (f->cursor > 0) {
-            memmove(f->buf + f->cursor - 1, f->buf + f->cursor, (size_t)(len - f->cursor + 1));
-            f->cursor--;
-            field_changed(f);
-        }
-    } else if (len + 1 < f->cap) {
-        char ins[2] = { (char)ch, 0 };
-        insert_into_field(f, ins);
-    }
+    if (!f) return;
+    if (ch == '\n' && !f->multiline) { field_return(f); return; }
+    if (ui_edit_key(f->buf, f->cap, &f->cursor, ch, field_flags(f)) && ui_edit_modified())
+        field_changed(f);
 }
 
 static void handle_alert_touch(const struct gz_input_event *e)
@@ -2200,8 +2179,8 @@ static void physical_event(const struct gz_input_event *e)
     }
     if (focus->digits && ch && ch != '\b' && (ch < '0' || ch > '9'))
         return;
-    if (ui_edit_input(focus->buf, focus->cap, &focus->cursor, e, focus->multiline)) {
-        field_changed(focus);
+    if (ui_edit_event(focus->buf, focus->cap, &focus->cursor, e, field_flags(focus))) {
+        if (ui_edit_modified()) field_changed(focus);
         dirty = true;
     }
 }

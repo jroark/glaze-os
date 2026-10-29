@@ -4,6 +4,7 @@
 #include <glaze/abi.h>
 struct stowaway_decoder {
     bool down[128], caps;
+    uint16_t held[96]; /* translated key-down code, including edit shortcuts */
     int repeat;
     uint32_t deadline;
 };

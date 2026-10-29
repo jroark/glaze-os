@@ -38,8 +38,32 @@ bool ui_has_hardware_keyboard(void);
 int ui_keyboard_height(void);
 /* Physical text/Enter/Backspace, or zero; other key events stay available. */
 int ui_input_char(const struct gz_input_event *e);
-/* Edit an ASCII buffer at *cursor; handles movement/deletion/text. */
+/* Edit an 8-bit text buffer at *cursor; handles movement/deletion/text. */
 bool ui_edit_input(char *text, int cap, int *cursor, const struct gz_input_event *e, bool multiline);
+/* Shared, volatile text clipboard (UI thread, foreground app only). set
+ * returns 0; get returns the byte length, or an error without truncation. */
+#define UI_CLIPBOARD_MAX SB_CLIPBOARD_MAX
+int ui_clipboard_set(const char *text, int length);
+int ui_clipboard_get(char *text, int capacity);
+int ui_clipboard_clear(void);
+
+enum { UI_EDIT_MULTILINE = 1, UI_EDIT_SECRET = 2, UI_EDIT_DIGITS = 4,
+       UI_EDIT_URL = 8, UI_EDIT_FILENAME = 16, UI_EDIT_READONLY = 32 };
+/* One active selection per process. Reset after programmatically replacing
+ * a buffer. Returning to another field or moving its cursor resets selection.
+ * A handled edit returns true, even if only the selection/clipboard changed. */
+void ui_edit_reset(void);
+bool ui_edit_event(char *text, int cap, int *cursor, const struct gz_input_event *e, unsigned flags);
+bool ui_edit_key(char *text, int cap, int *cursor, int key, unsigned flags);
+bool ui_edit_modified(void);
+bool ui_edit_selecting(void);
+const char *ui_edit_notice(void);
+bool ui_edit_selection(const char *text, int cursor, int *start, int *end);
+void ui_edit_set_cursor(char *text, int *cursor, int position, bool extend);
+/* Highlight the selected part of one displayed byte range, before drawing
+ * its text. Caller supplies clipping and uses the full buffer as `text`. */
+void ui_draw_edit_selection(gfx_surface *s, const gfx_font *font, const char *text,
+                            int cursor, int start, int length, int x, int y, int height);
 /* Next input event, waiting up to timeout_ms (-1 = forever). 1 = event,
  * 0 = timeout. */
 int ui_next_event(struct gz_input_event *ev, int timeout_ms);
@@ -195,8 +219,20 @@ struct ui_keyboard {
 
 /* ui_keyboard_event's return for the ".com" key of the URL layout. */
 #define UI_KEY_DOTCOM   0x100
+#define UI_KEY_SELECT_ALL 0x101
+#define UI_KEY_COPY       0x102
+#define UI_KEY_CUT        0x103
+#define UI_KEY_PASTE      0x104
+#define UI_KEY_SELECT     0x105
+#define UI_KEY_LEFT       0x106
+#define UI_KEY_RIGHT      0x107
+#define UI_KEY_CLEAR_CLIP 0x108
 
 void ui_keyboard_init(struct ui_keyboard *kb);
+/* Opt in to the Edit panel; legacy keyboards never return edit commands.
+ * Route every returned key through ui_edit_key/event. Flags protect secret
+ * fields and enforce numeric/URL/filename input rules. Structure ABI unchanged. */
+void ui_keyboard_edit_init(struct ui_keyboard *kb, unsigned flags);
 /* Default for newly initialized panels; changing a panel does not save it. */
 int ui_input_method_default(void);
 int ui_input_method_save(int method);

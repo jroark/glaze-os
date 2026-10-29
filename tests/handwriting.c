@@ -138,5 +138,21 @@ static void panel(void)
 int main(void)
 {
     struct ui_ink original=traces();geometry(&original);limits();panel();
+    struct ui_keyboard kb;
+    char text[32]="Copy this";int cursor=strlen(text);
+    ui_keyboard_edit_init(&kb,0);ui_keyboard_set_method(&kb,UI_INPUT_QWERTY);
+    assert(!tap(&kb,110,128));
+    assert(tap(&kb,55,35)==UI_KEY_SELECT_ALL);
+    ui_edit_key(text,sizeof(text),&cursor,UI_KEY_SELECT_ALL,0);
+    assert(tap(&kb,40,68)==UI_KEY_COPY);
+    ui_edit_key(text,sizeof(text),&cursor,UI_KEY_COPY,0);
+    char copied[32];assert(ui_clipboard_get(copied,sizeof(copied))==9 && !strcmp(text,copied));
+    event(&kb,GZ_EV_TOUCH_DOWN,180,35);event(&kb,GZ_EV_TOUCH_CANCEL,180,35);
+    assert(!event(&kb,GZ_EV_TOUCH_UP,180,35)); /* cancelled Paste cannot act or remain held */
+    ui_keyboard_edit_init(&kb,UI_EDIT_SECRET);ui_keyboard_set_method(&kb,UI_INPUT_QWERTY);
+    tap(&kb,110,128);assert(!tap(&kb,40,68) && !tap(&kb,110,68));
+    assert(tap(&kb,180,35)==UI_KEY_PASTE);
+    ui_keyboard_init(&kb);ui_keyboard_set_method(&kb,UI_INPUT_QWERTY);
+    assert(tap(&kb,110,128)==' '); /* old clients retain their original keyboard */
     puts("handwriting: independent letter/digit traces, transforms, all glyphs, bounds, ABI, panel, URL and defaults PASS");return 0;
 }

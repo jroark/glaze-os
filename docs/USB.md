@@ -116,6 +116,10 @@ Named keys include `ok`, `esc`, arrows, `home`, `power`, `enter`, `backspace`,
 are supported. A trailing `#` comment is allowed except after `text`, where
 it is literal text.
 
+Current builds also accept `selectall`, `copy`, `cut`, `paste`, `selectleft`,
+`selectright`, `selecthome` and `selectend` for native text editing. These
+operate on [Glaze's clipboard](CLIPBOARD.md), including over network debugging.
+
 The entire script is validated before input starts. Up to 2048 events and
 one hour are supported; expanded taps, drags and text count toward the event
 limit. Events are ordered by timestamp and uploaded before execution. The

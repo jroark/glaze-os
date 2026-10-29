@@ -6,6 +6,10 @@ headers, shared libraries, startup objects, project generator, GNU make
 rules, package checks, resource tools, an example and USB client source.
 The cross compiler, emulator and OS images are separate dependencies.
 
+Native text fields can opt into shared selection and copy/paste with
+`ui_keyboard_edit_init()` and `ui_edit_key()`/`ui_edit_event()`. See
+[CLIPBOARD.md](CLIPBOARD.md) for field flags, highlighting and clipboard APIs.
+
 ## Build the SDK
 
 From the Glaze source tree, using the existing Docker toolchain:

@@ -11,6 +11,10 @@ card, pairing key or internet connection is needed for direct USB mirroring.
 This is screen sharing from Glaze to your computer, rather than a VNC client
 for viewing another computer on the BE-300.
 
+Current Glaze builds support Ctrl/Command+A, C, X and V and Shift+Left/Right
+or Home/End for editing within Glaze. These use [Glaze's text clipboard](CLIPBOARD.md);
+the computer's clipboard is not synchronized and VNC ClientCutText is ignored.
+
 ## On a Mac
 
 Build the host tool with Xcode command-line tools and Homebrew dependencies:

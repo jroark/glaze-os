@@ -3,6 +3,18 @@
 #include <glaze/ui.h>
 #include <string.h>
 
+void ui_draw_edit_selection(gfx_surface *s, const gfx_font *font, const char *text,
+                            int cursor, int start, int length, int x, int y, int height)
+{
+    int a, b;
+    if (!ui_edit_selection(text, cursor, &a, &b)) return;
+    a = MAX(a, start); b = MIN(b, start + length);
+    if (a >= b) return;
+    int left = gfx_text_width_n(font, text + start, a - start);
+    int right = gfx_text_width_n(font, text + start, b - start);
+    gfx_fill(s, gfx_r(x + left, y, MAX(2, right - left), height), 0xB6D8FF);
+}
+
 int ui_wrap(const gfx_font *f, const char *text, int width, int *starts, int max_lines)
 {
     int n = 0, pos = 0, len = (int)strlen(text);

@@ -3,7 +3,8 @@ CC ?= cc
 CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -I../lib/include -I.
 GFX := ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c ../lib/gfx/res.c
 SB := ../servers/springboard/draw.c ../lib/ui/keypad.c
-KEYBOARD := ../lib/ui/keyboard.c ../lib/ui/handwriting.c ../lib/ui/recognize.c
+EDIT := ../lib/ui/edit.c clipboard_stub.c
+KEYBOARD := ../lib/ui/keyboard.c ../lib/ui/handwriting.c ../lib/ui/recognize.c $(EDIT)
 
 # The file server's flash stack, against a fault-injecting RAM NAND.
 FS := ../servers/fs/ftl.c ../third_party/littlefs/lfs.c ../third_party/littlefs/lfs_util.c \
@@ -34,6 +35,13 @@ MEDIA_CFLAGS := $(CFLAGS) -Wno-unused-but-set-variable -I../third_party/helix-mp
     -fsanitize=address,undefined -fno-sanitize=shift
 
 all: sheet preview fstest fattest mkfsimg browse mediatest
+
+clipboard-test: ../tests/clipboard.c ../tests/clipboard_sys.h ../lib/ui/clipboard.c ../lib/ui/edit.c ../servers/springboard/clipboard.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/clipboard_sys.h \
+	    $(filter %.c,$^) -o ../out/host/clipboard-test
+	../out/host/clipboard-test
+.PHONY: clipboard-test
 
 CHATGPT_SOURCES := ../packages/chatgpt/protocol.c ../apps/browser/url.c
 CHATGPT_AUTH := $(addprefix ../packages/chatgpt/,json.c tokens.c oauth.c responses.c http_io.c)
@@ -194,7 +202,7 @@ audio-volume-test: ../tests/audio_volume.c ../servers/audio/sound.c ../lib/media
 	../out/host/$@
 .PHONY: audio-volume-test
 
-stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c
+stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c $(EDIT)
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $^
 	./$@
 .PHONY: stowaway-test

@@ -310,6 +310,8 @@ static void draw_edit(gfx_surface *s)
         int y = text_top() + l * LINE_H - off;
         if (y + LINE_H < paper.y || y > paper.y + paper.h)
             continue;
+        if (editing) ui_draw_edit_selection(s, f, text, cursor, line_starts[l],
+            ui_line_len(text, line_starts, nlines, l), MARGIN, y, LINE_H);
         gfx_text_n(s, MARGIN, y + LINE_H - 4 - f->ascent, f, text + line_starts[l],
                    ui_line_len(text, line_starts, nlines, l), INK, 255);
     }
@@ -359,7 +361,7 @@ static void open_note(int i, bool with_keyboard)
     cursor = (int)strlen(text);
     editing = with_keyboard;
     dirty = false;
-    ui_keyboard_init(&kb);
+    ui_keyboard_edit_init(&kb, UI_EDIT_MULTILINE);
     if (cursor)
         kb.shift = false;
     ui_scroll_reset(&edit_scroll, 0, 0);
@@ -399,19 +401,10 @@ static void back_to_list(void)
 
 static void insert_char(int ch)
 {
-    int len = (int)strlen(text);
-
-    if (ch == '\b') {
-        if (cursor > 0) {
-            memmove(text + cursor - 1, text + cursor, (size_t)(len - cursor + 1));
-            cursor--;
-        }
-    } else if (len < MAX_TEXT) {
-        memmove(text + cursor + 1, text + cursor, (size_t)(len - cursor + 1));
-        text[cursor++] = (char)ch;
+    if (ui_edit_key(text, sizeof(text), &cursor, ch, UI_EDIT_MULTILINE) && ui_edit_modified()) {
+        dirty = true;
+        last_edit = gz_time_ms();
     }
-    dirty = true;
-    last_edit = gz_time_ms();
     layout();
     keep_cursor_visible();
 }
@@ -423,7 +416,8 @@ static void place_cursor(int x, int y)
     layout();
     if (line < 0)
         line = 0;
-    cursor = ui_text_hit(ui_font(FONT_R14), text, line_starts, nlines, line, x - MARGIN);
+    int position = ui_text_hit(ui_font(FONT_R14), text, line_starts, nlines, line, x - MARGIN);
+    ui_edit_set_cursor(text, &cursor, position, ui_edit_selecting());
 }
 
 /* ---- input -------------------------------------------------------------- */
@@ -505,6 +499,7 @@ static void edit_event(const struct gz_input_event *e)
         if (pressed_done && gfx_rect_contains(done_rect, e->x, e->y)) {
             pressed_done = false;
             editing = false;
+            ui_edit_reset();
             save_current();
             redraw();
             return;
@@ -550,21 +545,20 @@ static void physical_event(const struct gz_input_event *e)
         int l = cursor_line(), target = l + (e->code == GZ_KEY_UP ? -1 : 1);
         if (target >= 0 && target < nlines) {
             int x = gfx_text_width_n(ui_font(FONT_R14), text + line_starts[l], cursor - line_starts[l]);
-            cursor = ui_text_hit(ui_font(FONT_R14), text, line_starts, nlines, target, x);
+            ui_edit_set_cursor(text, &cursor, ui_text_hit(ui_font(FONT_R14), text, line_starts, nlines, target, x), ui_edit_selecting());
         }
         keep_cursor_visible();
         redraw();
         return;
     }
-    int oldlen = (int)strlen(text), oldcursor = cursor;
     if (ui_edit_input(text, sizeof(text), &cursor, e, true)) {
-        if ((int)strlen(text) != oldlen) {
+        if (ui_edit_modified()) {
             dirty = true;
             last_edit = gz_time_ms();
         }
         layout();
         keep_cursor_visible();
-        if (cursor != oldcursor || dirty) redraw();
+        redraw();
     }
 }
 
