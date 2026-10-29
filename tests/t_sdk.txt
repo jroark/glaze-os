@@ -1,0 +1,19 @@
+# SDK starter app: install from a CF card holding only build/app.gzp.
+# Requires the factory home-screen layout and a fresh NAND copy.
+# Build the app outside the OS checkout, then make its CF image with `make cf`.
+# Build Glaze with INPUT_SCRIPT=tests/t_sdk.txt and boot with that card.
+# Require sdk-app: ready count=0, then count=1 and count=2 in stdout.
+# Reboot a copy of the saved NAND with the same card/script: require
+# ready count=2, then count=3 and count=4 (reinstall preserves data).
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+6500 tap 120 64
+8500 tap 120 64
+10500 tap 120 242
+15000 tap 120 203
+16000 key home
+18000 tap 90 192
+20000 tap 120 216
+22000 key home
+24000 tap 90 192
+26000 tap 120 216

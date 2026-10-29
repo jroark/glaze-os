@@ -173,6 +173,10 @@ and files.
 
 ## Installing apps
 
+To develop your own apps, build the standalone SDK with `./build.sh sdk-archive`.
+It includes headers, libraries, a project generator, app/package build rules,
+an example and USB development tools. See the [app SDK guide](docs/SDK.md).
+
 Apps beyond the built-in ones come as packages: a `.gzp` file holding the
 app's `Info` (id, name, version), its executable and its resources
 (`lib/include/glaze/pkg.h`). Tap a package in Files and choose **Install on
