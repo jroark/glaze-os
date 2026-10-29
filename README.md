@@ -368,3 +368,7 @@ Enable it in Settings → Debugging after importing a private pairing key.
 The sync cable can also carry a [USB network interface](docs/USB_NETWORK.md)
 through the `glaze-usb usb-net` host helper (macOS utun or Linux TAP), including
 paired debugging on the same cable and normal socket access for Glaze apps.
+
+[Screen mirroring](docs/MIRRORING.md) exposes Glaze's display and live stylus/
+keyboard input to a local VNC viewer on your computer with `glaze-usb mirror`,
+over USB or paired TLS. macOS can use its built-in Screen Sharing viewer.

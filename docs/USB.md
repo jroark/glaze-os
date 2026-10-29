@@ -64,6 +64,9 @@ also works, as described in [GlazeBoot](GLAZEBOOT.md).
 The USB cable can also provide an IP connection through a macOS utun or Linux
 TAP interface. See [USB networking](USB_NETWORK.md) for `glaze-usb usb-net`.
 
+`glaze-usb mirror` provides live [VNC screen mirroring](MIRRORING.md), including
+mouse/stylus and keyboard control, through the same USB or paired TLS link.
+
 ```sh
 out/host/glaze-usb put out/pkg/hello.gzp /Downloads/hello.gzp
 out/host/glaze-usb run /Downloads/hello.gzp

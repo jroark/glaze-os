@@ -6,6 +6,7 @@
 #include <glaze/fs.h>
 #include <glaze/net.h>
 #include <glaze/sys.h>
+#include <glaze/mirror.h>
 #include <wolfssl/ssl.h>
 #include <string.h>
 #include <stdio.h>
@@ -105,6 +106,43 @@ static void reload(void)
     puts("debug-net-guest: reload accepted");
     for(;;)gz_sleep_ms(1000);
 }
+static uint8_t mirror_image[GU_SCREEN_BYTES];
+static void mirror_capture(unsigned flags)
+{
+    gu_put32(data,flags);
+    check(call(GU_MIRROR_NEXT,data,4)==24,"mirror metadata");
+    unsigned count=gu_get32(reply+12),total=gu_get32(reply+16);uint32_t crc=gu_get32(reply+20);
+    check(gu_get32(reply)==GM_WIDTH && gu_get32(reply+4)==GM_HEIGHT && gu_get32(reply+8)==GM_TILE &&
+          count<=GM_TILES && total==count*GM_RECORD,"mirror layout");
+    if(flags&GM_FORCE)check(count==GM_TILES,"full mirror frame");
+    uint8_t record[GM_RECORD],seen[GM_TILES]={0};unsigned used=0,records=0;
+    for(unsigned off=0;off<total;){
+        gu_put32(data,off);int n=call(GU_MIRROR_READ,data,4);check(n>0 && (unsigned)n<=total-off,"mirror read");
+        for(int i=0;i<n;i++){
+            record[used++]=reply[i];if(used!=GM_RECORD)continue;
+            unsigned tile=gu_get32(record);check(tile<GM_TILES && !seen[tile],"unique mirror tile");seen[tile]=1;
+            unsigned start=((tile/GM_COLUMNS)*GM_TILE*GM_WIDTH+(tile%GM_COLUMNS)*GM_TILE)*2;
+            for(unsigned y=0;y<GM_TILE;y++)memcpy(mirror_image+start+y*GM_WIDTH*2,record+4+y*GM_TILE*2,GM_TILE*2);
+            used=0;records++;
+        }
+        off+=(unsigned)n;
+    }
+    check(!used && records==count && ~gu_crc(~0u,mirror_image,sizeof(mirror_image))==crc,"mirror frame CRC");
+}
+static void mirror_test(void)
+{
+    mirror_capture(GM_FORCE);gz_sleep_ms(100);mirror_capture(0);
+    check(call(GU_DEBUG_STATUS,NULL,0)==8 && (gu_get32(reply)&GU_DEBUG_MIRROR),"mirror activity state");
+    memset(data,0,24);data[0]=GZ_EV_TOUCH_DOWN;data[4]=239;data[6]=63;data[7]=1;
+    data[8]=GZ_EV_TOUCH_MOVE;data[12]=238;data[14]=62;data[15]=1;
+    data[16]=GZ_EV_TOUCH_UP;data[20]=238;data[22]=62;data[23]=1;
+    check(!call(GU_MIRROR_INPUT,data,24),"immediate mirror touch input");
+    gz_sleep_ms(100);mirror_capture(0);
+    check(!call(GU_MIRROR_CLOSE,NULL,0),"mirror close");
+    check(call(GU_DEBUG_STATUS,NULL,0)==8 && !(gu_get32(reply)&GU_DEBUG_MIRROR),"mirror activity cleared");
+    check(call(GU_SCRIPT_STATUS,NULL,0)==16 && gu_get32(reply)==GU_SCRIPT_EMPTY,"mirror input released");
+    puts("debug-net-guest: mirror deltas/CRC, immediate input and close PASS");
+}
 int main(void)
 {
     /* The production network transport is off unless explicitly provisioned. */
@@ -128,6 +166,7 @@ int main(void)
     check(wolfSSL_Init()==WOLFSSL_SUCCESS,"TLS init");open_peer();
     check(call(GU_HELLO,NULL,0)==44,"hello");
     unsigned caps=gu_get32(reply+4);check((caps&1023u)==1023u,"USB capability parity");
+    check(caps&GU_CAP_MIRROR,"mirror capability");
     if(ram){puts("debug-net-guest: ALL PASS (RAM reload, pairing restored, TLS reconnected)");for(;;)gz_sleep_ms(1000);}
     for(unsigned i=0;i<3000;i++)data[8+i]=(uint8_t)(i*17);
     uint32_t sum=~gu_crc(~0u,data+8,3000);gu_put32(data,3000);gu_put32(data+4,sum);
@@ -146,6 +185,7 @@ int main(void)
     sum=~0u;
     for(unsigned off=0;off<GU_SCREEN_BYTES;) {gu_put32(data,off);int n=call(GU_SCREEN_READ,data,4);check(n>0,"screenshot read");sum=gu_crc(sum,reply,n);off+=n;}
     check(~sum!=0,"screenshot pixels");check(!call(GU_SCREEN_END,NULL,0),"screenshot end");
+    mirror_test();
     script(0);close_peer();gz_sleep_ms(1500);open_peer();check(call(GU_HELLO,NULL,0)==44,"reconnect");
     check(call(GU_SCRIPT_STATUS,NULL,0)==16 && gu_get32(reply)==GU_SCRIPT_EMPTY,"disconnect cancels held input");
     puts("debug-net-guest: files, replay, logs, app, screenshot, script, disconnect PASS");

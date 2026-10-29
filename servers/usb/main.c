@@ -3,6 +3,7 @@
 #include <glaze/debug_net.h>
 #include "network.h"
 #include "ethernet.h"
+#include "mirror.h"
 #include <glaze/fs.h>
 #include <glaze/pkg.h>
 #include <glaze/prefs.h>
@@ -35,6 +36,7 @@ static int debugger_state(unsigned *flags, unsigned *pid)
     unsigned f = session ? GU_DEBUG_CONNECTED | (network ? GU_DEBUG_NETWORK : 0) : 0;
     if (session && (upload >= 0 || screen || reloading || (int32_t)(gz_time_ms() - copy_until) < 0)) f |= GU_DEBUG_COPY;
     if (session && script_state == GU_SCRIPT_RUNNING) f |= GU_DEBUG_SCRIPT;
+    if (session && mirror_active()) f |= GU_DEBUG_MIRROR;
     int sb = gz_port_lookup(SB_PORT_NAME);
     if (sb < 0) return sb;
     struct gz_msg m = {{0}}, r;
@@ -59,6 +61,7 @@ static void abort_transfer(void)
 {
     if (upload >= 0) { fs_close(upload); fs_remove(temporary); upload = -1; }
     if (screen) { free(screen); screen = NULL; }
+    mirror_close();
     reloading = false; copy_until = 0; script_state = GU_SCRIPT_EMPTY;
     gz_usb_ctl(GZ_USB_SCRIPT_CANCEL, NULL, 0);
     gz_usb_ctl(GZ_USB_RELOAD_ABORT, NULL, 0);
@@ -119,6 +122,14 @@ static int launch(const char *path)
 static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
 {
     *out = 0;
+    if(mirror_active() && (op==GU_PUT_BEGIN || op==GU_BOOT_BEGIN || op==GU_SCREEN_BEGIN ||
+        op==GU_USB_NET_OPEN || (op>=GU_SCRIPT_BEGIN && op<=GU_SCRIPT_START)))return GZ_EBUSY;
+    if(op>=GU_MIRROR_NEXT && op<=GU_MIRROR_CLOSE){
+        if(upload>=0 || screen || reloading || script_state==GU_SCRIPT_RUNNING)return GZ_EBUSY;
+        int rv=mirror_dispatch(op,b,n,payload,out);
+        if(!rv)debugger_state(NULL,NULL);
+        return rv;
+    }
     switch (op) {
     case GU_HELLO: {
         if (n) return GZ_EINVAL;
@@ -127,7 +138,7 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r = gz_sysinfo(&si); if (r) return r;
         gu_put32(payload, GU_VERSION);
         gu_put32(payload + 4, GU_CAP_FILES | GU_CAP_RUN | GU_CAP_LOGS | GU_CAP_RELOAD |
-                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET);
+                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR);
         gu_put32(payload + 8, si.free_pages * 4096);
         memcpy(payload + 12, si.build, sizeof(si.build));
         payload[43] = 0; *out = 44; session = true; return 0;
@@ -380,6 +391,7 @@ int main(void)
         unsigned wanted = session ? GU_DEBUG_CONNECTED | (network ? GU_DEBUG_NETWORK : 0) : 0;
         if (session && (upload >= 0 || screen || reloading || (int32_t)(gz_time_ms() - copy_until) < 0)) wanted |= GU_DEBUG_COPY;
         if (session && script_state == GU_SCRIPT_RUNNING) wanted |= GU_DEBUG_SCRIPT;
+        if (session && mirror_active()) wanted |= GU_DEBUG_MIRROR;
         if (wanted != reported || (session && (int32_t)(gz_time_ms() - report_next) >= 0)) debugger_state(NULL,NULL);
         if (n <= 0) gz_sleep_ms(1);
     }
