@@ -111,9 +111,11 @@ BE-300 Windows CE 3.0 NAND image, using `be300/tools/extract_nk_lzss.py` and
   (CMM). The backlight routine at `0x01A55900`–`0x01A55990` takes a nonzero
   argument for **off**: write zero to BLG+0 and BLG+4, then clear CMM bit 0.
   Its on branch enables CMM first, configures BLG+4, period BLG+8 and duty
-  BLG+12, then enables BLG+0. Glaze uses the stock off sequence and restores
-  the saved BLG control/configuration and CMM gate bit on wake, preserving
-  unrelated CMM bits. It leaves the inherited period and current brightness
+  BLG+12, then enables BLG+0. Glaze stops the backlight channel but preserves
+  the shared configuration/clock while the separate piezo channel is active.
+  Wake restores the backlight's mode nibble and control without replacing
+  other channels' configuration changes. See [BUZZER.md](BUZZER.md).
+  It leaves the inherited period and current brightness
   duty unchanged rather than replacing them with the stock on defaults.
 
 The driver preserves unrelated contrast-register bits and skips unchanged

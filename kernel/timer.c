@@ -141,4 +141,5 @@ void timer_irq(void)
     usb_poll();
     net_irq();
     audio_irq();
+    buzzer_poll();
 }

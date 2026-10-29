@@ -19,7 +19,9 @@
  * kernel's mix ring, at the master output volume, and only when their
  * setting (the snd.* preferences) allows. There are two voices: a click
  * (taps, keys, swipes, lock) and an alert (a tone, which for the timer
- * repeats until stopped or a minute passes).
+ * repeats until stopped or a minute passes). System sounds also drive the
+ * separate piezo PWM with monophonic patterns, using the same switches,
+ * tone choices and master volume. Arbitrary PCM retains its headphone path.
  */
 #ifndef GLAZE_AUDIO_H
 #define GLAZE_AUDIO_H

@@ -200,6 +200,11 @@
 #define DISP_BL_CONFIG      REG32(0x0A000984u)
 #define DISP_BL_PERIOD      REG32(0x0A000988u)
 #define DISP_BL_GATE        REG32(0x0A001128u)
+/* bltinbuz.dll 018F1304..132C / 018F1604..1678: second BLG PWM
+ * channel, not the backlight at +0. Clock = 1,411,200 Hz (018F119C). */
+#define BUZZ_CONTROL        REG32(0x0A0009A0u)
+#define BUZZ_PERIOD         REG32(0x0A0009A4u)
+#define BUZZ_DUTY           REG32(0x0A0009A8u)
 #define DISP_CONTRAST       REG32(0x0A000C4Cu)
 
 #define FB_PA               0x0A200000u

@@ -36,6 +36,12 @@ See `docs/SDK.md`. Keep packaged SDKs and generated apps under ignored output.
 
 The website (glaze-os.com) is static HTML in `site/`; `tools/mksite.py` builds its images from emulator screenshots and `tools/publish_site.py` publishes it to the `glaze-os-site` stack (`infra/site/stack.json`). See `docs/WEBSITE.md`.
 
+The built-in piezo (`docs/BUZZER.md`) is BLG channel `09A0/9A4/9A8`, not
+backlight `0980/988/98C`. Its kernel driver is `kernel/drivers/buzzer.c`;
+the audio server sequences patterns in `servers/audio/buzzer.c`. Preserve
+shared BLG config `0984` and gate `1128` across display power changes.
+Use `buzzer-driver-test audio-driver-test audio-volume-test display-test`.
+
 Romfs is for the OS and built-in apps only. User files, settings and app data belong in the file system: `userdata/` is the factory volume, which `host/mkfsimg` (built with `HOSTCC`, default `cc`) formats into `out/fs.img` and `tools/mk_nand.py --fs-image` places at 0x500000. Don't name files in `userdata/` with spaces, since make lists them.
 
 ROM binaries must not be committed, including original demos and uploaded test games.

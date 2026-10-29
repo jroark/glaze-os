@@ -34,6 +34,7 @@ void machine_reboot_ce(void)
     usb_stop();
     ICU_MSYSINT1 = ICU_MSYSINT2 = ICU_MGIUINTL = ICU_MGIUINTH = 0;
     AUD_ARM = 0;
+    BUZZ_CONTROL = 0;
     AUD_CTRL &= ~AUD_CTRL_OUT;
     AUD_DMA_RUN &= ~1u;
     AUD_START &= ~2u;

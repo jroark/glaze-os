@@ -12,6 +12,7 @@
  */
 
 #include "sound.h"
+#include "buzzer.h"
 #include <glaze/audio.h>
 #include <glaze/media.h>
 #include <glaze/prefs.h>
@@ -88,6 +89,7 @@ static void load_settings(void)
     /* Squared, so the steps sound roughly even. */
     gain = vol * vol * 32768 / (AUDIO_VOLUME_MAX * AUDIO_VOLUME_MAX);
     gz_audio_gain((uint32_t)gain);
+    buzzer_volume(vol);
     sw_touch = pref_int(AUDIO_PREF_TOUCH, 0);
     sw_keys = pref_int(AUDIO_PREF_KEYS, 1);
     sw_swipe = pref_int(AUDIO_PREF_SWIPE, 1);
@@ -165,21 +167,29 @@ static void play(uint32_t snd)
         return;
     switch (snd) {
     case AUDIO_SND_TAP:
-        if (sw_touch)
+        if (sw_touch) {
             voice_start(&click, "tap.wav", false);
+            buzzer_click(snd);
+        }
         return;
     case AUDIO_SND_KEY:
-        if (sw_keys)
+        if (sw_keys) {
             voice_start(&click, "key.wav", false);
+            buzzer_click(snd);
+        }
         return;
     case AUDIO_SND_SWIPE:
-        if (sw_swipe)
+        if (sw_swipe) {
             voice_start(&click, "swipe.wav", false);
+            buzzer_click(snd);
+        }
         return;
     case AUDIO_SND_LOCK:
     case AUDIO_SND_UNLOCK:
-        if (sw_lock)
+        if (sw_lock) {
             voice_start(&click, snd == AUDIO_SND_LOCK ? "lock.wav" : "unlock.wav", false);
+            buzzer_click(snd);
+        }
         return;
     case AUDIO_SND_NOTIFY:      tone = tone_notify; break;
     case AUDIO_SND_CALENDAR:    tone = tone_cal; break;
@@ -189,15 +199,19 @@ static void play(uint32_t snd)
             tone = (int32_t)(snd - AUDIO_SND_TONE);
         break;
     }
-    if (tone != AUDIO_TONE_NONE)
+    if (tone != AUDIO_TONE_NONE) {
         voice_start(&alert, audio_tone_file(tone), loop);
+        buzzer_alert(tone,loop);
+    }
 }
 
 void sound_notify(uint32_t bits)
 {
     /* Stop and reload first, so a preview after a change uses it. */
-    if (bits & AUDIO_NOTIFY_STOP)
+    if (bits & AUDIO_NOTIFY_STOP) {
         alert.clip = NULL;
+        buzzer_stop_alert();
+    }
     if (bits & AUDIO_NOTIFY_RELOAD)
         load_settings();
     for (uint32_t snd = 0; snd < AUDIO_SND_TONE + AUDIO_TONES; snd++)

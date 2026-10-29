@@ -137,5 +137,9 @@ int sys_audio_stop(struct proc *p, uint32_t flush);
 int sys_audio_status(struct proc *p, uint32_t uout);
 int sys_audio_mix(struct proc *p, uint32_t ubuf, uint32_t len);
 int sys_audio_gain(struct proc *p, uint32_t gain);
+void buzzer_init(void);
+void buzzer_poll(void);
+bool buzzer_active(void);
+int sys_buzzer_tone(struct proc *p, uint32_t hz, uint32_t ms, uint32_t pulse);
 
 #endif
