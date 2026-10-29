@@ -450,6 +450,7 @@ static void draw_field(gfx_surface *s, bool editing)
         int x = r.x + 6 - MAX(0, (edit_fresh ? tw : cw) - text_w + 3);
         if (edit_fresh && tw)
             gfx_fill(s, gfx_r(x - 1, r.y + 4, MIN(tw, text_w) + 2, r.h - 8), 0xB4D2F7);
+        if (!edit_fresh) ui_draw_edit_selection(s, f, edit_url, url_cursor, 0, strlen(edit_url), x, r.y + 4, r.h - 8);
         gfx_text(s, x, r.y + (r.h - f->line_height) / 2, f, edit_url, 0x111111, 255);
         if (!edit_fresh)
             gfx_fill(s, gfx_r(x + cw + 1, r.y + 4, 2, r.h - 8), 0x3B7DDD);
@@ -617,6 +618,10 @@ static void draw_toast(gfx_surface *s)
 
 static void draw_browser(gfx_surface *s)
 {
+    if (focus && mode == M_FIELD) {
+        focus->selection_start = focus->selection_end = focus->cursor;
+        ui_edit_selection(focus->value, focus->cursor, &focus->selection_start, &focus->selection_end);
+    }
     draw_page(s);
     draw_bar(s);
     if (mode == M_BROWSE)
@@ -769,8 +774,9 @@ static void activate_ctl(struct ctl *c)
     case C_TEXTAREA:
         focus = c;
         c->cursor = c->len;
+        c->selection_start = c->selection_end = c->cursor;
         mode = M_FIELD;
-        ui_keyboard_init(&kb);
+        ui_keyboard_edit_init(&kb, c->type == C_PASSWORD ? UI_EDIT_SECRET : c->type == C_TEXTAREA ? UI_EDIT_MULTILINE : 0);
         kb.shift = false;
         sc.view_h = view_h();
         reveal_focus();
@@ -814,9 +820,10 @@ static void field_input(const struct gz_input_event *e)
         submit(c->form, NULL);
         return;
     }
-    ui_edit_input(c->value, c->cap, &c->cursor, e, c->type == C_TEXTAREA);
+    ui_edit_event(c->value, c->cap, &c->cursor, e,
+        c->type == C_PASSWORD ? UI_EDIT_SECRET : c->type == C_TEXTAREA ? UI_EDIT_MULTILINE : 0);
     c->len = (int)strlen(c->value);
-    script_event(c->node->owner, c->node, "input");
+    if (ui_edit_modified()) script_event(c->node->owner, c->node, "input");
 }
 
 static void field_key(int ch)
@@ -831,12 +838,13 @@ static void start_url_edit(void)
 {
     mode = M_URL;
     focus = NULL;
-    ui_keyboard_init(&kb);
+    ui_keyboard_edit_init(&kb, UI_EDIT_URL);
     kb.url = true;
     kb.shift = false;
     snprintf(edit_url, sizeof(edit_url), "%s", page ? page->url : "");
     edit_fresh = true;
     url_cursor = (int)strlen(edit_url);
+    ui_edit_key(edit_url, sizeof(edit_url), &url_cursor, UI_KEY_SELECT_ALL, UI_EDIT_URL);
     sc.view_h = view_h();
 }
 
@@ -872,7 +880,7 @@ static void url_input(const struct gz_input_event *e)
         if (ch == '\b' || e->code == GZ_KEY_DELETE) return;
     }
     if (e->type == GZ_EV_KEY_DOWN) edit_fresh = false;
-    if (ch != ' ') ui_edit_input(edit_url, sizeof(edit_url), &url_cursor, e, false);
+    if (ch != ' ' && ui_edit_event(edit_url, sizeof(edit_url), &url_cursor, e, UI_EDIT_URL)) edit_fresh = false;
 }
 
 static void url_key(int ch)

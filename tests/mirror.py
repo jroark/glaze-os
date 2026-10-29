@@ -125,6 +125,18 @@ class Mirroring(unittest.TestCase):
             self.assertIn((6,ord('A'),0,0),decoded)
             self.assertIn((4,7,0,0),decoded)
             self.assertIn((5,7,0,0),decoded)
+            key(s,True,0xffe3)
+            for symbol in 'acxv':
+                key(s,True,ord(symbol));key(s,False,ord(symbol))
+            key(s,False,0xffe3)
+            key(s,True,0xffe1);key(s,True,0xff51);key(s,False,0xffe1);key(s,False,0xff51)
+            key(s,True,0xffe7);key(s,True,ord('v'));key(s,False,0xffe7);key(s,False,ord('v'))
+            time.sleep(.15)
+            shortcuts=list(struct.iter_unpack('<HHhh',metrics(path)[1]))
+            for code in (17,18,19,20,21):  # Select All, Copy, Cut, Paste, Shift-Left
+                self.assertIn((4,code,0,0),shortcuts)
+                self.assertIn((5,code,0,0),shortcuts)
+            self.assertNotIn((6,ord('v'),0,0),shortcuts)
             pointer(s,31,65535,65535);pointer(s,0,65535,65535)
             time.sleep(.1)
             events=list(struct.iter_unpack('<HHhh',metrics(path)[1]))

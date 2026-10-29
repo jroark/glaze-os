@@ -389,6 +389,7 @@ static void draw(gfx_surface *s)
             gfx_vgradient(s, gfx_r(0, 30, 240, 33), 0xCFD6DF, 0xAFBBCB, 255);
             gfx_round_rect(s, gfx_r(7, 35, 226, 23), 11, 0x8C9AAF, 255);
             gfx_round_rect(s, gfx_r(8, 36, 224, 21), 10, 0xFFFFFF, 255);
+            if (editing) ui_draw_edit_selection(s, ui_font(FONT_R12), query, cursor, 0, strlen(query), 17, 39, 16);
             gfx_text_fit(s, 17, 40, 196, ui_font(FONT_R12), *query ? query : "Search apps",
                          *query ? UI_TEXT : 0x8793A2, 255);
             if (editing && (gz_time_ms() / 500) % 2 == 0) {
@@ -486,7 +487,7 @@ static void activate(void)
 int main(void)
 {
     ui_init(SB_STATUS_GRAY);
-    ui_keyboard_init(&keyboard);
+    ui_keyboard_edit_init(&keyboard, 0);
     ui_list_init(&list, gfx_r(0, LIST_Y, UI_W, list_height()), ROW_H);
     rebuild();
     strlcpy(message, "Connecting to the App Store...", sizeof(message));
@@ -559,16 +560,8 @@ int main(void)
                     if (c == '\n') {
                         editing = false;
                         rebuild();
-                    } else if (c == '\b') {
-                        if (cursor > 0) {
-                            memmove(query + cursor - 1, query + cursor, strlen(query + cursor) + 1);
-                            cursor--;
-                        }
-                        rebuild();
-                    } else if (c >= 32 && c < 127 && strlen(query) < sizeof(query) - 1) {
-                        memmove(query + cursor + 1, query + cursor, strlen(query + cursor) + 1);
-                        query[cursor++] = c;
-                        rebuild();
+                    } else if (c && ui_edit_key(query, sizeof(query), &cursor, c, 0)) {
+                        if (ui_edit_modified()) rebuild();
                     }
                     if (changed || c)
                         redraw();

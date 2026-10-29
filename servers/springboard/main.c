@@ -8,6 +8,7 @@
 #include "calibration.h"
 #include "display.h"
 #include "idle.h"
+#include "clipboard.h"
 
 #include <glaze/audio.h>
 #include <glaze/fs.h>
@@ -153,6 +154,7 @@ static struct {
 } clients[MAX_CLIENTS];
 
 static void load_settings(void);
+static struct sb_clipboard clipboard;
 
 /* ---- helpers ------------------------------------------------------------ */
 
@@ -1777,6 +1779,16 @@ static void handle_msg(int token, struct gz_msg *m)
 
     memset(&r, 0, sizeof(r));
     switch (m->w[0]) {
+    case SB_CLIPBOARD_BEGIN:
+    case SB_CLIPBOARD_WRITE:
+    case SB_CLIPBOARD_COMMIT:
+    case SB_CLIPBOARD_READ:
+    case SB_CLIPBOARD_CLEAR: {
+        struct sb_running *s = state == ST_APP ? front() : NULL;
+        r.w[0] = sb_clipboard_request(&clipboard, m, &r,
+            s && s->shared ? &s->shared->req : NULL, s ? s->pid : 0, now_ms());
+        break;
+    }
     case SB_REBOOT_CE:
         r.w[0] = settings_request_allowed((int)m->w[3]) ?
             (uint32_t)gz_reboot_ce() : (uint32_t)GZ_EPERM;
@@ -2111,6 +2123,8 @@ int main(void)
         }
 
         t = now_ms();
+        if (clipboard.writer && (state != ST_APP || !front() || front()->pid != clipboard.writer ||
+            (int32_t)(t - clipboard.deadline) >= 0)) sb_clipboard_cancel(&clipboard);
         unsigned debug_before = view.debugger;
         if ((int32_t)(t - debug_until) >= 0) debug_activity = 0;
         if (debug_app_pid && !gz_proc_alive(debug_app_pid)) debug_app_pid = 0;

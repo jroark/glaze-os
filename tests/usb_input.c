@@ -152,6 +152,14 @@ int main(void)
     assert(call(GZ_USB_LIVE_INPUT,8)==GZ_EINVAL && emitted==before);
     gu_put32(user,1);assert(!call(GZ_USB_SCRIPT_BEGIN,4));
     assert(call(GZ_USB_LIVE_INPUT,8)==GZ_EBUSY);usb_input_cancel();
+    for (unsigned code=GZ_KEY_SELECT_ALL;code<=GZ_KEY_LAST;code++) {
+        memset(user,0,8);user[0]=GZ_EV_KEY_DOWN;user[2]=code;
+        assert(!call(GZ_USB_LIVE_INPUT,8) && (keys&(1u<<code)));
+        usb_input_cancel();
+        assert(!keys && output[emitted-1].type==GZ_EV_KEY_UP && output[emitted-1].code==code);
+    }
+    memset(user,0,8);user[0]=GZ_EV_KEY_DOWN;user[2]=GZ_KEY_LAST+1;
+    assert(call(GZ_USB_LIVE_INPUT,8)==GZ_EINVAL);
     puts("usb-input: ALL PASS");
     return 0;
 }

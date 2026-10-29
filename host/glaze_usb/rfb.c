@@ -83,6 +83,8 @@ struct viewer {
     uint8_t input[4096];unsigned used,skip;
     unsigned x,y,w,h,pending,incremental;
     unsigned buttons,mouse_x,mouse_y;
+    unsigned modifiers;
+    uint8_t held[384]; /* ASCII and X11 0xffxx symbols: release translated code */
 };
 static unsigned special_key(uint32_t symbol)
 {
@@ -165,8 +167,28 @@ static int message(struct viewer *v,const struct rfb_source *source,int view_onl
     }
     if(p[0]==4 && !view_only){
         uint32_t symbol=get32(p+4);if((symbol>>24)==1)symbol&=0xffffff;
+        unsigned modifier=symbol==0xffe1?1:symbol==0xffe2?2:symbol==0xffe3?4:
+            symbol==0xffe4?8:symbol==0xffe7?16:symbol==0xffe8?32:
+            symbol==0xffeb?64:symbol==0xffec?128:0;
+        if(modifier){if(p[1])v->modifiers|=modifier;else v->modifiers&=~modifier;goto consumed;}
         unsigned code=special_key(symbol);uint8_t e[8];
-        if(code)event(e,p[1]?GZ_EV_KEY_DOWN:GZ_EV_KEY_UP,code,0,0);
+        unsigned slot=symbol<128?symbol:(symbol>=0xff00 && symbol<=0xffff)?128+(symbol&255):384;
+        if(!p[1] && slot<384 && v->held[slot]){
+            event(e,GZ_EV_KEY_UP,v->held[slot],0,0);v->held[slot]=0;
+            if(source->input(source->context,e,8))return -2;
+            goto consumed;
+        }
+        if(v->modifiers&0xfc){
+            unsigned ch=symbol>='A' && symbol<='Z'?symbol+32:symbol;
+            code=ch=='a'?GZ_KEY_SELECT_ALL:ch=='c'?GZ_KEY_COPY:ch=='x'?GZ_KEY_CUT:ch=='v'?GZ_KEY_PASTE:0;
+            if(!code)goto consumed;
+        }else if(v->modifiers&3){
+            if(code==GZ_KEY_LEFT)code=GZ_KEY_SELECT_LEFT;
+            if(code==GZ_KEY_RIGHT)code=GZ_KEY_SELECT_RIGHT;
+            if(code==GZ_KEY_KBD_HOME)code=GZ_KEY_SELECT_HOME;
+            if(code==GZ_KEY_END)code=GZ_KEY_SELECT_END;
+        }
+        if(code){event(e,p[1]?GZ_EV_KEY_DOWN:GZ_EV_KEY_UP,code,0,0);if(p[1] && slot<384)v->held[slot]=code;}
         else if(p[1] && symbol>=32 && symbol<=126)event(e,GZ_EV_TEXT,symbol,0,0);
         else goto consumed;
         if(source->input(source->context,e,8))return -2;

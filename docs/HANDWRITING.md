@@ -14,6 +14,9 @@ fall back to QWERTY. Existing open text panels keep their local selection.
 
 ## Using the pad
 
+For text selection and copy/paste, tap **Keys**, then **Edit**. The shared
+[clipboard](CLIPBOARD.md) works with recognized text just as with typed text.
+
 1. Print **one letter** in the white area. You can lift the pen between
    strokes, such as the crossbar of A or the dot of i.
 2. Tap the correct character in the three choices above the ink. Nothing is

@@ -213,6 +213,12 @@ struct field {
     gfx_rect r;
 };
 
+static unsigned field_flags(const struct field *f)
+{
+    return (f->secret ? UI_EDIT_SECRET : 0) | (f->digits ? UI_EDIT_DIGITS : 0) |
+           (f->url ? UI_EDIT_URL : 0);
+}
+
 static struct field f_sn = { acct.sn, OSCAR_SN_MAX, 0, false, false, false, false, "Required", { 0 } };
 static struct field f_pw = { password, sizeof(password), 0, true, false, false, false, "Required", { 0 } };
 static struct field f_host = { acct.host, OSCAR_HOST_MAX, 0, false, true, false, false, "aim.example.com", { 0 } };
@@ -442,7 +448,7 @@ static void set_focus(struct field *f)
     focus = f;
     if (!f)
         return;
-    ui_keyboard_init(&kb);
+    ui_keyboard_edit_init(&kb, field_flags(f));
     kb.url = f->url;
     kb.numbers = f->digits;
     kb.shift = f->caps && !f->buf[0];
@@ -470,6 +476,7 @@ static void draw_field(gfx_surface *s, struct field *f, gfx_rect r, const gfx_fo
     int ty = r.y + (r.h - font->line_height) / 2;
     gfx_rect saved = s->clip;
     gfx_set_clip(s, r);
+    if (focused && !f->secret) ui_draw_edit_selection(s, font, f->buf, f->cursor, start, n - start, r.x, ty, font->line_height);
     if (!n && f->placeholder)
         gfx_text(s, r.x, ty, font, f->placeholder, 0xB4B4B4, 255);
     else
@@ -1348,33 +1355,10 @@ static void blur(void)
 static void field_key(int ch)
 {
     struct field *f = focus;
-    int n = (int)strlen(f->buf);
-
-    if (ch == '\n') {
-        field_return(f);
-        return;
-    }
-    if (ch == '\b') {
-        if (f->cursor > 0) {
-            memmove(f->buf + f->cursor - 1, f->buf + f->cursor, (size_t)(n - f->cursor + 1));
-            f->cursor--;
-        }
-    } else {
-        const char *ins = ch == UI_KEY_DOTCOM ? ".com" : NULL;
-        char one[2] = { (char)ch, 0 };
-        if (!ins)
-            ins = one;
-        for (const char *p = ins; *p; p++) {
-            if (f->digits && (*p < '0' || *p > '9'))
-                continue;
-            if (n + 1 >= f->cap)
-                break;
-            memmove(f->buf + f->cursor + 1, f->buf + f->cursor, (size_t)(n - f->cursor + 1));
-            f->buf[f->cursor++] = *p;
-            n++;
-        }
-    }
-    field_changed(f);
+    if (!f) return;
+    if (ch == '\n') { field_return(f); return; }
+    if (ui_edit_key(f->buf, f->cap, &f->cursor, ch, field_flags(f)) && ui_edit_modified())
+        field_changed(f);
 }
 
 /* ---- protocol events ---------------------------------------------------- */
@@ -1839,9 +1823,9 @@ static void physical(const struct gz_input_event *e)
         struct field *f = focus;
         if (f->digits && ch && ch != '\b' && (ch < '0' || ch > '9'))
             return;
-        if (!ui_edit_input(f->buf, f->cap, &f->cursor, e, false))
+        if (!ui_edit_event(f->buf, f->cap, &f->cursor, e, field_flags(f)))
             return;
-        field_changed(f);
+        if (ui_edit_modified()) field_changed(f);
     }
     dirty = true;
 }

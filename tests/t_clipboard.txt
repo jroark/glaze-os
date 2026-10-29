@@ -1,0 +1,13 @@
+# Copy through the touch Edit panel in Notes, then paste into Browser's URL.
+3000 drag 40 280 235 280 500
+4500 tap 90 285
+6500 tap 220 30
+7200 text GlazeClipboard
+9000 tap 110 298
+9500 tap 60 206
+10000 tap 40 238
+11000 key home
+12500 tap 90 120
+14500 tap 80 45
+15100 key selectall
+15500 key paste

@@ -79,6 +79,16 @@ offsets stay unchanged. Do not extend this structure without considering SDK
 clients. Use `make -C host handwriting-test ui-events-test settings-test` and
 `make sdk-test`; `tests/t_handwriting_notes.txt` checks Notes with scripted input.
 
+The text clipboard (`docs/CLIPBOARD.md`) is volatile SpringBoard state in
+`servers/springboard/clipboard.c`, with chunked, atomic IPC through the existing
+request area. `lib/ui/edit.c` owns one focused selection per process; apps opt
+into keyboard commands with `ui_keyboard_edit_init` and route text through
+`ui_edit_key`/`ui_edit_event`, using matching flags for secret/filtered fields.
+Preserve the keyboard/shared-memory ABI. Run `clipboard-test stowaway-test
+handwriting-test ui-events-test settings-test mirror-test usb-input-test`,
+`browser-test`, full builds and `sdk-test`; `tests/t_clipboard.txt` exercises
+cross-app touch copy/paste. Clear INPUT_SCRIPT for normal builds afterward.
+
 ## Running and testing
 
 `make out/pkg/chatgpt.gzp` builds the direct Codex chat package. Its device-code

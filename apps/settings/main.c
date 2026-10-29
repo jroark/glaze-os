@@ -1350,7 +1350,7 @@ static void activate(int id)
                 wifi_entry.network.ssid_len = ap->ssid_len; memcpy(wifi_entry.network.ssid, ap->ssid, ap->ssid_len);
                 wifi_entry.security = ap->ie_len ? (ap->ie[0] == 48 ? WIFI_WPA2_PSK : WIFI_WPA_PSK) : WIFI_WEP;
                 wifi_show = false; wifi_editing = true; wifi_cursor = 0; wifi_error = 0;
-                ui_keyboard_init(&wifi_keyboard); go(V_WIFI_CREDENTIALS, true); return;
+                ui_keyboard_edit_init(&wifi_keyboard, UI_EDIT_SECRET); go(V_WIFI_CREDENTIALS, true); return;
             }
             wifi_error = net_wifi_connect(wireless_status.aps[index].ssid, wireless_status.aps[index].ssid_len);
         }
@@ -1775,7 +1775,7 @@ int main(void)
         }
         if (view == V_WIFI_CREDENTIALS && wifi_editing) {
             bool changed = false;
-            if (ui_edit_input(wifi_password, sizeof(wifi_password), &wifi_cursor, &ev, false)) { redraw(); continue; }
+            if (ui_edit_event(wifi_password, sizeof(wifi_password), &wifi_cursor, &ev, UI_EDIT_SECRET)) { redraw(); continue; }
             if (ui_keyboard_height() && ev.y >= UI_H - ui_keyboard_height() &&
                 (ev.type == GZ_EV_TOUCH_DOWN || ev.type == GZ_EV_TOUCH_MOVE || ev.type == GZ_EV_TOUCH_UP)) {
                 int ch = ui_keyboard_event(&wifi_keyboard, &ev, UI_H-ui_keyboard_height(), &changed);
@@ -1784,7 +1784,7 @@ int main(void)
                     struct gz_input_event key = {0};
                     key.type = ch == '\b' ? GZ_EV_KEY_DOWN : GZ_EV_TEXT;
                     key.code = ch == '\b' ? GZ_KEY_BACKSPACE : ch;
-                    ui_edit_input(wifi_password, sizeof(wifi_password), &wifi_cursor, &key, false);
+                    ui_edit_event(wifi_password, sizeof(wifi_password), &wifi_cursor, &key, UI_EDIT_SECRET);
                 }
                 if (ch || changed) redraw();
                 continue;

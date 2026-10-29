@@ -45,6 +45,9 @@ static void decoder_tests(void) {
     stowaway_decode(&s, 87 | 128, 13, emit);
     int n = count;
     stowaway_decode(&s, 26, 14, emit); tap(&s, 17, 15);
+    expect(n, GZ_EV_KEY_DOWN, GZ_KEY_SELECT_ALL);
+    expect(n + 1, GZ_EV_KEY_UP, GZ_KEY_SELECT_ALL);
+    n = count;
     stowaway_decode(&s, 26 | 128, 16, emit);
     stowaway_decode(&s, 35, 17, emit); tap(&s, 17, 18);
     stowaway_decode(&s, 35 | 128, 19, emit);
@@ -72,6 +75,19 @@ static void decoder_tests(void) {
     stowaway_repeat(&s, 349, emit); assert(count == 2);
     stowaway_decode(&s, 50 | 128, 350, emit);
     stowaway_repeat(&s, 1000, emit); assert(count == 3);
+    s=(struct stowaway_decoder){0};count=0;
+    stowaway_decode(&s,26,2000,emit);
+    const unsigned scan[]={17,44,16,45};
+    const unsigned commands[]={GZ_KEY_SELECT_ALL,GZ_KEY_COPY,GZ_KEY_CUT,GZ_KEY_PASTE};
+    for(unsigned i=0;i<4;i++){
+        tap(&s,scan[i],2010+i*2);
+        expect(i*2,GZ_EV_KEY_DOWN,commands[i]);expect(i*2+1,GZ_EV_KEY_UP,commands[i]);
+    }
+    stowaway_decode(&s,26|128,2030,emit);stowaway_decode(&s,87,2040,emit);
+    tap(&s,81,2050);expect(8,GZ_EV_KEY_DOWN,GZ_KEY_SELECT_LEFT);expect(9,GZ_EV_KEY_UP,GZ_KEY_SELECT_LEFT);
+    stowaway_decode(&s,83,2060,emit);stowaway_decode(&s,87|128,2061,emit);
+    stowaway_decode(&s,83|128,2062,emit);
+    expect(10,GZ_EV_KEY_DOWN,GZ_KEY_SELECT_RIGHT);expect(11,GZ_EV_KEY_UP,GZ_KEY_SELECT_RIGHT);
 }
 static bool key(char *buf, int cap, int *pos, int code, bool multi) {
     struct gz_input_event e = {.type=GZ_EV_KEY_DOWN, .code=(uint16_t)code};

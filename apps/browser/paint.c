@@ -7,6 +7,16 @@
 #define CTL_BORDER  0x8C8C8C
 #define CTL_FOCUS   0x3B7DDD
 
+static void selection(gfx_surface *s, const gfx_font *f, const struct ctl *c,
+                      int start, int length, int x, int y, int height)
+{
+    int a = MAX(start, c->selection_start), b = MIN(start + length, c->selection_end);
+    if (a >= b) return;
+    int left = gfx_text_width_n(f, c->value + start, a - start);
+    int right = gfx_text_width_n(f, c->value + start, b - start);
+    gfx_fill(s, gfx_r(x + left, y, MAX(2, right - left), height), 0xB6D8FF);
+}
+
 static void frame(gfx_surface *s, gfx_rect r, uint32_t c, int w)
 {
     gfx_fill(s, gfx_r(r.x, r.y, r.w, w), c);
@@ -69,6 +79,7 @@ static void paint_ctl(gfx_surface *s, gfx_rect r, const struct ctl *c, bool focu
                     s->clip = clip;
                     int cw = gfx_text_width_n(f, value, pos);
                     int x = in.x - MAX(0, cw - in.w + 3);
+                    if (c->type != C_PASSWORD) selection(s, f, c, 0, c->len, x, r.y + 2, r.h - 4);
                     gfx_text_n(s, x, r.y + (r.h - f->line_height) / 2, f, value, n, ink, 255);
                     gfx_fill(s, gfx_r(x + cw + 1, r.y + 3, 2, r.h - 6), CTL_FOCUS);
                     s->clip = old;
@@ -107,6 +118,7 @@ static void paint_ctl(gfx_surface *s, gfx_rect r, const struct ctl *c, bool focu
                     int y = r.y + 3 + (line - skip) * f->line_height;
                     if (y >= r.y + r.h) break;
                     if (y + f->line_height > r.y) {
+                        if (focused) selection(s, f, c, start, end - start, r.x + 4, y, f->line_height);
                         gfx_text_n(s, r.x + 4, y, f, c->value + start, end - start, ink, 255);
                         if (focused && caret) {
                             int cx = r.x + 4 + gfx_text_width_n(f, c->value + start, c->cursor - start);

@@ -37,14 +37,27 @@ bool stowaway_ack(unsigned *state, uint8_t byte)
 
 static void emit_press(struct stowaway_decoder *s, unsigned key, stowaway_emit emit)
 {
+    bool shift = s->down[87] || s->down[88];
     if (special[key]) {
-        emit(GZ_EV_KEY_DOWN, special[key]);
+        unsigned code = special[key];
+        if (shift) {
+            if (code == GZ_KEY_LEFT) code = GZ_KEY_SELECT_LEFT;
+            if (code == GZ_KEY_RIGHT) code = GZ_KEY_SELECT_RIGHT;
+            if (code == GZ_KEY_KBD_HOME) code = GZ_KEY_SELECT_HOME;
+            if (code == GZ_KEY_END) code = GZ_KEY_SELECT_END;
+        }
+        s->held[key] = code;
+        emit(GZ_EV_KEY_DOWN, code);
         return;
     }
     unsigned ch = (unsigned char)plain[key];
-    if (!ch || s->down[26] || s->down[35])
-        return;                     /* no Ctrl/Alt text or control bytes */
-    bool shift = s->down[87] || s->down[88];
+    if (!ch || s->down[35]) return;
+    if (s->down[26]) {
+        unsigned code = ch == 'a' ? GZ_KEY_SELECT_ALL : ch == 'c' ? GZ_KEY_COPY :
+                        ch == 'x' ? GZ_KEY_CUT : ch == 'v' ? GZ_KEY_PASTE : 0;
+        if (code) { s->held[key] = code; emit(GZ_EV_KEY_DOWN, code); }
+        return; /* Never insert Ctrl letters into the document. */
+    }
     if (ch >= 'a' && ch <= 'z') {
         if (shift != s->caps)
             ch -= 'a' - 'A';
@@ -64,8 +77,8 @@ void stowaway_decode(struct stowaway_decoder *s, uint8_t byte, uint32_t now, sto
     if (release) {
         if (s->repeat == (int)key + 1)
             s->repeat = 0;
-        if (special[key])
-            emit(GZ_EV_KEY_UP, special[key]);
+        if (s->held[key]) emit(GZ_EV_KEY_UP, s->held[key]);
+        s->held[key] = 0;
         return;
     }
     if (key == 24)
