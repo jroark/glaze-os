@@ -1875,7 +1875,7 @@ static void handle_msg(int token, struct gz_msg *m)
             if (idle.dark) { idle.dark = false; screen_wake(); }
             idle.last_activity = now_ms();
         }
-        debug_activity = m->w[1] & (GU_DEBUG_CONNECTED | GU_DEBUG_COPY | GU_DEBUG_SCRIPT);
+        debug_activity = m->w[1] & (GU_DEBUG_CONNECTED | GU_DEBUG_COPY | GU_DEBUG_SCRIPT | GU_DEBUG_NETWORK);
         debug_until = now_ms() + 2000;
         if (debug_app_pid && !gz_proc_alive(debug_app_pid)) debug_app_pid = 0;
         r.w[1] = debug_activity | (debug_app_pid ? GU_DEBUG_RUN : 0);

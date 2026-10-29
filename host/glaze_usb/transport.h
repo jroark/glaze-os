@@ -13,6 +13,7 @@ struct usb_link {
     unsigned revision;
     int lines_active;
     int claimed;
+    void *network;
 };
 int usb_open(struct usb_link *l, const char *location, int describe);
 int usb_reset_link(const char *location, int trace);

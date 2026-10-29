@@ -53,9 +53,10 @@ USB_PKG_CONFIG ?= $(if $(wildcard /opt/homebrew/bin/pkg-config),/opt/homebrew/bi
 USB_FLAGS := $(shell $(USB_PKG_CONFIG) --cflags --libs libusb-1.0 2>/dev/null)
 USB_CC ?= $(CC)
 USB_SOURCES := $(wildcard glaze_usb/*.c)
-../out/host/glaze-usb: $(USB_SOURCES) $(wildcard glaze_usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h
+USB_TLS := -I../third_party/wolfssl -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS
+../out/host/glaze-usb: $(USB_SOURCES) $(wildcard glaze_usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h ../lib/include/glaze/debug_net.h libwolfssl.a
 	@mkdir -p ../out/host
-	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(USB_SOURCES) $(USB_FLAGS) -o $@
+	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(USB_TLS) $(USB_SOURCES) libwolfssl.a $(USB_FLAGS) -o $@
 glaze-usb: ../out/host/glaze-usb
 .PHONY: glaze-usb
 
@@ -94,9 +95,9 @@ usb-cleanup-test:
 .PHONY: usb-cleanup-test
 
 # Real native CLI, with USB calls forwarded into the emulator by a test peer.
-glaze-usb-emulator: $(USB_SOURCES) ../tests/usb_libusb_stub.c
+glaze-usb-emulator: $(USB_SOURCES) ../tests/usb_libusb_stub.c ../lib/include/glaze/debug_net.h libwolfssl.a
 	@mkdir -p ../out/host
-	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(USB_SOURCES) ../tests/usb_libusb_stub.c -o ../out/host/glaze-usb-emulator
+	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(USB_TLS) $(USB_SOURCES) ../tests/usb_libusb_stub.c libwolfssl.a -o ../out/host/glaze-usb-emulator
 .PHONY: glaze-usb-emulator
 
 sheet: sheet.c hostres.c $(GFX)
@@ -585,3 +586,14 @@ DOOM_NATIVE_OBJS := $(patsubst ../%.c,../out/host/doom/%.o,$(DOOM_VENDOR) $(DOOM
 doom-test: ../out/host/doom-test
 	../out/host/doom-test
 	$(if $(DOOM_WAD),ASAN_OPTIONS=detect_leaks=0 ../out/host/doom-test "$(DOOM_WAD)",@echo "Optional full engine test: make doom-test DOOM_WAD=/absolute/path/doom1.wad")
+
+../out/host/debug-net-fixture: ../tests/debug_net_native.c ../servers/usb/network.c ../servers/usb/network.h ../lib/include/glaze/debug_net.h libwolfssl.a
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) $(USB_TLS) -fsanitize=address,undefined $(filter %.c,$^) libwolfssl.a -o $@
+.PHONY: debug-net-test
+debug-net-test: ../out/host/debug-net-fixture ../out/host/glaze-usb
+	python3 ../tests/debug_network.py
+../out/host/debug-net-client: ../tests/debug_net_client.c glaze_usb/network.c glaze_usb/network.h ../lib/include/glaze/debug_net.h libwolfssl.a
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) $(USB_TLS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(filter %.c,$^) libwolfssl.a -o $@
+debug-net-test: ../out/host/debug-net-client

@@ -1,6 +1,8 @@
 /* Settings: network, sounds, wallpaper, date & time, passcode, touch, about. */
 
 #include <glaze/audio.h>
+#include <glaze/debug_net.h>
+#include <glaze/fs.h>
 #include <glaze/display.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
@@ -16,7 +18,7 @@
 #include <string.h>
 
 enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
-            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT };
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -33,7 +35,7 @@ enum {
     R_WIFI, R_WIFI_SCAN, R_WIFI_DISCONNECT, R_WIFI_AP0,
     R_WIFI_FORGET = R_WIFI_AP0 + WIFI_AP_MAX, R_WIFI_SECURITY, R_WIFI_EDIT, R_WIFI_SHOW,
     R_WIFI_KEY_INDEX, R_WIFI_AUTH, R_WIFI_JOIN, R_WIFI_DONE,
-    R_REBOOT_CE, R_REBOOT_CONFIRM,
+    R_REBOOT_CE, R_REBOOT_CONFIRM, R_DEBUG, R_DEBUG_TOGGLE, R_DEBUG_IMPORT,
 };
 
 struct hit {
@@ -55,6 +57,7 @@ static char wifi_password[65];
 static int wifi_cursor;
 static bool wifi_show, wifi_editing;
 static bool ce_boot;
+static const char *debug_message;
 static const char *reboot_msg;
 static struct ui_keyboard wifi_keyboard;
 static const char *const wifi_security_names[] = {"Open", "WEP", "WPA Personal", "WPA2 Personal"};
@@ -320,7 +323,7 @@ static void draw_root(gfx_surface *s)
     if (cell_visible(s))
         root_card = card_key(&st);
     if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
-    root_scroll.content_h = (7 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
+    root_scroll.content_h = (8 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
     root_scroll.view_h = UI_H - UI_NAV_H;
     if (!root_scroll.dragging && !root_scroll.animating)
         root_scroll.offset = MAX(0, MIN(root_scroll.offset, ui_scroll_max(&root_scroll)));
@@ -339,6 +342,7 @@ static void draw_root(gfx_surface *s)
     bool enabled = cell_visible(s) && passcode_enabled();
     cell(s, 2, "Passcode Lock", enabled ? "On" : "Off", true, R_PASSCODE);
     cell(s, 2, "Touch Calibration", NULL, true, R_TOUCH);
+    cell(s, 2, "Debugging", NULL, true, R_DEBUG);
     cell(s, 3, "About", NULL, true, R_ABOUT);
     if (ce_boot) {
         section_gap();
@@ -473,6 +477,28 @@ static void draw_about(gfx_surface *s)
     cell(s, 2, "Available", avail, false, 0);
     cell(s, 2, "Processes", procs, false, 0);
     cell(s, 3, "Uptime", up, false, 0);
+}
+
+static void draw_debug(gfx_surface *s)
+{
+    int32_t on=0; uint8_t config[GD_CONFIG_BYTES+1];
+    bool paired=pref_get(GD_CONFIG,config,sizeof config)==GD_CONFIG_BYTES;
+    memset(config,0,sizeof config);
+    if (pref_get(GD_ENABLED,&on,4)!=4) on=0;
+    struct net_status st={0}; char address[32],ip[16];
+    bool up=net_status(&st)>=0 && (st.state==NET_UP || st.state==NET_UP_STATIC);
+    snprintf(address,sizeof address,"%s:%u",up ? net_ntoa(st.addr,ip) : "No network",GD_PORT);
+    nhits=0;
+    ui_draw_pinstripes(s,gfx_r(0,UI_NAV_H,UI_W,UI_H-UI_NAV_H));
+    ui_draw_navbar(s,"Debugging","Settings",&back_rect,0); add_hit(back_rect,R_BACK);
+    section_y=UI_NAV_H+12;
+    cell(s,1,"Network Debugging",on==1 ? "On" : "Off",false,R_DEBUG_TOGGLE);
+    cell(s,2,"Pairing",paired ? "Key installed" : "No key",false,0);
+    cell(s,3,"Address",up ? address : "No network",false,0);
+    section_gap(); cell(s,0,"Import DEBUG.KEY",NULL,true,R_DEBUG_IMPORT);
+    gfx_text_center(s,0,194,UI_W,ui_font(FONT_R11),"Use a paired computer to debug over TLS.",UI_TEXT_DETAIL,255);
+    gfx_text_center(s,0,213,UI_W,ui_font(FONT_R11),"Import a key from Documents or Card.",UI_TEXT_DETAIL,255);
+    if (debug_message) gfx_text_center(s,0,245,UI_W,ui_font(FONT_R10),debug_message,UI_TEXT_DETAIL,255);
 }
 
 static void draw_network(gfx_surface *s)
@@ -873,6 +899,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_DATETIME: draw_datetime(s); break;
     case V_ABOUT: draw_about(s); break;
     case V_NETWORK: draw_network(s); break;
+    case V_DEBUG: draw_debug(s); break;
     case V_WIFI: draw_wifi(s); break;
     case V_WIFI_CREDENTIALS: draw_wifi_credentials(s); break;
     case V_PASSCODE: draw_passcode(s); break;
@@ -1435,6 +1462,36 @@ static void activate(int id)
             s_synced = 0;
         go(V_DATETIME, true);
         return;
+    case R_DEBUG: debug_message=NULL; go(V_DEBUG,true); return;
+    case R_DEBUG_TOGGLE: {
+        int32_t on=0; uint8_t c[GD_CONFIG_BYTES+1];
+        if (pref_get(GD_ENABLED,&on,4)!=4) on=0;
+        bool paired=pref_get(GD_CONFIG,c,sizeof c)==GD_CONFIG_BYTES;
+        memset(c,0,sizeof c);
+        if (on!=1 && !paired) debug_message="Import a pairing key first.";
+        else { on=on==1 ? 0 : 1; debug_message=pref_put(GD_ENABLED,&on,4)<0 ? "Could not save setting." : NULL; }
+        break;
+    }
+    case R_DEBUG_IMPORT: {
+        uint8_t key[GD_CONFIG_BYTES+1];
+        int n=fs_read_file("/Documents/DEBUG.KEY",key,sizeof key);
+        if (n<0) n=fs_read_file("/Card/DEBUG.KEY",key,sizeof key);
+        uint8_t a=0,b=0;
+        if (n==GD_CONFIG_BYTES) for (unsigned i=0;i<32;i++) { a|=key[i]; b|=key[32+i]; }
+        if (n!=GD_CONFIG_BYTES || !a || !b) debug_message="A valid DEBUG.KEY is required.";
+        else {
+            /* Serialize imports with the debugger's RNG ratchet. */
+            int port=gz_port_lookup(GD_PAIR_PORT),rv=GZ_ENOENT;
+            struct gz_msg request,response;
+            memcpy(&request,key,GD_CONFIG_BYTES);
+            if (port>0) { rv=gz_send(port,&request,&response); if (!rv) rv=(int)response.w[0]; }
+            volatile uint8_t *wipe=(uint8_t *)&request;
+            for (unsigned i=0;i<sizeof request;i++) wipe[i]=0;
+            debug_message=rv ? "Debug service unavailable or save failed." : "Key imported. Enable debugging above.";
+        }
+        volatile uint8_t *p=key; for (unsigned i=0;i<sizeof key;i++) p[i]=0;
+        break;
+    }
     case R_ABOUT: go(V_ABOUT, true); return;
     case R_PASSCODE: go(V_PASSCODE, true); return;
     case R_PIN_ON:
@@ -1606,7 +1663,7 @@ int main(void)
 
     for (;;) {
         struct gz_input_event ev;
-        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI ? 1000
+        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI || view == V_DEBUG ? 1000
                     : view == V_ROOT ? 2000 : -1;
         if (view == V_TOUCH_TEST)
             timeout = 250;

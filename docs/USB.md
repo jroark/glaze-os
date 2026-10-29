@@ -5,6 +5,10 @@ Glaze. It can upload and launch a CE executable, boot Glaze through GlazeBoot,
 transfer files, launch Glaze apps, read console logs, and reload the kernel
 and romfs directly from a running Glaze system.
 
+Paired network debugging exposes the same Glaze runtime commands through
+`--host ADDRESS --key KEYFILE`; see [Network debugging](NETWORK_DEBUG.md) for
+pairing, Settings controls, encrypted transport and reload reconnection.
+
 ## Build and boot
 
 On macOS, install libusb and pkg-config, and have the existing Docker cross
@@ -190,7 +194,7 @@ write when that request is replayed. Partial transfers are aborted on session
 changes or 30 seconds of inactivity.
 
 The kernel owns bounded RX/TX/log rings and an allocated uncached DMA page.
-The trusted service catalog starts `bin/usb` after the file server and grants
+The trusted service catalog starts dynamically linked `bin/usb` after the file server and grants
 its USB and compositor capabilities; ordinary app spawning cannot grant USB
 access. Stopping the service cancels queued input and releases held gestures.
 Filesystem and SpringBoard operations run in userspace. Console logs survive early boot

@@ -158,6 +158,11 @@ $(OUT)/apps/appstore/%.o: USER_CFLAGS += -DAPPSTORE_URL='"$(APPSTORE_URL)"' -Iap
 $(OUT)/apps/appstore/main.o $(OUT)/dyn/apps/appstore/main.o: FORCE
 
 
+PROG_CFLAGS_usb := $(WOLFSSL_INC)
+PROG_DEPS_usb := $(OUT)/shared/libwolfssl.so.1
+PROG_LDLIBS_usb := -l:libwolfssl.so.1
+$(OUT)/servers/usb/%.o: USER_CFLAGS += $(WOLFSSL_INC)
+
 PROG_CFLAGS_browser := -Ithird_party/stb $(WOLFSSL_INC) $(JERRY_INC)
 PROG_CFLAGS_video := -Ithird_party/stb
 PROG_EXTRA_audio := apps/browser/conn.c apps/browser/tls.c apps/browser/url.c
@@ -206,6 +211,13 @@ USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)
 # ---- user programs ----------------------------------------------------------
 
 PROG_DIRS := $(wildcard apps/* servers/*)
+ifeq ($(NETDEBUG_TESTS),1)
+PROG_DIRS += tests/debug_guest
+PROG_CFLAGS_debug_guest := $(WOLFSSL_INC) -DDEBUG_RELOAD_ADDR='"$(or $(DEBUG_RELOAD_ADDR),10.0.0.254)"'
+PROG_DEPS_debug_guest := $(OUT)/shared/libwolfssl.so.1
+PROG_LDLIBS_debug_guest := -l:libwolfssl.so.1
+$(OUT)/dyn/tests/debug_guest/main.o: FORCE
+endif
 ifeq ($(SERVICE_TESTS),1)
 PROG_DIRS += tests/service_guest tests/service_hotplug
 endif
@@ -235,7 +247,7 @@ $(OUT)/servers/%.o: servers/%.c
 	$(CC) $(USER_CFLAGS) -c -o $@ $<
 
 # Bootstrap services are independent of the dynamic linker and file server.
-STATIC_PROGS := fs net usb
+STATIC_PROGS := fs net
 
 define STATIC_template
 $(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/lib/crt0.o $(USER_LIBS) $$(PROG_STATIC_DEPS_$(notdir $(1))) lib/user.lds
@@ -299,7 +311,7 @@ $(OUT)/pic/libwolfssl.a: $(WOLFSSL_PIC_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-# TLS code is shared by Browser, App Store and the radio audio service.
+# TLS code is shared by Browser, App Store, radio and the development service.
 # Its only application-provided imports are glaze_tls_seed/time; those are
 # exported by each executable and resolved by ld-glaze at process startup.
 $(OUT)/shared/libwolfssl.so.1: $(WOLFSSL_PIC_OBJS) $(OUT)/shared/libc.so.1 lib/wolfssl.exports.map

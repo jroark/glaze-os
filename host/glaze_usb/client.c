@@ -59,7 +59,7 @@ int gu_call(struct gu_client *c, uint32_t op, const void *data, uint32_t n)
     size_t size = gu_encode(out, op, id, 0, data, n);
     if (!size || !id) return -1;
     int r = usb_write(c->usb, out, size, 5000);
-    if (op == GU_ENTROPY) erase(out, size);
+    erase(out, size);
     if (r) return r;
     uint64_t end = now() + 10000;
     while (now() < end && !usb_cancelled) {
@@ -140,7 +140,7 @@ int gu_upload(struct gu_client *c, const char *local, const char *remote)
         if (gu_call(c, GU_PUT_DATA, b, (uint32_t)n + 4) < 0) { result = -1; break; }
         off += (uint32_t)n;
     }
-    fclose(f);
+    fclose(f); erase(b,sizeof b);
     if (!result && gu_call(c, GU_PUT_END, NULL, 0) < 0) result = -1;
     if (result) gu_call(c, GU_ABORT, NULL, 0);
     else fprintf(stderr, "Uploaded and verified %u bytes to %s\n", size, remote);

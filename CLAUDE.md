@@ -48,6 +48,14 @@ fetched). Platform I/O, buttons, indexed video and PCM effects live in
 `make -C host doom-test` uses synthetic data; `DOOM_WAD=/external/doom1.wad`
 adds real-engine movement/audio/save/load checks. See `docs/DOOM.md`.
 
+Network development transport is in `servers/usb/network.c`, sharing the
+USB dispatcher's capabilities and lifecycle. `glaze-usb --host HOST --key FILE`
+uses TLS 1.2 ECDHE-PSK; it is off by default. See `docs/NETWORK_DEBUG.md`.
+`make -C host debug-net-test` runs native paired-TLS tests; the opt-in
+`NETDEBUG_TESTS=1 INIT=bin/debug_guest DEBUG_RELOAD_ADDR=HOST_LAN_IP` image and
+`tests/debug_runtime.py` check real lwIP/RPC and reload/reconnect. Rebuild normally
+after testing. Never commit `DEBUG.KEY`, other pairing files, or fixture images.
+
 ## Running and testing
 
 `make out/pkg/chatgpt.gzp` builds the direct Codex chat package. Its device-code
@@ -73,7 +81,7 @@ be300 --nand out/glaze.bin --rtc-host-time --cf out/cf.img    # with a CompactFl
 
 ## Toolchain constraints
 
-- All targets use `-march=mips2 -mabi=32 -G 0 -msoft-float` and are freestanding. Kernel, SPL, interpreter and bootstrap services use `-mno-abicalls -fno-pic`; shared libraries and apps use `-mabicalls -fPIC`. The VR4131 is MIPS III without CLZ or MIPS32 SPECIAL2 ops, and the emulator executes 32-bit code only.
+- All targets use `-march=mips2 -mabi=32 -G 0 -msoft-float` and are freestanding. Kernel, SPL, interpreter and bootstrap services (fs and net) use `-mno-abicalls -fno-pic`; shared libraries and apps use `-mabicalls -fPIC`. The VR4131 is MIPS III without CLZ or MIPS32 SPECIAL2 ops, and the emulator executes 32-bit code only.
 - Nothing links libgcc. Compiler helpers live in `lib/libc` (`divdi3.c` for 64-bit division, `bitops.c` for `__popcountsi2`, `__ctzsi2`, `__clzsi2` and `__bswapsi2`). An "undefined reference to `__…si2`" means another helper is needed there.
 - The libc is minimal (`lib/libc/include`). Check it has a function before using it, or add it to `lib/libc/string.c` and similar. The kernel compiles `lib/libc/string.c` and `divdi3.c` too.
 - The VR4131 has no LL/SC (VR4131 UM: "does not support LL, LLD, SC, SCD"), so there are no userspace atomics: every lock is a kernel semaphore (`gz_mutex` in `glaze/thread.h`).

@@ -9,6 +9,8 @@
     wolfSSL_check_ip_address; wolfSSL_connect; wolfSSL_free;
     wolfSSL_get1_session; wolfSSL_get_error; wolfSSL_new; wolfSSL_read;
     wolfSSL_set_session; wolfSSL_shutdown; wolfSSL_write;
-    wolfSSLv23_client_method;
+    wolfSSLv23_client_method; wolfTLSv1_2_server_method; wolfTLSv1_2_client_method;
+    wolfSSL_CTX_set_psk_server_callback; wolfSSL_CTX_set_psk_client_callback;
+    wolfSSL_CTX_set_cipher_list; wolfSSL_accept;
   local: *;
 };
