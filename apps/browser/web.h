@@ -118,7 +118,7 @@ struct attr {
     const char *value;
 };
 
-enum { N_DOC, N_ELEM, N_TEXT };
+enum { N_DOC, N_ELEM, N_TEXT, N_FRAGMENT };
 
 struct style;
 struct ctl;
@@ -162,6 +162,7 @@ void dom_remove(struct page *p, struct node *n);
 bool dom_attr(struct page *p, struct node *n, const char *name, const char *value);
 bool dom_content(struct page *p, struct node *n, const char *text, bool html);
 char *dom_serialize(struct page *p, struct node *n, bool outer);
+struct node *dom_clone(struct page *p, struct node *n, bool deep);
 struct node *dom_query(struct page *p, struct node *root, const char *selector, struct node *after);
 int dom_select(struct page *p,struct node *root,const char *selector,struct node **out,int max);
 bool css_node_matches(const struct css_selector *selector,const struct node *n);
@@ -381,7 +382,7 @@ void ctl_toggle(struct page *p, struct ctl *c);
 
 /* ---- page, layout and painting ----------------------------------------------- */
 
-enum { DI_RECT, DI_TEXT, DI_IMAGE, DI_CTL, DI_BULLET, DI_FRAME };
+enum { DI_RECT, DI_TEXT, DI_IMAGE, DI_CTL, DI_BULLET, DI_FRAME, DI_BOX };
 
 struct ditem {
     uint8_t kind, deco;
@@ -425,6 +426,7 @@ struct script_slot {
     struct node *node;
     char *url, *source;
     int fetch, len;
+    bool module;
     uint8_t state;
 };
 struct frame_slot {
@@ -476,7 +478,7 @@ struct page {
     struct script_slot scripts[PAGE_MAX_SCRIPTS];
     struct frame_slot frames[PAGE_MAX_FRAMES];
     int nscripts,nframes,script_next,dom_nodes;
-    int viewport_h;
+    int viewport_h, scroll_y;
     unsigned serial;
     uint32_t start_ms;
     double time_origin;

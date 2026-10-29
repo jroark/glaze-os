@@ -706,6 +706,6 @@ store: packages
 	$(PYTHON) tools/mkstore.py --packages $(OUT)/pkg --output $(OUT)/store
 .PHONY: store
 
-$(OUT)/include/js_bootstrap.h: apps/browser/js_dom.js tools/mkjsbootstrap.py
+$(OUT)/include/js_bootstrap.h: apps/browser/js_dom.js apps/browser/js_web.js tools/mkjsbootstrap.py
 	python3 tools/mkjsbootstrap.py $< $@
 $(OUT)/apps/browser/script.o $(OUT)/dyn/apps/browser/script.o: $(OUT)/include/js_bootstrap.h

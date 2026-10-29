@@ -18,7 +18,7 @@ legacy framesets. Drag inside a long frame to scroll its contents.
   existing HTTP/HTTPS/file/res/data loader, redirects and cookies.
 - JerryScript's JavaScript language and standard objects, including numbers,
   Math, Date, JSON, arrays, typed arrays, Map/Set, promises and functions.
-  BigInt and ES modules are disabled. SharedArrayBuffer and Atomics are hidden;
+  ES modules are enabled; BigInt is disabled. SharedArrayBuffer and Atomics are hidden;
   there are no browser workers.
 - `window`, `self`, `globalThis`, `document`, `location`, console logging,
   `alert` (console output), function-based timers, and event listeners.
@@ -45,6 +45,13 @@ legacy framesets. Drag inside a long frame to scroll its contents.
   `contentWindow`, parent/top and named entries in `frames`; foreign or
   sandboxed contexts return null. Native node references expire on unload.
 
+The bounded Web APIs also include fetch, AbortController, URL/URLSearchParams,
+UTF-8 text conversion, local/session storage, fragments, cloning, richer events,
+layout measurements, animation callbacks, and static/dynamic ES modules.
+See [BROWSER_WEB_APIS.md](BROWSER_WEB_APIS.md) for interfaces, quotas, security
+checks, examples, and deliberate compatibility limits. `res:apis.html` is an
+offline demonstration linked from the welcome page.
+
 ## Limits and compatibility
 
 Scripts run after HTML parsing; `async` and `defer` currently use the same
@@ -52,8 +59,8 @@ ordered execution model. `document.write` inserts after the executing script,
 or appends to the body outside script loading. Scripts inserted through
 `innerHTML` stay inert. Node lists are snapshots. The DOM and CSS interfaces
 are a subset; layout remains Glaze's integer layout engine. There is no
-Fetch/XHR, canvas scripting, WebAssembly, storage API or full browser history
-API. Child navigation does not create top-level history entries. Unicode
+XHR, canvas scripting, WebAssembly, IndexedDB or full browser history
+API. Fetch and origin-scoped storage are bounded subsets described above. Child navigation does not create top-level history entries. Unicode
 text entering the rendered DOM uses Glaze's existing font/charset mappings.
 
 With scripting enabled, `noscript` contents are inert raw text in both the head
@@ -93,13 +100,14 @@ File documents have distinct origins; about:blank/srcdoc inherit their creator.
 `make -j4` builds the browser and `out/glaze.bin`. The engine, fdlibm math
 routines and selected LLVM soft-float helpers are browser-private archives;
 other apps do not acquire a JavaScript runtime dependency. The factory romfs
-currently has about 40 KiB free; its slot is separate from user file storage. Build provenance
+currently occupies about 96% of its slot; its slot is separate from user file storage. Build provenance
 and local vendor changes are recorded in `third_party/*/UPSTREAM.md`.
 
 `make -C host browser-test` runs ASan/UBSan integration tests against a local
 HTTP fixture server: DOM/events/timers, script order, errors and execution
 budgets, allocation failure/restart, frame navigation, origin isolation,
-sandboxing, CSP/XFO, framesets and embedding limits.
+sandboxing, CSP/XFO, framesets and embedding limits, plus the Web API, CORS,
+storage persistence and module tests described in the companion document.
 
 `make -C host browser-google` builds an opt-in live workflow check. Run
 `(cd host && ../out/host/browser-google)` to open Google, submit the default

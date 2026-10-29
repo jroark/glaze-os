@@ -48,3 +48,12 @@ unsigned glaze_js_random(void)
     state ^= state << 5;
     return state & 0x7fffffff;
 }
+/* The browser supplies an asynchronous policy-aware module resolver. Never
+ * let Jerry's optional default resolver bypass it with filesystem access. */
+jerry_char_t *jerry_port_path_normalize(const jerry_char_t *path,jerry_size_t size)
+{ (void)path;(void)size;return NULL; }
+void jerry_port_path_free(jerry_char_t *path) { free(path); }
+jerry_size_t jerry_port_path_base(const jerry_char_t *path) { (void)path;return 0; }
+jerry_char_t *jerry_port_source_read(const char *path,jerry_size_t *size)
+{ (void)path;*size=0;return NULL; }
+void jerry_port_source_free(jerry_char_t *buffer) { free(buffer); }

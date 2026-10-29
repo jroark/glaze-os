@@ -115,7 +115,7 @@ static int buf_append(struct http *h, const uint8_t *d, int n)
 }
 
 static struct http *start(const char *url, const char *post, int post_len, const char *post_type,
-                          const char *cookies, const char *bearer, const char *account, int max_body, int idle_ms, bool api)
+                          const char *cookies, const char *bearer, const char *account, int max_body, int idle_ms, bool api, const char *origin)
 {
     static struct url u;
     struct http *h;
@@ -148,7 +148,7 @@ static struct http *start(const char *url, const char *post, int post_len, const
 
     size_t cap = strlen(u.path) + strlen(u.query) + strlen(u.host) + (cookies ? strlen(cookies) : 0) +
                  (size_t)(post ? post_len : 0) + (bearer ? strlen(bearer) + 32 : 0) +
-                 (account ? strlen(account) + 96 : 0) + 1024;
+                 (account ? strlen(account) + 96 : 0) + (origin ? strlen(origin) + 16 : 0) + 1024;
     h->req = malloc(cap);
     if (!h->req) {
         free(h);
@@ -167,12 +167,16 @@ static struct http *start(const char *url, const char *post, int post_len, const
                      api ? (account ? "text/event-stream" : "application/json") :
                            "text/html,application/xhtml+xml,image/png,image/jpeg,image/gif,*/*;q=0.5",
                      api ? "identity" : "gzip, deflate");
+    if (origin)
+        n += snprintf(h->req + n, cap - (size_t)n, "Origin: %s\r\n", origin);
     if (cookies && *cookies)
         n += snprintf(h->req + n, cap - (size_t)n, "Cookie: %s\r\n", cookies);
     if (bearer)
         n += snprintf(h->req + n, cap - (size_t)n, "Authorization: Bearer %s\r\n", bearer);
     if (account)
         n += snprintf(h->req + n, cap - (size_t)n, "ChatGPT-Account-Id: %s\r\noriginator: glaze_chat\r\n", account);
+    if (!post && post_type)
+        n += snprintf(h->req + n,cap-(size_t)n,"Content-Type: %s\r\n",post_type);
     if (post)
         n += snprintf(h->req + n, cap - (size_t)n, "Content-Type: %s\r\nContent-Length: %d\r\n",
                       post_type ? post_type : "application/x-www-form-urlencoded", post_len);
@@ -199,7 +203,16 @@ static struct http *start(const char *url, const char *post, int post_len, const
 struct http *http_start(const char *url, const char *post, int post_len, const char *post_type,
                         const char *cookies, int max_body)
 {
-    return start(url, post, post_len, post_type, cookies, NULL, NULL, max_body, IDLE_MS, false);
+    return start(url, post, post_len, post_type, cookies, NULL, NULL, max_body, IDLE_MS, false, NULL);
+}
+
+struct http *http_start_web(const char *url, const char *post, int post_len,
+    const char *type, const char *cookies, const char *origin, int max_body)
+{
+    if (!origin || strlen(origin) > 256 || origin[strcspn(origin,"\r\n")] ||
+        (type && (strlen(type) > 128 || type[strcspn(type,"\r\n")]))) return NULL;
+    return start(url, post, post_len, type, cookies, NULL, NULL,
+                 max_body, IDLE_MS, false, origin);
 }
 
 struct http *http_start_post(const char *url, const char *post, int post_len,
@@ -212,7 +225,7 @@ struct http *http_start_post(const char *url, const char *post, int post_len,
     struct url u;
     if (!url_parse(url, &u) || (strcmp(u.scheme, "http") && strcmp(u.scheme, "https"))) return NULL;
     struct http *h = start(url, post, post_len, o->content_type, NULL,
-                            o->bearer && *o->bearer ? o->bearer : NULL, o->account, o->max_body, o->idle_ms, true);
+                            o->bearer && *o->bearer ? o->bearer : NULL, o->account, o->max_body, o->idle_ms, true, NULL);
     if (h) {
         h->sink = o->sink; h->sink_arg = o->sink_arg;
     }

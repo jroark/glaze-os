@@ -39,6 +39,7 @@
     proto.insertBefore=function(n,b){return dom('insert',this,n,b);};
     proto.removeChild=function(n){if(n.parentNode!==this)throw Error('Not a child');dom('remove',n);return n;};
     proto.remove=function(){dom('remove',this);};
+    proto.cloneNode=function(deep){return dom('clone',this,!!deep);};
     proto.replaceChild=function(n,o){this.insertBefore(n,o);this.removeChild(o);return o;};
     proto.querySelectorAll=function(s){return dom('query',this,String(s));};
     proto.querySelector=function(s){return this.querySelectorAll(s)[0]||null;};
@@ -74,22 +75,51 @@
     prop('contentWindow',function(){return dom('frameWindow',this);});
     proto.submit=function(){dom('submit',this);};
     proto.reset=function(){dom('reset',this);};
-    function add(type,fn){if(typeof fn==='function'||fn&&typeof fn.handleEvent==='function')listeners.push({target:this,type:String(type),fn:fn});}
-    function remove(type,fn){for(var i=listeners.length-1;i>=0;i--)if(listeners[i].target===this&&listeners[i].type===type&&listeners[i].fn===fn)listeners.splice(i,1);}
-    function Event(type,options){this.type=String(type);this.bubbles=!!(options&&options.bubbles);this.cancelable=!!(options&&options.cancelable);this.defaultPrevented=false;this._stop=false;}
-    Event.prototype.preventDefault=function(){if(this.cancelable)this.defaultPrevented=true;};
+    function add(type,fn,options){
+        if(!(typeof fn==='function'||fn&&typeof fn.handleEvent==='function'))return;
+        var capture=typeof options==='boolean'?options:!!(options&&options.capture);
+        type=String(type);
+        for(var i=0;i<listeners.length;i++)if(listeners[i].target===this&&listeners[i].type===type&&listeners[i].fn===fn&&listeners[i].capture===capture)return;
+        if(options&&options.signal&&options.signal.aborted)return;
+        var rec={target:this,type:type,fn:fn,capture:capture,once:!!(options&&options.once),passive:!!(options&&options.passive)};
+        listeners.push(rec);
+        if(options&&options.signal){rec.signal=options.signal;rec.abort=function(){dropListener(rec);};rec.signal.addEventListener('abort',rec.abort,{once:true});}
+    }
+    function dropListener(rec){var i=listeners.indexOf(rec);if(i>=0)listeners.splice(i,1);if(rec.signal)rec.signal.removeEventListener('abort',rec.abort);}
+    function remove(type,fn,options){var capture=typeof options==='boolean'?options:!!(options&&options.capture);for(var i=listeners.length-1;i>=0;i--)if(listeners[i].target===this&&listeners[i].type===String(type)&&listeners[i].fn===fn&&listeners[i].capture===capture)dropListener(listeners[i]);}
+    function Event(type,options){this.type=String(type);this.bubbles=!!(options&&options.bubbles);this.cancelable=!!(options&&options.cancelable);this.defaultPrevented=false;this._stop=false;this._immediate=false;this.eventPhase=0;this.timeStamp=dom('performanceNow');}
+    Event.prototype.preventDefault=function(){if(this.cancelable&&!this._passive)this.defaultPrevented=true;};
     Event.prototype.stopPropagation=function(){this._stop=true;};
+    Event.prototype.stopImmediatePropagation=function(){this._stop=this._immediate=true;};
+    Event.prototype.composedPath=function(){return (this._path||[]).slice();};
     function dispatch(target,type,event){
-        var e=event||new Event(type,{bubbles:type!=='load',cancelable:true});e.target=target;
-        for(var n=target;n;n=(n===document?win:n.parentNode)){
-            e.currentTarget=n;
-            var fn=n['on'+e.type];
-            if(!fn&&n.nodeType===1){var source=n.getAttribute('on'+e.type);if(source)fn=dom('handler',n,source);}
-            if(typeof fn==='function'&&fn.call(n,e)===false)e.preventDefault();
+        var e=event||new Event(type,{bubbles:type!=='load',cancelable:true});
+        if(e.eventPhase)throw Error('Event is already being dispatched');
+        e.target=target;e._stop=e._immediate=false;
+        var path=[target];for(var n=target;n&&n!==win;){n=n===document?win:n.parentNode;if(n)path.push(n);}
+        e._path=path.slice();
+        function invoke(n,capture,phase){
+            e.currentTarget=n;e.eventPhase=phase;
             var copy=listeners.slice();
-            for(var i=0;i<copy.length;i++)if(copy[i].target===n&&copy[i].type===e.type){var cb=copy[i].fn;if(typeof cb==='function')cb.call(n,e);else cb.handleEvent(e);}
-            if(e._stop||!e.bubbles||n===win)break;
+            for(var i=0;i<copy.length&&!e._immediate;i++){
+                var rec=copy[i];
+                if(rec.target!==n||rec.type!==e.type||rec.capture!==capture||listeners.indexOf(rec)<0)continue;
+                if(rec.once)dropListener(rec);
+                e._passive=rec.passive;
+                try{if(typeof rec.fn==='function')rec.fn.call(n,e);else rec.fn.handleEvent(e);}catch(err){console.error(err);}
+                e._passive=false;
+            }
+            if(!capture&&!e._immediate){
+                var fn=n['on'+e.type];
+                if(!fn&&n.nodeType===1){var source=n.getAttribute('on'+e.type);if(source)fn=dom('handler',n,source);}
+                try{if(typeof fn==='function'&&fn.call(n,e)===false)e.preventDefault();}catch(err){console.error(err);}
+            }
         }
+        try{
+            for(var i=path.length-1;i>0&&!e._stop;i--)invoke(path[i],true,1);
+            if(!e._stop){invoke(target,true,2);if(!e._immediate)invoke(target,false,2);}
+            if(e.bubbles)for(var i=1;i<path.length&&!e._stop;i++)invoke(path[i],false,3);
+        }finally{e.currentTarget=null;e.eventPhase=0;e._passive=false;}
         return !e.defaultPrevented;
     }
     proto.addEventListener=win.addEventListener=add;
@@ -99,6 +129,7 @@
     var document=dom('document',null);Object.setPrototypeOf(document,proto);
     document.createElement=function(n){return dom('create',document,String(n));};
     document.createTextNode=function(s){return dom('createText',document,String(s));};
+    document.createDocumentFragment=function(){return dom('fragment',document);};
     document.getElementById=function(id){return dom('id',document,String(id));};
     ['body','head','documentElement','currentScript','readyState','URL'].forEach(function(n){Object.defineProperty(document,n,{get:function(){return dom(n,document);}});});
     Object.defineProperty(document,'title',{get:function(){return dom('title',document);},set:function(v){dom('title=',document,String(v));}});
@@ -171,7 +202,7 @@
     win.setTimeout=function(fn,delay){if(typeof fn!=='function')throw TypeError('Timer callback must be a function');if(timers.length>=32)throw Error('Too many timers');var id=nextTimer++,args=Array.prototype.slice.call(arguments,2);timers.push({id:id,fn:fn,args:args,due:dom('now')+Math.max(4,Math.min(2147483647,Number(delay)||0)),repeat:0});return id;};
     win.setInterval=function(fn,delay){var id=win.setTimeout.apply(win,arguments);timers[timers.length-1].repeat=Math.max(4,Number(delay)||0);return id;};
     win.clearTimeout=win.clearInterval=function(id){timers=timers.filter(function(t){return t.id!==id;});};
-    function tick(){var now=dom('now'), copy=timers.slice(),count=0;for(var i=0;i<copy.length&&count<4;i++){var t=copy[i];if(((now-t.due)|0)>=0&&timers.indexOf(t)>=0){if(t.repeat)t.due=now+t.repeat;else win.clearTimeout(t.id);count++;t.fn.apply(win,t.args);}}}
+    function tick(){webTick();var now=dom('now'), copy=timers.slice(),count=0;for(var i=0;i<copy.length&&count<4;i++){var t=copy[i];if(((now-t.due)|0)>=0&&timers.indexOf(t)>=0){if(t.repeat)t.due=now+t.repeat;else win.clearTimeout(t.id);count++;t.fn.apply(win,t.args);}}}
     /* Content policy controls eval as well as classic scripts. Native bindings
        compile permitted inline event handlers without exposing a bypass. */
     if(!dom('evalAllowed')){var denied=function(){throw Error('eval blocked by Content-Security-Policy');};
@@ -180,6 +211,7 @@
         Object.defineProperty(Object.getPrototypeOf(async function(){}),'constructor',{value:denied});
         Object.defineProperty(Object.getPrototypeOf(async function*(){}),'constructor',{value:denied});
         win.eval=win.Function=denied;}
+    /* WEB_APIS */
     /* Glaze has no browser workers or shared-memory threading. */
     delete win.SharedArrayBuffer;delete win.Atomics;
     delete win.__dom;

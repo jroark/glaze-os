@@ -515,7 +515,7 @@ jerry.o: ../third_party/jerryscript/jerryscript.c ../third_party/jerryscript/jer
 	$(CC) -std=c99 -O2 -g -I../third_party/jerryscript -include ../apps/browser/js_config.h -c -o $@ $<
 libjerry.a: jerry.o
 	ar rcs $@ $^
-../out/include/js_bootstrap.h: ../apps/browser/js_dom.js ../tools/mkjsbootstrap.py
+../out/include/js_bootstrap.h: ../apps/browser/js_dom.js ../apps/browser/js_web.js ../tools/mkjsbootstrap.py
 	python3 ../tools/mkjsbootstrap.py $< $@
 
 ../out/host/browser-platform.o: browse.c

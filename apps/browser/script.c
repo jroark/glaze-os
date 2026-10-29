@@ -18,6 +18,16 @@
 
 #define JS_PAGES (PAGE_MAX_FRAMES + 1)
 #define JS_NODES 1024
+#define WEB_REQUESTS 8
+#define WEB_MODULES 32
+struct module_entry {
+    char *url, *source, *base;
+    int fetch, len, state;
+    jerry_value_t value;
+    struct node *root;
+    const struct node *policy;
+};
+struct web_request { int id;uint32_t started;bool done;struct fetch_result result; };
 struct handle {
     struct node *node;
     uintptr_t id;
@@ -30,6 +40,10 @@ struct runtime {
     int nnodes;
     struct node *current, *write_after;
     uint32_t next_tick;
+    struct web_request requests[WEB_REQUESTS];
+    struct module_entry modules[WEB_MODULES];
+    int nmodules, module_bytes;
+    struct { bool used;int index;jerry_value_t promise; } imports[8];
 };
 static struct runtime *pages[JS_PAGES];
 static const jerry_object_native_info_t node_info = {0}, fn_info = {0};
@@ -56,6 +70,8 @@ static void clean_temps(void)
     while (ntemps)
         free(temps[--ntemps]);
 }
+static void web_free(struct runtime *s);
+static void modules_free(struct runtime *s, bool engine);
 static void failed(void)
 {
     clean_temps();
@@ -66,6 +82,8 @@ static void failed(void)
         if (pages[i]) {
             pages[i]->page->script_disabled = true;
             pages[i]->page->js = NULL;
+            web_free(pages[i]);
+            modules_free(pages[i],false);
             free(pages[i]);
             pages[i] = NULL;
         }
@@ -233,12 +251,12 @@ static bool token(const char *s, size_t n, const char *wanted)
 {
     return n == strlen(wanted) && !strncmp(s, wanted, n);
 }
-static bool policy_allows(struct page *p, const char *source, const struct node *node,
-                          const char *special)
+static bool policy_for(struct page *p, const char *source, const struct node *node,
+                          const char *special, const char *directive_name)
 {
     const char *s;
     size_t len;
-    if (!directive(p->csp, "script-src", &s, &len) && !directive(p->csp, "default-src", &s, &len))
+    if (!directive(p->csp, directive_name, &s, &len) && !directive(p->csp, "default-src", &s, &len))
         return true;
     const char *end = s + len;
     bool nonce_or_hash = false, strict_dynamic = false;
@@ -295,6 +313,11 @@ static bool policy_allows(struct page *p, const char *source, const struct node 
     }
     return false;
 }
+static bool policy_allows(struct page *p, const char *source, const struct node *node, const char *special)
+{ return policy_for(p,source,node,special,"script-src"); }
+#include "script_web.inc"
+static void report(jerry_value_t v);
+#include "script_modules.inc"
 bool script_allowed(struct page *p, const char *source, const struct node *node)
 {
     return p && p->scripting_enabled && !p->script_disabled &&
@@ -334,7 +357,8 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
     do {                                                                                           \
         result = text_value(v);                                                                    \
     } while (0)
-    if (IS("document"))
+    if (web_native(s,op,a,b,n,&result)) { }
+    else if (IS("document"))
         result = wrap(owner->doc);
     else if (IS("now"))
         result = jerry_number(plat_ms());
@@ -431,11 +455,12 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
                 result = jerry_number(image && image->state == IMG_OK ?
                                       (IS("naturalWidth") ? image->w : image->h) : 0);
         } else if (IS("type"))
-            result = jerry_number(n->type == N_DOC ? 9 : n->type == N_TEXT ? 3 : 1);
+            result = jerry_number(n->type == N_DOC ? 9 : n->type == N_TEXT ? 3 : n->type == N_FRAGMENT ? 11 : 1);
         else if (IS("name")) {
             char name[64];
             snprintf(name, sizeof name, "%s",
                      n->type == N_DOC    ? "#document"
+                     : n->type == N_FRAGMENT ? "#document-fragment"
                      : n->type == N_TEXT ? "#text"
                                          : n->name);
             if (n->type == N_ELEM)
@@ -653,6 +678,8 @@ bool script_init(struct page *p)
         live = true;
         glaze_js_stack_base((uintptr_t)__builtin_frame_address(0));
         jerry_halt_handler(128, halt, NULL);
+        jerry_module_on_import(module_import,NULL);
+        jerry_module_on_import_meta(module_meta,NULL);
     }
     int slot = 0;
     while (slot < JS_PAGES && pages[slot])
@@ -705,7 +732,10 @@ void script_free(struct page *p)
     for (int i = 0; i < JS_PAGES; i++)
         if (pages[i] == s)
             pages[i] = NULL;
+    web_free(s);
+    modules_free(s,live);
     if (live) {
+        jerry_module_cleanup(s->realm);
         for (int i = 0; i < s->nnodes; i++)
             jerry_value_free(s->nodes[i].value);
         jerry_value_free(s->proto);
@@ -729,7 +759,14 @@ bool script_eval(struct page *p, const char *code, int len, struct node *current
     s->current = current;
     s->write_after = NULL;
     jerry_value_t old = jerry_set_realm(s->realm);
-    jerry_value_t result = jerry_eval((const jerry_char_t *)code, (size_t)len, JERRY_PARSE_NO_OPTS);
+    jerry_parse_options_t opts={.options=JERRY_PARSE_HAS_SOURCE_NAME|JERRY_PARSE_HAS_USER_VALUE};
+    const char *source_url=p->base;
+    for(int i=0;i<p->nscripts;i++)if(p->scripts[i].node==current && p->scripts[i].url){source_url=p->scripts[i].url;break;}
+    opts.source_name=utf8_value(source_url);opts.user_value=module_user(s,source_url,current);
+    jerry_value_t parsed=jerry_parse((const jerry_char_t *)code,(size_t)len,&opts);
+    jerry_value_free(opts.source_name);jerry_value_free(opts.user_value);
+    jerry_value_t result=jerry_value_is_exception(parsed)?jerry_value_copy(parsed):jerry_run(parsed);
+    jerry_value_free(parsed);
     bool ok = !jerry_value_is_exception(result);
     report(result);
     jerry_value_t jobs = jerry_run_jobs();
@@ -797,6 +834,7 @@ void script_tick(struct page *p)
     }
     budget(__builtin_frame_address(0), false);
     jerry_value_t old = jerry_set_realm(s->realm);
+    module_tick(s);
     report(jerry_call(s->tick, s->realm, NULL, 0));
     report(jerry_run_jobs());
     (void)jerry_set_realm(old);
@@ -811,4 +849,5 @@ void script_shutdown(void)
     if (live)
         jerry_cleanup();
     live = false;
+    for(int i=0;i<STORAGE_SLOTS;i++){free(sessions[i].origin);free(sessions[i].json);memset(&sessions[i],0,sizeof sessions[i]);}
 }

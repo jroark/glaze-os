@@ -9,6 +9,7 @@
 #include "net.h"
 #include "plat.h"
 #include "url.h"
+#include "frames.h"
 #include "web.h"
 
 #include <ctype.h>
@@ -25,7 +26,7 @@
 #define CACHE_ENTRIES   48
 #define MAX_COOKIES     64
 
-static const int max_body[] = { [F_DOC] = 1024 * 1024, [F_FRAME]=64*1024, [F_SCRIPT]=128*1024, [F_CSS] = 384 * 1024, [F_IMG] = 768 * 1024 };
+static const int max_body[] = { [F_API]=64*1024, [F_MODULE]=128*1024, [F_DOC] = 1024 * 1024, [F_FRAME]=64*1024, [F_SCRIPT]=128*1024, [F_CSS] = 384 * 1024, [F_IMG] = 768 * 1024 };
 
 struct fetch {
     bool used, active, done, reload;
@@ -33,6 +34,9 @@ struct fetch {
     int id, tag, redirects;
     char *url, *post, *post_type;
     int post_len;
+    char *origin;
+    int credentials;
+    bool same_origin;
     struct http *h;
     struct fetch_result r;
 };
@@ -463,10 +467,41 @@ static void finish(struct fetch *f, int err)
 }
 
 /* Starts (or restarts, after a redirect) the request for f->url. */
+static bool same_origin(const char *a, const char *b)
+{
+    struct page x = {.origin=(char *)a}, y = {.origin=(char *)b};
+    return page_same_origin(&x, &y);
+}
+static bool web_allowed(struct fetch *f, const char *url)
+{
+    struct url u;
+    if (!url_parse(url, &u) || !u.host[0] ||
+        (strcmp(u.scheme,"http") && strcmp(u.scheme,"https"))) return false;
+    if (!strncmp(f->origin,"https:",6) && strcmp(u.scheme,"https")) return false;
+    if (f->same_origin && !same_origin(f->origin,url)) return false;
+    /* Non-simple cross-origin POSTs require a preflight, not yet supported. */
+    if (!same_origin(f->origin,url) && f->post_type &&
+        strcmp(f->post_type,"text/plain;charset=UTF-8") && strcmp(f->post_type,"text/plain") &&
+        strcmp(f->post_type,"application/x-www-form-urlencoded")) return false;
+    return true;
+}
+static bool cors_allowed(struct fetch *f)
+{
+    if (!f->origin || same_origin(f->origin,f->url)) return true;
+    const char *allow = http_header(f->h,"access-control-allow-origin",0);
+    if (!allow || http_header(f->h,"access-control-allow-origin",1)) return false;
+    if (strcmp(allow,f->origin) && (strcmp(allow,"*") || f->credentials==2)) return false;
+    if (f->credentials==2) {
+        const char *cred=http_header(f->h,"access-control-allow-credentials",0);
+        if (!cred || strcmp(cred,"true") || http_header(f->h,"access-control-allow-credentials",1)) return false;
+    }
+    return true;
+}
 static void begin(struct fetch *f)
 {
     static struct url u;
 
+    if (f->origin && !web_allowed(f,f->url)) { finish(f,WE_SCHEME);return; }
     if (!strncasecmp(f->url, "data:", 5)) {
         finish(f, load_data(f));
         return;
@@ -483,7 +518,7 @@ static void begin(struct fetch *f)
         finish(f, WE_SCHEME);
         return;
     }
-    if (!f->post && !f->reload && f->kind!=F_DOC && f->kind!=F_FRAME) {
+    if (!f->origin && !f->post && !f->reload && f->kind!=F_DOC && f->kind!=F_FRAME) {
         struct centry *e = cache_find(f->url);
         if (e) {
             e->used = ++cache_clock;
@@ -497,8 +532,10 @@ static void begin(struct fetch *f)
             }
         }
     }
-    char *cookies = cookies_for(&u, false);
-    f->h = http_start(f->url, f->post, f->post_len, f->post_type, cookies, max_body[f->kind]);
+    char *cookies = !f->origin || f->credentials==2 ||
+        (f->credentials==1 && same_origin(f->origin,f->url)) ? cookies_for(&u, false) : NULL;
+    f->h = f->origin ? http_start_web(f->url,f->post,f->post_len,f->post_type,cookies,f->origin,max_body[f->kind]) :
+        http_start(f->url, f->post, f->post_len, f->post_type, cookies, max_body[f->kind]);
     free(cookies);
     if (!f->h)
         finish(f, WE_BADURL);
@@ -511,7 +548,8 @@ static void response(struct fetch *f)
     int status = http_status(f->h);
     const char *v;
 
-    if (url_parse(f->url, &u))
+    if (!cors_allowed(f)) { finish(f,WE_SCHEME);return; }
+    if ((!f->origin || f->credentials==2 || (f->credentials==1 && same_origin(f->origin,f->url))) && url_parse(f->url, &u))
         for (int i = 0; (v = http_header(f->h, "set-cookie", i)); i++)
             set_cookie(&u, v, false);
     const char *loc = http_header(f->h, "location", 0);
@@ -522,6 +560,11 @@ static void response(struct fetch *f)
             return;
         }
         if(strncasecmp(next,"http://",7) && strncasecmp(next,"https://",8)) {
+            free(next);finish(f,WE_SCHEME);return;
+        }
+        /* Reject origin-changing script redirects before issuing the next
+         * request. This also prevents credential/preflight policy bypass. */
+        if (f->origin && (!web_allowed(f,next) || !same_origin(f->url,next))) {
             free(next);finish(f,WE_SCHEME);return;
         }
         if (++f->redirects > MAX_REDIRECTS) {
@@ -542,6 +585,8 @@ static void response(struct fetch *f)
         return;
     }
     f->r.status = status;
+    f->r.redirected=f->redirects!=0;
+    f->r.cors=f->origin&&!same_origin(f->origin,f->url);
     f->r.data = http_take_body(f->h, &f->r.len);
     v = http_header(f->h, "content-type", 0);
     f->r.ctype = v ? strdup(v) : NULL;
@@ -549,10 +594,10 @@ static void response(struct fetch *f)
     if(http_header(f->h,"x-frame-options",1)) { free(f->r.xfo);f->r.xfo=strdup("DENY"); }
     v=http_header(f->h,"content-security-policy",0);f->r.csp=v ? strdup(v) : NULL;
     if(http_header(f->h,"content-security-policy",1)) {
-        free(f->r.csp);f->r.csp=strdup("script-src 'none'; frame-ancestors 'none'");
+        free(f->r.csp);f->r.csp=strdup("default-src 'none'; frame-ancestors 'none'");
     }
     v = http_header(f->h, "cache-control", 0);
-    if (status == 200 && !f->post && f->r.data && f->kind!=F_DOC && f->kind!=F_FRAME && !(v && strstr(v, "no-store")))
+    if (!f->origin && status == 200 && !f->post && f->r.data && f->kind!=F_DOC && f->kind!=F_FRAME && !(v && strstr(v, "no-store")))
         cache_put(f->url, f->r.data, f->r.len, f->r.ctype);
     finish(f, f->r.data ? 0 : WE_NOMEM);
 }
@@ -566,7 +611,7 @@ int ld_start(const char *url, int kind, int tag, const char *post, const char *p
 {
     struct fetch *f = NULL;
 
-    if (kind < F_DOC || kind > F_IMG) return WE_BADURL;
+    if (kind < F_DOC || kind > F_MODULE) return WE_BADURL;
     for (int i = 0; i < MAX_FETCHES && !f; i++)
         if (!fetches[i].used)
             f = &fetches[i];
@@ -592,6 +637,22 @@ int ld_start(const char *url, int kind, int tag, const char *post, const char *p
     return f->id;
 }
 
+int ld_start_web(const char *url, int kind, const char *origin, const char *post,
+                 const char *type, int credentials, bool same)
+{
+    if ((kind!=F_API && kind!=F_MODULE) || !origin || strlen(origin)>256 ||
+        credentials<0 || credentials>2 || (post && strlen(post)>16384)) return WE_BADURL;
+    int id=ld_start(url,kind,0,post,type,true);
+    if (id<=0) return id;
+    for (int i=0;i<MAX_FETCHES;i++) if(fetches[i].used && fetches[i].id==id) {
+        struct fetch *f=&fetches[i];
+        f->origin=strdup(origin);f->credentials=credentials;f->same_origin=same;
+        if (!f->origin) finish(f,WE_NOMEM);
+        return id;
+    }
+    return WE_NOMEM;
+}
+
 static struct fetch *by_id(int id)
 {
     for (int i = 0; i < MAX_FETCHES; i++)
@@ -604,6 +665,7 @@ static void release(struct fetch *f)
 {
     http_free(f->h);
     free(f->url);
+    free(f->origin);
     free(f->post);
     free(f->post_type);
     if (f->done)

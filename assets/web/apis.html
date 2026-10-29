@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset=utf-8><title>Web APIs</title>
+<style>body{font-family:sans-serif;margin:14px;color:#25334a;background:#f3f5f8}h1{font-size:22px}p{font-size:15px}.ok{color:green}</style></head>
+<body><h1>Web APIs</h1><p id=utilities>Checking text and URLs…</p><p id=dom>Checking DOM…</p>
+<p id=animation>Waiting for a frame…</p><p id=modules>Loading modules…</p>
+<p>HTTP pages can also fetch JSON and keep small settings in local storage.</p><p><a href=start.html>Welcome</a></p>
+<script>
+function verify(c,m){if(!c)throw Error(m);}
+verify(new TextDecoder().decode(new TextEncoder().encode('café'))==='café','UTF-8');
+var u=new URL('../search','https://example.com/docs/page');u.searchParams.set('q','Glaze OS');
+verify(u.href==='https://example.com/search?q=Glaze+OS','URL');
+document.getElementById('utilities').textContent='Text and URLs: ready';console.log('browser APIs: utilities PASS');
+var fragment=document.createDocumentFragment(),item=document.createElement('span');item.textContent='DOM: ready';fragment.appendChild(item);
+var out=document.getElementById('dom');out.textContent='';out.appendChild(fragment);
+verify(out.cloneNode(true).textContent==='DOM: ready','clone');verify(out.getBoundingClientRect().width>0,'layout');
+console.log('browser APIs: DOM PASS');
+requestAnimationFrame(function(t){verify(t>=0,'animation time');document.getElementById('animation').textContent='Animation: ready';console.log('browser APIs: animation PASS');});
+</script>
+<script type=module>
+import {answer} from './apis-math.js';
+verify(answer===42,'module imports');
+document.getElementById('modules').textContent='Modules: ready';console.log('browser APIs: modules PASS');
+import('./apis-math.js').then(function(m){verify(m.answer===42,'dynamic import');console.log('browser APIs: dynamic import PASS');});
+</script></body></html>
