@@ -19,6 +19,7 @@
 #include <glaze/wifi.h>
 #include <glaze/prefs.h>
 #include <glaze/fs.h>
+#include <glaze/usb_net.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -97,8 +98,8 @@ static err_t link_output(struct netif *n, struct pbuf *p)
 
 static err_t nif_init(struct netif *n)
 {
-    n->name[0] = 'e';
-    n->name[1] = 'n';
+    n->name[0] = info.kind == GZ_NET_USB ? 'u' : 'e';
+    n->name[1] = info.kind == GZ_NET_USB ? 's' : 'n';
     n->hwaddr_len = ETH_HWADDR_LEN;
     memcpy(n->hwaddr, info.mac, ETH_HWADDR_LEN);
     n->mtu = 1500;
@@ -149,7 +150,16 @@ static int attach(void)
     wireless = info.kind == GZ_NET_XI825 || info.kind == GZ_NET_WL54CF;
     associated = false;
     netif_set_up(&nif);
-    if (!wireless) {
+    if (info.kind == GZ_NET_USB) {
+        ip4_addr_t addr, mask, gw; ip_addr_t dns;
+        ip4addr_aton(GUN_DEVICE_IP, &addr); ip4addr_aton(GUN_MASK, &mask);
+        ip4addr_aton(GUN_HOST_IP, &gw); ipaddr_aton(GUN_DNS, &dns);
+        state = NET_UP_STATIC;
+        dns_setserver(0, &dns);
+        netif_set_link_up(&nif);
+        netif_set_addr(&nif, &addr, &mask, &gw);
+        net_log("net: USB Ethernet tunnel ready\n");
+    } else if (!wireless) {
         netif_set_link_up(&nif);
         dhcp_start(&nif);
         dhcp_started = gz_time_ms();

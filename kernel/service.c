@@ -22,6 +22,7 @@ static bool alive(unsigned i) { return proc_by_pid(states[i].pid) != NULL; }
 
 static void reconcile(void)
 {
+    usbnet_collect();
     uint32_t wanted = 0, healthy = 0, generation = net_generation();
     for (unsigned n = 0; n < manifest.count; n++) {
         unsigned i = order[n];
@@ -38,10 +39,10 @@ static void reconcile(void)
         unsigned i = order[n - 1];
         struct gz_service_spec *s = &manifest.entries[i];
         struct proc *p = proc_by_pid(states[i].pid);
-        if (p && !(healthy & (1u << i))) {
-            if (s->privileges & PROC_AUDIO) sys_audio_stop(p, 1);
-            if (s->privileges & PROC_USB) usb_input_cancel();
-            proc_exit(p, 0);
+        if ((p && !(healthy & (1u << i))) || (!p && states[i].pid)) {
+            if (p && (s->privileges & PROC_AUDIO)) sys_audio_stop(p, 1);
+            if (s->privileges & PROC_USB) { usb_input_cancel(); usbnet_stop(); }
+            if (p) proc_exit(p, 0);
             kprintf("service: stopped %s\n", s->name);
         }
         if (!alive(i)) states[i].pid = 0;

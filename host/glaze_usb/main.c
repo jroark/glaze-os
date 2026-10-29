@@ -57,6 +57,7 @@ static int usage(void)
           "  net-keygen KEYFILE             create a private pairing record offline\n"
           "  net-enable KEYFILE             provision and enable network debugging over USB\n"
           "  net-disable                    disable the network listener\n"
+          "  usb-net [INTERFACE]            USB IP link (macOS utun / Linux TAP)\n"
           "  probe                         descriptors and runtime\n"
           "  ce-probe                      stock CE handshake\n"
           "  ce-info                       report CE staging-volume space\n"
@@ -95,6 +96,7 @@ int main(int argc, char **argv)
     if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect") || !strcmp(cmd,"net-disable")) ? left != 0 :
         (!strcmp(cmd, "screenshot") || !strcmp(cmd,"net-enable")) ? left != 1 :
         !strcmp(cmd, "script") ? (left < 1 || left > 2) :
+        !strcmp(cmd, "usb-net") ? left > 1 :
         !strcmp(cmd, "reboot") ? (left > 1 || (left == 1 && strcmp(argv[i], "--ce") && strcmp(argv[i], "--glaze"))) :
         !strcmp(cmd, "ce-clean-nand") ? (left > 1 || (left == 1 && strcmp(argv[i], "--dry-run"))) :
         (!strcmp(cmd, "put") || !strcmp(cmd, "get")) ? left != 2 :
@@ -103,7 +105,7 @@ int main(int argc, char **argv)
         !strcmp(cmd, "logs") ? (left > 1 || (left == 1 && strcmp(argv[i], "--once"))) : 1) return usage();
     signal(SIGINT, stop); signal(SIGTERM, stop);
     signal(SIGPIPE,SIG_IGN);
-    if (host && (!strncmp(cmd,"ce-",3) || !strcmp(cmd,"reset-link") || !strcmp(cmd,"diag") || !strcmp(cmd,"net-enable"))) {
+    if (host && (!strncmp(cmd,"ce-",3) || !strcmp(cmd,"reset-link") || !strcmp(cmd,"diag") || !strcmp(cmd,"net-enable") || !strcmp(cmd,"usb-net"))) {
         fputs("This command requires the USB transport.\n",stderr); return 2;
     }
     if (!strcmp(cmd, "reset-link")) return usb_reset_link(device, l.trace) ? 1 : 0;
@@ -185,7 +187,8 @@ int main(int argc, char **argv)
     } else if (l.revision == 0x0100) {
         r = gu_hello(&c, &l);
         if (!r) {
-            if (!strcmp(cmd,"net-enable")) {
+            if (!strcmp(cmd,"usb-net")) r=gu_usb_net(&c,left ? argv[i] : NULL);
+            else if (!strcmp(cmd,"net-enable")) {
                 r=debug_host_key_valid(argv[i]);
                 int trace=l.trace; l.trace=0; /* pairing material is never packet-traced */
                 if (!r) r=gu_upload(&c,argv[i],"/Library/Preferences/" GD_CONFIG);

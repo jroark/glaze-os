@@ -521,7 +521,7 @@ static void draw_network(gfx_surface *s)
     }
     snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
              st.mac[0], st.mac[1], st.mac[2], st.mac[3], st.mac[4], st.mac[5]);
-    cell(s, 1, "Status", net_state_name(st.state), false, 0);
+    cell(s, 1, st.kind == GZ_NET_USB ? "USB Network" : "Status", net_state_name(st.state), false, 0);
     cell(s, 3, "MAC", mac, false, 0);
     section_gap();
     bool up = st.state == NET_UP || st.state == NET_UP_STATIC;

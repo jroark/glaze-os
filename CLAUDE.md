@@ -56,6 +56,13 @@ uses TLS 1.2 ECDHE-PSK; it is off by default. See `docs/NETWORK_DEBUG.md`.
 `tests/debug_runtime.py` check real lwIP/RPC and reload/reconnect. Rebuild normally
 after testing. Never commit `DEBUG.KEY`, other pairing files, or fixture images.
 
+USB networking (`docs/USB_NETWORK.md`) uses `kernel/drivers/usbnet.c` queues
+and `servers/usb/ethernet.c`'s independent framed tunnel parser. macOS uses
+utun (IPv4 plus an AF_INET prefix, ARP adaptation); Linux uses TAP. Native
+`make -C host usb-net-test net-driver-test service-test usb-driver-test` covers
+packet framing, backpressure/replay and lifecycle. USB takes routing precedence
+while the host helper runs; changing transport restarts the network service.
+
 ## Running and testing
 
 `make out/pkg/chatgpt.gzp` builds the direct Codex chat package. Its device-code

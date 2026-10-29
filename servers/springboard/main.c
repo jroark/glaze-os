@@ -237,7 +237,9 @@ static bool update_card_status(void)
 
     /* A network card can be inserted or pulled too (cf.c's pcmcia_poll);
      * net_status is answered at once, without this process's session. */
-    network_card = net_status(&net) == 0 && net.state != NET_NO_CARD;
+    /* USB networking does not occupy the card socket: keep an installed
+     * storage card's Files shortcut and card dialog available. */
+    network_card = net_status(&net) == 0 && net.state != NET_NO_CARD && net.kind != GZ_NET_USB;
     network_kind = network_card ? net.kind : GZ_NET_NONE;
     bool mounted = network_card || fs_stat("/Card", &st) == 0;
     bool changed = mounted != view.card_mounted;

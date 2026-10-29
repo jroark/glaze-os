@@ -52,14 +52,26 @@ int net_handle(struct proc *p)
 }
 
 uint32_t net_generation(void) { return generation; }
-uint32_t net_driver_kind(void) { return driver ? kind : GZ_NET_NONE; }
-uint32_t net_driver_pages(void) { return image.pages + (queue ? QUEUE_PAGES : 0); }
+uint32_t net_driver_kind(void) { return usbnet_up() ? GZ_NET_USB : driver ? kind : GZ_NET_NONE; }
+uint32_t net_driver_pages(void) { return image.pages + (queue ? QUEUE_PAGES : 0) + usbnet_pages(); }
+
+/* One IP interface owns routing. USB takes precedence while its host helper
+ * is attached; changing transport invalidates old raw-frame handles and
+ * restarts the network service through its normal generation policy. */
+void net_usb_changed(void)
+{
+    generation++;
+    head = tail = 0;
+    if (bound_port > 0) ipc_notify(bound_port, GZ_NOTIFY_NET);
+    bound_port = 0;
+}
 
 void net_set_mac(const uint8_t mac[6]) { memcpy(info.mac, mac, 6); }
 void net_rx_drop(void) { info.rx_dropped++; }
 void net_overrun(void) { info.overruns++; }
 void net_receive(const uint8_t *frame, uint32_t len)
 {
+    if (usbnet_up()) return; /* Never inject card traffic into the USB subnet. */
     if (!queue || len < 14 || len > sizeof(queue[0].data) || head - tail == QUEUE_LEN) {
         net_rx_drop();
         return;
@@ -74,7 +86,7 @@ void net_receive(const uint8_t *frame, uint32_t len)
 
 bool net_up(void)
 {
-    return online && driver && driver->present();
+    return usbnet_up() || (online && driver && driver->present());
 }
 
 static void free_queue(void)
@@ -173,7 +185,9 @@ void net_init(void)
 bool net_insert(unsigned manufacturer, unsigned product)
 {
     select_card(manufacturer, product);
-    return net_up();
+    /* The socket power-up caller needs the card's result, even if USB
+     * independently supplies a working network connection. */
+    return online && driver && driver->present();
 }
 
 /* The card was pulled: its driver forgets it, and its frames go. */
@@ -220,6 +234,7 @@ int sys_net_info(struct proc *p, uint32_t uout)
     pcmcia_poll();          /* the network server's look at the socket */
     int error = net_access(p);
     if (error) return error;
+    if (usbnet_up()) return usbnet_info(p, uout);
     if (driver && driver->info)
         return driver->info(p, uout);
     return copy_to_as(&p->as, uout, &info, sizeof(info));
@@ -229,6 +244,7 @@ int sys_net_bind(struct proc *p, int port)
 {
     int error = net_access(p);
     if (error) return error;
+    if (usbnet_up()) return usbnet_bind(port);
     if (driver && driver->bind)
         return driver->bind(p, port);
     int rv = check(p);
@@ -244,6 +260,7 @@ int sys_net_send(struct proc *p, uint32_t ubuf, uint32_t len)
 {
     int error = net_access(p);
     if (error) return error;
+    if (usbnet_up()) return usbnet_send(p, ubuf, len);
     if (driver && driver->send)
         return driver->send(p, ubuf, len);
     int rv = check(p);
@@ -267,6 +284,7 @@ int sys_net_recv(struct proc *p, uint32_t ubuf, uint32_t max)
 {
     int error = net_access(p);
     if (error) return error;
+    if (usbnet_up()) return usbnet_recv(p, ubuf, max);
     if (driver && driver->recv)
         return driver->recv(p, ubuf, max);
     int rv = check(p);
@@ -285,6 +303,7 @@ int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t address)
 {
     int error = net_access(p);
     if (error) return error;
+    if (usbnet_up()) return GZ_ENOENT;
     if (driver && driver->wifi)
         return driver->wifi(p, op, address);
     if (!driver || !driver->control || !info.present)

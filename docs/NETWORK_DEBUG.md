@@ -2,8 +2,12 @@
 
 The Glaze development service accepts the same framed debugger protocol over
 USB and paired TLS/TCP. Network debugging is **off by default**. It needs an
-Ethernet or Wi-Fi card, an established network connection, and a pairing record.
+established Ethernet, Wi-Fi or USB network connection, and a pairing record.
 No listener or TLS context is opened while disabled or without a network.
+
+The [USB network interface](USB_NETWORK.md) can supply that connection without
+a network card. Start `glaze-usb usb-net` on macOS or Linux, then connect the
+paired debugger to `192.168.7.2` in another terminal.
 
 ## Build and pair
 

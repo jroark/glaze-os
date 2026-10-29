@@ -36,6 +36,8 @@ uint32_t net_driver_pages(void) { return connected ? 6 : 0; }
 uint32_t net_generation(void) { return card_generation; }
 void pcmcia_poll(void) {}
 void usb_input_cancel(void) { usb_cancelled++; }
+void usbnet_stop(void) {}
+void usbnet_collect(void) {}
 int sys_audio_stop(struct proc *p, uint32_t flush) { return 0; }
 struct proc *proc_by_pid(int pid)
 {
@@ -105,6 +107,9 @@ int main(void)
     assert(!states[1].pid && states[1].error == GZ_ENOMEM);
     unsigned count = spawned; reconcile(); assert(count == spawned);
     fail_spawn = false; clock_us += 1000000; reconcile(); assert(states[1].pid);
+    first=states[3].pid;unsigned before=usb_cancelled;
+    proc_exit(proc_by_pid(first),-1);reconcile();
+    assert(usb_cancelled==before+1); /* crashed USB service also closes its network link */
     puts("services: capabilities, absent hardware, start/stop, restart, backoff and dependency teardown PASS");
     return 0;
 }

@@ -61,6 +61,9 @@ also works, as described in [GlazeBoot](GLAZEBOOT.md).
 
 ## Commands
 
+The USB cable can also provide an IP connection through a macOS utun or Linux
+TAP interface. See [USB networking](USB_NETWORK.md) for `glaze-usb usb-net`.
+
 ```sh
 out/host/glaze-usb put out/pkg/hello.gzp /Downloads/hello.gzp
 out/host/glaze-usb run /Downloads/hello.gzp
