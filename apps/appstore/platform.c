@@ -3,6 +3,7 @@
 #include "plat.h"
 #include "web.h"
 #include <glaze/fs.h>
+#include <glaze/random.h>
 #include <glaze/net.h>
 #include <glaze/notify.h>
 #include <glaze/sys.h>
@@ -115,9 +116,9 @@ void plat_noise(uint8_t *buf, int n)
         buf[i] = (uint8_t)(t ^ (t >> 8) ^ (t >> 16));
     }
 }
-void plat_load_seed(uint8_t *seed)
+int plat_load_seed(uint8_t *seed)
 {
-    fs_read_file("/Library/Caches/AppStore/seed", seed, PLAT_SEED_LEN);
+    return gz_entropy_load_seed("/Library/Caches/AppStore/seed", seed);
 }
 void plat_save_seed(const uint8_t *seed)
 {

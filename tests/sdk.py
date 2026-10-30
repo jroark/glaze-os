@@ -141,7 +141,7 @@ class SDKTests(unittest.TestCase):
         self.make("check")
 
     def test_corresponding_source_rebuild(self):
-        result = subprocess.run(["make", "-C", str(self.sdk / "src"), "-j4", f"CROSS={ARGS.cross}"],
+        result = subprocess.run(["make", "-C", str(self.sdk / "src"), "-j4", "OUT=rebuilt", f"CROSS={ARGS.cross}"],
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.assertEqual(result.returncode, 0, result.stdout)
         for name in ("libc.so.1", "libgfx.so.1", "libui.so.1", "libmedia.so.1", "ld-glaze.so.1", "crt0.o", "start.o"):

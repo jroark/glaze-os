@@ -9,7 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef __APPLE__
 #include <sys/random.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 uint32_t plat_ms(void)
@@ -46,10 +48,14 @@ const void *plat_roots(uint32_t *size)
 long long plat_time(void) { return time(NULL); }
 void plat_noise(uint8_t *buf, int n)
 {
+#ifdef __APPLE__
+    arc4random_buf(buf, (size_t)n);
+#else
     int off = 0;
     while (off < n) { ssize_t rv = getrandom(buf + off, (size_t)(n - off), 0); if (rv <= 0) abort(); off += (int)rv; }
+#endif
 }
-void plat_load_seed(uint8_t *seed) { plat_noise(seed, PLAT_SEED_LEN); }
+int plat_load_seed(uint8_t *seed) { plat_noise(seed, PLAT_SEED_LEN); return 0; }
 void plat_save_seed(const uint8_t *seed) { (void)seed; }
 struct context { const char *base; bool canceled; int saves; uint32_t started, cancel_ms; };
 static bool active(void *arg)

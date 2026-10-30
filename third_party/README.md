@@ -4,6 +4,7 @@ Vendored projects (local changes are listed below):
 
 | Directory | Project | Version | License |
 | --- | --- | --- | --- |
+| `jitterentropy/` | [Jitterentropy](https://github.com/smuellerDD/jitterentropy-library) CPU timing-jitter seed collector | 3.6.3 | BSD-style or GPL-2.0-or-later; Glaze elects GPL; port and pin in `UPSTREAM.md` |
 | `doomgeneric/` | [DoomGeneric](https://github.com/ozkl/doomgeneric), original Doom software engine | `e257a09527062` | GPL-2.0-or-later, elected GPLv3 for the Glaze app; `COPYING` and `UPSTREAM.md`; no game data |
 | `beetle-pce-fast/` | [Beetle PCE Fast](https://github.com/libretro/beetle-pce-fast-libretro), C HuC6280 CPU, VDC/VCE and PSG for HuCards | `4eee99c451f8` | GPL-2.0-or-later, elected GPLv3 for the app; `COPYING` and `UPSTREAM.md` |
 | `totalsms/` | [TotalSMS](https://github.com/ITotalJustice/TotalSMS), Master System / Game Gear CPU/VDP and cartridge mappers; scheduler dependency | `05bbb8bbd931` | MIT; pins and port changes in `totalsms/UPSTREAM.md`; original integer PSG in `packages/mastersystem/psg.c` |

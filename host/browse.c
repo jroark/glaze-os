@@ -158,9 +158,10 @@ void plat_noise(uint8_t *buf, int n)
     fclose(f);
 }
 
-void plat_load_seed(uint8_t *seed)
+int plat_load_seed(uint8_t *seed)
 {
-    (void)seed;
+    plat_noise(seed, PLAT_SEED_LEN);
+    return 0;
 }
 
 void plat_save_seed(const uint8_t *seed)

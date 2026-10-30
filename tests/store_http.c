@@ -11,12 +11,14 @@
 #include <time.h>
 #include <unistd.h>
 static uint32_t address;
-uint32_t plat_ms(void)
+static uint32_t seed_clock_advance;
+static uint32_t wall_ms(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
+uint32_t plat_ms(void) { return wall_ms() + seed_clock_advance; }
 int plat_resolve_start(const char *host)
 {
     struct addrinfo hints = {0}, *res;
@@ -49,9 +51,12 @@ void plat_noise(uint8_t *b, int n)
         abort();
     fclose(f);
 }
-void plat_load_seed(uint8_t *b)
+int plat_load_seed(uint8_t *b)
 {
-    (void)b;
+    if (getenv("STORE_TEST_ENTROPY_FAIL")) return -1;
+    if (getenv("STORE_TEST_ENTROPY_SLOW")) seed_clock_advance = 40000;
+    plat_noise(b, PLAT_SEED_LEN);
+    return 0;
 }
 void plat_save_seed(const uint8_t *b)
 {
@@ -91,8 +96,8 @@ int main(int argc, char **argv)
         return 2;
     }
     int result = 0;
-    uint32_t start = plat_ms();
-    while (!(result = http_step(h)) && plat_ms() - start < 5000) {
+    uint32_t start = wall_ms();
+    while (!(result = http_step(h)) && wall_ms() - start < 5000) {
         int got, total;
         http_progress(h, &got, &total);
         if (cancel && got > 0)

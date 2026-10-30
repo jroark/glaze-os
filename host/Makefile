@@ -284,6 +284,16 @@ reboot-test: ../tests/reboot.c ../kernel/reboot.c
 	../out/host/reboot-test
 .PHONY: reboot-test
 
+entropy-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -DGLAZE_ENTROPY_TEST -fsanitize=address,undefined \
+	    -o ../out/host/entropy-test ../tests/entropy.c ../lib/libc/entropy.c
+	../out/host/entropy-test
+	$(CC) $(CFLAGS) -O0 -DGLAZE_ENTROPY_TEST -I../third_party/jitterentropy -fsanitize=address,undefined \
+	    -o ../out/host/entropy-clock-test ../tests/entropy_clock.c ../lib/libc/entropy_jent.c
+	../out/host/entropy-clock-test
+.PHONY: entropy-test
+
 touch-calibration-test: ../tests/touch_calibration.c ../lib/libc/touch.c ../servers/springboard/calibration.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/touch-calibration-test $^

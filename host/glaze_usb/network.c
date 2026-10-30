@@ -1,5 +1,6 @@
 /* TLS 1.2 PSK client for the exact same development RPC client as USB. */
 #include "network.h"
+#include <sys/random.h>
 #include <glaze/debug_net.h>
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/random.h>

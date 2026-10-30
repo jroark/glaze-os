@@ -459,7 +459,8 @@ int http_step(struct http *h)
             if ((rv = conn_open(&h->c, addr, h->port, h->https ? h->host : NULL)) < 0)
                 return rv;
             h->state = H_CONNECT;
-            h->last = now;
+            /* Initial TLS seed collection may take seconds before TCP starts. */
+            h->last = plat_ms();
             break;
         }
         case H_CONNECT:

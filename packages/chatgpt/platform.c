@@ -3,6 +3,7 @@
 #include "plat.h"
 #include "web.h"
 #include <glaze/fs.h>
+#include <glaze/random.h>
 #include <glaze/net.h>
 #include <glaze/notify.h>
 #include <glaze/res.h>
@@ -36,9 +37,9 @@ void plat_noise(uint8_t *buf, int n)
     }
 }
 static void seed_path(char *path) { snprintf(path, FS_PATH_MAX, "%s/data/seed", res_bundle()); }
-void plat_load_seed(uint8_t *seed)
+int plat_load_seed(uint8_t *seed)
 {
-    char path[FS_PATH_MAX]; seed_path(path); fs_read_file(path, seed, PLAT_SEED_LEN);
+    char path[FS_PATH_MAX]; seed_path(path); return gz_entropy_load_seed(path, seed);
 }
 void plat_save_seed(const uint8_t *seed)
 {

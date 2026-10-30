@@ -62,7 +62,7 @@ void plat_noise(uint8_t *out,int n)
 {
     FILE *f=fopen("/dev/urandom","rb"); assert(f); assert(fread(out,1,(size_t)n,f)==(size_t)n); fclose(f);
 }
-void plat_load_seed(uint8_t *s) { (void)s; }
+int plat_load_seed(uint8_t *s) { plat_noise(s, PLAT_SEED_LEN); return 0; }
 void plat_save_seed(const uint8_t *s) { (void)s; }
 const void *plat_roots(uint32_t *n)
 {

@@ -6,6 +6,7 @@
  */
 
 #include <glaze/fs.h>
+#include <glaze/random.h>
 #include <glaze/net.h>
 #include <glaze/notify.h>
 #include <glaze/res.h>
@@ -86,7 +87,10 @@ int glaze_tls_seed(unsigned char *out, unsigned int n)
         char path[FS_PATH_MAX];
         memset(init, 0, SEED_LEN);
         seed_path(path, sizeof(path));
-        fs_read_file(path, init, SEED_LEN);
+        if (gz_entropy_load_seed(path, init) < 0) {
+            memset(init, 0, sizeof(init));
+            return -1;
+        }
         collect_noise(init + SEED_LEN, 256);
         wc_Sha256Hash(init, sizeof(init), rng_pool);
         rng_pool_ready = true;
@@ -302,6 +306,18 @@ static void connect_thread(void *arg)
         free(a);
         return;
     }
+    /* Bootstrap the RNG before opening a TCP connection: an unseeded RAM
+     * boot must not spend the server's TLS timeout collecting entropy. */
+    if (a->use_tls) {
+        gz_mutex_lock(&tls_lock);
+        bool ready = ensure_tls_ctx();
+        gz_mutex_unlock(&tls_lock);
+        if (!ready) {
+            finish(a, -1, NULL, "Could not initialize TLS and its random seed.");
+            free(a);
+            return;
+        }
+    }
     if ((s = net_socket(NET_TCP)) < 0) {
         finish(a, -1, NULL, net_strerror(s));
         free(a);
@@ -322,13 +338,6 @@ static void connect_thread(void *arg)
     }
 
     gz_mutex_lock(&tls_lock);
-    if (!ensure_tls_ctx()) {
-        gz_mutex_unlock(&tls_lock);
-        net_close(s);
-        finish(a, -1, NULL, "Could not load trusted SSL root certificates.");
-        free(a);
-        return;
-    }
     WOLFSSL *ssl = wolfSSL_new(tls_ctx);
     if (!ssl) {
         gz_mutex_unlock(&tls_lock);
