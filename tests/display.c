@@ -13,6 +13,8 @@
 static volatile uint32_t backlight, panel = 0xA5A50000;
 static volatile uint32_t bl_control = 1, bl_config = 0x202, bl_gate = 0xA5A50001;
 static volatile uint32_t bl_period, lcd_clock, lcd_gate, lcd[0x50 / 4];
+static volatile uint32_t buzz_control;
+bool buzzer_active(void) { return buzz_control != 0; }
 #define DISP_BACKLIGHT backlight
 #define DISP_CONTRAST panel
 #define DISP_BL_CONTROL bl_control
@@ -133,7 +135,7 @@ static void driver_tests(void)
         assert(!display_set(b, 5));
         uint32_t saved_duty = backlight;
         assert(!display_power(0));
-        assert(!bl_control && !bl_config && bl_gate == 0xA5A50000);
+        assert(!bl_control && !(bl_config & 0xf) && bl_gate == 0xA5A50000);
         assert(backlight == saved_duty);  /* zero duty must never mean off */
         assert(!display_power(0));       /* repeated calls preserve the snapshot */
         bl_gate |= 0x10;                 /* another peripheral changed while dark */
@@ -146,8 +148,13 @@ static void driver_tests(void)
     assert(display_power(2) == GZ_EINVAL && display_power(-1) == GZ_EINVAL);
     /* Settings changes and preview rollback must not enable a dark display. */
     assert(!display_power(0));
-    assert(!display_set(4, 5) && !bl_control && !bl_config);
+    assert(!display_set(4, 5) && !bl_control && !(bl_config & 0xf));
     assert(!display_power(1) && backlight == 981 && bl_config == 0x202);
+    buzz_control=1;
+    assert(!display_power(0) && !bl_control && (bl_gate&1) && bl_config==0x202);
+    bl_config|=0x400; /* another BLG channel changes while the panel is dark */
+    assert(!display_power(1) && bl_control==1 && bl_config==0x602 && (bl_gate&1));
+    buzz_control=0;bl_config&=~0x400u;
 }
 
 static void service_tests(void)
@@ -171,7 +178,7 @@ static void service_tests(void)
     sb_display_load(&s);
     assert(s.current.brightness == 4 && s.current.contrast == 7 && backlight == 981);
     for (int fault = 0; fault < 3; fault++) {
-        write_result = fault == 0 ? GZ_ENOSPC : fault == 1 ? sizeof(disk) - 1 : 0;
+        write_result = fault == 0 ? GZ_ENOSPC : fault == 1 ? (int)sizeof(disk) - 1 : 0;
         rename_error = fault == 2 ? GZ_EIO : 0;
         assert(!sb_display_request(&s, SB_DISPLAY_PREVIEW, 7, 1, 0));
         assert(sb_display_request(&s, SB_DISPLAY_SAVE, 7, 1, 0) < 0);
@@ -235,7 +242,7 @@ static void startup_test(bool inherit, uint32_t control, bool backlight_on)
     assert(brightness_now == 5 && contrast_now == 5 && powered);
     /* Runtime settings and sleep/wake still work from the initialized state. */
     assert(!display_set(3, 5) && backlight == 1964);
-    assert(!display_power(0) && !bl_control && !bl_config && !bl_gate);
+    assert(!display_power(0) && !bl_control && !(bl_config & 0xf) && !bl_gate);
     assert(!display_power(1) && bl_control == 1 && bl_config == 0xA5A50202 && bl_gate == 1);
 }
 

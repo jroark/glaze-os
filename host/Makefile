@@ -196,9 +196,15 @@ audio-driver-test: ../tests/audio_driver.c ../kernel/drivers/audio.c ../kernel/h
 	../out/host/$@
 .PHONY: audio-driver-test
 
-audio-volume-test: ../tests/audio_volume.c ../servers/audio/sound.c ../lib/media/wav.c ../lib/media/resample.c
+buzzer-driver-test: ../tests/buzzer_driver.c ../kernel/drivers/buzzer.c ../kernel/hw.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/$@ ../tests/audio_volume.c ../lib/media/wav.c ../lib/media/resample.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/$@ ../tests/buzzer_driver.c
+	../out/host/$@
+.PHONY: buzzer-driver-test
+
+audio-volume-test: ../tests/audio_volume.c ../tests/audio_volume_sys.h ../servers/audio/sound.c ../servers/audio/buzzer.c ../lib/media/wav.c ../lib/media/resample.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -include ../tests/audio_volume_sys.h -o ../out/host/$@ ../tests/audio_volume.c ../servers/audio/buzzer.c ../lib/media/wav.c ../lib/media/resample.c
 	../out/host/$@
 .PHONY: audio-volume-test
 

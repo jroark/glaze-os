@@ -190,8 +190,10 @@ MMIO: codec power/settling, current/next buffer replenishment, repeated and
 simultaneous completion flags, restarts, IRQ masking, timeouts and recovery.
 NAND boot, the RAM-boot trampoline and full Windows CE/GlazeBoot emulator
 runs pass `INIT=bin/ktest`. Headphone output is also confirmed on a real
-BE-300. The internal buzzer uses a separate BLG block at `0x0A000980`
-(Casio SDK `buzzer.h`, `hardware.txt:186`); this driver does not implement it.
+BE-300. The internal piezo uses the separate BLG channel at `0x0A0009A0`
+with period/duty at `9A4/9A8`; `0x0A000980` controls the backlight.
+The independent buzzer driver and system-sound patterns are described in
+[BUZZER.md](BUZZER.md). Physical piezo validation is still required.
 
 Settings → Sounds → Volume controls music, radio, video streams and effects.
 The audio server reads `snd.volume`, uses the existing squared gain curve

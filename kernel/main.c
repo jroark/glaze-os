@@ -75,6 +75,7 @@ void kmain(const struct gz_bootinfo *bi)
     TRACE(12, GZ_TRACE_WHITE);
     timer_init();
     display_init(ram_boot != NULL);
+    buzzer_init();
     cmcu_init();
     TRACE(13, timer_rtc_ok() ? GZ_TRACE_WHITE : GZ_TRACE_RED);
     rtc_init();

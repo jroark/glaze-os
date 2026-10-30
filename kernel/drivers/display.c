@@ -18,18 +18,19 @@ int display_power(int on)
     /* Stock ddi.dll 0x01A55900: off writes zero to BLG+0/+4, then
      * clears CMM+0 bit 0. The inverse enables that gate before configuring
      * PWM and enabling BLG+0. See docs/DISPLAY.md for the pointer mapping.
-     * Restore the inherited configuration, including its reserved bits;
-     * leave the period and brightness duty untouched. */
+     * Restore our mode nibble while preserving the buzzer/other channel
+     * settings; leave both channels' period and duty words untouched. */
     if (!on) {
         saved_control = DISP_BL_CONTROL;
         saved_config = DISP_BL_CONFIG;
         saved_gate = DISP_BL_GATE & 1u;
         DISP_BL_CONTROL = 0;
-        DISP_BL_CONFIG = 0;
-        DISP_BL_GATE &= ~1u;
+        /* BLG config and CMM gate are shared with the piezo channel. */
+        if (buzzer_active()) DISP_BL_CONFIG |= 0x0202;
+        else { DISP_BL_CONFIG &= ~0xFu; DISP_BL_GATE &= ~1u; }
     } else {
-        DISP_BL_GATE = (DISP_BL_GATE & ~1u) | saved_gate;
-        DISP_BL_CONFIG = saved_config;
+        DISP_BL_GATE = (DISP_BL_GATE & ~1u) | saved_gate | (buzzer_active() ? 1u : 0u);
+        DISP_BL_CONFIG = (DISP_BL_CONFIG & ~0xFu) | (saved_config & 0xFu);
         DISP_BL_CONTROL = saved_control;
     }
     powered = on;

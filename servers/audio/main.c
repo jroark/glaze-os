@@ -20,6 +20,7 @@
  */
 
 #include "sound.h"
+#include "buzzer.h"
 #include "radio.h"
 #include "radio_mp3.h"
 
@@ -801,7 +802,7 @@ static int dispatch(struct gz_msg *m, struct gz_msg *r)
     if (op == AUD_HELLO)
         return op_hello((int)m->w[1], r);
     if (op == AUD_SOUND_BUSY)
-        return sound_busy();
+        return sound_busy() || buzzer_busy();
     if (sess >= MAX_SESSIONS || !sessions[sess].pid)
         return GZ_EINVAL;
     struct session *s = &sessions[sess];
@@ -881,7 +882,7 @@ int main(void)
         }
         player_service();
         radio_service();
-        sound_timeout = sound_service();
+        sound_timeout = min_timeout(sound_service(),buzzer_service());
         uint64_t now = gz_time_us();
         if (now - last_reap > 1000000) {
             last_reap = now;

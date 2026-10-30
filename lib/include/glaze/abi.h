@@ -85,6 +85,7 @@ enum {
     SYS_USB_CTL,           /* kernel-started USB development service only */
     SYS_BOOT_MODE,         /* read-only GZ_BOOT_MODE_* */
     SYS_REBOOT_CE,         /* privileged; only valid after a CE RAM boot */
+    SYS_BUZZER_TONE,       /* PROC_AUDIO: Hz, milliseconds, pulse percent (1..50); Hz=0 stops */
     SYS_COUNT
 };
 
@@ -272,6 +273,8 @@ struct gz_netif_info {
  * little-endian, interleaved when stereo. The hardware plays 8000, 11025,
  * 16000, 22050, 32000 and 44100 Hz. */
 #define GZ_AUDIO_RING   65536   /* bytes of PCM the kernel buffers */
+#define GZ_BUZZER_CLOCK 1411200u
+#define GZ_BUZZER_MAX_MS 1000u
 /* A second, smaller ring of effects (UI sounds, alerts) in the same format,
  * added with saturation as each DMA buffer is refilled, so they play within
  * a buffer or two however full the main ring is. */
