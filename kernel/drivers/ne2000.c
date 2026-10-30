@@ -301,7 +301,7 @@ static bool attribute_mac(void)
 void ne2000_init(void)
 {
     PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
-    if ((PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) != PCMCIA_CARD_IN) {
+    if (!PCMCIA_CARD_PRESENT()) {
         kputs("ne2000: no card\n");
         return;
     }

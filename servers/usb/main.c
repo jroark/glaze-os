@@ -1,5 +1,6 @@
 /* USB development service. All filesystem work runs in userspace. */
 #include <glaze/usb.h>
+#include <glaze/nand_repair.h>
 #include <glaze/debug_net.h>
 #include "network.h"
 #include "ethernet.h"
@@ -119,10 +120,12 @@ static int launch(const char *path)
     gz_shm_unmap(req);
     return err ? err : (int)r.w[0];
 }
+static bool cf_recovery_ready;
+static uint32_t cf_recovery_sectors,cf_recovery_generation;
 static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
 {
     *out = 0;
-    if(mirror_active() && (op==GU_PUT_BEGIN || op==GU_BOOT_BEGIN || op==GU_SCREEN_BEGIN ||
+    if(mirror_active() && (op==GU_PUT_BEGIN || op==GU_CF_RECOVERY_BEGIN || op==GU_BOOT_BEGIN || op==GU_SCREEN_BEGIN ||
         op==GU_USB_NET_OPEN || (op>=GU_SCRIPT_BEGIN && op<=GU_SCRIPT_START)))return GZ_EBUSY;
     if(op>=GU_MIRROR_NEXT && op<=GU_MIRROR_CLOSE){
         if(upload>=0 || screen || reloading || script_state==GU_SCRIPT_RUNNING)return GZ_EBUSY;
@@ -138,7 +141,9 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r = gz_sysinfo(&si); if (r) return r;
         gu_put32(payload, GU_VERSION);
         gu_put32(payload + 4, GU_CAP_FILES | GU_CAP_RUN | GU_CAP_LOGS | GU_CAP_RELOAD |
-                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR);
+                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ);
+        if (!gz_nand_repair(GZ_NAND_REPAIR_AVAILABLE,NULL,0))
+            gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_NAND_REPAIR);
         gu_put32(payload + 8, si.free_pages * 4096);
         memcpy(payload + 12, si.build, sizeof(si.build));
         payload[43] = 0; *out = 44; session = true; return 0;
@@ -156,26 +161,39 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         if (network || n || upload >= 0 || reloading || screen) return GZ_EINVAL;
         return usb_ethernet_open(gu_get32(parser.bytes + 8), gu_get32(parser.bytes + 20));
     case GU_ENTROPY: {
-        if (n != 32) return GZ_EINVAL;
+        if (n != 32) { printf("usb: invalid entropy length %u\n",n); return GZ_EINVAL; }
         uint8_t existing[33];
         int size = pref_get("net.entropy", existing, sizeof(existing));
         volatile uint8_t *wipe = existing;
         for (unsigned i = 0; i < sizeof(existing); i++) wipe[i] = 0;
-        if (size < 0 && size != GZ_ENOENT) return size;
+        if (size < 0 && size != GZ_ENOENT) { printf("usb: entropy preference read failed (%d)\n",size); return size; }
         /* Preserve the live ratchet: another debugger connection must not
          * replace a seed while the network service is authenticating. */
         if (size != 32) {
             int r = pref_put("net.entropy", b, n);
-            if (r) return r;
+            if (r) { printf("usb: entropy preference write failed (%d)\n",r); return r; }
             puts("usb: entropy seeded from host CSPRNG");
         }
         gu_put32(payload, size != 32); *out = 4; return 0;
     }
-    case GU_PUT_BEGIN: {
+    case GU_PUT_BEGIN:
+    case GU_CF_RECOVERY_BEGIN: {
         copying();
-        if (n < 9 || upload >= 0) return GZ_EINVAL;
-        int r = path_read(destination, sizeof(destination) - 6, b + 8, n - 8);
-        if (r || destination[0] != '/' || !strncmp(destination, "/NAND", 5) || !strncmp(destination, "/Card", 5)) return GZ_EINVAL;
+        if (upload >= 0) return GZ_EINVAL;
+        bool recovery=op==GU_CF_RECOVERY_BEGIN;
+        int r;
+        if (recovery) {
+            struct gz_cf_info info;
+            if (network || n!=8 || !cf_recovery_ready) return GZ_EPERM;
+            r=gz_cf_info(&info); if(r)return r;
+            if (!info.present || info.sectors!=cf_recovery_sectors || info.generation!=cf_recovery_generation)
+                return GZ_ENOENT;
+            strlcpy(destination,"/Card/RECOVER.BIN",sizeof(destination));
+        } else {
+            if (n<9) return GZ_EINVAL;
+            r=path_read(destination,sizeof(destination)-6,b+8,n-8);
+            if (r || destination[0]!='/' || !strncmp(destination,"/NAND",5) || !strncmp(destination,"/Card",5)) return GZ_EINVAL;
+        }
         /* The default development root is RAM. Explicit external storage
          * is not part of the USB service's initial write interface. */
         expected = gu_get32(b); expected_crc = gu_get32(b + 4);
@@ -188,6 +206,7 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         snprintf(temporary, sizeof(temporary), "%s.part", destination);
         upload = fs_open(temporary, FS_O_WRITE | FS_O_CREATE | FS_O_EXCL);
         if (upload < 0) return upload;
+        if (recovery) cf_recovery_ready=false;
         uploaded = 0; crc = ~0u; return 0;
     }
     case GU_PUT_DATA: {
@@ -204,6 +223,69 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         if (!r) r = fs_rename(temporary, destination);
         if (r) fs_remove(temporary);
         return r;
+    }
+    case GU_NAND_REPAIR:
+        if (network || n<4) return GZ_EPERM;
+        if (upload>=0 || reloading || screen || mirror_active()) return GZ_EBUSY;
+        return gz_nand_repair(gu_get32(b),b+4,n-4);
+    case GU_CF_FORMAT: {
+        if (network || n!=12 || gu_get32(b+8)!=0x36314643u) return GZ_EINVAL; /* CF16 */
+        if (upload>=0 || reloading || screen || mirror_active()) return GZ_EBUSY;
+        struct gz_cf_info info;
+        int r=gz_cf_info(&info);
+        if (r) return r;
+        if (!info.present || gu_get32(b)!=info.sectors || gu_get32(b+4)!=info.generation) return GZ_ENOENT;
+        cf_recovery_ready=false;
+        r=fs_card_format(info.generation,info.sectors);
+        if (!r) {
+            cf_recovery_sectors=info.sectors;cf_recovery_generation=info.generation;
+            cf_recovery_ready=true;
+        }
+        return r;
+    }
+    case GU_NAND_STATUS: {
+        if (n) return GZ_EINVAL;
+        int r=gz_nand_chip_status();
+        if (r<0) return r;
+        gu_put32(payload,(uint32_t)r); *out=4;
+        return 0;
+    }
+    case GU_CF_INFO: {
+        if (n) return GZ_EINVAL;
+        struct gz_cf_info info;
+        int r = gz_cf_info(&info);
+        if (r) return r;
+        gu_put32(payload, info.present); gu_put32(payload+4, info.generation);
+        gu_put32(payload+8, info.sectors);
+        memcpy(payload+12, info.model, sizeof(info.model));
+        *out = 12+sizeof(info.model);
+        return 0;
+    }
+    case GU_CF_READ: {
+        if (n != 12) return GZ_EINVAL;
+        uint32_t lba=gu_get32(b), count=gu_get32(b+4), generation=gu_get32(b+8);
+        struct gz_cf_info info;
+        int r=gz_cf_info(&info);
+        if (r) return r;
+        if (!info.present || info.generation!=generation) return GZ_ENOENT;
+        if (!count || count>GU_PAYLOAD/GZ_CF_SECTOR || lba>=info.sectors || count>info.sectors-lba)
+            return GZ_EINVAL;
+        r=gz_cf_read(lba,count,payload);
+        if (r) return r;
+        *out=count*GZ_CF_SECTOR;
+        return 0;
+    }
+    case GU_NAND_READ: {
+        if (n != 8) return GZ_EINVAL;
+        uint32_t page = gu_get32(b), count = gu_get32(b+4);
+        if (!count || count > GU_PAYLOAD/528 || page >= 32768 || count > 32768-page)
+            return GZ_EINVAL;
+        for (uint32_t i=0;i<count;i++) {
+            int r = gz_nand_raw_read(page+i, payload+i*528);
+            if (r) return r;
+        }
+        *out = count*528;
+        return 0;
     }
     case GU_GET: {
         copying();
@@ -346,7 +428,11 @@ int main(void)
             if (network) { debug_net_drop(); network=false; }
             debugger_state(NULL,NULL);
         }
-        int n = network ? debug_net_read(b,sizeof b) : usb_ethernet_active() ? 0 : gz_usb_ctl(GZ_USB_READ, b, sizeof(b));
+        /* The host can queue bulk HELLO immediately after SET_CONTROL_LINE.
+         * Wait until the kernel has committed DTR's status stage; otherwise
+         * HELLO opens a session that the next state transition discards. */
+        int n = network ? debug_net_read(b,sizeof b) :
+                usb_ethernet_active() || (state&3)!=3 ? 0 : gz_usb_ctl(GZ_USB_READ,b,sizeof(b));
         if (network && n<0) {
             abort_transfer(); parser.used=0; session=have_last=false;
             network=false; debugger_state(NULL,NULL);

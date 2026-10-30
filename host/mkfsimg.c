@@ -23,6 +23,8 @@
 static uint8_t *flash;
 static uint32_t pages, blocks;
 static lfs_t lfs;
+static uint8_t factory_bad[128];
+int flash_raw_is_bad(uint32_t block) { return (factory_bad[block/8] >> (block%8)) & 1; }
 
 /* Erased NAND reads as 0xFF and programming only clears bits. */
 int flash_raw_read(uint32_t page, uint8_t *buf)
@@ -129,6 +131,14 @@ int main(int argc, char **argv)
         return 1;
     memset(flash, 0xFF, size);
 
+    if (blocks > 1024) return 2;
+    for (int i = 4; i < argc; i++) if (!strncmp(argv[i], "--bad-blocks=", 13)) {
+        FILE *in = fopen(argv[i]+13, "rb");
+        if (!in || fread(factory_bad,1,sizeof(factory_bad),in) != sizeof(factory_bad) || fgetc(in) != EOF)
+            die("bad bitmap", argv[i], -1);
+        fclose(in);
+        for (unsigned b=blocks;b<1024;b++) if (flash_raw_is_bad(b)) die("bitmap range", argv[i], -1);
+    }
     int rv = ftl_mount(&lfs, blocks);
     if (rv != 1)
         die("format", argv[3], rv);
@@ -136,6 +146,7 @@ int main(int argc, char **argv)
         lfs_mkdir(&lfs, fs_standard_folders[i]);
     copy_tree(argv[1], "");
     for (int i = 4; i < argc; i++) {        /* build products, such as packages */
+        if (!strncmp(argv[i], "--bad-blocks=", 13)) continue;
         char *eq = strchr(argv[i], '=');
         if (!eq || argv[i][0] != '/')
             die("bad file argument", argv[i], 0);

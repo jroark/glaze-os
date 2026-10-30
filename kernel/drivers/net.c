@@ -160,8 +160,10 @@ failed:
 
 void net_init(void)
 {
+    if (driver)
+        return;  /* The cold socket initializer already configured this card. */
     PCMCIA_BRIDGE |= PCMCIA_BRIDGE_EN;
-    if ((PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) != PCMCIA_CARD_IN)
+    if (!PCMCIA_CARD_PRESENT())
         return;
     unsigned function = 0xff, manufacturer = 0, product = 0;
     for (unsigned i = 0, n = 0; n < 64 && i + 2 < 0x100; n++) {
@@ -215,7 +217,7 @@ void net_irq(void)
     /* From the tick and GIRQ0 alike: a pulled card reads 0xFF everywhere,
      * which a driver would take for every event at once. pcmcia_poll()
      * notices the removal itself. */
-    if ((PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) != PCMCIA_CARD_IN)
+    if (!PCMCIA_CARD_PRESENT())
         return;
     if (driver && online) driver->irq();
 }

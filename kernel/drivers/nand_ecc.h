@@ -11,7 +11,10 @@
 int nand_ecc_solve(const uint16_t s[6], uint32_t pos[2], uint16_t val[2]);
 
 /* Checks and corrects a raw page (512 data and 16 spare bytes) in
- * software: 0 if clean, the number of bytes corrected, or -1. */
+ * software: 0 if clean, 1 or 2 corrected RS symbols (data/tag or parity),
+ * or -1. Failed corrections leave the page unchanged. */
 int nand_ecc_check(uint8_t page[528]);
+/* Preserve bytes 0..519, generate ROM/CE-compatible packed parity. */
+void nand_ecc_encode(uint8_t page[528]);
 
 #endif

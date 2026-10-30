@@ -9,6 +9,7 @@
  */
 
 #include <stdint.h>
+#include "../kernel/drivers/nand_boot.h"
 
 /* Kernel layout — overridden by -DKERNEL_* on the SPL command line. */
 #ifndef KERNEL_LOAD_VA
@@ -26,24 +27,50 @@
 
 #define NAND_PAGE_DATA      512u
 
-/* VRC4173 NAND XFER engine, KSEG1 (uncached) aliases of PA 0x0A00A4xx. */
-#define XFER_CMD     (*(volatile uint32_t *)0xAA00A414u)  /* phase select */
-#define XFER_ADDR8   (*(volatile uint8_t  *)0xAA00A420u)  /* cmd/addr byte */
-#define XFER_ACK     (*(volatile uint32_t *)0xAA00A430u)  /* commit phase */
-#define XFER_STATUS  (*(volatile uint32_t *)0xAA00A440u)  /* bit 0 ready */
-#define XFER_KICK    (*(volatile uint32_t *)0xAA00A460u)  /* start busy */
-#define XFER_MODE    (*(volatile uint32_t *)0xAA00A464u)  /* 0x05 = 520-burst */
-#define STREAM_DATA  (*(volatile uint32_t *)0xAA00B000u)  /* 4-byte stream port */
+/* Register overrides allow the production loader to run against a strict
+ * host MMIO model (tests/spl_io.c). */
+#ifndef SPL_REG32
+#define SPL_REG32(a) (*(volatile uint32_t *)(a))
+#define SPL_REG8(a)  (*(volatile uint8_t *)(a))
+#endif
+#define XFER_CMD     SPL_REG32(0xAA00A414u)
+#define XFER_ADDR8   SPL_REG8(0xAA00A420u)
+#define XFER_ACK     SPL_REG32(0xAA00A430u)
+#define XFER_STATUS  SPL_REG32(0xAA00A440u)
+#define XFER_KICK    SPL_REG32(0xAA00A460u)
+#define XFER_MODE    SPL_REG32(0xAA00A464u)
+#define STREAM_DATA  SPL_REG32(0xAA00B000u)
+#define SIU_THR      SPL_REG8(0xAA008680u)
+#define SIU_LSR      SPL_REG8(0xAA008694u)
 
-/* VRC4173 SIU (UART) at 0xAA008680, addr_mult=4. Used for early debug. */
-#define SIU_THR      (*(volatile uint8_t *)0xAA008680u)        /* base + 0  */
-#define SIU_LSR      (*(volatile uint8_t *)(0xAA008680u + 5*4)) /* base + 5*4 */
+static uint32_t uart_dead;
+
+/* After a power-on the companion SIU's clock gate is off, and any access to
+ * a gated companion unit stalls the bus for good, which no poll bound can
+ * catch (docs/NAND_BOOT_AUDIT.md, "Power-on findings"). Which of the gates
+ * Windows CE leaves on clocks the SIU is still open, so the SPL stays silent
+ * unless all of them are on; the kernel turns them on itself. */
+static void uart_init(void)
+{
+    static const uint16_t gates[] = { 0x1108, 0x112C, 0x1138, 0x113C };
+
+    for (unsigned i = 0; i < sizeof(gates) / sizeof(gates[0]); i++)
+        if (!(SPL_REG32(0xAA000000u + gates[i]) & 1u))
+            uart_dead = 1;
+}
 
 static void uart_putc(char c)
 {
-    while (!(SIU_LSR & 0x20u))
-        ;
-    SIU_THR = (uint8_t)c;
+    /* Serial is optional. A gated UART must not prevent loading the OS. */
+    if (uart_dead)
+        return;
+    for (uint32_t n = 0; n < 200000u; n++) {
+        if (SIU_LSR & 0x20u) {
+            SIU_THR = (uint8_t)c;
+            return;
+        }
+    }
+    uart_dead = 1;
 }
 
 static void uart_puts(const char *s)
@@ -51,8 +78,7 @@ static void uart_puts(const char *s)
     while (*s) {
         if (*s == '\n')
             uart_putc('\r');
-        uart_putc(*s);
-        s++;
+        uart_putc(*s++);
     }
 }
 
@@ -63,45 +89,98 @@ static void uart_puthex32(uint32_t v)
         uart_putc(hex[(v >> i) & 0xFu]);
 }
 
-/*
- * Read one 512-byte NAND page into `dest` (4-byte aligned). The 8 trailing
- * OOB bytes from the 520-byte stream burst are discarded. `page` is the
- * absolute page index (0-based, 32 pages/block, 1024 blocks total).
- */
+static void nand_deselect(void)
+{
+    XFER_CMD = 0;
+    SPL_REG32(0xAA00A410u) = 0;
+}
+
+static void nand_wait_ready(void)
+{
+    for (uint32_t n = 0; n < 1000000u; n++)
+        if (XFER_STATUS & 1u)
+            return;
+    nand_deselect();
+    uart_puts("SPL: NAND timeout; boot stopped\n");
+#ifdef SPL_TEST_STOP
+    SPL_TEST_STOP();
+#endif
+    for (;;) ;  /* Never jump to a partially loaded kernel. */
+}
+
+static void nand_select(void)
+{
+    SPL_REG32(0xAA001134u) = 1; /* NAND unit clock, before engine access */
+    SPL_REG32(0xAA00A400u) = 1;
+    SPL_REG32(0xAA00A408u) = 1;
+    SPL_REG32(0xAA00A40Cu) = 1;
+    SPL_REG32(0xAA00A410u) = 1;
+}
+
+static void nand_command(uint8_t cmd)
+{
+    XFER_CMD = 2;
+    XFER_CMD = 3;
+    XFER_ADDR8 = cmd;
+    (void)XFER_ACK;
+    XFER_CMD = 2;
+    nand_wait_ready();
+}
+
+static void nand_init(void)
+{
+    /* Reclaim PIO from ROM/CE DMA, as kernel/drivers/nand.c does. */
+    SPL_REG32(0xAA001134u) = 1;
+    SPL_REG32(0xAA001CF4u) = 1;
+    SPL_REG32(0xAA001CC0u) = 0;
+    SPL_REG32(0xAA00A400u) = 0;
+    XFER_MODE = 0;
+    nand_deselect();
+    nand_select();
+    nand_command(0xFF);
+    nand_deselect();
+}
+
+/* Use the hardware-tested kernel PIO framing, including read ACK and all
+ * 16 spare bytes. Do not depend on the ROM leaving the engine selected. */
+static void nand_read_raw_page(uint32_t page, uint32_t *dest)
+{
+    nand_select();
+    nand_command(0);
+    XFER_CMD = 6;
+    XFER_ADDR8 = 0;
+    XFER_ADDR8 = (uint8_t)page;
+    XFER_ADDR8 = (uint8_t)(page >> 8);
+    (void)XFER_ACK;
+    XFER_CMD = 2;
+    nand_wait_ready();
+    XFER_KICK = 1;
+    XFER_MODE = 5;
+    nand_wait_ready();
+    for (uint32_t i = 0; i < 528u / 4; i++)
+        dest[i] = STREAM_DATA;
+    XFER_MODE = 0;
+    nand_deselect();
+}
+
+static struct nand_boot_map boot_map;
+
+static int boot_raw(void *ctx, uint32_t page, uint8_t raw[528])
+{
+    (void)ctx;
+    nand_read_raw_page(page, (uint32_t *)raw);
+    return 0;
+}
+
 static void nand_read_page(uint32_t page, uint32_t *dest)
 {
-    /* Command phase: READ0 (0x00) */
-    XFER_CMD = 0x03u;
-    XFER_ADDR8 = 0x00u;
-    XFER_ACK = 0u;
-
-    /* Address phase: 3 bytes — column_lo, page_lo, page_hi. The emulator's
-     * XFER engine (`nand.c` MODE 0x05 path) decodes the address as
-     * `row = addr[1] | (addr[2] << 8); col = addr[0]`, so a 4th byte would
-     * overflow the 3-byte queue and shift `col` out. */
-    XFER_CMD = 0x06u;
-    XFER_ADDR8 = 0x00u;                              /* col_lo = 0 (start of page) */
-    XFER_ADDR8 = (uint8_t)(page & 0xFFu);            /* row byte 0 (page lo) */
-    XFER_ADDR8 = (uint8_t)((page >> 8) & 0xFFu);     /* row byte 1 (page hi) */
-    XFER_ACK = 0u;
-
-    /* Kick (busy = !ready), then MODE = 0x05 which the emulator's XFER
-     * engine uses to latch the address into stream_page/col, mark
-     * `stream_active`, and set `ready = true`. KICK before MODE matters:
-     * KICK alone leaves ready=false until something else flips it, and
-     * MODE=5 is the only path that activates the stream. */
-    XFER_KICK = 1u;
-    XFER_MODE = 0x05u;
-
-    while (!(XFER_STATUS & 1u))
-        ;
-
-    /* 128 4-byte reads = 512 data bytes. */
-    for (int i = 0; i < 128; i++)
-        dest[i] = STREAM_DATA;
-    /* Drain the 8 OOB bytes (2 words). */
-    (void)STREAM_DATA;
-    (void)STREAM_DATA;
+    if (!nand_boot_read(&boot_map, boot_raw, 0, page, dest, true))
+        return;
+    uart_puts("SPL: missing or corrupt NAND boot page; boot stopped\n");
+#ifdef SPL_TEST_STOP
+    SPL_TEST_STOP();
+#endif
+    for (;;) ;
 }
 
 #ifdef SPL_RAMBOOT
@@ -206,6 +285,12 @@ static void __attribute__((noreturn)) ramboot(void)
 
 uint32_t spl_main(void)
 {
+    uart_init();
+    nand_init();
+    if (nand_boot_scan(&boot_map, boot_raw, 0, true)) {
+        uart_puts("SPL: ambiguous NAND boot block map; boot stopped\n");
+        for (;;) ;
+    }
     uart_puts("\nGlaze SPL\n");
     uart_puts("kernel load = 0x");
     uart_puthex32(KERNEL_LOAD_VA);
@@ -231,5 +316,6 @@ uint32_t spl_main(void)
     }
 
     uart_puts("kernel loaded; jumping\n");
-    return KERNEL_ENTRY_VA;
+    /* Kernel entry performs its own cache setup before returning to KSEG0. */
+    return KERNEL_ENTRY_VA | 0x20000000u;
 }

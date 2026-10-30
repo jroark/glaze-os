@@ -20,6 +20,8 @@
 
 #define GZ_BOOT_NAND_RW     (1u << 0)       /* SYS_NAND_PROG/ERASE allowed */
 #define GZ_BOOT_NAND_OFF    (1u << 1)       /* SYS_NAND_* refused: no /NAND */
+#define GZ_BOOT_NAND_REPAIR (1u << 2)       /* explicit raw repair; /NAND filesystem disabled */
+#define GZ_BOOT_FROM_ROM    (1u << 3)       /* RAM root loaded by ROM, not a warm CE handoff */
 
 struct gz_bootinfo {
     uint32_t magic, version, flags;
@@ -83,6 +85,15 @@ struct gz_kernel_bin {
 #define GZ_TRACE_GRAY       0x8410u
 #define GZ_TRACE_PINK       0xFC18u
 #define GZ_TRACE_DKGREEN    0x0400u
+
+/* The framebuffer is companion memory behind the LCD clock gates (0A001100,
+ * 0A00110C). A store there with either gate off stalls the bus for good: a
+ * power-on recovery boot hung on its first trace write. After a CE handoff
+ * or once display_init has run, both are on. */
+static inline __attribute__((always_inline)) int gz_boot_trace_live(void)
+{
+    return (*(volatile uint32_t *)0xAA001100u & 1) && (*(volatile uint32_t *)0xAA00110Cu & 1);
+}
 
 static inline __attribute__((always_inline)) void gz_boot_trace(uint32_t n, uint16_t color)
 {

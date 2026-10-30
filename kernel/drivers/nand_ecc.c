@@ -18,7 +18,7 @@
 #include <stdbool.h>
 
 #define POLY    0x409u          /* x^10 + x^3 + 1 (0x019A5CB0) */
-#define SYMBOLS 527u            /* 520 bytes and 6 parity symbols, + 1 */
+#define SYMBOLS 526u            /* 520 bytes and 6 parity symbols */
 #define LAST    525u            /* position of symbol j is LAST - j */
 
 /* a*x (0x019A5C98). */
@@ -162,8 +162,63 @@ int nand_ecc_check(uint8_t page[528])
     if (clean)
         return 0;
     int n = nand_ecc_solve(s, pos, val);
-    for (int i = 0; i < n; i++)
+    if (n < 1 || n > 2)
+        return -1;
+    /* The locator uses S0..S3. Verify the proposed correction against ALL
+     * six syndromes before modifying the page. Otherwise a higher-weight
+     * error with zero leading syndromes can be mistaken for a clean page. */
+    for (int i = 0; i < n; i++) {
+        if (pos[i] > LAST || !val[i] || val[i] > 0x3FFu ||
+            (pos[i] < NAND_ECC_BYTES && (val[i] & 3u)))
+            return -1;
+        for (uint32_t k = 0; k < 6; k++)
+            s[k] ^= mul_xk(val[i], k * (LAST - pos[i]));
+    }
+    for (int k = 0; k < 6; k++)
+        if (s[k])
+            return -1;
+    for (int i = 0; i < n; i++) {
         if (pos[i] < NAND_ECC_BYTES)
             page[pos[i]] ^= bitrev((uint8_t)(val[i] >> 2));
+        else
+            r[pos[i] - NAND_ECC_BYTES] ^= val[i];
+    }
+    /* Repair parity symbols too. Preserve the four unused packed bits. */
+    uint8_t b[8] = {
+        (uint8_t)(r[5] >> 2), (uint8_t)((r[5] << 6) | (r[4] >> 4)),
+        (uint8_t)((r[4] << 4) | (r[3] >> 6)), (uint8_t)((r[3] << 2) | (r[2] >> 8)),
+        (uint8_t)r[2], (uint8_t)(r[1] >> 2),
+        (uint8_t)((r[1] << 6) | (r[0] >> 4)),
+        (uint8_t)((r[0] << 4) | (bitrev(page[527]) & 0x0Fu))
+    };
+    for (int i = 0; i < 8; i++)
+        page[520 + i] = bitrev(b[i]);
     return n;
+}
+
+
+void nand_ecc_encode(uint8_t page[528])
+{
+    static uint16_t g[7];
+    if (!g[6]) {
+        g[0] = 1;
+        uint16_t root = 1;
+        for (int k = 0; k < 6; k++, root = xtime(root)) {
+            for (int i = k + 1; i > 0; i--) g[i] = g[i-1] ^ mul(g[i], root);
+            g[0] = mul(g[0], root);
+        }
+    }
+    uint16_t r[6] = {0};
+    for (unsigned p = 0; p < 520; p++) {
+        uint16_t f = (uint16_t)(bitrev(page[p]) << 2) ^ r[5];
+        for (int i = 5; i > 0; i--) r[i] = r[i-1] ^ mul(f, g[i]);
+        r[0] = mul(f, g[0]);
+    }
+    uint8_t b[8] = {
+        (uint8_t)(r[0] >> 2), (uint8_t)((r[0] << 6) | (r[1] >> 4)),
+        (uint8_t)((r[1] << 4) | (r[2] >> 6)), (uint8_t)((r[2] << 2) | (r[3] >> 8)),
+        (uint8_t)r[3], (uint8_t)(r[4] >> 2),
+        (uint8_t)((r[4] << 6) | (r[5] >> 4)), (uint8_t)(r[5] << 4)
+    };
+    for (unsigned i = 0; i < 8; i++) page[520+i] = bitrev(b[i]);
 }

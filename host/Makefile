@@ -647,3 +647,74 @@ wince-nand-test: ../tests/wince_assets_native.c ../tests/wince_nand_assets.py ..
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/wince-assets-native ../tests/wince_assets_native.c ../apps/wince/assets.c ../apps/wince/pe.c
 	python3 ../tests/wince_nand_assets.py
 .PHONY: wince-nand-test
+
+# Production early boot I/O with fake registers and failure injection.
+boot-init-test: ../tests/spl_io.c ../boot/spl.c ../kernel/drivers/nand.c ../tests/timer_boot.c ../kernel/timer.c ../tests/irq_boot.c ../kernel/drivers/irq.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/spl_io.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c -o ../out/host/spl-io-test
+	../out/host/spl-io-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/timer_boot.c -o ../out/host/timer-boot-test
+	../out/host/timer-boot-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/irq_boot.c -o ../out/host/irq-boot-test
+	../out/host/irq-boot-test
+.PHONY: boot-init-test
+
+nand-boot-test: ../tests/nand_boot.c ../tests/nand_ecc.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_boot.h ../kernel/drivers/nand_ecc.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/nand_boot.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c -o ../out/host/nand-boot-test
+	../out/host/nand-boot-test
+.PHONY: nand-boot-test
+
+../out/host/nand-inventory: nand_inventory.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c ../kernel/drivers/nand_boot.h ../kernel/drivers/nand_ecc.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 nand_inventory.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c -o $@
+nand-image-tools: ../out/host/nand-inventory mkfsimg
+.PHONY: nand-image-tools
+
+ftl-factory-test: ../tests/ftl_factory_bad.c $(FS)
+	@mkdir -p ../out/host
+	$(CC) $(FS_CFLAGS) -fsanitize=address,undefined -o ../out/host/ftl-factory-test $^
+	../out/host/ftl-factory-test
+.PHONY: ftl-factory-test
+
+nand-backup-test: ../tests/nand_backup.c glaze_usb/nand.c
+	@mkdir -p ../out/host
+	$(USB_CC) $(CFLAGS) $(USB_FLAGS) -fsanitize=address,undefined $^ -o ../out/host/nand-backup-test
+	../out/host/nand-backup-test
+.PHONY: nand-backup-test
+
+nand-policy-test: ../tests/nand_raw_policy.c ../kernel/drivers/flash.c ../kernel/drivers/nand_ecc.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/nand_raw_policy.c ../kernel/drivers/nand_ecc.c -o ../out/host/nand-policy-test
+	../out/host/nand-policy-test
+.PHONY: nand-policy-test
+
+cf-boot-test: ../tests/cf_boot.c ../kernel/drivers/cf.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/cf_boot.c -o ../out/host/cf-boot-test
+	../out/host/cf-boot-test
+.PHONY: cf-boot-test
+
+nand-program-test: ../tests/nand_program.c ../kernel/drivers/nand.c $(BE300_SOURCE)/src/hw/nand.c $(BE300_SOURCE)/src/hw/nand_restore.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -I$(BE300_SOURCE)/src -fsanitize=address,undefined ../tests/nand_program.c $(BE300_SOURCE)/src/hw/nand.c $(BE300_SOURCE)/src/hw/nand_restore.c -o ../out/host/nand-program-test
+	../out/host/nand-program-test
+.PHONY: nand-program-test
+
+../out/host/mkcf-recovery: mkcf_recovery.c $(FAT) ../third_party/fatfs/ffconf.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -I../servers/fs -I../third_party/fatfs -fsanitize=address,undefined mkcf_recovery.c $(FAT) -o $@
+cf-recovery-tools: ../out/host/mkcf-recovery
+.PHONY: cf-recovery-tools
+
+cf-read-test: ../tests/cf_read.c glaze_usb/cf.c
+	@mkdir -p ../out/host
+	$(USB_CC) $(CFLAGS) $(USB_FLAGS) -fsanitize=address,undefined $^ -o ../out/host/cf-read-test
+	../out/host/cf-read-test
+.PHONY: cf-read-test
+
+nand-writer-test: ../tests/nand_writer.c glaze_usb/nand_write.c ../kernel/nand_repair.c libwolfssl.a
+	@mkdir -p ../out/host
+	$(USB_CC) $(CFLAGS) $(USB_FLAGS) $(USB_TLS) -fsanitize=address,undefined ../tests/nand_writer.c glaze_usb/nand_write.c libwolfssl.a -o ../out/host/nand-writer-test
+	../out/host/nand-writer-test
+.PHONY: nand-writer-test

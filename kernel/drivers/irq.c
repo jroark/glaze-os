@@ -29,17 +29,31 @@ void irq_init(void)
      * GIUINTEN/GIUINTSTAT, ch. 11 ICU MGIUINTL/MGIUINTH). */
     GIU_INTENL = 0;
     GIU_INTENH = 0;
+    /* GIRQ0 is an active-high level on GPIO0. CE's GIU dump has
+     * IOSELL[0]=0, INTTYPL[0]=0, INTALSELL[0]=1. Linux vr41xx GIU
+     * setup also clears hold for level inputs. Set this before enabling
+     * the cascade rather than inheriting CE's pin configuration. */
+    GIU_IOSELL &= ~1u;
+    GIU_INTTYPL &= ~1u;
+    GIU_INTALSELL |= 1u;
+    GIU_INTHTSELL &= ~1u;
     /* Buttons are polled every tick (input_poll) and the CF disk is polled,
      * so their GIRQ0 sources stay masked; ne2000_init enables the PCMCIA
      * one for a network card. Left enabled after Windows CE, the CF card's
      * level interrupt stormed on a real BE-300. */
-    KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
-    KJ_SRC_KEYS &= ~KJ_SRC_ENABLE;
+    /* Writing a source word also clears its latch: a power-on boot's touch
+     * source was latched before anything ran. Keep the mode bit CE sets
+     * (hw.h KJ_SRC_MODE) on the sources Glaze handles. */
+    KJ_SRC_PCMCIA = (KJ_SRC_PCMCIA & ~KJ_SRC_ENABLE) | KJ_SRC_MODE;
+    KJ_SRC_KEYS = (KJ_SRC_KEYS & ~KJ_SRC_ENABLE) | KJ_SRC_MODE;
+    KJ_SRC_EN |= KJ_SRC_MODE;           /* audio; audio.c owns its enable */
+    KJ_GIRQ0_EN(9) = (KJ_GIRQ0_EN(9) & ~KJ_SRC_ENABLE) | KJ_SRC_MODE; /* input_init enables touch when ready */
     GIU_INTSTATL = 0xFFFFu;
     GIU_INTSTATH = 0xFFFFu;
     GIU_INTENL = 0x0001u;
     ICU_MGIUINTL = 0x0001u;
     ICU_MSYSINT1 = SYSINT1_GIU;
+    KJ_GIRQ0_OUT = 1;   /* last: every source is masked or handled by now */
 }
 
 void irq_dispatch_ip2(void)
@@ -81,7 +95,7 @@ void irq_dispatch_ip2(void)
         if (pending & KJ_INT_CF) {
             net_irq();
             if (net_up() &&
-                (PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) == PCMCIA_CARD_IN)
+                PCMCIA_CARD_PRESENT())
                 KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
         }
         if (pending & KJ_INT_AUDIO) {

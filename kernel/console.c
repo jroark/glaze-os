@@ -152,7 +152,7 @@ void panic(const char *fmt, ...)
     va_end(ap);
     kputs("\n");
     /* The boot trace's third row all red (glaze/bootinfo.h). */
-    for (uint32_t n = 24; tracing && n < 36; n++)
+    for (uint32_t n = 24; tracing && gz_boot_trace_live() && n < 36; n++)
         gz_boot_trace(n, GZ_TRACE_RED);
     for (;;)
         usb_panic_poll();

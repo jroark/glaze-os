@@ -37,7 +37,8 @@ static int boot_options(const char *dir, struct boot_options *o)
         } else if (!strncmp(p, "nand=", 5)) {
             if (!strcmp(p + 5, "off")) o->flags = 2;
             else if (!strcmp(p + 5, "ro")) o->flags = 0;
-            else { fprintf(stderr, "USB boot accepts nand=off or nand=ro\n"); result = -1; break; }
+            else if (!strcmp(p + 5, "repair")) o->flags = 4;
+            else { fprintf(stderr, "USB boot accepts nand=off, nand=ro or explicit nand=repair\n"); result = -1; break; }
         } else if ((!strncmp(p, "kernel=", 7) && strcmp(p + 7, "kernel.bin")) ||
                    (!strncmp(p, "romfs=", 6) && strcmp(p + 6, "romfs.img"))) {
             fprintf(stderr, "USB artifact directories use kernel.bin and romfs.img\n"); result = -1; break;
@@ -129,7 +130,9 @@ int gu_upload(struct gu_client *c, const char *local, const char *remote)
     uint8_t b[GU_PAYLOAD]; uint32_t size, crc;
     if (strlen(remote) > 120 || file_crc(local, &size, &crc)) return -1;
     gu_put32(b, size); gu_put32(b + 4, crc); memcpy(b + 8, remote, strlen(remote));
-    if (gu_call(c, GU_PUT_BEGIN, b, (uint32_t)strlen(remote) + 8) < 0) return -1;
+    int recovery=!strcmp(remote,"/Card/RECOVER.BIN");
+    if (gu_call(c,recovery ? GU_CF_RECOVERY_BEGIN : GU_PUT_BEGIN,b,
+                recovery ? 8 : (uint32_t)strlen(remote)+8)<0) return -1;
     FILE *f = fopen(local, "rb");
     if (!f) { gu_call(c, GU_ABORT, NULL, 0); return -1; }
     uint32_t off = 0; int result = 0;
@@ -241,10 +244,10 @@ int gu_reload(struct gu_client *c, const char *dir)
 fail:
     gu_call(c, GU_ABORT, NULL, 0); return -1;
 }
-static int ce_folder(struct pc_link *p, uint64_t need, char folder[512])
+static int ce_folder(struct pc_link *p, uint64_t need, char folder[512], int cf_only)
 {
     const char *roots[] = {"\\Storage Card", "\\Nand Disk"};
-    for (unsigned i = 0; i < 2; i++) {
+    for (unsigned i = 0; i < (cf_only ? 1u : 2u); i++) {
         uint64_t free_bytes;
         if (pc_free_space(p, roots[i], &free_bytes) || free_bytes < need) continue;
         snprintf(folder, 512, "%s\\GlazeUSB", roots[i]);
@@ -281,13 +284,13 @@ static int ce_test(struct pc_link *p, const char *dir, const char *folder)
     fprintf(stderr, "CE probe did not produce this run's execution nonce\n");
     return -1;
 }
-int ce_self_test(struct usb_link *u, const char *dir)
+int ce_self_test(struct usb_link *u, const char *dir, int cf_only)
 {
     struct pc_link p; char folder[512];
-    if (pc_connect(&p, u) || ce_folder(&p, 65536, folder)) return -1;
+    if (pc_connect(&p, u) || ce_folder(&p, 65536, folder, cf_only)) return -1;
     return ce_test(&p, dir, folder);
 }
-int ce_boot(struct usb_link *u, const char *dir)
+int ce_boot(struct usb_link *u, const char *dir, int cf_only)
 {
     char kernel[1024], romfs[1024]; uint32_t ks, rs, kc, rc;
     struct boot_options options;
@@ -297,7 +300,7 @@ int ce_boot(struct usb_link *u, const char *dir)
     struct pc_link p;
     if (pc_connect(&p, u)) return -1;
     char folder[512], remote[600], local[1024];
-    if (ce_folder(&p, (uint64_t)ks + rs + 262144, folder) || ce_test(&p, dir, folder)) return -1;
+    if (ce_folder(&p, (uint64_t)ks + rs + 262144, folder, cf_only) || ce_test(&p, dir, folder)) return -1;
     const char *files[] = {"GlazeBoot.exe", "kernel.bin", "romfs.img", "glaze.cfg"};
     for (unsigned i = 0; i < 4; i++) {
         snprintf(remote, sizeof(remote), "%s\\%s", folder, files[i]);

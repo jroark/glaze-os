@@ -280,10 +280,12 @@ void input_init(void)
      * 0x0A000300): a 0x5DC interval (30 us units, ~22 Hz) and stable count
      * 0xC8, and interrupt mask 0xDD. A ~10 ms interval lost data on the
      * first touch on a real BE-300. */
+    PIU_ADC_ENABLE = 3;     /* before the sequencer starts (hw.h) */
     PIU_SIVL = 0x05DC;
     PIU_STBL = 0x00C8;
     PIU_INT = (PIUINT_PENCHG | PIUINT_DATALOST | PIUINT_PAGE0 | PIUINT_PAGE1 | PIUINT_OTHER) << 8;
     PIU_CNT = PIU_SCAN;
+    KJ_GIRQ0_EN(9) |= KJ_SRC_ENABLE;
     stowaway_init();
 #ifdef GLAZE_INPUT_SCRIPT
     input_script_load();

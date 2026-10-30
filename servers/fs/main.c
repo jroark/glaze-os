@@ -42,6 +42,9 @@ static struct file files[MAX_FILES];
 
 /* ---- platform hooks for ftl.c -------------------------------------------- */
 
+static bool flash_badmap;
+int flash_raw_is_bad(uint32_t block) { return flash_badmap ? gz_flash_bad(block) : 0; }
+
 int flash_raw_read(uint32_t page, uint8_t *buf)
 {
     return gz_flash_read(page, buf);
@@ -395,6 +398,16 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
         return op_statfs(s, m->w[2]);
     if (op == FS_FORMAT)
         return op_format();
+    if (op == FS_CARD_FORMAT) {
+        for (int i=0;i<MAX_FILES;i++) {
+            if (files[i].used && files[i].card && files[i].cf.f.obj.fs &&
+                files[i].cf.f.obj.fs->pdrv==CARD_DRIVE) {
+                /* Mount ids invalidate any old handles after format. */
+                card_close(&files[i].cf); files[i].used=false;
+            }
+        }
+        return card_format_recovery(m->w[2],m->w[3]);
+    }
 
     const char *path = path_arg(s, 0);
     const char *cpath = path ? card_path(path) : NULL;
@@ -497,6 +510,7 @@ int main(void)
     char line[96];
 
     gz_flash_info(&fi);
+    flash_badmap = (fi.flags & GZ_FLASH_BADMAP) != 0;
     int rv = ftl_mount(&lfs, fi.blocks);
     mount_err = rv < 0 ? gz_err(rv) : 0;
     if (rv == 1)

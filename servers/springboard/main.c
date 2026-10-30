@@ -2063,6 +2063,7 @@ int main(void)
     state = ST_LOCK;
     render_lock();
     timesync_start(sb_port);
+    hwdump_start();
     idle.last_activity = now_ms();
     puts("springboard: ready");
     bench_log("ready", NULL, now_ms());

@@ -86,6 +86,11 @@ enum {
     SYS_BOOT_MODE,         /* read-only GZ_BOOT_MODE_* */
     SYS_REBOOT_CE,         /* privileged; only valid after a CE RAM boot */
     SYS_BUZZER_TONE,       /* PROC_AUDIO: Hz, milliseconds, pulse percent (1..50); Hz=0 stops */
+    SYS_FLASH_BAD,         /* PROC_FLASH: region block -> 0 good, 1 quarantined */
+    SYS_NAND_RAW_READ,     /* PROC_USB/FLASH, read-only CE RAM handoff: physical 528-byte page */
+    SYS_NAND_CHIP_STATUS,  /* same read-only handoff: 70h status byte, no program/erase */
+    SYS_NAND_REPAIR,       /* PROC_USB + explicit repair RAM boot: op, buffer, length */
+    SYS_HWDUMP,            /* privileged, HWDUMP=1 builds: op, buffer (0 = size), length */
     SYS_COUNT
 };
 
@@ -244,6 +249,7 @@ struct gz_task_snapshot {
 #define GZ_NAND_BLOCKS          1024
 #define GZ_NAND_FIRST_WRITABLE  2
 
+#define GZ_FLASH_BADMAP         (1u << 3)   /* SYS_FLASH_BAD supplies persisted inventory */
 #define GZ_FLASH_RAM            (1u << 0)   /* SYS_FLASH_* is a RAM disk */
 #define GZ_FLASH_NAND           (1u << 1)   /* SYS_NAND_READ works */
 #define GZ_FLASH_NAND_RW        (1u << 2)   /* SYS_NAND_PROG/ERASE too */
@@ -294,7 +300,8 @@ struct gz_audio_status {
 };
 
 /* SYS_CF_*: a CompactFlash ATA card's 512-byte sectors, for the file
- * server (PROC_FLASH). generation changes whenever the card is inserted,
+ * server (PROC_FLASH). PROC_USB may inspect geometry and read sectors only.
+ * generation changes whenever the card is inserted,
  * removed or swapped. */
 #define GZ_CF_SECTOR    512
 #define GZ_CF_IO_MAX    4096    /* bytes per SYS_CF_READ / SYS_CF_WRITE */

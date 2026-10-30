@@ -14,8 +14,7 @@ static uint8_t cis[256];
 #define PCMCIA_BRIDGE bridge
 #define PCMCIA_BRIDGE_EN 4
 #define PCMCIA_CARD_STATUS socket_status
-#define PCMCIA_STATUS_MASK 12
-#define PCMCIA_CARD_IN 4
+#define PCMCIA_CARD_PRESENT() (socket_status == 4)  /* 4: a card, 0: none */
 static unsigned reads;
 static uint8_t read_cis(unsigned i)
 {

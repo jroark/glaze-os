@@ -12,16 +12,16 @@
  * There is no hot-plug interrupt: SYS_CF_INFO samples the socket status
  * and re-identifies the card when it changes, bumping a generation count
  * the file server compares to notice a swapped card. At boot the card is
- * the one GlazeBoot came from, configured by Windows CE (or decoded by the
- * emulator without configuration); a card inserted later gets the socket
- * power-up and configuration register writes Windows CE's pcmcia.dll does,
- * with the COR value Windows CE gave the boot card.
+ * one GlazeBoot came from, configured by Windows CE. NAND boot and later
+ * insertions explicitly set up the socket and card using the sequences from
+ * the stock SPL and pcmcia.dll. RAM handoff retains CE's live socket and COR.
  */
 
 #include "../kernel.h"
 #include "../hw.h"
 #include "../drivers.h"
 #include "../proc.h"
+#include <glaze/bootinfo.h>
 
 /* Taskfile registers (offsets from CF_ATA_BASE). */
 #define ATA_ERROR       1       /* read */
@@ -66,6 +66,8 @@ static bool socket_full;         /* the socket status at the last probe */
 static bool booted;              /* cf_init has run: later insertions are hot */
 static uint16_t io_buf[GZ_CF_IO_MAX / 2];
 static int boot_cor = -1;        /* the COR Windows CE set, if it was readable */
+/* Socket history for HWDUMP=1 diagnostics (kernel/hwdump.c, cf_debug). */
+static uint32_t cold_status = ~0u, cold_inserts, inserts, probes, removals;
 
 static bool wait_status(uint8_t mask, uint8_t want)
 {
@@ -82,7 +84,7 @@ static bool wait_status(uint8_t mask, uint8_t want)
 
 static bool card_inserted(void)
 {
-    return (PCMCIA_CARD_STATUS & PCMCIA_STATUS_MASK) == PCMCIA_CARD_IN;
+    return PCMCIA_CARD_PRESENT();
 }
 
 /*
@@ -307,12 +309,6 @@ static void delay_ms(uint32_t ms)
         ;
 }
 
-/* A card inserted after boot is unpowered and unconfigured: power and reset
- * the socket as pcmcia.dll does on insertion (hw.h), with the PC Card
- * spec's 300 ms power-up and a settle after reset. At boot Windows CE or
- * the boot ROM has done this. Enough for the emulator; a real BE-300's card
- * still reads 0 afterwards, presumably until its configuration register is
- * set through a mapped attribute window, which isn't done yet. */
 /* The register state Windows CE left, and the boot card's COR when the
  * configuration window is mapped (A020 bit 3, as pcmcia.dll leaves it). */
 static void note_boot_state(void)
@@ -328,8 +324,21 @@ static void note_boot_state(void)
     }
 }
 
+/* CE may gate the socket while no card is present. Establish the stock
+ * ROM/SPL baseline before BOTH cold boot and later power-up attempts. */
+static void socket_bus_init(void)
+{
+    REG32(0x0A00111Cu) = 1;
+    REG32(0x0A00A010u) = 0x1073;
+    REG32(0x0A00A014u) = 0x1061;
+    REG32(0x0A00A018u) = 0x10B1;
+    REG16(0x0F000140u) |= 0x20;
+    REG16(0x0F000144u) |= 0x20;
+}
+
 static void socket_power_up(void)
 {
+    socket_bus_init();
     /* 0x0198C2F8 then 0x0198C318: Vcc, presumably. */
     PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
     PCMCIA_A034 = (PCMCIA_A034 | 0x08u) & ~0x30u;
@@ -355,7 +364,10 @@ static void socket_power_up(void)
  * settling in the socket can drop the write, so it is read back. */
 static bool configure(void)
 {
-    uint8_t cor = boot_cor >= 0 ? (uint8_t)boot_cor : 0x43u;
+    /* Zero is the unconfigured memory mode; bit 7 holds the card in reset.
+     * Neither is a usable inherited ATA configuration after CE had no card. */
+    uint8_t cor = boot_cor >= 0 && !(boot_cor & 0x80) && (boot_cor & 0x3F)
+                    ? (uint8_t)boot_cor : 0x43u;
 
     PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
     PCMCIA_A024 = PCMCIA_A024 & ~0x0Cu;
@@ -438,6 +450,7 @@ static void insert(void)
 {
     int kind = -1;              /* the FUNCID first read: retries follow it */
 
+    inserts++;
     for (int attempt = 0; attempt < 3; attempt++) {
         struct cis c;
 
@@ -481,6 +494,7 @@ static void probe(void)
 {
     bool was = info.present, had = socket_full;
 
+    probes++;
     socket_full = card_inserted();
     if (!socket_full) {
         if (net_present()) {
@@ -497,10 +511,43 @@ static void probe(void)
         info.generation++;
     if (info.present)
         kprintf("cf: %s, %u sectors\n", info.model, info.sectors);
-    else if (was)
+    else if (was) {
+        removals++;
         kputs("cf: card removed\n");
+    }
     else if (socket_full && !net_present())
         kprintf("cf: card not ready (status %x)\n", CF_ATA(ATA_STATUS));
+}
+
+/* Stock SPL 80F03248/80F03290: companion socket clock, bus timings,
+ * GPIO5 direction/output. CE RAM handoff retains its live socket instead.
+ * Run before net_init reads CIS: an inserted network card also needs COR. */
+void pcmcia_cold_init(bool force)
+{
+    if (ram_boot && !(ram_boot->flags & GZ_BOOT_FROM_ROM) && !force)
+        return;
+    if (force)
+        kputs("cf: testing cold socket initialization\n");
+    socket_bus_init();
+    cold_status = PCMCIA_CARD_STATUS;
+    socket_full = card_inserted(); /* identify() requires the presence latch */
+    if (socket_full) {
+        cold_inserts++;
+        insert();  /* Includes power/reset settling, CIS, COR and identify. */
+    }
+}
+
+/* Live socket state for the HWDUMP=1 writer, which may have no console. */
+void cf_debug(uint32_t out[8])
+{
+    out[0] = PCMCIA_CARD_STATUS;
+    out[1] = cold_status;
+    out[2] = cold_inserts;
+    out[3] = inserts;
+    out[4] = probes;
+    out[5] = removals;
+    out[6] = info.present;
+    out[7] = info.generation;
 }
 
 void cf_init(void)
@@ -510,7 +557,9 @@ void cf_init(void)
     if (!net_present() && card_inserted()) {
         PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
         probe();
-        if (!info.present)
+        if (!info.present && !net_present())
+            insert(); /* CE may have handed over an unpowered socket. */
+        if (!info.present && !net_present())
             kputs("cf: card is not an ATA disk\n");
     }
     socket_full = card_inserted();      /* a network card found at boot too */
@@ -523,16 +572,16 @@ void pcmcia_poll(void)
         probe();
 }
 
-static int check(struct proc *p)
+static int check(struct proc *p, bool write)
 {
-    if (!(p->flags & PROC_FLASH))
+    if (!(p->flags & (write ? PROC_FLASH : PROC_FLASH | PROC_USB)))
         return GZ_EPERM;
     return info.present ? 0 : GZ_ENOENT;
 }
 
 int sys_cf_info(struct proc *p, uint32_t uout)
 {
-    if (!(p->flags & PROC_FLASH))
+    if (!(p->flags & (PROC_FLASH | PROC_USB)))
         return GZ_EPERM;
     /* No hot-plug interrupt: look at the socket each time, and handle an
      * insertion or removal of whatever card. */
@@ -542,7 +591,7 @@ int sys_cf_info(struct proc *p, uint32_t uout)
 
 static int transfer(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf, bool write)
 {
-    int rv = check(p);
+    int rv = check(p, write);
 
     if (rv)
         return rv;

@@ -37,6 +37,8 @@ bool card_is_root(const char *fpath);
 void card_check(void);
 /* 0 when a FAT volume is mounted on the card, else the reason it isn't. */
 int card_status(void);
+/* Erases CF filesystem metadata only, never the NAND drive. */
+int card_format_recovery(uint32_t generation, uint32_t sectors);
 
 /* Mounts Windows CE's FAT partition as /NAND (a RAM boot), read-only unless
  * writable. Returns 0 or the reason it isn't mounted, as nand_status(). */

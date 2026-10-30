@@ -155,7 +155,7 @@ int usb_reload_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
         if (manifest.kernel_bytes < 4096 || manifest.kernel_bytes > 1024 * 1024 ||
             manifest.romfs_bytes < 8 || manifest.romfs_bytes > 0x4c0000 ||
             manifest.ramfs_kb < 128 || manifest.ramfs_kb > 11264 ||
-            manifest.flags & ~GZ_BOOT_NAND_OFF) return GZ_EINVAL;
+            (manifest.flags!=0 && manifest.flags!=GZ_BOOT_NAND_OFF && manifest.flags!=GZ_BOOT_NAND_REPAIR)) return GZ_EINVAL;
         total = ALIGN_UP(manifest.kernel_bytes, PAGE_SIZE) + manifest.romfs_bytes;
         uint32_t want = ALIGN_UP(total, PAGE_SIZE) / PAGE_SIZE;
         if (want + 32 > mm_free_pages()) { total = 0; return GZ_ENOMEM; }

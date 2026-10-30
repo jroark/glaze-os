@@ -97,9 +97,13 @@ def main():
     ap.add_argument("--speed", default="166", help="emulator target in million instructions/sec")
     ap.add_argument("--descriptor-delay", type=float, default=0, help="simulate stale CE descriptors after a RAM reload")
     ap.add_argument("--reboot-test", choices=["ce", "glaze"], help="verify reboot and CE recovery in one guest")
+    ap.add_argument("--work",type=Path,default=Path("out/usb-native"))
+    ap.add_argument("--no-trace",action="store_true")
+    ap.add_argument("--nand-transaction-test",nargs=3,type=Path,metavar=("TARGET","INSTALL_PLAN","RESTORE_PLAN"),
+                    help="install then restore disposable emulator NAND using the native writer")
     ap.add_argument("command", nargs="*", default=["ce-self-test"])
     args = ap.parse_args()
-    work = Path("out/usb-native").resolve()
+    work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.nand, work / "nand.img")
     if args.cf:
@@ -142,11 +146,16 @@ def main():
                     commands = args.command and [args.command]
                     if args.reboot_test == "ce": commands = [["reboot"], ["ce-probe"]]
                     if args.reboot_test == "glaze": commands = [["boot"], ["reboot"], ["reboot", "--ce"], ["ce-probe"]]
+                    if args.nand_transaction_test:
+                        target,install,restore=[str(p.resolve()) for p in args.nand_transaction_test]
+                        source=str(args.nand.resolve())
+                        commands=[["nand-apply",source,target,install,"--execute"],
+                                  ["nand-apply",target,source,restore,"--execute"]]
                     for command in commands:
                         shell_before = (work/"stdout.log").read_bytes().count(b"CASIO Original Shell started")
                         reconnect_deadline=time.monotonic()+120
                         while True:
-                            cli = subprocess.Popen([str(args.cli.resolve()), "--trace"] + command,
+                            cli = subprocess.Popen([str(args.cli.resolve())]+([] if args.no_trace else ["--trace"]) + command,
                                 env=dict(os.environ, GLAZE_USB_TEST_SOCKET=str(socket_path)),
                                 stdout=cli_output, stderr=subprocess.STDOUT)
                             while cli.poll() is None:
@@ -195,6 +204,9 @@ def main():
                     emulator.kill()
                     emulator.wait()
                 socket_path.unlink(missing_ok=True)
+    if args.nand_transaction_test:
+        assert (work/"nand.img").read_bytes()==args.nand.read_bytes(),"NAND restore changed original data/OOB"
+        print("Native USB install/restore: every physical byte restored PASS",flush=True)
 
 
 if __name__ == "__main__":

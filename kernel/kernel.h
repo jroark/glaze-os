@@ -5,6 +5,10 @@
 
 #include <stdarg.h>
 
+struct gz_nand_manifest;
+void boot_nand_read(uint32_t page, void *buf);
+const struct gz_nand_manifest *boot_nand_manifest(void);
+
 /* console.c */
 void uart_putc(char c);
 void console_use_debug_uart(void);

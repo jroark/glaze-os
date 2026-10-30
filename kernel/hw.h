@@ -50,10 +50,14 @@
 
 /* VR4131 GIU (doc: GPIO). */
 #define GIU_BASE            0x0F000140u
+#define GIU_IOSELL          REG16(GIU_BASE + 0x00)
 #define GIU_INTSTATL        REG16(GIU_BASE + 0x08)
 #define GIU_INTSTATH        REG16(GIU_BASE + 0x0A)
 #define GIU_INTENL          REG16(GIU_BASE + 0x0C)
 #define GIU_INTENH          REG16(GIU_BASE + 0x0E)
+#define GIU_INTTYPL         REG16(GIU_BASE + 0x10)
+#define GIU_INTALSELL       REG16(GIU_BASE + 0x14)
+#define GIU_INTHTSELL       REG16(GIU_BASE + 0x18)
 
 /* VRC4173 companion: GIRQ0 cascade on GIU line 0 (doc: Interrupts; the
  * Linux port's irq.c). KJ_INTSTAT shows each source's level. */
@@ -67,6 +71,14 @@
 #define KJ_SRC_PCMCIA       REG32(0x0A000010u)
 #define KJ_SRC_KEYS         REG32(0x0A000014u)
 #define KJ_SRC_ENABLE       0x08u
+/* Bit 2 of a source word is needed too: Windows CE sets it on every source
+ * it uses (0x0C, hw_dump_vrc4173.txt), and with it clear a power-on boot's
+ * touch source latched bit 7 for good, so no further touch interrupt came.
+ * Bits 4-7 read back as status. 0x0A000008 bit 0 drives GIRQ0 out to GIU
+ * line 0 at all: it reads 1 under Windows CE and 0 after a power-on, and
+ * setting it put SYSINT1's GIU bit up (USB poke on a real BE-300). */
+#define KJ_SRC_MODE         0x04u
+#define KJ_GIRQ0_OUT        REG32(0x0A000008u)
 
 
 /* ScCmcu, the companion's interface to Casio's power-management
@@ -94,6 +106,11 @@
 #define AUD_CODEC_CMD       REG32(0x0A0003C0u)   /* serial codec command */
 #define AUD_CODEC_READY     REG32(0x0A0003C4u)   /* non-zero when idle */
 #define AUD_CODEC_STATUS    REG32(0x0A0003F4u)   /* bit 7 folds into 0xD007 */
+/* Windows CE leaves 3 here; after a power-on it reads 0, and the PIU then
+ * never samples. It must be set before the PIU sequencer starts: set on a
+ * running PIU it takes effect only at the next restart (USB poke on a real
+ * BE-300, 2026-10-30). Its bits' meaning is unknown. */
+#define PIU_ADC_ENABLE      REG32(0x0A0003C8u)
 #define AUD_CTRL            REG32(0x0A000880u)   /* 6:4 rate, 3 output on */
 #define AUD_CTRL16          REG16(0x0A000880u)
 #define AUD_POWER           REG32(0x0A000884u)   /* 0 enable, 1 codec on */
@@ -152,9 +169,15 @@
 #define PCMCIA_WINDOWS      REG32(0x0A001B20u)
 #define PCMCIA_BRIDGE       REG32(0x0A00A01Cu)
 #define PCMCIA_BRIDGE_EN    0x04u
+/* Card presence is A008 bits 1-2, the socket's active-low card-detect
+ * inputs: 0x2F9/0x2B9 with a card, 0x3FF with the socket empty on a real
+ * BE-300 after a power-on (USB peek, 2026-10-30), and pcmcia.dll's
+ * CardGetStatus samples them (UM 0x0198C3C8). 0x0A001000 bits 2-3 read 4
+ * only once Windows CE has set the card up: 0 with a card after a power-on
+ * and 8 with none, so it can't tell a cold card from no card. */
 #define PCMCIA_CARD_STATUS  REG32(0x0A001000u)
-#define PCMCIA_STATUS_MASK  0x0Cu
-#define PCMCIA_CARD_IN      0x04u
+#define PCMCIA_CD_MASK      0x06u
+#define PCMCIA_CARD_PRESENT() ((PCMCIA_STATUS & PCMCIA_CD_MASK) == 0)
 
 /* NE2000 (DP8390) in the card I/O window at ISA port 0x300; the window
  * decodes the low five address bits (be300 src/hw/cf_ne2000.c). */
@@ -182,6 +205,7 @@
 #define UART_BASE           0x0A008680u
 #define UART_THR            REG8(UART_BASE + 0 * 4)
 #define UART_RBR            REG8(UART_BASE + 0 * 4)
+#define UART_LCR            REG8(UART_BASE + 3 * 4)
 #define UART_LSR            REG8(UART_BASE + 5 * 4)
 #define UART_LSR_DR         0x01u
 #define UART_LSR_THRE       0x20u
@@ -265,6 +289,7 @@
 #define NAND_XFER_CTRL      REG32(0x0A00A410u)
 #define NAND_XFER_CMD       REG32(0x0A00A414u)
 #define NAND_XFER_ADDR8     REG8(0x0A00A420u)
+#define NAND_XFER_DATA32    REG32(0x0A00A420u) /* CMD 70h returns chip status here */
 #define NAND_XFER_ACK       REG32(0x0A00A430u)
 #define NAND_XFER_STATUS    REG32(0x0A00A440u)
 #define NAND_XFER_KICK      REG32(0x0A00A460u)
