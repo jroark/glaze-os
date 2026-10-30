@@ -19,6 +19,7 @@
 #include <glaze/wifi.h>
 #include <glaze/prefs.h>
 #include <glaze/fs.h>
+#include <glaze/random.h>
 #include <glaze/usb_net.h>
 #include <stdio.h>
 #include <string.h>
@@ -250,8 +251,9 @@ static void wifi_link(void)
  * host's CSPRNG (glaze.seed beside GlazeBoot), and ratchet it on the card
  * before using it, so that no two boots start from the same seed. Without
  * the file, an attached USB debugger can instead supply fresh host CSPRNG
- * bytes through the USB service. Authentication refuses to run until a
- * seed is present; clocks and card identifiers are not entropy substitutes.
+ * bytes through the USB service. If neither is available, collect a local
+ * jitter seed before starting WPA association. Raw clocks and identifiers
+ * alone are not used as seeds.
  */
 static const char *const card_seeds[] = { "/Card/CE/R4100/glaze.seed", "/Card/Glaze/glaze.seed" };
 static void seed_from_card(void)
@@ -280,7 +282,30 @@ static void seed_from_card(void)
     forced_memzero(seed, sizeof(seed)); forced_memzero(next, sizeof(next)); forced_memzero(boot, sizeof(boot));
 }
 
-/* The seed originates from the host CSPRNG in the factory filesystem image.
+/* Saved host/card seeds are preferred; otherwise bootstrap from device jitter
+ * before a handshake starts, since the first collection can take seconds. */
+static int ensure_wifi_seed(void)
+{
+    uint8_t seed[33];
+    if (pref_get("net.entropy", seed, sizeof(seed)) == 32) {
+        forced_memzero(seed, sizeof(seed));
+        return 0;
+    }
+    net_log("wifi: collecting device timing entropy\n");
+    int rv = gz_entropy_seed(seed, 32);
+    if (!rv) {
+        /* A USB host may have provisioned a seed while collection ran. */
+        uint8_t current[33];
+        if (pref_get("net.entropy", current, sizeof(current)) != 32)
+            rv = pref_put("net.entropy", seed, 32);
+        forced_memzero(current, sizeof(current));
+    }
+    forced_memzero(seed, sizeof(seed));
+    net_log(rv ? "wifi: device entropy collection failed\n" : "wifi: random seed ready\n");
+    return rv ? WIFI_ERANDOM : 0;
+}
+
+/* The seed originates from a host/card CSPRNG or the local jitter collector.
  * Ratchet it durably before releasing bytes, including across guest reboots. */
 static int wifi_random(uint8_t *out, unsigned n)
 {
@@ -330,6 +355,10 @@ static int connect_network(const struct wifi_credentials *c)
     rv = gz_wifi_ctl(WIFI_STATUS, &status);
     if (rv) return rv;
     if (!(status.capabilities & WIFI_CAP(c->security))) return WIFI_EUNSUPPORTED;
+    if (c->security == WIFI_WPA_PSK || c->security == WIFI_WPA2_PSK) {
+        rv = ensure_wifi_seed();
+        if (rv) return rv;
+    }
     /* WL54CF supplies the beacon IE and BSSID needed by the supplicant.
      * PRISM's older scan format allows explicit WEP selection by SSID. */
     rv = gz_wifi_ctl(WIFI_SCAN, NULL); if (rv) return rv;

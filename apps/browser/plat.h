@@ -27,9 +27,9 @@ const void *plat_roots(uint32_t *size);
 long long plat_time(void);
 /* Fills buf with timing noise, a little entropy per byte at best. */
 void plat_noise(uint8_t *buf, int n);
-/* A random seed kept between runs: load leaves seed alone if there is none. */
+/* Load a saved seed or obtain fresh seed material; negative on failure. */
 #define PLAT_SEED_LEN   32
-void plat_load_seed(uint8_t *seed);
+int plat_load_seed(uint8_t *seed);
 void plat_save_seed(const uint8_t *seed);
 
 /* Browser local storage: eight bounded, atomically replaced origin records.

@@ -55,7 +55,10 @@ int glaze_tls_seed(unsigned char *out, unsigned int n)
     if (!pool_ready) {
         uint8_t init[PLAT_SEED_LEN + 256];
         memset(init, 0, PLAT_SEED_LEN);
-        plat_load_seed(init);
+        if (plat_load_seed(init) < 0) {
+            memset(init, 0, sizeof(init));
+            return -1;
+        }
         plat_noise(init + PLAT_SEED_LEN, 256);
         wc_Sha256Hash(init, sizeof(init), pool);
         pool_ready = true;

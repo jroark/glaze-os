@@ -13,6 +13,7 @@
  */
 
 #include <glaze/fs.h>
+#include <glaze/random.h>
 #include <glaze/notify.h>
 #include <glaze/sys.h>
 #include <glaze/ui.h>
@@ -189,9 +190,7 @@ long long plat_time(void)
     return (long long)gz_dt_to_secs(&dt) + 946684800;   /* 2000-01-01 in Unix time */
 }
 
-/* There's no hardware random source: the microsecond clock read after each
- * trip through the scheduler varies with interrupts, network and flash
- * traffic, and other processes. */
+/* Supplemental noise, mixed only after loading or collecting a seed. */
 void plat_noise(uint8_t *buf, int n)
 {
     for (int i = 0; i < n; i++) {
@@ -201,9 +200,9 @@ void plat_noise(uint8_t *buf, int n)
     }
 }
 
-void plat_load_seed(uint8_t *seed)
+int plat_load_seed(uint8_t *seed)
 {
-    fs_read_file(SEED_PATH, seed, PLAT_SEED_LEN);
+    return gz_entropy_load_seed(SEED_PATH, seed);
 }
 
 void plat_save_seed(const uint8_t *seed)

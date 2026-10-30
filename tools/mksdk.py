@@ -104,6 +104,7 @@ def main():
         # Glaze binaries in the SDK. No firmware, games or toolchain binaries.
         for name in ("include", "libc", "gfx", "ui", "media", "ldso", "crt0_pic.S"):
             copy(ROOT / "lib" / name, stage / "src/lib" / name)
+        copy(ROOT / "third_party/jitterentropy", stage / "src/third_party/jitterentropy")
         copy(ROOT / "sdk/libraries.mk", stage / "src/Makefile")
         compiler = subprocess.run([args.cross + "gcc", "--version"], text=True, capture_output=True, check=True)
         manifest = {"format": 1, "revision": args.revision, "target": "mipsel-glaze-o32-softfloat",

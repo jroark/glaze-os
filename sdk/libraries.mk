@@ -9,6 +9,7 @@ BASE := $(ARCH) -std=gnu11 -ffreestanding -fno-builtin -nostdlib -fno-stack-prot
     -O2 -g -Wall -Wextra -Wno-unused-parameter -ffunction-sections -fdata-sections \
     -Ilib/include -Ilib/libc/include -MMD -MP
 PIC := $(BASE) -mabicalls -fPIC
+$(OUT)/libc/entropy_jent.o: PIC += -O0 -Ithird_party/jitterentropy
 LDFLAGS := -m elf32ltsmip --hash-style=sysv -z now -z relro -z text -z max-page-size=4096 -z separate-code
 LIBS := c gfx ui media
 LIBFILES := $(foreach n,$(LIBS),$(OUT)/lib$(n).so.1)

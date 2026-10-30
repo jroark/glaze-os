@@ -51,7 +51,8 @@ after RAM reloads, so WPA/WPA2 can work when the storage card has been replaced
 by a Wi-Fi card. An existing seed is preserved for the network service's
 ratchet. Seed packets are excluded from `--trace`; the OS random API failing
 stops the connection rather than substituting a weaker source. Untethered
-boots still use the factory or boot-card seed described in [Wi-Fi](WIFI.md).
+boots prefer the factory or boot-card seed described in [Wi-Fi](WIFI.md), then
+fall back to [device-local timing entropy](ENTROPY.md) before WPA/WPA2 association.
 
 The boot runs in RAM. It replaces CE's live RAM, including its object store;
 save anything important there before booting. Files staged through CE remain

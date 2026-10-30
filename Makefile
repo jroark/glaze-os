@@ -40,6 +40,8 @@ PIC_CFLAGS := $(filter-out -mno-abicalls -fno-pic,$(CFLAGS_COMMON)) -mabicalls -
 DYN_LDFLAGS := -m elf32ltsmip --hash-style=sysv -z now -z relro -z text -z max-page-size=4096 -z separate-code
 
 LIBC_SRCS := $(wildcard lib/libc/*.c)
+$(OUT)/lib/libc/entropy_jent.o: USER_CFLAGS += -O0 -Ithird_party/jitterentropy
+$(OUT)/pic/libc/entropy_jent.o: PIC_CFLAGS += -O0 -Ithird_party/jitterentropy
 LIBGFX_SRCS := $(wildcard lib/gfx/*.c)
 LIBUI_SRCS := $(wildcard lib/ui/*.c)
 
