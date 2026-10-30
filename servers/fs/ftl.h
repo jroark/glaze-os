@@ -15,6 +15,8 @@
 
 /* Raw flash in the file server's region; 0 on success. A program or erase
  * failure may also show up only as data that doesn't read back. */
+/* 0 good, 1 factory/quarantined bad, negative if inventory unavailable. */
+int flash_raw_is_bad(uint32_t block);
 int flash_raw_read(uint32_t page, uint8_t *buf);
 int flash_raw_prog(uint32_t page, const uint8_t *buf);
 int flash_raw_erase(uint32_t block);

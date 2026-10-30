@@ -37,7 +37,7 @@ uint64_t time_us(void)
 /* Count's rate if the RTC can't measure it: a real BE-300 measures 10406
  * kHz, the emulator 10372. */
 #define GUESS_COUNT_PER_MS  10406u
-/* A plausible Count rate (VR4131 Count runs at half PClock): anything else
+/* A plausible Count rate (BE-300 Count runs at PClock/16): anything else
  * is a bad measurement. */
 #define MIN_COUNT_PER_MS    2000u
 #define MAX_COUNT_PER_MS    100000u
@@ -54,32 +54,40 @@ bool timer_rtc_ok(void)
 
 /* The RTC's elapsed-time counter counts on its own clock: a read can catch
  * it changing, so take a value two reads agree on. */
-static uint16_t rtc_ticks(void)
+static bool rtc_ticks(uint16_t *out)
 {
-    uint16_t a, b;
-
-    do {
-        a = RTC_ETIME_L;
-        b = RTC_ETIME_L;
-    } while (a != b);
-    return a;
+    for (uint32_t n = 0; n < 32; n++) {
+        uint16_t a = RTC_ETIME_L;
+        uint16_t b = RTC_ETIME_L;
+        if (a == b) {
+            *out = a;
+            return true;
+        }
+    }
+    return false;
 }
 
-/* Count across 100 ms of RTC time (3277 ticks), or 0 if the RTC isn't
- * counting. */
+/* Every wait is bounded, including a counter that stops after its first
+ * tick or cannot produce a stable read. Count calibration precedes time_us. */
 static uint32_t measure(void)
 {
     const uint16_t span = RTC_HZ / 10;
-    uint16_t start = rtc_ticks();
+    uint16_t start, now;
     uint32_t n = 0;
 
-    while (rtc_ticks() == start)
-        if (++n == RTC_POLLS)
+    if (!rtc_ticks(&start))
+        return 0;
+    do {
+        if (++n == RTC_POLLS || !rtc_ticks(&now))
             return 0;
-    start = rtc_ticks();
+    } while (now == start);
+    start = now;
     uint32_t c0 = read_c0_count();
-    while ((uint16_t)(rtc_ticks() - start) < span)
-        ;
+    n = 0;
+    do {
+        if (++n == RTC_POLLS || !rtc_ticks(&now))
+            return 0;
+    } while ((uint16_t)(now - start) < span);
     return (read_c0_count() - c0) / 100u;
 }
 

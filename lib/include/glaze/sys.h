@@ -84,8 +84,17 @@ static inline int gz_input_read(struct gz_input_event *ev, uint32_t max) { retur
 static inline int gz_flash_read(uint32_t page, void *buf) { return GZ_SC2(SYS_FLASH_READ, page, buf); }
 static inline int gz_flash_prog(uint32_t page, const void *buf) { return GZ_SC2(SYS_FLASH_PROG, page, buf); }
 static inline int gz_flash_erase(uint32_t block) { return GZ_SC1(SYS_FLASH_ERASE, block); }
+static inline int gz_flash_bad(uint32_t block) { return GZ_SC1(SYS_FLASH_BAD, block); }
 static inline int gz_flash_info(struct gz_flash_info *info) { return GZ_SC1(SYS_FLASH_INFO, info); }
 /* The whole NAND, in a RAM boot (glaze/bootinfo.h); pages are 512 bytes. */
+static inline int gz_nand_raw_read(uint32_t page, void *buf) { return GZ_SC2(SYS_NAND_RAW_READ, page, buf); }
+static inline int gz_nand_chip_status(void) { return GZ_SC0(SYS_NAND_CHIP_STATUS); }
+/* HWDUMP=1 kernels: op GZ_HWDUMP_SNAPSHOTS copies kernel/hwdump.c's
+ * snapshots, GZ_HWDUMP_CF eight words of live socket state (cf_debug). */
+#define GZ_HWDUMP_SNAPSHOTS 0
+#define GZ_HWDUMP_CF        1
+static inline int gz_hwdump(uint32_t op, void *buf, uint32_t len) { return GZ_SC3(SYS_HWDUMP, op, buf, len); }
+static inline int gz_nand_repair(uint32_t op, const void *buf, uint32_t len) { return GZ_SC3(SYS_NAND_REPAIR, op, buf, len); }
 static inline int gz_nand_read(uint32_t page, void *buf) { return GZ_SC2(SYS_NAND_READ, page, buf); }
 static inline int gz_nand_prog(uint32_t page, const void *buf) { return GZ_SC2(SYS_NAND_PROG, page, buf); }
 static inline int gz_nand_erase(uint32_t block) { return GZ_SC1(SYS_NAND_ERASE, block); }

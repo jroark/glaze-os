@@ -8,6 +8,18 @@
 #include <unistd.h>
 #include <signal.h>
 #include <time.h>
+#include <stdlib.h>
+#include <errno.h>
+
+static int number(const char *s, uint32_t *out)
+{
+    char *end;
+    errno=0;
+    unsigned long long value=strtoull(s,&end,0);
+    if (errno || !*s || *s=='-' || *end || value>UINT32_MAX) return -1;
+    *out=(uint32_t)value;
+    return 0;
+}
 
 static void stop(int signum) { (void)signum; usb_cancelled = 1; }
 static uint64_t monotonic_ms(void)
@@ -53,7 +65,7 @@ static int reconnect(struct usb_link *l, const char *device, struct gu_client *c
 }
 static int usage(void)
 {
-    fputs("usage: glaze-usb [--trace] [--device BUS.PORT | --host HOST[:PORT] --key FILE] COMMAND [ARGS]\n"
+    fputs("usage: glaze-usb [--trace] [--cf-only] [--device BUS.PORT | --host HOST[:PORT] --key FILE] COMMAND [ARGS]\n"
           "  net-keygen KEYFILE             create a private pairing record offline\n"
           "  net-enable KEYFILE             provision and enable network debugging over USB\n"
           "  net-disable                    disable the network listener\n"
@@ -66,6 +78,9 @@ static int usage(void)
           "  ce-self-test [ARTIFACT_DIR]    harmless upload/download/launch check\n"
           "  reset-link                    reset USB bus connection\n"
           "  diag                          Glaze control/status diagnostics\n"
+          "  peek PA [COUNT]               HWDUMP=1 kernels: words of RAM/companion/VR4131 over EP0\n"
+          "  peek-dump PA WORDS OUTPUT     the same, saved little-endian to a file\n"
+          "  poke PA VALUE [16]            HWDUMP=1 kernels: write a word (or halfword), print it back\n"
           "  put LOCAL REMOTE              verified upload\n"
           "  get REMOTE LOCAL              download\n"
           "  run REMOTE [CE_ARGS]          launch CE executable / Glaze package or built-in\n"
@@ -73,7 +88,13 @@ static int usage(void)
           "  reload [ARTIFACT_DIR]          fresh Glaze RAM boot\n"
           "  reboot [--ce|--glaze]          restart current OS, or select the target\n"
           "  logs [--once]                 stream/drain Glaze console\n", stderr);
-    fputs("  screenshot OUTPUT.png          capture the displayed 240x320 frame\n"
+    fputs("  nand-backup OUTPUT.raw         two-pass physical NAND backup (read-only)\n"
+          "  nand-status                   read chip ready/failure/write-protect bits\n"
+          "  nand-apply SOURCE TARGET PLAN --execute  raw NAND program/verify (repair boot only)\n"
+          "  cf-info                       CF card geometry (read-only)\n"
+          "  cf-read LBA COUNT OUTPUT       two-pass raw CF extent snapshot (read-only)\n"
+          "  cf-format-recovery SECTORS GENERATION  erase CF filesystem; create recovery FAT16\n"
+          "  screenshot OUTPUT.png          capture the displayed 240x320 frame\n"
           "  script INPUT.txt [OUTPUT.png]  replay emulator-style timed input\n"
           "  connect                       hold a debugger session; Ctrl-C closes\n"
           "  run REMOTE --wait             launch and stay connected until app exit\n", stderr);
@@ -82,9 +103,10 @@ static int usage(void)
 int main(int argc, char **argv)
 {
     struct usb_link l = {0}; const char *device = NULL, *host=NULL, *key=NULL;
-    int i = 1;
+    int i = 1, cf_only = 0;
     while (i < argc && argv[i][0] == '-') {
         if (!strcmp(argv[i], "--trace")) l.trace = 1;
+        else if (!strcmp(argv[i], "--cf-only")) cf_only = 1;
         else if (!strcmp(argv[i], "--host") && i+1<argc) host=argv[++i];
         else if (!strcmp(argv[i], "--key") && i+1<argc) key=argv[++i];
         else if (!strcmp(argv[i], "--device") && i + 1 < argc) device = argv[++i];
@@ -93,9 +115,16 @@ int main(int argc, char **argv)
     }
     if (i == argc || (device && host) || (key && !host)) return usage();
     const char *cmd = argv[i++]; int left = argc - i;
+    if (cf_only && strcmp(cmd,"boot") && strcmp(cmd,"ce-self-test")) return usage();
     if (!strcmp(cmd,"net-keygen")) return left==1 && !host && !device ? (debug_host_keygen(argv[i]) ? 1 : 0) : usage();
-    if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect") || !strcmp(cmd,"net-disable")) ? left != 0 :
-        (!strcmp(cmd, "screenshot") || !strcmp(cmd,"net-enable")) ? left != 1 :
+    if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect") || !strcmp(cmd,"net-disable") || !strcmp(cmd,"cf-info") || !strcmp(cmd,"nand-status")) ? left != 0 :
+        !strcmp(cmd,"cf-read") ? left != 3 :
+        !strcmp(cmd,"peek") ? (left < 1 || left > 2) :
+        !strcmp(cmd,"peek-dump") ? left != 3 :
+        !strcmp(cmd,"poke") ? (left < 2 || left > 3 || (left == 3 && strcmp(argv[i + 2], "16"))) :
+        !strcmp(cmd,"cf-format-recovery") ? left != 2 :
+        !strcmp(cmd,"nand-apply") ? (left!=4 || strcmp(argv[i+3],"--execute")) :
+        (!strcmp(cmd, "screenshot") || !strcmp(cmd,"net-enable") || !strcmp(cmd,"nand-backup")) ? left != 1 :
         !strcmp(cmd, "script") ? (left < 1 || left > 2) :
         !strcmp(cmd, "usb-net") ? left > 1 :
         !strcmp(cmd, "mirror") ? 0 :
@@ -107,7 +136,7 @@ int main(int argc, char **argv)
         !strcmp(cmd, "logs") ? (left > 1 || (left == 1 && strcmp(argv[i], "--once"))) : 1) return usage();
     signal(SIGINT, stop); signal(SIGTERM, stop);
     signal(SIGPIPE,SIG_IGN);
-    if (host && (!strncmp(cmd,"ce-",3) || !strcmp(cmd,"reset-link") || !strcmp(cmd,"diag") || !strcmp(cmd,"net-enable") || !strcmp(cmd,"usb-net"))) {
+    if (host && (!strncmp(cmd,"ce-",3) || !strcmp(cmd,"reset-link") || !strcmp(cmd,"diag") || !strncmp(cmd,"peek",4) || !strcmp(cmd,"poke") || !strcmp(cmd,"net-enable") || !strcmp(cmd,"usb-net") || !strcmp(cmd,"cf-format-recovery") || !strcmp(cmd,"nand-apply"))) {
         fputs("This command requires the USB transport.\n",stderr); return 2;
     }
     if (!strcmp(cmd, "reset-link")) return usb_reset_link(device, l.trace) ? 1 : 0;
@@ -127,6 +156,56 @@ int main(int argc, char **argv)
             }
         }
         if (r) fputs("USB diagnostics unavailable\n", stderr);
+    } else if (!strcmp(cmd, "poke")) {
+        /* Bring-up experiments on HWDUMP=1 kernels: load the value with
+         * request 0x5b, then write it through the peek address encoding. */
+        uint32_t pa = (uint32_t)strtoul(argv[i], NULL, 0), value = (uint32_t)strtoul(argv[i + 1], NULL, 0);
+        unsigned region = pa < 0x01000000u ? 0 : (pa >> 24) == 0x0A ? 1 : (pa >> 24) == 0x0F ? 2 : 3;
+        uint32_t index = (pa & 0x00FFFFFFu) >> 2;
+        int half = left == 3;
+        uint8_t b[8]; int done;
+        r = -1;
+        if (region > 2 || (pa & (half ? 1 : 3)) || index >= (1u << 22)) fprintf(stderr, "poke: bad address %08x\n", pa);
+        else if (l.revision != 0x0100 || usb_lines(&l, 3) < 0) fputs("poke: the device isn't running Glaze\n", stderr);
+        else if (libusb_control_transfer(l.dev, 0x40, 0x5b, (uint16_t)value, (uint16_t)(value >> 16), NULL, 0, 1000) >= 0) {
+            libusb_interrupt_transfer(l.dev, 0x83, b, sizeof(b), &done, 1000);    /* the line state */
+            uint16_t sel = (uint16_t)((half ? 4 : 3) | (region << 6 | index >> 16) << 8);
+            /* A halfword at +2 is the word's upper half: the kernel writes
+             * 16 bits at the word address, so pass the exact address. */
+            uint16_t lo = (uint16_t)(half ? (pa & 0x00FFFFFFu) >> 2 : index);
+            if (half && (pa & 2)) { fputs("poke: 16-bit writes need a 4-byte aligned address\n", stderr); }
+            else if (libusb_control_transfer(l.dev, 0x40, 0x5a, sel, lo, NULL, 0, 1000) >= 0 &&
+                     !libusb_interrupt_transfer(l.dev, 0x83, b, sizeof(b), &done, 1000) &&
+                     done == 8 && b[0] == 'G' && b[1] == 'Z' && b[6] == 'W') {
+                printf("%08x <- %08x, reads %02x%02x%02x%02x\n", pa, value, b[5], b[4], b[3], b[2]);
+                r = 0;
+            } else fputs("poke: no answer (not an HWDUMP=1 kernel?)\n", stderr);
+        }
+    } else if (!strcmp(cmd, "peek") || !strcmp(cmd, "peek-dump")) {
+        /* Read-only words through the out-of-band diagnostic request, which
+         * works while bulk transfers don't (kernel/drivers/usb.c). Only
+         * HWDUMP=1 kernels answer. A gated companion unit hangs the device's
+         * bus, so ask only for addresses known to be live. */
+        uint32_t pa = (uint32_t)strtoul(argv[i], NULL, 0);
+        uint32_t count = left > 1 ? (uint32_t)strtoul(argv[i + 1], NULL, 0) : 1;
+        FILE *out = NULL;
+        if (!strcmp(cmd, "peek-dump") && !(out = fopen(argv[i + 2], "wb"))) { perror(argv[i + 2]); return 1; }
+        r = l.revision == 0x0100 && usb_lines(&l, 3) >= 0 ? 0 : -1;
+        if (r) fputs("peek: the device isn't running Glaze\n", stderr);
+        for (uint32_t k = 0; !r && k < count; k++, pa += 4) {
+            unsigned region = pa < 0x01000000u ? 0 : (pa >> 24) == 0x0A ? 1 : (pa >> 24) == 0x0F ? 2 : 3;
+            uint32_t index = (pa & 0x00FFFFFFu) >> 2;
+            uint8_t b[8]; int done;
+            if (region > 2 || (pa & 3) || index >= (1u << 22)) { fprintf(stderr, "peek: bad address %08x\n", pa); r = -1; break; }
+            uint16_t value = (uint16_t)(2 | (region << 6 | index >> 16) << 8);
+            r = libusb_control_transfer(l.dev, 0x40, 0x5a, value, (uint16_t)index, NULL, 0, 1000);
+            if (r < 0) break;
+            r = libusb_interrupt_transfer(l.dev, 0x83, b, sizeof(b), &done, 1000);
+            if (r || done != 8 || b[0] != 'G' || b[1] != 'Z' || b[6] != 'P') { fputs("peek: no answer (not an HWDUMP=1 kernel?)\n", stderr); r = -1; break; }
+            if (out) fwrite(b + 2, 1, 4, out);
+            else printf("%08x: %02x%02x%02x%02x\n", pa, b[5], b[4], b[3], b[2]);
+        }
+        if (out) fclose(out);
     } else if (!strcmp(cmd, "probe")) {
         if (l.revision == 0x0100) r = gu_hello(&c, &l);
         else puts("  stock CE descriptor (use ce-probe to establish a session)");
@@ -147,7 +226,7 @@ int main(int argc, char **argv)
                 }
             }
         } else if (glaze) {
-            r = ce_boot(&l, "out/glazeboot");
+            r = ce_boot(&l, "out/glazeboot", 0);
             if (!r) r = reconnect(&l, device, &c, host, key);
             if (!r) r = gu_logs(&c, 1);
         } else {
@@ -181,9 +260,9 @@ int main(int argc, char **argv)
             }
         }
     } else if (!strcmp(cmd, "ce-self-test")) {
-        r = l.revision == 0x0100 ? -1 : ce_self_test(&l, left ? argv[i] : "out/glazeboot");
+        r = l.revision == 0x0100 ? -1 : ce_self_test(&l, left ? argv[i] : "out/glazeboot", cf_only);
     } else if (!strcmp(cmd, "boot") && l.revision != 0x0100) {
-        r = ce_boot(&l, left ? argv[i] : "out/glazeboot");
+        r = ce_boot(&l, left ? argv[i] : "out/glazeboot", cf_only);
         if (!r) r = reconnect(&l, device, &c, host, key);
         if (!r) r = gu_logs(&c, 1);
     } else if (l.revision == 0x0100) {
@@ -213,6 +292,34 @@ int main(int argc, char **argv)
                         usleep(250000);
                     }
                 }
+            }
+            else if (!strcmp(cmd, "nand-backup")) r = gu_nand_backup(&c, argv[i]);
+            else if (!strcmp(cmd,"nand-apply")) r=gu_nand_apply(&c,argv[i],argv[i+1],argv[i+2]);
+            else if (!strcmp(cmd, "nand-status")) {
+                r=gu_call(&c,GU_NAND_STATUS,NULL,0);
+                if (r==4) {
+                    unsigned status=gu_get32(c.frame+GU_HEADER);
+                    printf("NAND chip status=%02x ready=%u failed=%u write_enabled=%u\n",
+                           status,!!(status&0x40),!!(status&1),!!(status&0x80));
+                    r=0;
+                } else r=-1;
+            }
+            else if (!strcmp(cmd, "cf-info")) { uint32_t sectors,generation; r=gu_cf_info(&c,&sectors,&generation); }
+            else if (!strcmp(cmd, "cf-format-recovery")) {
+                uint32_t sectors,generation,current_sectors,current_generation;
+                if (number(argv[i],&sectors) || number(argv[i+1],&generation) ||
+                    gu_cf_info(&c,&current_sectors,&current_generation) ||
+                    sectors!=current_sectors || generation!=current_generation) r=-1;
+                else {
+                    uint8_t b[12];gu_put32(b,sectors);gu_put32(b+4,generation);gu_put32(b+8,0x36314643u);
+                    fprintf(stderr,"Formatting CF (%u sectors, generation %u) as recovery FAT16\n",sectors,generation);
+                    r=gu_call(&c,GU_CF_FORMAT,b,sizeof(b));
+                }
+            }
+            else if (!strcmp(cmd, "cf-read")) {
+                uint32_t lba,count;
+                if (number(argv[i],&lba) || number(argv[i+1],&count)) r=-1;
+                else r=gu_cf_read(&c,lba,count,argv[i+2]);
             }
             else if (!strcmp(cmd, "screenshot")) r = gu_screenshot(&c, argv[i]);
             else if (!strcmp(cmd, "script")) r = gu_script(&c, argv[i], left == 2 ? argv[i+1] : NULL);

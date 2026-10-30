@@ -20,6 +20,14 @@ INIT    ?= bin/springboard
 BUILD_ID ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 # Test builds: replay this input script (see kernel/drivers/input.c).
 INPUT_SCRIPT ?=
+# Read-only physical NAND diagnostic after a CE RAM handoff.
+NAND_BOOT_PROBE ?=
+# Exercise the NAND-boot socket path after a non-destructive CE RAM handoff.
+COLD_SOCKET_TEST ?=
+# Snapshot hardware registers at kernel entry and after driver setup.
+HWDUMP ?=
+# Beep at early kernel stages, before the LCD is on (power-on bring-up).
+BOOT_BEEP ?=
 
 # GCC's VR41xx errata workarounds, off by default as in Linux's VR41xx
 # builds: VR_FIX="-mfix-vr4130 -mfix-vr4120" pads mflo/mfhi and keeps GCC
@@ -446,7 +454,11 @@ KERNEL_SRCS := $(filter-out $(foreach d,$(DRIVER_NAMES),kernel/drivers/$(d).c),$
 KERNEL_OBJS := $(patsubst %,$(OUT)/%.o,$(basename $(KERNEL_SRCS))) $(OUT)/kernel/string.o $(OUT)/kernel/divdi3.o
 KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -Ikernel -MMD \
     -DGLAZE_BUILD='"$(BUILD_ID)"' -DGLAZE_INIT='"$(INIT)"' \
-    $(if $(INPUT_SCRIPT),-DGLAZE_INPUT_SCRIPT)
+    $(if $(INPUT_SCRIPT),-DGLAZE_INPUT_SCRIPT) \
+    $(if $(COLD_SOCKET_TEST),-DGLAZE_COLD_SOCKET_TEST) \
+    $(if $(NAND_BOOT_PROBE),-DGLAZE_NAND_BOOT_PROBE) \
+    $(if $(HWDUMP),-DGLAZE_HWDUMP) \
+    $(if $(BOOT_BEEP),-DGLAZE_BOOT_BEEP)
 
 $(OUT)/kernel/%.o: kernel/%.c
 	@mkdir -p $(dir $@)
@@ -480,16 +492,20 @@ $(OUT)/kernel_consts.flags: $(OUT)/kernel.elf tools/elf_consts.py
 
 SPL_CFLAGS := $(CFLAGS_COMMON) -Os
 
-$(OUT)/boot/%.o: boot/%.S $(OUT)/kernel_consts.flags
+$(OUT)/boot/%.o: boot/%.S $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
 	@mkdir -p $(dir $@)
 	$(CC) $(SPL_CFLAGS) $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
 
-$(OUT)/boot/%.o: boot/%.c $(OUT)/kernel_consts.flags
+$(OUT)/boot/%.o: boot/%.c $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
 	@mkdir -p $(dir $@)
 	$(CC) $(SPL_CFLAGS) $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
 
-$(OUT)/spl.elf: $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o boot/spl.lds
-	$(LD) -m elf32ltsmip -T boot/spl.lds -o $@ $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o
+$(OUT)/boot/nand_%.o: kernel/drivers/nand_%.c kernel/drivers/nand_boot.h kernel/drivers/nand_ecc.h
+	@mkdir -p $(dir $@)
+	$(CC) $(SPL_CFLAGS) -c -o $@ $<
+
+$(OUT)/spl.elf: $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o $(OUT)/boot/nand_boot.o $(OUT)/boot/nand_ecc.o boot/spl.lds
+	$(LD) -m elf32ltsmip -T boot/spl.lds -o $@ $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o $(OUT)/boot/nand_boot.o $(OUT)/boot/nand_ecc.o
 
 # ---- app packages -------------------------------------------------------------
 # Apps that are installed rather than built in (glaze/pkg.h). packages/<name>
@@ -677,16 +693,16 @@ usb-probe-exe: $(GB_DIR)/UsbProbe.exe
 RB_DIR := $(OUT)/ramboot
 RAMBOOT_FS ?=
 
-$(RB_DIR)/%.o: boot/%.S $(OUT)/kernel_consts.flags
+$(RB_DIR)/%.o: boot/%.S $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
 	@mkdir -p $(dir $@)
 	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
 
-$(RB_DIR)/%.o: boot/%.c $(OUT)/kernel_consts.flags
+$(RB_DIR)/%.o: boot/%.c $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
 	@mkdir -p $(dir $@)
 	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
 
-$(RB_DIR)/spl.elf: $(RB_DIR)/spl_start.o $(RB_DIR)/spl.o $(GB_DIR)/tramp.o $(GB_DIR)/tramp.checked boot/spl.lds
-	$(LD) -m elf32ltsmip -T boot/spl.lds -o $@ $(RB_DIR)/spl_start.o $(RB_DIR)/spl.o $(GB_DIR)/tramp.o
+$(RB_DIR)/spl.elf: $(RB_DIR)/spl_start.o $(RB_DIR)/spl.o $(GB_DIR)/tramp.o $(GB_DIR)/tramp.checked $(OUT)/boot/nand_boot.o $(OUT)/boot/nand_ecc.o boot/spl.lds
+	$(LD) -m elf32ltsmip -T boot/spl.lds -o $@ $(RB_DIR)/spl_start.o $(RB_DIR)/spl.o $(GB_DIR)/tramp.o $(OUT)/boot/nand_boot.o $(OUT)/boot/nand_ecc.o
 
 $(OUT)/glaze-ramboot.bin: $(RB_DIR)/spl.elf $(OUT)/kernel.elf $(OUT)/romfs.img $(RAMBOOT_FS) tools/mk_nand.py
 	$(PYTHON) tools/mk_nand.py --kernel $(OUT)/kernel.elf --spl $(RB_DIR)/spl.elf \
@@ -711,3 +727,23 @@ store: packages
 $(OUT)/include/js_bootstrap.h: apps/browser/js_dom.js apps/browser/js_web.js tools/mkjsbootstrap.py
 	python3 tools/mkjsbootstrap.py $< $@
 $(OUT)/apps/browser/script.o $(OUT)/dyn/apps/browser/script.o: $(OUT)/include/js_bootstrap.h
+
+# Standalone ROM/CF recovery: boots even with blank NAND, root stays in RAM.
+$(OUT)/recovery/consts.flags: $(GB_DIR)/kernel.bin $(GB_DIR)/romfs.img tools/mkrecovery.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/mkrecovery.py --kernel $(GB_DIR)/kernel.bin --romfs $(GB_DIR)/romfs.img --flags $@
+$(OUT)/recovery/start.o: boot/recovery_start.S $(OUT)/recovery/consts.flags
+	$(CC) $(SPL_CFLAGS) $$(cat $(OUT)/recovery/consts.flags) -c -o $@ $<
+$(OUT)/recovery/start.elf: $(OUT)/recovery/start.o boot/recovery.lds
+	$(LD) -m elf32ltsmip -T boot/recovery.lds -o $@ $<
+$(OUT)/recovery/start.bin: $(OUT)/recovery/start.elf
+	$(OBJCOPY) -O binary $< $@
+$(OUT)/recovery/RECOVER.BIN: $(OUT)/recovery/start.bin $(GB_DIR)/kernel.bin $(GB_DIR)/romfs.img tools/mkrecovery.py
+	$(PYTHON) tools/mkrecovery.py --kernel $(GB_DIR)/kernel.bin --romfs $(GB_DIR)/romfs.img --stub $< --out $@
+recovery: $(OUT)/recovery/RECOVER.BIN
+.PHONY: recovery
+
+$(OUT)/recovery/REPAIR.BIN: $(OUT)/recovery/start.bin $(GB_DIR)/kernel.bin $(GB_DIR)/romfs.img tools/mkrecovery.py
+	$(PYTHON) tools/mkrecovery.py --kernel $(GB_DIR)/kernel.bin --romfs $(GB_DIR)/romfs.img --stub $< --nand-repair --out $@
+recovery-repair: $(OUT)/recovery/REPAIR.BIN
+.PHONY: recovery-repair

@@ -27,6 +27,7 @@
 #include "mips.h"
 #include "proc.h"
 #include "drivers/nand.h"
+#include "drivers/nand_boot.h"
 #include <glaze/bootinfo.h>
 
 #define NPAGES          (SDRAM_SIZE / PAGE_SIZE)
@@ -49,7 +50,7 @@ static void read_block(uint32_t n, uint8_t *buf)
     if (ram_pa)
         memcpy(buf, (const uint8_t *)KSEG0(ram_pa) + n * NAND_PAGE_DATA, NAND_PAGE_DATA);
     else
-        nand_read_page(FIRST_NAND_PAGE + n, buf);
+        boot_nand_read(FIRST_NAND_PAGE + n, buf);
 }
 
 void romfs_init(void)

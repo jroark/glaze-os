@@ -57,12 +57,24 @@ int input_read(struct addrspace *as, uint32_t uevents, uint32_t max);
 int sys_flash_read(struct proc *p, uint32_t page, uint32_t ubuf);
 int sys_flash_prog(struct proc *p, uint32_t page, uint32_t ubuf);
 int sys_flash_erase(struct proc *p, uint32_t block);
+int sys_flash_bad(struct proc *p, uint32_t block);
 int sys_flash_info(struct proc *p, uint32_t uout);
+int sys_nand_raw_read(struct proc *p, uint32_t page, uint32_t ubuf);
+int sys_nand_chip_status(struct proc *p);
+int sys_nand_repair(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
 int sys_nand_read(struct proc *p, uint32_t page, uint32_t ubuf);
 int sys_nand_prog(struct proc *p, uint32_t page, uint32_t ubuf);
 int sys_nand_erase(struct proc *p, uint32_t block);
 
+/* hwdump.c: register snapshots for cold-boot bring-up (HWDUMP=1). */
+void hwdump_setup(uint32_t *words, uint32_t nwords);
+void hwdump_capture(uint32_t slot);
+bool hwdump_active(void);
+int sys_hwdump(struct proc *p, uint32_t op, uint32_t uaddr, uint32_t len);
+void cf_debug(uint32_t out[8]);
+
 /* cf.c: CompactFlash ATA card for the file server. */
+void pcmcia_cold_init(bool force);
 void cf_init(void);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
@@ -138,6 +150,7 @@ int sys_audio_status(struct proc *p, uint32_t uout);
 int sys_audio_mix(struct proc *p, uint32_t ubuf, uint32_t len);
 int sys_audio_gain(struct proc *p, uint32_t gain);
 void buzzer_init(void);
+void buzzer_beeps(unsigned n);
 void buzzer_poll(void);
 bool buzzer_active(void);
 int sys_buzzer_tone(struct proc *p, uint32_t hz, uint32_t ms, uint32_t pulse);

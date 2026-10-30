@@ -298,6 +298,13 @@ int fs_format(void)
     return rv ? rv : call(FS_FORMAT, 0, 0, 0, NULL);
 }
 
+int fs_card_format(uint32_t generation, uint32_t sectors)
+{
+    SESSION_LOCKED();
+    int rv=connect();
+    return rv ? rv : call(FS_CARD_FORMAT,generation,sectors,0,NULL);
+}
+
 int fs_read_file(const char *path, void *dst, uint32_t max)
 {
     SESSION_LOCKED();

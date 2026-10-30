@@ -16,13 +16,47 @@
 _start:
 	/* 0x80F00000: alignment NOP (boot ROM jumps to +4) */
 	nop
-	/* 0x80F00004: entry — disable interrupts, set up sp, call C main, jump
-	 * to the value spl_main returns. */
-	mtc0	$zero, $12        /* CP0 Status: clear all (ERL=0, BEV=stays, IE=0) */
-	mtc0	$zero, $13        /* CP0 Cause: clear pending */
-	li	$sp, 0x80FF0000   /* stack high in SDRAM, 64 KiB below 16 MiB */
+	mtc0	$zero, $12        /* interrupts, BEV and ERL clear */
+	mtc0	$zero, $13        /* clear software-pending interrupts */
+	/* Run code and stack uncached before C touches memory. The ROM loaded
+	 * the SPL through aliases whose cache state we must not inherit. */
+	la	$t0, 1f
+	lui	$t1, 0x2000
+	or	$t0, $t0, $t1
+	jr	$t0
+	nop
+1:	nop
+	nop
+	nop
+	/* Index operations are safe before the VR4131 Hit-op workaround.
+	 * Flush ROM cache lines before copying any kernel data through KSEG1. */
+	.set	push
+	.set	mips3
+	lui	$t0, 0x8000
+	ori	$t1, $t0, 0x8000
+2:	cache	0x01, 0($t0)
+	cache	0x00, 0($t0)
+	addiu	$t0, $t0, 16
+	bne	$t0, $t1, 2b
+	nop
+	sync
+	.set	pop
+	li	$sp, 0xA0FF0000   /* uncached stack, 64 KiB below SDRAM end */
 	move	$gp, $zero
-	jal	spl_main
+	/* BSS is absent from the container's file-backed ELF segments. */
+	la	$t0, __bss_start
+	la	$t1, __bss_end
+	lui	$t2, 0x2000
+	or	$t0, $t0, $t2
+	or	$t1, $t1, $t2
+3:	beq	$t0, $t1, 4f
+	nop
+	sw	$zero, 0($t0)
+	b	3b
+	addiu	$t0, $t0, 4
+4:	la	$t0, spl_main
+	or	$t0, $t0, $t2
+	jalr	$t0
 	nop
 	move	$t0, $v0          /* spl_main returns the kernel entry VA */
 	/* MIPS Linux head.S stores a0..a3 to fw_arg0..3 (cmdline argc/argv

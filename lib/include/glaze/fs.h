@@ -38,6 +38,7 @@ enum {
     FS_FORMAT,              /* erase everything */
     FS_SET_END,             /* w2 = handle; truncate/extend at current position */
     FS_NAND_READ,           /* read-only CE logical NAND: w2 byte offset, w3 bytes <= FS_IO_MAX */
+    FS_CARD_FORMAT,         /* CF-only FAT16 superfloppy: w2 generation, w3 sector count */
 };
 
 #define FS_O_READ       0x1
@@ -99,6 +100,7 @@ int fs_statfs(struct fs_info *info);
  * (whose flash_blocks and ECC counts are 0). */
 int fs_statvfs(const char *path, struct fs_info *info);
 int fs_format(void);
+int fs_card_format(uint32_t generation, uint32_t sectors);
 
 /* Whole-file helpers: bytes read (up to max) or written, or an error. */
 int fs_read_file(const char *path, void *buf, uint32_t max);

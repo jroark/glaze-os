@@ -16,6 +16,7 @@
 #include "nand.h"
 #include "nand_ecc.h"
 #include <glaze/bootinfo.h>
+#include <glaze/nand_image.h>
 
 #define FIRST_BLOCK     (FLASH_FS_OFFSET / (NAND_PAGE_DATA * NAND_PAGES_PER_BLOCK))
 #define FIRST_PAGE      (FIRST_BLOCK * NAND_PAGES_PER_BLOCK)
@@ -30,7 +31,9 @@ static bool ram_erased;
 
 static uint32_t region_blocks(void)
 {
-    return ram_boot ? ram_boot->ramfs_blocks : GZ_FLASH_BLOCKS;
+    if (ram_boot) return ram_boot->ramfs_blocks;
+    const struct gz_nand_manifest *m = boot_nand_manifest();
+    return m ? m->fs_blocks : GZ_FLASH_BLOCKS;
 }
 
 static uint8_t *ram_page(uint32_t page)
@@ -50,6 +53,16 @@ static int check(struct proc *p, uint32_t n, uint32_t limit)
     return n < limit ? 0 : GZ_EINVAL;
 }
 
+int sys_flash_bad(struct proc *p, uint32_t block)
+{
+    int rv = check(p, block, region_blocks());
+    if (rv) return rv;
+    if (ram_boot) return 0;
+    const struct gz_nand_manifest *m = boot_nand_manifest();
+    unsigned phys = FIRST_BLOCK + block;
+    return m ? (m->bad[phys / 8] >> (phys % 8)) & 1 : 0;
+}
+
 int sys_flash_info(struct proc *p, uint32_t uout)
 {
     struct gz_flash_info info = { .blocks = region_blocks() };
@@ -57,17 +70,20 @@ int sys_flash_info(struct proc *p, uint32_t uout)
     if (!(p->flags & PROC_FLASH))
         return GZ_EPERM;
     if (ram_boot) {
-        info.flags = GZ_FLASH_RAM | GZ_FLASH_NAND;
+        info.flags = GZ_FLASH_RAM;
+        if (!(ram_boot->flags & GZ_BOOT_NAND_REPAIR)) info.flags |= GZ_FLASH_NAND;
         if (ram_boot->flags & GZ_BOOT_NAND_RW)
             info.flags |= GZ_FLASH_NAND_RW;
         info.nand_blocks = GZ_NAND_BLOCKS;
     }
+    if (!ram_boot && boot_nand_manifest()) info.flags |= GZ_FLASH_BADMAP;
     return copy_to_as(&p->as, uout, &info, sizeof(info));
 }
 
 int sys_flash_read(struct proc *p, uint32_t page, uint32_t ubuf)
 {
     int rv = check(p, page, region_blocks() * GZ_FLASH_PAGES_PER_BLOCK);
+    if (!rv && sys_flash_bad(p, page / NAND_PAGES_PER_BLOCK) > 0) rv = GZ_EIO;
 
     if (rv)
         return rv;
@@ -80,6 +96,7 @@ int sys_flash_read(struct proc *p, uint32_t page, uint32_t ubuf)
 int sys_flash_prog(struct proc *p, uint32_t page, uint32_t ubuf)
 {
     int rv = check(p, page, region_blocks() * GZ_FLASH_PAGES_PER_BLOCK);
+    if (!rv && sys_flash_bad(p, page / NAND_PAGES_PER_BLOCK) > 0) rv = GZ_EIO;
 
     if (rv)
         return rv;
@@ -92,13 +109,13 @@ int sys_flash_prog(struct proc *p, uint32_t page, uint32_t ubuf)
             dst[i] &= src[i];
         return 0;
     }
-    nand_program_page(FIRST_PAGE + page, page_buf);
-    return 0;
+    return nand_program_page(FIRST_PAGE + page, page_buf) ? GZ_EIO : 0;
 }
 
 int sys_flash_erase(struct proc *p, uint32_t block)
 {
     int rv = check(p, block, region_blocks());
+    if (!rv && sys_flash_bad(p, block) > 0) rv = GZ_EIO;
 
     if (rv)
         return rv;
@@ -106,8 +123,7 @@ int sys_flash_erase(struct proc *p, uint32_t block)
         memset(ram_page(block * NAND_PAGES_PER_BLOCK), 0xFF, BLOCK_BYTES);
         return 0;
     }
-    nand_erase_block(FIRST_BLOCK + block);
-    return 0;
+    return nand_erase_block(FIRST_BLOCK + block) ? GZ_EIO : 0;
 }
 
 /* ---- the whole NAND, in a RAM boot ------------------------------------------ */
@@ -116,6 +132,7 @@ static int check_nand(struct proc *p, uint32_t block, bool write)
 {
     if (!(p->flags & PROC_FLASH) || !ram_boot)
         return GZ_EPERM;
+    if (ram_boot->flags & GZ_BOOT_NAND_REPAIR) return GZ_ENOENT;
     /* GlazeBoot's nand=off. */
     if (ram_boot->flags & GZ_BOOT_NAND_OFF)
         return GZ_ENOENT;
@@ -200,6 +217,27 @@ static uint32_t nand_block(uint32_t b)
     return bat[b];
 }
 
+static bool raw_read_allowed(struct proc *p)
+{
+    return (p->flags & (PROC_USB | PROC_FLASH)) && ram_boot &&
+        !(ram_boot->flags & (GZ_BOOT_NAND_OFF | GZ_BOOT_NAND_RW));
+}
+
+int sys_nand_chip_status(struct proc *p)
+{
+    return raw_read_allowed(p) ? nand_status() : GZ_EPERM;
+}
+
+int sys_nand_raw_read(struct proc *p, uint32_t page, uint32_t ubuf)
+{
+    /* A stable recovery backup is only possible while the NAND is read-only.
+     * This API exposes physical bytes, including errors, without ECC edits. */
+    if (!raw_read_allowed(p)) return GZ_EPERM;
+    if (page >= GZ_NAND_BLOCKS * NAND_PAGES_PER_BLOCK) return GZ_EINVAL;
+    nand_read_raw(page, raw);
+    return copy_to_as(&p->as, ubuf, raw, sizeof(raw));
+}
+
 int sys_nand_read(struct proc *p, uint32_t page, uint32_t ubuf)
 {
     int rv = check_nand(p, page / NAND_PAGES_PER_BLOCK, false);
@@ -242,8 +280,7 @@ int sys_nand_prog(struct proc *p, uint32_t page, uint32_t ubuf)
     uint32_t phys = nand_block(page / NAND_PAGES_PER_BLOCK);
     if (phys == BAT_NONE || phys < GZ_NAND_FIRST_WRITABLE)
         return GZ_EPERM;
-    nand_program_page(phys * NAND_PAGES_PER_BLOCK + page % NAND_PAGES_PER_BLOCK, page_buf);
-    return 0;
+    return nand_program_page(phys * NAND_PAGES_PER_BLOCK + page % NAND_PAGES_PER_BLOCK, page_buf) ? GZ_EIO : 0;
 }
 
 int sys_nand_erase(struct proc *p, uint32_t block)
@@ -255,6 +292,5 @@ int sys_nand_erase(struct proc *p, uint32_t block)
     uint32_t phys = nand_block(block);
     if (phys == BAT_NONE || phys < GZ_NAND_FIRST_WRITABLE)
         return GZ_EPERM;
-    nand_erase_block(phys);
-    return 0;
+    return nand_erase_block(phys) ? GZ_EIO : 0;
 }

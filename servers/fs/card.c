@@ -152,6 +152,39 @@ int card_status(void)
     return status[CARD_DRIVE];
 }
 
+int card_format_recovery(uint32_t generation, uint32_t sectors)
+{
+    struct gz_cf_info current;
+    if (card_raw_info(&current)<0 || !current.present || current.generation!=generation || current.sectors!=sectors)
+        return GZ_ENOENT;
+    /* Keep FAT16 between 4096 and 65524 clusters; ROM needs two FATs,
+     * 512-byte sectors, <=255 reserved sectors, and a fixed root directory. */
+    uint32_t spc=1;
+    while (sectors/spc>=65500 && spc<128) spc*=2;
+    if (sectors<8192 || sectors/spc>=65500) return GZ_EINVAL;
+    MKFS_PARM options={.fmt=FM_FAT|FM_SFD,.n_fat=2,.align=1,.n_root=512,.au_size=spc*512};
+    uint8_t work[4096] __attribute__((aligned(4)));
+    f_unmount("0:");
+    info=current; known=true; status[CARD_DRIVE]=GZ_EIO;
+    FRESULT r=f_mkfs("0:",&options,work,sizeof(work));
+    if (r!=FR_OK) return fat_err(r);
+    status[CARD_DRIVE]=fat_err(f_mount(&fatfs[CARD_DRIVE],"0:",1));
+    if (!status[CARD_DRIVE] && fatfs[CARD_DRIVE].fs_type!=FS_FAT16) {
+        f_unmount("0:"); status[CARD_DRIVE]=GZ_ECORRUPT;
+    }
+    if (!status[CARD_DRIVE]) {
+        /* FatFs emits the generic "FAT     " label even for FAT16. ROM
+         * 9FC00F3A compares exactly "FAT16" before choosing its decoder. */
+        f_unmount("0:"); status[CARD_DRIVE]=GZ_EIO;
+        if (card_raw_read(0,1,work)<0) return GZ_EIO;
+        memcpy(work+54,"FAT16   ",8);
+        if (card_raw_write(0,1,work)<0 || card_raw_read(0,1,work+512)<0 || memcmp(work,work+512,512))
+            return GZ_EIO;
+        status[CARD_DRIVE]=fat_err(f_mount(&fatfs[CARD_DRIVE],"0:",1));
+    }
+    return status[CARD_DRIVE];
+}
+
 int card_mount_nand(bool writable)
 {
     char line[96];

@@ -113,6 +113,9 @@ static void check_pages(void)
         page[512] = 0xAA; page[513] = 0x55; page[514] = 0x0F; page[515] = 0xFF;
         encode(page);
         memcpy(orig, page, sizeof(page));
+        memset(page + 520, 0xFF, 8);
+        nand_ecc_encode(page);
+        CHECK(!memcmp(orig, page, sizeof(page)));
         CHECK(nand_ecc_check(page) == 0);
         unsigned a = (unsigned)rand() % 520, b = (a + 1 + (unsigned)rand() % 519) % 520;
         page[a] ^= (uint8_t)(1 + rand() % 255);
@@ -121,6 +124,58 @@ static void check_pages(void)
         page[b] ^= (uint8_t)(1 + rand() % 255);
         CHECK(nand_ecc_check(page) == 2 && !memcmp(page, orig, 520));
     }
+}
+
+/* Packed parity faults can straddle two RS symbols. Exercise every bit,
+ * mixed data/parity faults, and reject uncorrectable pages without mutation. */
+static void check_parity_and_rejection(void)
+{
+    uint8_t good[528], bad[528], before[528];
+    memset(good, 0x5A, 520);
+    encode(good);
+    for (unsigned off = 520; off < 528; off++) {
+        for (unsigned bit = 0; bit < 8; bit++) {
+            if (off == 527 && bit >= 4) continue; /* unused bits after bitrev */
+            memcpy(bad, good, sizeof(bad));
+            bad[off] ^= (uint8_t)(1u << bit);
+            CHECK(nand_ecc_check(bad) > 0);
+            CHECK(!memcmp(bad, good, sizeof(bad)));
+            CHECK(nand_ecc_check(bad) == 0);
+            memcpy(bad, good, sizeof(bad));
+            bad[17] ^= 0xA5;
+            bad[off] ^= (uint8_t)(1u << bit);
+            CHECK(nand_ecc_check(bad) == 2);
+            CHECK(!memcmp(bad, good, sizeof(bad)));
+        }
+    }
+    for (unsigned t = 0; t < 1000; t++) {
+        memcpy(bad, good, sizeof(bad));
+        bad[t % 170] ^= 0x31;
+        bad[170 + t % 170] ^= 0x53;
+        bad[340 + t % 170] ^= 0x97;
+        memcpy(before, bad, sizeof(bad));
+        CHECK(nand_ecc_check(bad) == -1);
+        CHECK(!memcmp(bad, before, sizeof(bad)));
+    }
+    /* A nonzero S4/S5 with S0..S3 zero must not be accepted. A parity
+     * polynomial x^0..x^3 factor has exactly that leading-zero property. */
+    uint16_t g[5] = {1};
+    for (int k = 0; k < 4; k++) {
+        uint16_t root = gpow((uint32_t)k);
+        for (int i = k + 1; i > 0; i--) g[i] = g[i-1] ^ gmul(g[i], root);
+        g[0] = gmul(g[0], root);
+    }
+    memcpy(bad, good, sizeof(bad));
+    /* Inject the polynomial through parity's six packed symbols by
+     * encoding it as the parity bit stream, in the independent layout. */
+    uint16_t r0=0, r1=g[4], r2=g[3], r3=g[2], r4=g[1], r5=g[0];
+    uint8_t b[8] = { (uint8_t)(r5>>2), (uint8_t)((r5<<6)|(r4>>4)),
+        (uint8_t)((r4<<4)|(r3>>6)), (uint8_t)((r3<<2)|(r2>>8)),
+        (uint8_t)r2, (uint8_t)(r1>>2), (uint8_t)((r1<<6)|(r0>>4)), (uint8_t)(r0<<4) };
+    for (int i=0;i<8;i++) bad[520+i] ^= br8(b[i]);
+    memcpy(before,bad,sizeof(bad));
+    CHECK(nand_ecc_check(bad) == -1);
+    CHECK(!memcmp(bad,before,sizeof(bad)));
 }
 
 int main(void)
@@ -143,7 +198,11 @@ int main(void)
         if (a != b)
             check(2, a, va, b, vb);
     }
+    /* There is no codeword symbol at exponent 526. */
+    for (unsigned k = 0; k < 6; k++) s[k] = gmul(0x155, gpow(k * 526));
+    CHECK(nand_ecc_solve(s, pos, val) == -1);
     check_pages();
+    check_parity_and_rejection();
     if (failures) {
         fprintf(stderr, "nand-ecc: %d failures\n", failures);
         return 1;

@@ -179,6 +179,7 @@ void notify_clear_delivered(void);
  * with SB_NOTIFY_CLOCK after setting the clock. */
 #define SB_NOTIFY_CLOCK     0x4u
 void timesync_start(int port);
+void hwdump_start(void);
 void timesync_wake(void);           /* SB_NOTIFY_TIME: settings changed */
 
 #endif

@@ -23,6 +23,8 @@ static bool network_debugger;
 static bool active, configured, tx_busy, short_pending, zlp, status_pending;
 static uint8_t lines, pending_lines;
 static uint8_t diagnostic;
+static uint32_t peek_addr;      /* diagnostics 3-5: KSEG1 address to read or write */
+static uint32_t poke_value;     /* loaded by vendor request 0x5b */
 static uint32_t generation;
 
 void usb_log_putc(char c)
@@ -97,6 +99,20 @@ void usb_poll(void)
             /* Out-of-band diagnostics stay usable if bulk DMA is broken.
              * The host drains EP3 before issuing this vendor request. */
             diagnostic = b[2] + 1; pending_lines = lines; status_pending = true;
+        } else if (b[0] == 0x40 && b[1] == 0x5a && b[2] >= 2 && b[2] <= 4 &&
+                   (b[3] >> 6) < 3 && !b[6] && !b[7] && hwdump_active()) {
+            /* HWDUMP=1 bring-up only: read (2) or write the word loaded by
+             * 0x5b, 32-bit (3) or 16-bit (4), in RAM, the companion or the
+             * VR4131 (wValue high bits 7-6), word index in wValue bits 5-0
+             * and wIndex. Lets a cold boot be examined and changed while
+             * nothing else works; a gated companion unit still hangs the
+             * bus, so the host must only touch live addresses. */
+            static const uint32_t base[] = { 0xA0000000u, 0xAA000000u, 0xAF000000u };
+            peek_addr = base[b[3] >> 6] + ((uint32_t)(b[3] & 0x3F) << 18 | b[5] << 10 | b[4] << 2);
+            diagnostic = b[2] + 1; pending_lines = lines; status_pending = true;
+        } else if (b[0] == 0x40 && b[1] == 0x5b && !b[6] && !b[7] && hwdump_active()) {
+            poke_value = (uint32_t)b[2] | b[3] << 8 | b[4] << 16 | (uint32_t)b[5] << 24;
+            pending_lines = lines; status_pending = true;
         } else { W(0x1460, R(0x1460) | 8); W(0x148c, 1); }
         W(0x1480, ~1u);
     }
@@ -110,7 +126,15 @@ void usb_poll(void)
         if (!(R(0x1454) & 0x10)) {
             if (diagnostic) {
                 uint8_t d[8] = {'G', 'Z'};
-                if (diagnostic == 1) {
+                if (diagnostic >= 3) {
+                    if (diagnostic == 4)
+                        *(volatile uint32_t *)(uintptr_t)peek_addr = poke_value;
+                    else if (diagnostic == 5)
+                        *(volatile uint16_t *)(uintptr_t)peek_addr = (uint16_t)poke_value;
+                    uint32_t w = *(volatile uint32_t *)(uintptr_t)peek_addr;
+                    d[2] = w; d[3] = w >> 8; d[4] = w >> 16; d[5] = w >> 24;
+                    d[6] = diagnostic == 3 ? 'P' : 'W'; d[7] = generation;
+                } else if (diagnostic == 1) {
                     d[2] = R(0x1324); d[3] = R(0x1464); d[4] = R(0x1468);
                     d[5] = R(0x146c); d[6] = R(0x1454); d[7] = R(0x14d8);
                 } else {

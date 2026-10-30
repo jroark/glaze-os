@@ -36,6 +36,7 @@ void usbnet_stop(void) { net_stops++; }
 int usbnet_ctl(struct proc *p, uint32_t op, uint32_t b, uint32_t n)
 { net_calls++; return 456; }
 void usb_input_cancel(void) { input_cancels++; }
+bool hwdump_active(void) { return false; }  /* the HWDUMP=1 peek stays refused */
 void machine_reboot_ce(void) { rebooted++; longjmp(reboot_return, 1); }
 uint64_t time_us(void) { static uint64_t now; now += 100000; return now; }
 int usb_input_ctl(struct proc *p, uint32_t op, uint32_t b, uint32_t n)

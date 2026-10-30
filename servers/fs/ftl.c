@@ -329,7 +329,7 @@ int dhara_nand_is_bad(const struct dhara_nand *n, dhara_block_t b)
     return (bbt.bad[pb / 8] >> (pb % 8)) & 1;
 }
 
-static void bbt_save(void);
+static bool bbt_save(void);
 
 void dhara_nand_mark_bad(const struct dhara_nand *n, dhara_block_t b)
 {
@@ -429,9 +429,12 @@ int dhara_nand_copy(const struct dhara_nand *n, dhara_page_t src, dhara_page_t d
     return dhara_nand_prog(n, dst, buf, err);
 }
 
+/* Legacy host models and data-only images have no external bad map. */
+__attribute__((weak)) int flash_raw_is_bad(uint32_t block) { (void)block; return 0; }
+
 /* ---- bad-block table storage ---------------------------------------------- */
 
-static void bbt_save(void)
+static bool bbt_save(void)
 {
     uint8_t buf[PAGE];
 
@@ -441,23 +444,36 @@ static void bbt_save(void)
     make_slot(buf, CP_COVER, buf + CP_COVER);
     /* Alternate copies so a torn write leaves the previous table. */
     uint32_t block = bbt.gen & 1;
-    if (raw_erase_verify(block) || raw_prog_verify(block * PPB, buf))
+    if ((bbt.bad[0] >> block) & 1u) block ^= 1u;
+    if ((bbt.bad[0] >> block) & 1u) return false;
+    if (raw_erase_verify(block) || raw_prog_verify(block * PPB, buf)) {
         ftl_log("fs: bad-block table write failed");
+        return false;
+    }
+    return true;
 }
 
 static bool bbt_load_copy(uint32_t block, struct bbt *out)
 {
     uint8_t buf[PAGE];
 
-    if (flash_raw_read(block * PPB, buf) || all_ff(buf, PAGE) ||
+    if (flash_raw_is_bad(block) != 0 || flash_raw_read(block * PPB, buf) || all_ff(buf, PAGE) ||
         ecc_check(buf, CP_COVER, buf + CP_COVER, true))
         return false;
     memcpy(out, buf, sizeof(*out));
     return out->magic == BBT_MAGIC && out->blocks == nand.num_blocks + BBT_BLOCKS;
 }
 
-static void bbt_load(void)
+static bool bbt_load(void)
 {
+    uint8_t factory[MAX_BLOCKS / 8] = {0};
+    for (unsigned block = 0; block < nand.num_blocks + BBT_BLOCKS; block++) {
+        int bad = flash_raw_is_bad(block);
+        if (bad < 0) return false; /* Never erase before inventory is known. */
+        if (bad) factory[block / 8] |= 1u << (block % 8);
+    }
+    if ((factory[0] & 3u) == 3u) return false;
+    bool changed = false;
     struct bbt a, b;
     bool ok_a = bbt_load_copy(0, &a), ok_b = bbt_load_copy(1, &b);
 
@@ -466,16 +482,21 @@ static void bbt_load(void)
     else if (ok_b)
         bbt = b;
     else {
-        /* Fresh flash. Factory-marked blocks aren't detected: their marks
-         * are in the spare area, which the emulator doesn't model. */
+        /* Import the external inventory before creating either BBT copy. */
         memset(&bbt, 0, sizeof(bbt));
         bbt.magic = BBT_MAGIC;
         bbt.blocks = nand.num_blocks + BBT_BLOCKS;
-        bbt_save();
+        changed = true;
     }
+    for (unsigned i = 0; i < sizeof(factory); i++) {
+        changed |= (bbt.bad[i] | factory[i]) != bbt.bad[i];
+        bbt.bad[i] |= factory[i];
+    }
+    if (changed && !bbt_save()) return false;
     stats.bad_blocks = 0;
     for (uint32_t i = 0; i < bbt.blocks; i++)
         stats.bad_blocks += (bbt.bad[i / 8] >> (i % 8)) & 1;
+    return true;
 }
 
 /* ---- littlefs block device --------------------------------------------------- */
@@ -581,7 +602,7 @@ int ftl_mount(lfs_t *lfs, uint32_t blocks)
     nand.log2_page_size = 9;
     nand.log2_ppb = 5;
     nand.num_blocks = blocks - BBT_BLOCKS;
-    bbt_load();
+    if (!bbt_load()) return LFS_ERR_IO;
 
     dhara_map_init(&map, &nand, map_buf, GC_RATIO);
     if (dhara_map_resume(&map, &err)) {
