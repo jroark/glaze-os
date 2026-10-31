@@ -99,6 +99,8 @@ def main():
     ap.add_argument("--reboot-test", choices=["ce", "glaze"], help="verify reboot and CE recovery in one guest")
     ap.add_argument("--work",type=Path,default=Path("out/usb-native"))
     ap.add_argument("--no-trace",action="store_true")
+    ap.add_argument("--power-held",action="store_true",
+                    help="hold Power at reset so the ROM boots --cf over a bootable --nand")
     ap.add_argument("--nand-transaction-test",nargs=3,type=Path,metavar=("TARGET","INSTALL_PLAN","RESTORE_PLAN"),
                     help="install then restore disposable emulator NAND using the native writer")
     ap.add_argument("command", nargs="*", default=["ce-self-test"])
@@ -122,7 +124,8 @@ def main():
                 (work / "cli.log").open("wb") as cli_output:
             emulator = subprocess.Popen([str(args.emulator.resolve()), "--nand", str(work / "nand.img"),
                 "--rtc-host-time", "--speed", args.speed, "--pcconnect-dock", "usb-sync", "--pcconnect-bridge",
-                f"tcp:127.0.0.1:{listener.getsockname()[1]}"] + (["--cf",str(work/"cf.img")] if args.cf else []), cwd=work,
+                f"tcp:127.0.0.1:{listener.getsockname()[1]}"] + (["--cf",str(work/"cf.img")] if args.cf else []) +
+                (["--power-held"] if args.power_held else []), cwd=work,
                 env=dict(os.environ, SDL_VIDEODRIVER="dummy"), stdout=out, stderr=err)
             cli = None
             try:

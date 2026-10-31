@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline install/restore plan binding and preservation rules."""
+"""Offline install/update/restore plan binding and preservation rules."""
 import importlib.util
 import struct
 import unittest
@@ -39,6 +39,16 @@ class Transaction(unittest.TestCase):
         broken=bytearray(self.target);broken[20*n.BLOCK]=0
         placement={**self.placement,'physical_sha256':n.sha(broken)}
         with self.assertRaises(ValueError):t.prepare(self.factory,broken,self.factory,self.inventory,placement)
+
+    def test_update_from_installed_image(self):
+        new=bytearray(self.target);new[40*n.BLOCK]=7;new=bytes(new)
+        placement={**self.placement,'physical_sha256':n.sha(new)}
+        _,review=t.prepare(self.target,new,self.factory,self.inventory,placement,installed=self.placement)
+        self.assertEqual(review['operation'],'update');self.assertEqual(review['write_order'],[40])
+        # The source's plan must describe the source, against the same backup and quarantine.
+        for bad in ({**self.placement,'physical_sha256':n.sha(new)},{**self.placement,'backup_sha256':'00'*32},
+                    {**self.placement,'preserve_blocks':[]}):
+            with self.assertRaises(ValueError):t.prepare(self.target,new,self.factory,self.inventory,placement,installed=bad)
 
     def test_manifest_and_noop(self):
         broken=bytearray(self.target);broken[528+508]^=1
