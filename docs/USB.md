@@ -25,7 +25,9 @@ out/host/glaze-usb ce-self-test
 out/host/glaze-usb boot
 ```
 
-Connect an awake BE-300 with its USB sync cable. `boot` defaults to the
+On the BE-300, set **Connections → PC Connect → Connection method: USB**
+before connecting. If the method is serial, USB may enumerate while the PC
+Connect handshake times out. Connect an awake BE-300 with its USB sync cable. `boot` defaults to the
 artifacts in `out/glazeboot`; an optional directory argument selects another
 build. It first uploads `UsbProbe.exe`, reads it back, launches it with a
 unique nonce, and downloads the resulting text to verify execution. Only

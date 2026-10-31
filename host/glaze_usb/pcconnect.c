@@ -162,7 +162,11 @@ int pc_connect(struct pc_link *p, struct usb_link *u)
          * requests. Drain it completely, as the Windows driver does. */
         if (heard && r == LIBUSB_ERROR_TIMEOUT) break;
     }
-    if (!heard || ms() >= deadline || usb_cancelled) return LIBUSB_ERROR_TIMEOUT;
+    if (!heard || ms() >= deadline || usb_cancelled) {
+        if (!usb_cancelled)
+            fputs("CE PC Connect did not respond. On the BE-300, set Connections -> PC Connect -> Connection method: USB, then retry.\n", stderr);
+        return LIBUSB_ERROR_TIMEOUT;
+    }
     /* This query has no side effects. DTR starts AtPcCnct on stock CE. */
     uint8_t query[10] = {0x10, 1, 0, 10, 3, 0x2d};
     p->seq = 1; pc_checksums(query, sizeof(query));

@@ -84,7 +84,7 @@ def main():
     frame = ttk.Frame(root, padding=26)
     frame.pack(fill='both', expand=True)
     ttk.Label(frame, text='Install Glaze', font=('', 24, 'bold')).pack(anchor='w')
-    ttk.Label(frame, text='Connect your BE-300 by USB and plug in power.', wraplength=560).pack(anchor='w', pady=(8, 18))
+    ttk.Label(frame, text='On your BE-300: Connections → PC Connect → Connection method: USB.\nThen connect USB and external power.', wraplength=560).pack(anchor='w', pady=(8, 18))
     device = tk.StringVar(value=args.device)
     save_backup = tk.BooleanVar(value=True)
     verify_wince = tk.BooleanVar(value=True)
@@ -324,7 +324,7 @@ def main():
             if kind == 'error':
                 state['last_error'] = text
                 friendly = text
-                for command, message in [('boot', 'Couldn’t start Glaze. Check USB and try again.'),
+                for command, message in [('boot', 'Couldn’t start Glaze. On the BE-300, check Connections → PC Connect → Connection method: USB, then try again.'),
                                          ('backup', 'Couldn’t read your BE-300. Check USB and try again.'),
                                          ('snapshot', 'Couldn’t read your BE-300. Check USB and try again.'),
                                          ('apply', 'Installation stopped. Keep USB connected and open Details.')]:

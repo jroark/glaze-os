@@ -13,6 +13,8 @@ setup is guided and uses the bundled Zadig; it may request administrator access.
 
 ## End-user flow
 
+On the BE-300, first set **Connections → PC Connect → Connection method: USB**.
+The serial setting prevents CE PC Connect from responding over the USB cable.
 Open the app, connect USB and external power, choose apps if desired, and click
 **Install Glaze**. The app detects the device and runs preparation, flashing and
 restart automatically after one replacement confirmation. The main window shows

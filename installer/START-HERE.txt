@@ -7,7 +7,9 @@ macOS: drag Glaze Installer into Applications and open it.
 Windows: run setup and launch Glaze Installer. If needed, use USB driver setup
 in the app. In the bundled Zadig, select only the BE-300 (07CF:2002) and WinUSB.
 
-Connect USB and external power, choose your apps, then click Install Glaze.
+On the BE-300, open Connections -> PC Connect -> Connection method and select
+'USB' (not serial). Then connect USB and external power, choose your apps, and
+click Install Glaze.
 Hello is not included; Windows CE compatibility starts unchecked. WL54-CF
 Wi-Fi firmware is an optional hardware choice.
 Detection, preparation, flashing and restart happen automatically. Keep USB
