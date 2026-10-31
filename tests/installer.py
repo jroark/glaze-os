@@ -27,6 +27,59 @@ class InstallerTest(unittest.TestCase):
         path.write_text(json.dumps(record))
         return path
 
+    def test_automatic_install_keeps_chosen_backup(self):
+        calls = []
+        def prepare(destination, apps, verify_wince):
+            folder = Path(destination) / 'saved'
+            folder.mkdir()
+            record = folder / 'installation.json'
+            record.write_text('{}')
+            (folder / 'original-ce.raw').write_bytes(b'CE')
+            calls.append(('prepare', verify_wince))
+            return record
+        with patch.object(self.engine, 'prepare', side_effect=prepare), \
+             patch.object(self.engine, 'apply', side_effect=lambda r: calls.append(('apply', r))):
+            self.engine.install_device(self.root / 'backups', [], save_backup=True, verify_wince=False)
+        self.assertEqual(calls[0], ('prepare', False))
+        self.assertEqual(calls[1][0], 'apply')
+        self.assertTrue((self.root / 'backups/saved/original-ce.raw').exists())
+        self.assertTrue(any(e['event'] == 'backup-saved' for e in self.events))
+
+    def test_skip_backup_removes_source_after_success_or_failure(self):
+        for fails in (False, True):
+            paths = []
+            def prepare(destination, apps, verify_wince):
+                self.assertFalse(verify_wince)
+                folder = Path(destination) / 'transient'
+                folder.mkdir()
+                source = folder / 'original-ce.raw'
+                source.write_bytes(b'CE')
+                record = folder / 'installation.json'
+                record.write_text('{}')
+                paths.append(source)
+                return record
+            def apply(record):
+                self.assertTrue(paths[-1].exists())
+                if fails:
+                    raise RuntimeError('simulated failure')
+            with patch.object(self.engine, 'prepare', side_effect=prepare), patch.object(self.engine, 'apply', side_effect=apply):
+                if fails:
+                    with self.assertRaisesRegex(RuntimeError, 'simulated failure'):
+                        self.engine.install_device(self.root / 'unused', [], save_backup=False, verify_wince=False)
+                else:
+                    self.engine.install_device(self.root / 'unused', [], save_backup=False, verify_wince=False)
+            self.assertFalse(paths[-1].exists())
+            self.assertFalse((self.root / 'unused').exists())
+        self.assertFalse(any(e['event'] == 'backup-saved' for e in self.events))
+
+    def test_skip_wince_check_omits_ce_execution_probe(self):
+        (self.root / 'ram').mkdir()
+        self.engine.verify_wince = False
+        with patch.object(self.engine, 'run') as run, patch.object(self.engine, 'wait_glaze'):
+            self.engine.ram_boot('ro')
+        self.assertEqual(run.call_args.args[0], 'boot')
+        self.assertEqual(run.call_args.args[-1], '--skip-ce-test')
+
     def test_reconnect_refreshes_stale_usb_configuration(self):
         clock = [0]
         calls = []
@@ -195,6 +248,19 @@ class OfflinePipelineTest(unittest.TestCase):
                 resumed.prepare(tmp, [])
                 boot.assert_not_called()
             self.assertEqual((folder / 'original-ce.raw').read_bytes(), factory)
+            single_pass = Installer(root / 'out/installer/resources', events.append, '1.2')
+            fast_calls = []
+            def fast_run(*args):
+                fast_calls.append(args[0])
+                if args[0] == 'snapshot':
+                    Path(args[1]).write_bytes(factory)
+                    return []
+                return run(*args)
+            with patch.object(single_pass, 'run', side_effect=fast_run), patch.object(single_pass, 'ram_boot'):
+                fast_record = single_pass.prepare(tmp, [], verify_wince=False)
+            self.assertIn('snapshot', fast_calls)
+            self.assertNotIn('backup', fast_calls)
+            self.assertFalse(json.loads(fast_record.read_text())['verify_wince'])
             candidate = (folder / 'candidate.raw').read_bytes()
             self.assertEqual(len(candidate), 17301504)
             fresh = bytearray(candidate)

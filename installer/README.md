@@ -13,35 +13,42 @@ setup is guided and uses the bundled Zadig; it may request administrator access.
 
 ## End-user flow
 
-Open the Mac app or run Windows setup. Connect USB and external power and wake
-stock Windows CE. Existing GlazeBoot staging files are compared byte for byte and
-reused when they match. Free-space checks cover only missing or changed files
-plus a small workspace; previous files stay intact until a verified replacement
-is ready. Choose apps, prepare the installation, choose a permanent backup
-folder, then review and click Install Glaze. After GlazeBoot, the app refreshes
-the USB connection automatically if macOS retains CE’s old device state. If a
-previous attempt stopped at that step, reconnect USB and click Prepare again;
-the matching read-only Glaze RAM session can be reused without rebooting CE. Files, Settings, and system services
-are required. Built-ins are selected by default; the 17 additional packages start
-unselected. Selected packages are preinstalled in `/Applications` on NAND. The
-app chooser also supports Select all and Required only.
+Open the app, connect USB and external power, choose apps if desired, and click
+**Install Glaze**. The app detects the device and runs preparation, flashing and
+restart automatically after one replacement confirmation. The main window shows
+one status line and progress; diagnostic output and manual USB selection are
+hidden under **Show details**. No separate Detect or Prepare steps are needed.
 
-Preparation repacks the NAND ROMFS to omit unchecked built-in executables while
-retaining services and shared resources. It populates the fresh filesystem with
-selected package bundles and builds a device-specific physical image using the
-actual bad-block inventory. The saved installation record includes selected app
-IDs and the exact image/transaction hashes. Changing choices requires preparing
-a new image. Restore always targets the original saved CE NAND, independent of
-app choices. CE compatibility and game engines still need user-supplied software
-or game data; those external files are not included.
+**Save Windows CE backup** and **Verify Windows CE** start enabled and can be
+unchecked independently. Backups go automatically to `Documents/Glaze Backups`,
+with an optional folder chooser and an **Open backup** button after success.
+Skipping backup stores the CE source only in an OS temporary directory, removed
+on success or failure. It leaves no CE restore copy from this installation.
+Skipping verification uses one source read instead of two and omits the optional
+CE executable/nonce self-test. Glaze payload validation, bad-block mapping,
+source binding, writer preflight and write verification remain required.
 
-Save important CE RAM files first: RAM bootstrap clears CE's volatile object
-store. Internal CE staging files are included in the saved NAND snapshot. Keep
-the complete backup directory permanently. Restore accepts its `installation.json`
-and needs a working CE or Glaze USB bootstrap at the recorded USB port. Backups
-must be outside the application's install directory; use NTFS on Windows because
-atomic publication uses hard links. Driver replacement may affect old CE sync
-software; uninstalling the app does not remove the driver or erase backups.
+A temporary raw NAND source read is necessary for physical placement and the
+existing transaction format even when no backup is retained. Diagnostics stay
+in the host's per-user log directory. Restoring a previously saved CE backup is
+still available through **Restore Windows CE**.
+
+The app chooser offers built-ins and all 17 additional packages. Files, Settings,
+and system services are required; built-ins start selected and optional packages
+start unselected. Packages install into `/Applications` on NAND. Unchecked built-in
+executables are omitted from the generated ROMFS while services/libraries remain.
+Existing GlazeBoot staging files are compared and reused when matching. Only
+missing/changed files require additional CE staging space, and previous files
+stay intact until verified replacement. The matching read-only Glaze RAM session
+can be reused after a failed attempt without rebooting CE.
+
+Save important CE RAM files beforehand: RAM bootstrap clears CE's volatile object
+store. Installation replaces CE and its internal files. Keep complete saved backup
+directories outside the application's install folder. Restore needs a working CE
+or Glaze USB bootstrap at the recorded USB port. Use NTFS for saved Windows
+backups because atomic publication uses hard links. CE compatibility and game
+engines need user-supplied software or game data. Replacing the Windows USB driver
+may affect old CE sync software; uninstalling the app does not remove the driver.
 
 ## Build matching payloads
 

@@ -320,7 +320,7 @@ int ce_self_test(struct usb_link *u, const char *dir, int cf_only)
     if (pc_connect(&p, u) || ce_folder(&p, dir, files, 1, folder, cf_only)) return -1;
     return ce_test(&p, dir, folder, files[0].reuse);
 }
-int ce_boot(struct usb_link *u, const char *dir, int cf_only)
+int ce_boot_options(struct usb_link *u, const char *dir, int cf_only, int verify_ce)
 {
     char kernel[1024], romfs[1024]; uint32_t ks, rs, kc, rc;
     struct boot_options options;
@@ -332,7 +332,8 @@ int ce_boot(struct usb_link *u, const char *dir, int cf_only)
     char folder[512], remote[600], local[1024];
     struct ce_artifact files[] = {{.name="UsbProbe.exe"}, {.name="GlazeBoot.exe"},
                                   {.name="kernel.bin"}, {.name="romfs.img"}, {.name="glaze.cfg"}};
-    if (ce_folder(&p, dir, files, 5, folder, cf_only) || ce_test(&p, dir, folder, files[0].reuse)) return -1;
+    if (ce_folder(&p, dir, files + !verify_ce, 5 - !verify_ce, folder, cf_only)) return -1;
+    if (verify_ce && ce_test(&p, dir, folder, files[0].reuse)) return -1;
     for (unsigned i = 1; i < 5; i++) {
         if (files[i].reuse) continue;
         snprintf(remote, sizeof(remote), "%s\\%s", folder, files[i].name);
@@ -341,4 +342,9 @@ int ce_boot(struct usb_link *u, const char *dir, int cf_only)
     }
     snprintf(remote, sizeof(remote), "%s\\GlazeBoot.exe", folder);
     return pc_run(&p, remote, "--usb-boot");
+}
+
+int ce_boot(struct usb_link *u, const char *dir, int cf_only)
+{
+    return ce_boot_options(u, dir, cf_only, 1);
 }

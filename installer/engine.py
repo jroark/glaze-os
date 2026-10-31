@@ -36,6 +36,7 @@ class Installer:
         self.ext = '.exe' if os.name == 'nt' else ''
         self.helper = self.resources / 'bin' / ('glaze-installer-usb' + self.ext)
         self.build = None
+        self.verify_wince = True
 
     def verify(self):
         manifest = json.loads((self.resources / 'manifest.json').read_text())
@@ -105,7 +106,7 @@ class Installer:
                 except RuntimeError:
                     pass  # GlazeBoot can still have USB powered down; retry.
                 reset_at = time.monotonic() + 5
-        raise RuntimeError('Glaze did not reconnect after USB refresh attempts. Unplug and reconnect USB once, then click Prepare installation again. No NAND programming was started by this reconnect step.')
+        raise RuntimeError('Glaze did not reconnect after USB refresh attempts. Unplug and reconnect USB once, then try Install Glaze again. No NAND programming was started by this reconnect step.')
 
     def ram_boot(self, mode):
         # ce_test writes its nonce reply beside the payload; bundles are read-only.
@@ -113,10 +114,16 @@ class Installer:
             folder = Path(tmp) / 'boot'
             shutil.copytree(self.resources / 'ram', folder)
             (folder / 'glaze.cfg').write_text(f'nand={mode}\nramfs_kb=2048\n')
-            self.run('boot', folder)
+            self.emit({'event': 'status', 'text': 'Starting Glaze…'})
+            if self.verify_wince:
+                self.run('boot', folder)
+            else:
+                self.run('boot', folder, '--skip-ce-test')
             self.wait_glaze(4096 | (16384 if mode == 'repair' else 0))
 
-    def prepare(self, destination, requested_apps=None):
+    def prepare(self, destination, requested_apps=None, verify_wince=True):
+        self.verify_wince = verify_wince
+        self.emit({'event': 'status', 'text': 'Connecting to your BE-300…'})
         self.verify()
         device = self.probe()
         ram_readonly = (device['runtime'] == 'Glaze' and
@@ -139,7 +146,9 @@ class Installer:
         if not ram_readonly:
             self.ram_boot('ro')
         backup = folder / 'original-ce.raw'
-        self.run('backup', backup)
+        self.emit({'event': 'status', 'text': 'Reading your device…'})
+        self.run('backup' if verify_wince else 'snapshot', backup)
+        self.emit({'event': 'status', 'text': 'Preparing your apps…'})
         inv = self.n.inspect(backup)
         self.n.write_new(folder / 'inventory.json', json.dumps(inv).encode())
         with tempfile.TemporaryDirectory() as tmp:
@@ -166,11 +175,28 @@ class Installer:
         self.n.write_new(folder / 'install.bin', plan)
         self.n.write_new(folder / 'review.json', json.dumps(review, indent=2).encode())
         files = ['original-ce.raw', 'candidate.raw', 'inventory.json', 'placement.json', 'install.bin', 'review.json']
-        record = {'version': 1, 'device': self.device, 'apps': chosen, 'payload': self.manifest,
+        record = {'version': 1, 'verify_wince': verify_wince, 'device': self.device, 'apps': chosen, 'payload': self.manifest,
                   'files': {f: digest(folder / f) for f in files}}
         self.n.write_new(folder / 'installation.json', json.dumps(record, indent=2).encode())
         self.emit({'event': 'prepared', 'record': str(folder / 'installation.json'),
-                   'text': f'{len(chosen)} apps selected. Backup verified. Installation will replace Windows CE and its stored files. Backup: {backup}'})
+                   'text': 'Your apps are ready to install.'})
+        return folder / 'installation.json'
+
+    def install_device(self, destination, requested_apps=None, save_backup=True, verify_wince=True):
+        # Source bytes are needed for bad-block inventory and transaction
+        # binding. Without a backup these exist only in an OS temporary folder,
+        # which is removed on both success and failure, including partial files.
+        if save_backup:
+            destination = Path(destination).expanduser().resolve()
+            destination.mkdir(parents=True, exist_ok=True)
+            record = self.prepare(destination, requested_apps, verify_wince=verify_wince)
+            self.emit({'event': 'backup-saved', 'path': str(record.parent),
+                       'text': 'Windows CE backup saved.'})
+            self.apply(record)
+        else:
+            with tempfile.TemporaryDirectory(prefix='glaze-install-') as temporary:
+                record = self.prepare(temporary, requested_apps, verify_wince=verify_wince)
+                self.apply(record)
 
     def apply(self, record_path, restore=False):
         self.verify()
@@ -187,6 +213,7 @@ class Installer:
         # requires reconnecting at that port; source comparison additionally binds bytes.
         self.device = record['device']
         self.probe()
+        self.emit({'event': 'status', 'text': 'Getting ready to restore…' if restore else 'Getting ready to install…'})
         self.ram_boot('repair')
         source, target, plan = folder / 'original-ce.raw', folder / 'candidate.raw', folder / 'install.bin'
         if restore:
@@ -197,9 +224,10 @@ class Installer:
                                          json.loads((folder / 'inventory.json').read_text()), restore=True)
             self.n.write_new(plan, data)
             self.n.write_new(attempt / 'review.json', json.dumps(review, indent=2).encode())
-        self.emit({'event': 'programming', 'text': 'Programming and verifying NAND. Keep USB and power connected.'})
+        self.emit({'event': 'programming', 'text': ('Restoring Windows CE…' if restore else 'Installing Glaze…') + ' Keep power and USB connected.'})
         self.run('apply', source, target, plan)
         self.emit({'event': 'verified', 'text': 'Whole-device programming verification passed.'})
+        self.emit({'event': 'status', 'text': 'Restarting your BE-300…'})
         self.run('cold-reboot')
         if restore:
             deadline = time.monotonic() + 90
@@ -207,7 +235,7 @@ class Installer:
                 time.sleep(2)
                 try:
                     if self.probe()['runtime'] == 'CE':
-                        self.emit({'event': 'success', 'text': 'Original CE NAND restored and CE USB detected.'})
+                        self.emit({'event': 'success', 'text': 'Windows CE is restored. You can disconnect USB.'})
                         return
                 except RuntimeError:
                     pass
@@ -219,4 +247,4 @@ class Installer:
                 raise RuntimeError(f'Expected build {expected}, detected {self.build}')
         except RuntimeError as error:
             raise RuntimeError('NAND programming verified; boot verification incomplete. ' + str(error)) from error
-        self.emit({'event': 'success', 'text': 'Glaze installed, verified, and detected after NAND boot.'})
+        self.emit({'event': 'success', 'text': 'Glaze is installed. You can disconnect USB.'})

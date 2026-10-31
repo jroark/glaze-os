@@ -14,7 +14,7 @@ Produced:
 Passed:
 
 - Matching NAND, RAM kernel/romfs, CE loaders and package builds.
-- Thirteen installer tests and five app-selection tests. These cover executable
+- Sixteen installer tests and five app-selection tests. These cover executable
   exclusion, required-app preservation, aligned ROMFS repacking, bundle layout,
   malformed archive rejection, actual image encoding and fresh restore plans.
 - Four physical NAND tests, five transaction tests, and native NAND ECC,
@@ -60,6 +60,23 @@ CE staging reuse fix:
 - Reused boot files still go through the fresh nonce-based execution check.
   Changed files keep the existing temporary upload/read-back/atomic publication
   path; no unchecked executable is launched.
+
+Simplified automatic flow:
+
+- One Install action now chains preparation and application automatically, with
+  device detection, friendly status/progress and diagnostic output hidden by
+  default. Backup destinations are automatic, with an optional folder chooser.
+- Backup retention and extra CE verification are independent options. Tests
+  confirm that skipped-backup source files are removed after success and failure,
+  selected backups persist, and the automatic flow executes prepare then apply.
+- Native capture tests cover a single-pass snapshot as well as the existing
+  two-pass backup and failure cleanup. Production boot tests prove the optional
+  CE probe can be omitted while invalid Glaze boot images still fail validation.
+- The installed Windows runtime under Wine also exercised the automatic
+  skip-both path using real Windows encoder/filesystem helpers and synthetic
+  NAND data; its transient CE source was removed afterward.
+- Required physical inventory, source binding and NAND writer checks remain on.
+  This flow was tested with synthetic data; no hardware programming was performed.
 
 Incomplete:
 

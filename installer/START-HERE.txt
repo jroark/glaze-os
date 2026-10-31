@@ -1,23 +1,25 @@
 GLAZE USB INSTALLER FOR CASIO BE-300
 
-Everything needed to install Glaze is included. No CF card, compiler, Python
-installation, firmware download or network connection is needed at runtime.
+Everything needed is included. No CF card, system Python, separate firmware
+or additional download is needed.
 
-macOS: drag Glaze Installer into Applications, then open it.
-Windows: run the setup EXE, then launch Glaze BE-300 Installer. If USB access
-is unavailable, use Windows USB driver setup in the app. Zadig is bundled.
-Select only the BE-300 (USB ID 07CF:2002), and install WinUSB.
+macOS: drag Glaze Installer into Applications and open it.
+Windows: run setup and launch Glaze Installer. If needed, use USB driver setup
+in the app. In the bundled Zadig, select only the BE-300 (07CF:2002) and WinUSB.
 
-1. Connect the BE-300's USB cable and external power, and wake Windows CE.
-2. Choose your apps and click Prepare installation.
-3. Choose a permanent backup folder. The app verifies two complete NAND reads.
-4. Review the backup path, then click Install Glaze.
-5. Keep USB and power connected until verification and reboot finish.
+Connect USB and external power, choose your apps, then click Install Glaze.
+Detection, preparation, flashing and restart happen automatically. Keep USB
+and power connected until the app finishes. Details are available if needed.
 
-Save important CE RAM files before starting; the RAM bootstrap clears CE's
-volatile object store. Installing replaces CE and files in internal NAND.
-Keep the entire generated backup directory. Restore CE uses its
-installation.json file and requires a working CE or Glaze USB bootstrap.
+Save Windows CE backup and Verify Windows CE are optional. They start enabled.
+Uncheck backup to keep no CE restore copy. Uncheck verification to skip the
+extra CE read and execution probe. A temporary device read is still needed
+for image placement and flash consistency. Glaze image and write checks stay on.
 
-These are unsigned/not-notarized development builds. Windows and physical
-flashing require further validation. No public release certification is implied.
+Backups are saved automatically to Documents/Glaze Backups unless changed.
+After installation, Open backup shows the saved folder. Keep that entire folder
+for Restore Windows CE. CE RAM files are cleared when Glaze starts, so save
+anything important from CE's volatile object store beforehand.
+
+These are development builds. Physical flashing and Windows USB driver setup
+still need validation; Windows GUI/runtime checks were performed under Wine.
