@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from app_selection import load_catalog, select, customize_logical, install_packages
 
 RAW_SIZE = 17301504
 
@@ -102,11 +103,15 @@ class Installer:
             self.run('boot', folder)
             self.wait_glaze(4096 | (16384 if mode == 'repair' else 0))
 
-    def prepare(self, destination):
+    def prepare(self, destination, requested_apps=None):
         self.verify()
         device = self.probe()
         if device['runtime'] != 'CE':
             raise ValueError('New installation requires stock Windows CE. Use Restore for a saved installation.')
+        catalog = load_catalog(self.resources)
+        chosen = select(catalog, requested_apps)
+        logical = customize_logical((self.resources / 'glaze.bin').read_bytes(), catalog, chosen)
+        self.n.validate_logical(logical)
         destination = Path(destination).resolve()
         if shutil.disk_usage(destination).free < 256 * 1024 * 1024:
             raise ValueError('At least 256 MiB of free backup space is required.')
@@ -128,11 +133,13 @@ class Installer:
                     bad[rel // 8] |= 1 << (rel % 8)
             (tmp / 'bad').write_bytes(bad)
             (tmp / 'seed').write_bytes(os.urandom(32))
-            subprocess.run([str(self.n.MKFS), str(self.resources / 'userdata'), '684', str(tmp / 'fs'),
+            shutil.copytree(self.resources / 'userdata', tmp / 'userdata')
+            install_packages(self.resources, catalog, chosen, tmp / 'userdata')
+            subprocess.run([str(self.n.MKFS), str(tmp / 'userdata'), '684', str(tmp / 'fs'),
                             '--bad-blocks=' + str(tmp / 'bad'),
                             '/Library/Preferences/net.entropy=' + str(tmp / 'seed')], check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            raw, placement = self.n.build((self.resources / 'glaze.bin').read_bytes(), backup.read_bytes(),
+            raw, placement = self.n.build(logical, backup.read_bytes(),
                                           inv, (tmp / 'fs').read_bytes())
         self.n.write_new(folder / 'candidate.raw', raw)
         self.n.native(['--check-boot', folder / 'candidate.raw'])
@@ -141,11 +148,11 @@ class Installer:
         self.n.write_new(folder / 'install.bin', plan)
         self.n.write_new(folder / 'review.json', json.dumps(review, indent=2).encode())
         files = ['original-ce.raw', 'candidate.raw', 'inventory.json', 'placement.json', 'install.bin', 'review.json']
-        record = {'version': 1, 'device': self.device, 'payload': self.manifest,
+        record = {'version': 1, 'device': self.device, 'apps': chosen, 'payload': self.manifest,
                   'files': {f: digest(folder / f) for f in files}}
         self.n.write_new(folder / 'installation.json', json.dumps(record, indent=2).encode())
         self.emit({'event': 'prepared', 'record': str(folder / 'installation.json'),
-                   'text': f'Backup verified. Installation will replace Windows CE and its stored files. Backup: {backup}'})
+                   'text': f'{len(chosen)} apps selected. Backup verified. Installation will replace Windows CE and its stored files. Backup: {backup}'})
 
     def apply(self, record_path, restore=False):
         self.verify()

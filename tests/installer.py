@@ -127,9 +127,10 @@ class OfflinePipelineTest(unittest.TestCase):
                     Path(args[1]).write_bytes(factory)
                 return []
             with patch.object(engine, 'run', side_effect=run), patch.object(engine, 'ram_boot'):
-                engine.prepare(tmp)
+                engine.prepare(tmp, ['builtin:files', 'builtin:settings', 'package:hello'])
             record = Path(next(e['record'] for e in events if e['event'] == 'prepared'))
             folder = record.parent
+            self.assertEqual(json.loads(record.read_text())['apps'], ['builtin:files', 'builtin:settings', 'package:hello'])
             self.assertEqual((folder / 'original-ce.raw').read_bytes(), factory)
             candidate = (folder / 'candidate.raw').read_bytes()
             self.assertEqual(len(candidate), 17301504)

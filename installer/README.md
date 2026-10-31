@@ -1,41 +1,60 @@
-# Glaze BE-300 USB Installer
+# Glaze BE-300 USB installer
 
-Development test installer. Installs from stock CE and restores the exact saved
-CE NAND snapshot using the existing verified NAND transaction protocol. No CF
-card, Python installation, compiler, or preinstalled device helper is needed by
-an end user. Windows needs WinUSB; the GUI provides Zadig instructions.
+One offline download per platform:
 
-The workflow is Detect → Prepare installation → review the backup path → Install
-Glaze. Prepare RAM-boots Glaze and saves a two-pass physical backup. CE's volatile
-object store is cleared by RAM boot, so save those files beforehand. Internal CE
-staging files are present in the saved NAND snapshot. Keep the complete generated
-backup directory permanently. Restore CE accepts its `installation.json`.
+- `Glaze-Installer-windows-x64.exe`: setup, GUI launcher, private Python/Tk runtime,
+  libusb, all 29 app choices, matching firmware, and Zadig USB driver setup.
+- `Glaze-Installer-macos-arm64.dmg`: self-contained Apple Silicon app, Applications
+  shortcut, instructions, native helpers, all app choices and matching firmware.
 
-The app pins the USB port and the writer compares every source byte before
-programming. Reconnect to the recorded port for restore. Restore needs running
-CE or Glaze USB; if both bootstrap paths are lost, external recovery is required.
-No recovery claim is made for a completely unbootable device.
+No CF card, system Python, build tools, separate firmware or additional runtime
+download is needed. The app makes no network requests. The Windows USB driver
+setup is guided and uses the bundled Zadig; it may request administrator access.
 
-## Build payloads once
+## End-user flow
 
-From this worktree, with `mips-cross-dev` Docker image and the BE300 CE toolchain:
+Open the Mac app or run Windows setup. Connect USB and external power and wake
+stock Windows CE. Choose apps, prepare the installation, choose a permanent backup
+folder, then review and click Install Glaze. Files, Settings, and system services
+are required. Built-ins are selected by default; the 17 additional packages start
+unselected. Selected packages are preinstalled in `/Applications` on NAND. The
+app chooser also supports Select all and Required only.
+
+Preparation repacks the NAND ROMFS to omit unchecked built-in executables while
+retaining services and shared resources. It populates the fresh filesystem with
+selected package bundles and builds a device-specific physical image using the
+actual bad-block inventory. The saved installation record includes selected app
+IDs and the exact image/transaction hashes. Changing choices requires preparing
+a new image. Restore always targets the original saved CE NAND, independent of
+app choices. CE compatibility and game engines still need user-supplied software
+or game data; those external files are not included.
+
+Save important CE RAM files first: RAM bootstrap clears CE's volatile object
+store. Internal CE staging files are included in the saved NAND snapshot. Keep
+the complete backup directory permanently. Restore accepts its `installation.json`
+and needs a working CE or Glaze USB bootstrap at the recorded USB port. Backups
+must be outside the application's install directory; use NTFS on Windows because
+atomic publication uses hard links. Driver replacement may affect old CE sync
+software; uninstalling the app does not remove the driver or erase backups.
+
+## Build matching payloads
+
+Use the `mips-cross-dev` Docker image and the BE-300 CE toolchain:
 
 ```sh
 ./build.sh all glazeboot BUILD_ID=cc8c1c4-installer-test
 make glazeboot-exe usb-probe-exe BE300_DEV=/path/to/be300-dev
 ```
 
-Transport `out/glaze.bin`, the four files `GlazeBoot.exe`, `UsbProbe.exe`,
-`kernel.bin`, `romfs.img` under `out/glazeboot/`, and the source checkout to each
-native packaging host. The build ID passed to packaging must match the compiled
-kernel. CE binaries and Glaze payloads must come from matching source revisions.
+The packaging build ID must match the compiled kernel. The NAND image, RAM image,
+CE loader, all `out/pkg/*.gzp` packages, and source must come from matching builds.
+Do not include proprietary ROM or game data in the input tree.
 
-## macOS
+## macOS packaging
 
-Use Python 3.11 with working Tk, CMake, pkg-config, libusb and PyInstaller 6.16.0.
+Use Python 3.11 with working Tk, CMake, pkg-config, libusb, and PyInstaller 6.16.0.
 Homebrew packages: `python@3.11 python-tk@3.11 cmake pkg-config libusb`.
-Build separately on Apple Silicon and Intel hosts. Select native Homebrew's
-pkg-config to avoid accidentally linking the other architecture's libusb.
+Select native Homebrew's pkg-config when multiple architectures are installed.
 
 ```sh
 python3.11 -m venv out/installer-venv
@@ -45,52 +64,47 @@ cmake --build out/installer-native -j8
 out/installer-venv/bin/python installer/package.py --build-id cc8c1c4-installer-test
 ```
 
-Outputs: `out/installer/Glaze-Installer-macos-ARCH.dmg`, the `.app` under
-`out/installer/dist`, and `SHA256SUMS`. macOS bundles are ad-hoc signed local test
-builds, not notarized. Minimum OS compatibility depends on Python/Tk and libusb;
-the local build uses Homebrew Sequoia binaries and has not been validated on
-macOS 13. Public distribution and signing credentials are outside this version.
+`--native-dir` selects an alternative helper build directory. The generated DMG
+contains the app, an Applications shortcut, and offline instructions. It is
+ad-hoc signed and not notarized. This Apple Silicon build uses Homebrew Sequoia
+binaries; compatibility with macOS 13 has not been established. Intel packaging
+still requires an Intel Python/Tk environment.
 
-## Windows x64
+## Windows packaging from macOS/Linux
 
-Use native Windows Python 3.11 including Tk, Inno Setup 6 (`iscc` on PATH),
-and MSYS2 UCRT64 GCC, CMake, pkg-config and libusb. In an MSYS2 UCRT64 shell,
-install `mingw-w64-ucrt-x86_64-{gcc,cmake,pkgconf,libusb}`. Add the native Windows
-Python and Inno Setup directories to PATH. Keep native Windows Python first;
-MSYS Python is not suitable for this package.
+The Windows setup can be built without a Windows runner. Install a MinGW x64
+cross compiler, NSIS, `7z`, and `msiextract`. On macOS:
 
 ```sh
-python -m venv out/installer-venv
-out/installer-venv/Scripts/python -m pip install -r installer/requirements.txt
-cmake -S installer -B out/installer-native -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build out/installer-native
-out/installer-venv/Scripts/python installer/package.py --build-id cc8c1c4-installer-test
+brew install mingw-w64 nsis p7zip msitools
+python3 installer/package_windows.py --build-id cc8c1c4-installer-test
 ```
 
-Output: `out/installer/Glaze-Installer-windows-x64.exe` plus `SHA256SUMS`.
-The current Windows packaging uses a console-capable executable so worker JSON
-can be piped reliably. A console accompanies the GUI in these development builds.
-Driver installation is a separate, guided administrator action in Zadig and
-replaces the legacy sync driver. Uninstalling the application preserves backups
-and does not uninstall the USB driver.
+This downloads official CPython 3.11.9/Tk, libusb 1.0.30, and Zadig 2.9 with locked
+SHA-256 checksums in `windows-downloads.json`; subsequent builds use the local
+cache. It compiles the native helpers and GUI launcher, bundles the private
+runtime and driver setup, and uses NSIS to produce one offline setup EXE. It
+installs per-user, adds a Start menu shortcut, and offers to launch the GUI.
+The driver setup stays a separate guided action. No console window accompanies
+the GUI; workers run using the bundled console interpreter with a hidden window.
 
-## Tests and limitations
+Downloaded libusb/libwdi redistribution sources and licenses are bundled.
+Windows native helpers use system crypto APIs; no wolfSSL runtime is needed.
+
+## Collect and verify
 
 ```sh
+python3 installer/collect_downloads.py
 python3 tests/installer.py
-make -C host nand-image-tools nand-ecc-test nand-boot-test nand-policy-test nand-backup-test
-make -C host nand-program-test nand-writer-test BE300_SOURCE=/path/to/be300
+python3 tests/installer_apps.py
 python3 tests/physical_nand.py
 python3 tests/nand_transaction.py
 ```
 
-Native helpers require an NTFS backup volume on Windows (atomic publication uses
-hard links). Failures stop automatic writes; restore always takes a fresh source
-snapshot and generates a new plan. Do not force-close the app during programming.
-Hardware interruption recovery, Windows driver binding, and clean-machine GUI
-behavior require platform/hardware validation before public release.
+The ready-to-share files and `SHA256SUMS` are collected under
+`out/installer/downloads`. `--check-bundle` verifies bundled resources, encodes a
+NAND page and starts every native helper without opening USB. `--smoke-test`
+opens the GUI and app chooser briefly, then closes without device access.
 
-Resource manifests bind bundled firmware and saved installation artifacts to
-SHA-256. They are integrity checks, not signatures. Native executables are handled
-by the platform packager because signing relocates their load commands. Logs and
-backups stay local; diagnostic logs exclude firmware and entropy payload bytes.
+These are development builds. See `VALIDATION.md` for the exact checks and
+remaining hardware/OS validation. Packaging does not publish a release.
