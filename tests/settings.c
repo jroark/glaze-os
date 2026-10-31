@@ -50,6 +50,14 @@ int gz_sysinfo(struct gz_sysinfo *si)
     return 0;
 }
 int gz_boot_mode(void) { return boot_mode; }
+int gz_power_status(struct gz_power_status *st)
+{
+    memset(st, 0, sizeof(*st));
+    st->version = GZ_POWER_VERSION;
+    st->flags = GZ_POWER_VALID | GZ_POWER_AC;
+    st->percent = st->level = 100;
+    return 0;
+}
 int gz_port_lookup(const char *name)
 {
     return !strcmp(name, SB_PORT_NAME) ? 11 : -1;

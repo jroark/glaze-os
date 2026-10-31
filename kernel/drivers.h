@@ -57,6 +57,14 @@ int stowaway_status(void);
 void input_irq(uint16_t kj_status);
 void input_poll(void);
 int input_bind(int port);
+void input_touch_restart(void);
+void input_notify(uint32_t bits);     /* to the compositor's input port */
+
+/* battery.c: battery, adapter and charger (docs/POWER.md). */
+void battery_init(void);
+void battery_tick(void);
+int battery_status(struct addrspace *as, uint32_t uout, uint32_t size);
+void battery_idle(uint32_t us);       /* a STANDBY ended after us */
 int input_read(struct addrspace *as, uint32_t uevents, uint32_t max);
 
 /* flash.c: raw NAND for the file server. */

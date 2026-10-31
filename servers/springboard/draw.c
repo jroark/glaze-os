@@ -89,14 +89,52 @@ void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt)
 
 /* ---- status bar --------------------------------------------------------- */
 
-static void draw_battery(gfx_surface *s, int x, int y, uint32_t fg)
+#define BATTERY_X   (SCREEN_W - 26)
+
+/* The battery from the kernel's status (glaze/abi.h gz_power_status):
+ * filled to the level, amber at 20 % and red when critical on battery,
+ * with a bolt while charging. Full until the first sample. */
+static void draw_battery(gfx_surface *s, int x, int y, uint32_t fg, const struct gz_power_status *p)
 {
+    bool valid = p->flags & GZ_POWER_VALID;
+    bool battery = valid && !(p->flags & GZ_POWER_AC);
+    int level = valid ? p->level : 100;
+    int w = (level * 16 + 50) / 100;
+    uint32_t top = 0x9FE07A, bottom = 0x3E9E1E;
+
+    if (battery && (p->flags & GZ_POWER_CRITICAL)) {
+        top = 0xFF8A7A;
+        bottom = 0xC4231A;
+    } else if (battery && level <= 20) {
+        top = 0xFFD36B;
+        bottom = 0xD98E04;
+    }
+    if (level > 0 && w < 2)
+        w = 2;
     gfx_fill(s, gfx_r(x, y, 20, 1), fg);
     gfx_fill(s, gfx_r(x, y + 8, 20, 1), fg);
     gfx_fill(s, gfx_r(x, y, 1, 9), fg);
     gfx_fill(s, gfx_r(x + 19, y, 1, 9), fg);
     gfx_fill(s, gfx_r(x + 20, y + 3, 2, 3), fg);
-    gfx_vgradient(s, gfx_r(x + 2, y + 2, 16, 5), 0x9FE07A, 0x3E9E1E, 255);
+    if (w)
+        gfx_vgradient(s, gfx_r(x + 2, y + 2, w, 5), top, bottom, 255);
+    if ((p->flags & (GZ_POWER_AC | GZ_POWER_CHARGING)) == (GZ_POWER_AC | GZ_POWER_CHARGING)) {
+        static const uint8_t bolt[7][2] = {   /* x offset, width per row */
+            { 10, 2 }, { 9, 2 }, { 8, 2 }, { 7, 6 }, { 10, 2 }, { 9, 2 }, { 8, 2 },
+        };
+        for (int r = 0; r < 7; r++)
+            gfx_fill(s, gfx_r(x + bolt[r][0] - 1, y + 1 + r, bolt[r][1], 1), fg);
+    }
+}
+
+/* Left edge of the battery and its percentage, for the card icon. */
+static int battery_left(const struct sb_view *v, const gfx_font *f, char *pct, size_t cap)
+{
+    pct[0] = 0;
+    if (!v->battery_pct || !(v->power.flags & GZ_POWER_VALID))
+        return BATTERY_X;
+    snprintf(pct, cap, "%d%%", v->power.level);
+    return BATTERY_X - 2 - gfx_text_width(f, pct);
 }
 
 static void draw_padlock(gfx_surface *s, int cx, int y, uint32_t fg)
@@ -116,9 +154,11 @@ static void draw_card(gfx_surface *s, int x, int y, uint32_t fg)
         gfx_fill(s, gfx_r(x + 2 + i * 2, y + 8, 1, 2), 0x637080);
 }
 
-gfx_rect sb_card_icon_rect(void)
+gfx_rect sb_card_icon_rect(const struct sb_view *v)
 {
-    return gfx_r(SCREEN_W - 48, 0, 22, SB_STATUS_H);
+    char pct[8];
+    int left = battery_left(v, ui_font(FONT_B10), pct, sizeof(pct));
+    return gfx_r(left - 22, 0, 22, SB_STATUS_H);
 }
 
 gfx_rect sb_draw_card_details(gfx_surface *s, const struct sb_card_details *d, bool pressed)
@@ -177,9 +217,13 @@ void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool pad
         draw_padlock(s, SCREEN_W / 2, 3, fg);
     else
         gfx_text_center(s, 0, 2, SCREEN_W, f, v->clk.status, fg, 255);
+    char pct[8];
+    int left = battery_left(v, f, pct, sizeof(pct));
+    if (pct[0])
+        gfx_text(s, left, 2, f, pct, fg, 255);
     if (v->card_mounted)
-        draw_card(s, SCREEN_W - 43, 3, fg);
-    draw_battery(s, SCREEN_W - 26, 3, fg);
+        draw_card(s, left - 17, 3, fg);
+    draw_battery(s, BATTERY_X, 3, fg, &v->power);
 }
 
 /* ---- shared wallpaper --------------------------------------------------- */

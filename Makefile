@@ -28,6 +28,9 @@ COLD_SOCKET_TEST ?=
 HWDUMP ?=
 # Beep at early kernel stages, before the LCD is on (power-on bring-up).
 BOOT_BEEP ?=
+# The idle thread's VR4131 STANDBY (docs/POWER.md); IDLE_STANDBY=0 spins
+# instead, for bisecting on hardware. Rebuild kernel/sched.o after changing it.
+IDLE_STANDBY ?= 1
 
 # GCC's VR41xx errata workarounds, off by default as in Linux's VR41xx
 # builds: VR_FIX="-mfix-vr4130 -mfix-vr4120" pads mflo/mfhi and keeps GCC
@@ -466,7 +469,8 @@ KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -Ikernel -MMD \
     $(if $(COLD_SOCKET_TEST),-DGLAZE_COLD_SOCKET_TEST) \
     $(if $(NAND_BOOT_PROBE),-DGLAZE_NAND_BOOT_PROBE) \
     $(if $(HWDUMP),-DGLAZE_HWDUMP) \
-    $(if $(BOOT_BEEP),-DGLAZE_BOOT_BEEP)
+    $(if $(BOOT_BEEP),-DGLAZE_BOOT_BEEP) \
+    $(if $(filter 0,$(IDLE_STANDBY)),-DGLAZE_NO_STANDBY)
 
 $(OUT)/kernel/%.o: kernel/%.c
 	@mkdir -p $(dir $@)

@@ -9,6 +9,7 @@
 #include <glaze/notify.h>
 #include <glaze/ntp.h>
 #include <glaze/passcode.h>
+#include <glaze/power.h>
 #include <glaze/prefs.h>
 #include <glaze/sys.h>
 #include <glaze/tz.h>
@@ -18,7 +19,7 @@
 #include <string.h>
 
 enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
-            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD };
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD, V_BATTERY };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -37,6 +38,7 @@ enum {
     R_WIFI_KEY_INDEX, R_WIFI_AUTH, R_WIFI_JOIN, R_WIFI_DONE,
     R_REBOOT_CE, R_REBOOT_CONFIRM, R_DEBUG, R_DEBUG_TOGGLE, R_DEBUG_IMPORT,
     R_INPUT_METHOD, R_INPUT_KEYS, R_INPUT_WRITE,
+    R_BATTERY, R_BATTERY_PCT,
 };
 
 struct hit {
@@ -317,6 +319,8 @@ static bool cell_visible(const gfx_surface *s)
     return gfx_rect_intersect(gfx_r(CELL_X, section_y, CELL_W, UI_ROW_H), s->clip, &c);
 }
 
+static const char *battery_summary(char *buf, size_t cap);
+
 static void draw_root(gfx_surface *s)
 {
     nhits = 0;
@@ -328,7 +332,7 @@ static void draw_root(gfx_surface *s)
     if (cell_visible(s))
         root_card = card_key(&st);
     if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
-    root_scroll.content_h = (9 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
+    root_scroll.content_h = (10 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
     root_scroll.view_h = UI_H - UI_NAV_H;
     if (!root_scroll.dragging && !root_scroll.animating)
         root_scroll.offset = MAX(0, MIN(root_scroll.offset, ui_scroll_max(&root_scroll)));
@@ -349,7 +353,10 @@ static void draw_root(gfx_surface *s)
     cell(s, 2, "Touch Calibration", NULL, true, R_TOUCH);
     cell(s, 2, "Debugging", NULL, true, R_DEBUG);
     cell(s, 2, "Input Method", NULL, true, R_INPUT_METHOD);
-    cell(s, 3, "About", NULL, true, R_ABOUT);
+    cell(s, 2, "About", NULL, true, R_ABOUT);
+    /* Last, so the rows above keep their places (tests/t_*.txt tap them). */
+    char level[16];
+    cell(s, 3, "Battery", cell_visible(s) ? battery_summary(level, sizeof(level)) : NULL, true, R_BATTERY);
     if (ce_boot) {
         section_gap();
         cell(s, 0, "Reboot to Windows CE", NULL, true, R_REBOOT_CE);
@@ -468,6 +475,72 @@ static void draw_datetime(gfx_surface *s)
         snprintf(buf, sizeof(buf), i == 0 ? "%d" : "%02d", values[i]);
         stepper_cell(s, i == 0 ? 1 : i == 4 ? 3 : 2, field_names[i], buf, R_FIELD_DOWN + i, R_FIELD_UP + i);
     }
+}
+
+/* ---- Battery (docs/POWER.md) -------------------------------------------- */
+
+static bool battery_pct;
+
+static const char *battery_summary(char *buf, size_t cap)
+{
+    struct gz_power_status st;
+
+    if (gz_power_status(&st) < 0 || !(st.flags & GZ_POWER_VALID))
+        return NULL;
+    if ((st.flags & (GZ_POWER_AC | GZ_POWER_CHARGING)) == GZ_POWER_AC)
+        return "Charged";
+    snprintf(buf, cap, "%d%%", st.level);
+    return buf;
+}
+
+static void draw_battery(gfx_surface *s)
+{
+    struct gz_power_status st;
+    struct gz_sysinfo si;
+    char level[24], reading[24], range[24], idle[16];
+    const char *state = "Unknown";
+
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Battery", "Settings", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    if (gz_power_status(&st) < 0)
+        memset(&st, 0, sizeof(st));
+    gz_sysinfo(&si);
+    bool valid = st.flags & GZ_POWER_VALID;
+    if (st.flags & GZ_POWER_CHARGING)
+        state = "Charging";
+    else if (st.flags & GZ_POWER_AC)
+        state = "Charged";
+    else if (st.flags & GZ_POWER_CRITICAL)
+        state = "Critically Low";
+    else if (st.flags & GZ_POWER_LOW)
+        state = "Low";
+    else if (st.version)
+        state = "On Battery";
+    if (!valid)
+        strlcpy(level, "Measuring", sizeof(level));
+    else
+        snprintf(level, sizeof(level), "About %d%%", st.level);
+    cell(s, 1, "Status", state, false, 0);
+    cell(s, 3, "Level", level, false, 0);
+    section_gap();
+    switch_cell(s, 0, "Percentage", battery_pct, R_BATTERY_PCT);
+    section_gap();
+
+    /* The A/D counts Windows CE's driver reads, against the calibration it
+     * takes for 3.7 V and 4.2 V. */
+    if (valid)
+        snprintf(reading, sizeof(reading), "%u (avg %u)", st.adc_last, st.adc_avg);
+    else
+        strlcpy(reading, "None yet", sizeof(reading));
+    snprintf(range, sizeof(range), "%u-%u", st.cal_min, st.cal_max);
+    snprintf(idle, sizeof(idle), "%u%%", si.uptime_ms ? (uint32_t)((uint64_t)st.idle_ms * 100 / si.uptime_ms) : 0);
+    cell(s, 1, "Reading", reading, false, 0);
+    cell(s, 2, "Calibration", st.flags & GZ_POWER_CAL_EEPROM ? "EEPROM" : "Default", false, 0);
+    cell(s, 2, "Range", range, false, 0);
+    cell(s, 3, "CPU Idle", idle, false, 0);
 }
 
 static void draw_about(gfx_surface *s)
@@ -917,6 +990,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_PREVIEW: draw_preview(s); break;
     case V_DATETIME: draw_datetime(s); break;
     case V_ABOUT: draw_about(s); break;
+    case V_BATTERY: draw_battery(s); break;
     case V_NETWORK: draw_network(s); break;
     case V_DEBUG: draw_debug(s); break;
     case V_INPUT_METHOD: draw_input_method(s); break;
@@ -1465,6 +1539,18 @@ static void activate(int id)
         go(V_ZONE, true);
         return;
     case R_SOUNDS: go(V_SOUNDS, true); return;
+    case R_BATTERY:
+        battery_pct = power_percent_get();
+        go(V_BATTERY, true);
+        return;
+    case R_BATTERY_PCT: {
+        int p = gz_port_lookup(SB_PORT_NAME);
+        if (power_percent_put(!battery_pct) == 0)
+            battery_pct = !battery_pct;
+        if (p > 0)
+            gz_notify(p, SB_NOTIFY_POWER);
+        break;
+    }
     case R_SND_KEYS:
         s_keys = !s_keys;
         save_sound(AUDIO_PREF_KEYS, s_keys);
@@ -1713,7 +1799,8 @@ int main(void)
 
     for (;;) {
         struct gz_input_event ev;
-        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI || view == V_DEBUG ? 1000
+        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI || view == V_DEBUG ||
+                      view == V_BATTERY ? 1000
                     : view == V_ROOT ? 2000 : -1;
         if (view == V_TOUCH_TEST)
             timeout = 250;

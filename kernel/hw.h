@@ -38,6 +38,7 @@
 #define PMU_INT             REG16(PMU_BASE + 0x00)
 #define PMU_CNT             REG16(PMU_BASE + 0x02)
 #define PMU_CNT2            REG16(PMU_BASE + 0x06)
+#define PMUINT_BATTINTR     (1u << 1)   /* battery low while running (UM 12.2.1) */
 #define PMUCNT_HALTIMERRST  (1u << 2)
 #define PMUCNT2_SOFTRST     (1u << 4)
 
@@ -51,6 +52,7 @@
 /* VR4131 GIU (doc: GPIO). */
 #define GIU_BASE            0x0F000140u
 #define GIU_IOSELL          REG16(GIU_BASE + 0x00)
+#define GIU_PIODL           REG16(GIU_BASE + 0x04)
 #define GIU_INTSTATL        REG16(GIU_BASE + 0x08)
 #define GIU_INTSTATH        REG16(GIU_BASE + 0x0A)
 #define GIU_INTENL          REG16(GIU_BASE + 0x0C)
@@ -255,6 +257,36 @@
 #define PIUINT_PAGE0        0x08u
 #define PIUINT_OTHER        0xC0u   /* enabled by Windows CE; acknowledged */
 #define PIUINT_PAGE1        0x10u
+
+/* The battery's A/D port scan, as Windows CE's battery driver runs it
+ * (gwes.exe 0xB0348-0xB0590, docs/POWER.md): wait for state Standby or
+ * WaitPenTouch, stop the sequencer, GPIO8 low, 10 ms, then PIUMODE 01 with
+ * 0x314 = 5 and 0x318 = 0x14E converts, raising bit 6 of PIUINT, and 0x390
+ * holds the 12-bit result. CE accesses 0x314/0x318/0x390 as words. */
+#define PIU_ADP_CTL         REG32(PIU_BASE + 0x14)
+#define PIU_ADP_CFG         REG32(PIU_BASE + 0x18)
+#define PIU_ADPORT          REG32(PIU_BASE + 0x90)
+#define PIUCNT_PADRST       0x0001u
+#define PIUCNT_PIUMODE_ADP  0x0008u     /* PIUMODE 01 */
+#define PIUCNT_STATE        0x1C00u
+#define PIUCNT_STATE_STBY   0x0400u     /* Standby */
+#define PIUCNT_STATE_WAIT   0x1000u     /* WaitPenTouch */
+#define PIUINT_ADPORT       0x40u       /* A/D port scan done */
+#define PIUINT_MASK_PENCHG  0x0100u
+
+/* Battery lines on the VR4131 GIU (gwes.exe 0xB0318, 0xB0704, 0xB0824). */
+#define GPIO_CHARGING       0x0004u     /* GPIO2, with the adapter: charging */
+#define GPIO_BATT_SENSE     0x0100u     /* GPIO8, driven low before a sample */
+#define GPIO_ON_BATTERY     0x1000u     /* GPIO12: no adapter */
+
+/* The serial EEPROM (IC3), bit-banged as eeprom.dll does (E2pRead
+ * 01A210FC, transport 01A212F4; be300 docs/WINCE_DISPLAY_CONTROLS.md). */
+#define EEPROM_GATE         REG32(0x0A001124u)  /* written 0 first */
+#define EEPROM_A140         REG32(0x0A00A140u)  /* then 1 */
+#define EEPROM_A194         REG32(0x0A00A194u)  /* then 0 */
+#define EEPROM_SCL          REG32(0x0A00A19Cu)
+#define EEPROM_SDA_OUT      REG32(0x0A00A1A0u)
+#define EEPROM_SDA_IN       REG32(0x0A00A1A4u)
 
 /* Buttons (doc: Buttons). A dummy halfword read at +2 precedes the live
  * bytes, matching the stock driver. */

@@ -11,6 +11,7 @@
 #include "hw.h"
 #include "mips.h"
 #include "proc.h"
+#include "drivers.h"
 
 struct thread *cur;
 uint32_t cur_kstack_top;
@@ -154,15 +155,39 @@ struct thread *thread_create_kernel(void (*entry)(void), int priority)
     return t;
 }
 
+uint64_t standby_since;
+
+/* From trap(), before the interrupt's handlers: the STANDBY has ended. */
+void sched_standby_wake(void)
+{
+    battery_idle((uint32_t)(time_us() - standby_since));
+    standby_since = 0;
+}
+
 static void idle_loop(void)
 {
     for (;;) {
         /* Interrupts are enabled here (see thread_setup in sched_init). */
+        uint32_t s = irq_save();
         if (need_resched) {
-            uint32_t s = irq_save();
             schedule();
             irq_restore(s);
+            continue;
         }
+#ifdef GLAZE_NO_STANDBY
+        irq_restore(s);
+#else
+        /* Nothing to run until an interrupt: the timer tick at the latest,
+         * which polls every device that has no interrupt of its own. IE is
+         * set first: STANDBY sets it on a VR4131, but not in every emulator
+         * (be300's gxemul ran it as WAIT and never woke). An interrupt in
+         * the few instructions before it delays its thread by a tick. */
+        standby_since = time_us();
+        irq_restore(s);
+        if (!need_resched)
+            vr41xx_standby();
+        standby_since = 0;      /* trap() has cleared it if one came */
+#endif
     }
 }
 

@@ -54,6 +54,15 @@ fetched). Platform I/O, buttons, indexed video and PCM effects live in
 `make -C host doom-test` uses synthetic data; `DOOM_WAD=/external/doom1.wad`
 adds real-engine movement/audio/save/load checks. See `docs/DOOM.md`.
 
+Battery, charging and idle power (`docs/POWER.md`) follow Windows CE's
+gwes.exe battery driver: GIUPIODL bits 12/2, a PIU A/D port sample at
+`0x0A000390` from `kernel/drivers/battery.c`'s tick, EEPROM calibration and
+the averaging/bands in `glaze/battery.h`. `gz_power_status()` is
+size-checked; SpringBoard draws and warns (`servers/springboard/power.c`).
+The idle thread runs VR4131 STANDBY (`IDLE_STANDBY=0` disables it). Use
+`make -C host battery-test settings-test` and be300's `--battery`,
+`--battery-state`, `--battery-drain` through `BE300_ARGS`.
+
 Network development transport is in `servers/usb/network.c`, sharing the
 USB dispatcher's capabilities and lifecycle. `glaze-usb --host HOST --key FILE`
 uses TLS 1.2 ECDHE-PSK; it is off by default. See `docs/NETWORK_DEBUG.md`.

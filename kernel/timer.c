@@ -150,5 +150,6 @@ void timer_irq(void)
     net_irq();
     audio_irq();
     buzzer_poll();
+    battery_tick();
     splash_tick();
 }

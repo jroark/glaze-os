@@ -292,6 +292,18 @@ void input_init(void)
 #endif
 }
 
+/* Restart the touch scan after kernel/drivers/battery.c used the PIU. */
+void input_touch_restart(void)
+{
+    PIU_CNT = PIU_SCAN;
+}
+
+void input_notify(uint32_t bits)
+{
+    if (bound_port > 0)
+        ipc_notify(bound_port, bits);
+}
+
 int input_bind(int port)
 {
     bound_port = port;

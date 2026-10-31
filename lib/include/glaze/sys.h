@@ -153,6 +153,7 @@ static inline int gz_net_handle(void) { return GZ_SC0(SYS_NET_HANDLE); }
 
 static inline int gz_sysinfo(struct gz_sysinfo *si) { return GZ_SC1(SYS_SYSINFO, si); }
 static inline int gz_boot_mode(void) { return GZ_SC0(SYS_BOOT_MODE); }
+static inline int gz_power_status(struct gz_power_status *st) { return GZ_SC2(SYS_POWER_STATUS, st, sizeof(*st)); }
 static inline int gz_reboot_ce(void) { return GZ_SC0(SYS_REBOOT_CE); }
 static inline int gz_task_snapshot(struct gz_task_snapshot *s)
 { return GZ_SC2(SYS_TASK_SNAPSHOT, s, sizeof(*s)); }

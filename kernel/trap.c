@@ -48,6 +48,8 @@ void trap(struct trapframe *tf)
 
     if (exc == EXC_INT) {
         uint32_t pending = tf->cause & tf->status & 0xFF00;
+        if (standby_since)
+            sched_standby_wake();
         if (pending & CAUSE_IP7)
             timer_irq();
         if (pending & CAUSE_IP2)

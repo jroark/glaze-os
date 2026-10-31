@@ -144,6 +144,7 @@ void kmain(const struct gz_bootinfo *bi)
     rtc_init();
     TRACE(14, GZ_TRACE_WHITE);
     input_init();
+    battery_init();             /* after input_init: shares the PIU */
     TRACE(15, GZ_TRACE_WHITE);
     splash_step(660);
 #ifdef GLAZE_COLD_SOCKET_TEST
