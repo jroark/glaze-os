@@ -726,3 +726,9 @@ nand-writer-test: ../tests/nand_writer.c glaze_usb/nand_write.c ../kernel/nand_r
 	$(USB_CC) $(CFLAGS) $(USB_FLAGS) $(USB_TLS) -fsanitize=address,undefined ../tests/nand_writer.c glaze_usb/nand_write.c libwolfssl.a -o ../out/host/nand-writer-test
 	../out/host/nand-writer-test
 .PHONY: nand-writer-test
+
+usb-ce-staging-test: ../tests/usb_ce_staging.c glaze_usb/client.c glaze_usb/pcconnect.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_ce_staging.c $(USB_FLAGS) -o ../out/host/usb-ce-staging-test
+	../out/host/usb-ce-staging-test
+.PHONY: usb-ce-staging-test

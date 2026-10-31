@@ -244,25 +244,54 @@ int gu_reload(struct gu_client *c, const char *dir)
 fail:
     gu_call(c, GU_ABORT, NULL, 0); return -1;
 }
-static int ce_folder(struct pc_link *p, uint64_t need, char folder[512], int cf_only)
+struct ce_artifact { const char *name; uint32_t size; int reuse; };
+static int ce_folder(struct pc_link *p, const char *dir, struct ce_artifact *files,
+                     unsigned count, char folder[512], int cf_only)
 {
     const char *roots[] = {"\\Storage Card", "\\Nand Disk"};
-    for (unsigned i = 0; i < (cf_only ? 1u : 2u); i++) {
+    char local[1024], remote[600];
+    /* Validate every local artifact before making a CE filesystem change. */
+    for (unsigned j = 0; j < count; j++) {
+        uint32_t crc;
+        if (snprintf(local, sizeof(local), "%s/%s", dir, files[j].name) >= (int)sizeof(local) ||
+            file_crc(local, &files[j].size, &crc)) return -1;
+    }
+    /* Negative mode is reserved for the installer: internal CE staging only. */
+    for (unsigned i = cf_only < 0 ? 1u : 0u; i < (cf_only > 0 ? 1u : 2u); i++) {
         uint64_t free_bytes;
-        if (pc_free_space(p, roots[i], &free_bytes) || free_bytes < need) continue;
+        if (pc_free_space(p, roots[i], &free_bytes)) continue;
         snprintf(folder, 512, "%s\\GlazeUSB", roots[i]);
+        /* Only changed/missing files need space for a verified temporary copy.
+         * Existing files stay intact until pc_put atomically publishes each
+         * replacement. Reserve a small workspace for nonce output/metadata. */
+        uint64_t need = 65536;
+        for (unsigned j = 0; j < count; j++) {
+            snprintf(local, sizeof(local), "%s/%s", dir, files[j].name);
+            snprintf(remote, sizeof(remote), "%s\\%s", folder, files[j].name);
+            files[j].reuse = pc_file_matches(p, local, remote);
+            if (files[j].reuse < 0) {
+                fprintf(stderr, "Cannot verify CE staging file %s; stopped\n", remote); return -1;
+            }
+            if (!files[j].reuse) need += ((uint64_t)files[j].size + 4095) & ~4095ull;
+            else fprintf(stderr, "CE reuse verified: %s (%u bytes)\n", remote, files[j].size);
+        }
+        if (free_bytes < need) {
+            fprintf(stderr, "CE staging %s: need %llu additional bytes, have %llu; matching files are already accounted for\n",
+                    roots[i], (unsigned long long)need, (unsigned long long)free_bytes);
+            continue;
+        }
         return pc_mkdir(p, folder);
     }
-    fprintf(stderr, "No CE staging volume has enough free space\n"); return -1;
+    fprintf(stderr, "No CE staging volume has enough additional free space; existing files were preserved\n"); return -1;
 }
-static int ce_test(struct pc_link *p, const char *dir, const char *folder)
+static int ce_test(struct pc_link *p, const char *dir, const char *folder, int reuse_probe)
 {
     char local[1024], remote[600], reply[1024];
     if (snprintf(local, sizeof(local), "%s/UsbProbe.exe", dir) >= (int)sizeof(local) ||
         snprintf(reply, sizeof(reply), "%s/usb-probe-return.txt", dir) >= (int)sizeof(reply)) return -1;
     char nonce[32]; snprintf(nonce, sizeof(nonce), "%llx-%x", (unsigned long long)now(), (unsigned)getpid());
     snprintf(remote, sizeof(remote), "%s\\UsbProbe.exe", folder);
-    if (pc_put(p, local, remote) || pc_run(p, remote, nonce)) return -1;
+    if ((!reuse_probe && pc_put(p, local, remote)) || pc_run(p, remote, nonce)) return -1;
     snprintf(remote, sizeof(remote), "%s\\usb-probe.txt", folder);
     char expected[100]; int size = snprintf(expected, sizeof(expected), "Glaze USB CE execution verified: %s\r\n", nonce);
     if (size < 0 || size >= (int)sizeof(expected)) return -1;
@@ -287,8 +316,9 @@ static int ce_test(struct pc_link *p, const char *dir, const char *folder)
 int ce_self_test(struct usb_link *u, const char *dir, int cf_only)
 {
     struct pc_link p; char folder[512];
-    if (pc_connect(&p, u) || ce_folder(&p, 65536, folder, cf_only)) return -1;
-    return ce_test(&p, dir, folder);
+    struct ce_artifact files[] = {{.name="UsbProbe.exe"}};
+    if (pc_connect(&p, u) || ce_folder(&p, dir, files, 1, folder, cf_only)) return -1;
+    return ce_test(&p, dir, folder, files[0].reuse);
 }
 int ce_boot(struct usb_link *u, const char *dir, int cf_only)
 {
@@ -300,11 +330,13 @@ int ce_boot(struct usb_link *u, const char *dir, int cf_only)
     struct pc_link p;
     if (pc_connect(&p, u)) return -1;
     char folder[512], remote[600], local[1024];
-    if (ce_folder(&p, (uint64_t)ks + rs + 262144, folder, cf_only) || ce_test(&p, dir, folder)) return -1;
-    const char *files[] = {"GlazeBoot.exe", "kernel.bin", "romfs.img", "glaze.cfg"};
-    for (unsigned i = 0; i < 4; i++) {
-        snprintf(remote, sizeof(remote), "%s\\%s", folder, files[i]);
-        if (snprintf(local, sizeof(local), "%s/%s", dir, files[i]) >= (int)sizeof(local)) return -1;
+    struct ce_artifact files[] = {{.name="UsbProbe.exe"}, {.name="GlazeBoot.exe"},
+                                  {.name="kernel.bin"}, {.name="romfs.img"}, {.name="glaze.cfg"}};
+    if (ce_folder(&p, dir, files, 5, folder, cf_only) || ce_test(&p, dir, folder, files[0].reuse)) return -1;
+    for (unsigned i = 1; i < 5; i++) {
+        if (files[i].reuse) continue;
+        snprintf(remote, sizeof(remote), "%s\\%s", folder, files[i].name);
+        if (snprintf(local, sizeof(local), "%s/%s", dir, files[i].name) >= (int)sizeof(local)) return -1;
         if (pc_put(&p, local, remote)) return -1;
     }
     snprintf(remote, sizeof(remote), "%s\\GlazeBoot.exe", folder);

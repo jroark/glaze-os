@@ -11,6 +11,10 @@ static int raw_read(void *ctx, uint32_t p, uint8_t raw[528])
 }
 int main(int argc, char **argv)
 {
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     if (argc == 2 && !strcmp(argv[1], "--encode")) {
         uint8_t raw[528]; size_t n;
         while ((n=fread(raw,1,520,stdin))) {

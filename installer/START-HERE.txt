@@ -1,0 +1,23 @@
+GLAZE USB INSTALLER FOR CASIO BE-300
+
+Everything needed to install Glaze is included. No CF card, compiler, Python
+installation, firmware download or network connection is needed at runtime.
+
+macOS: drag Glaze Installer into Applications, then open it.
+Windows: run the setup EXE, then launch Glaze BE-300 Installer. If USB access
+is unavailable, use Windows USB driver setup in the app. Zadig is bundled.
+Select only the BE-300 (USB ID 07CF:2002), and install WinUSB.
+
+1. Connect the BE-300's USB cable and external power, and wake Windows CE.
+2. Choose your apps and click Prepare installation.
+3. Choose a permanent backup folder. The app verifies two complete NAND reads.
+4. Review the backup path, then click Install Glaze.
+5. Keep USB and power connected until verification and reboot finish.
+
+Save important CE RAM files before starting; the RAM bootstrap clears CE's
+volatile object store. Installing replaces CE and files in internal NAND.
+Keep the entire generated backup directory. Restore CE uses its
+installation.json file and requires a working CE or Glaze USB bootstrap.
+
+These are unsigned/not-notarized development builds. Windows and physical
+flashing require further validation. No public release certification is implied.
