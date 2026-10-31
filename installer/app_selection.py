@@ -57,7 +57,7 @@ def select(catalog, requested=None):
     return sorted(chosen)
 
 
-def customize_logical(logical, catalog, chosen):
+def customize_logical(logical, catalog, chosen, resources=None):
     image = bytearray(logical)
     if len(image) != 16 * 1024 * 1024:
         raise ValueError('Invalid NAND image size')
@@ -72,9 +72,17 @@ def customize_logical(logical, catalog, chosen):
                 raise ValueError('Bundled OS does not contain ' + app['name'])
             if app['id'] not in chosen:
                 del files[name]
+    for app in catalog:
+        if app['kind'] == 'firmware':
+            for name in app['files']:
+                files.pop(name, None)
+                if app['id'] in chosen:
+                    if resources is None:
+                        raise ValueError('Selected firmware payload is unavailable')
+                    files[name] = (Path(resources) / name).read_bytes()
     blob = archive(files)
     if len(blob) > ROMFS_END - ROMFS_START:
-        raise ValueError('Selected apps exceed the ROMFS slot')
+        raise ValueError('These options exceed device space. Deselect Windows CE compatibility or another optional app.')
     image[ROMFS_START:ROMFS_END] = b'\xff' * (ROMFS_END - ROMFS_START)
     image[ROMFS_START:ROMFS_START + len(blob)] = blob
     struct.pack_into('<I', image, 4 * 16 + 12, (len(blob) + 511) // 512)

@@ -3,7 +3,7 @@
 One offline download per platform:
 
 - `Glaze-Installer-windows-x64.exe`: setup, GUI launcher, private Python/Tk runtime,
-  libusb, all 29 app choices, matching firmware, and Zadig USB driver setup.
+  libusb, all app and hardware options, matching firmware, and Zadig USB driver setup.
 - `Glaze-Installer-macos-arm64.dmg`: self-contained Apple Silicon app, Applications
   shortcut, instructions, native helpers, all app choices and matching firmware.
 
@@ -33,9 +33,11 @@ existing transaction format even when no backup is retained. Diagnostics stay
 in the host's per-user log directory. Restoring a previously saved CE backup is
 still available through **Restore Windows CE**.
 
-The app chooser offers built-ins and all 17 additional packages. Files, Settings,
+The app chooser offers built-ins and all 16 additional packages. Files, Settings,
 and system services are required; built-ins start selected and optional packages
-start unselected. Packages install into `/Applications` on NAND. Unchecked built-in
+start unselected. Hello is excluded from this installer, Windows CE compatibility
+starts unchecked, and WL54-CF Wi-Fi firmware is a separate unchecked hardware
+option. Packages install into `/Applications` on NAND. Unchecked built-in
 executables are omitted from the generated ROMFS while services/libraries remain.
 Existing GlazeBoot staging files are compared and reused when matching. Only
 missing/changed files require additional CE staging space, and previous files
@@ -50,11 +52,19 @@ backups because atomic publication uses hard links. CE compatibility and game
 engines need user-supplied software or game data. Replacing the Windows USB driver
 may affect old CE sync software; uninstalling the app does not remove the driver.
 
+The verified, redistributable Linux WL54-CF firmware pair is bundled for offline
+installation on the physical Marvell card, with its full `LICENCE.Marvell` notice
+and pinned provenance. Selecting it inserts both firmware files into NAND ROMFS;
+deselecting it omits them. It is not added to the temporary RAM boot. Some large
+combinations exceed the fixed ROMFS slot: the chooser catches this before install
+and asks the user to deselect Windows CE compatibility or another optional app.
+
 ## Build matching payloads
 
 Use the `mips-cross-dev` Docker image and the BE-300 CE toolchain:
 
 ```sh
+python3 tools/fetch_wl54cf_firmware.py
 ./build.sh all glazeboot BUILD_ID=cc8c1c4-installer-test
 make glazeboot-exe usb-probe-exe BE300_DEV=/path/to/be300-dev
 ```

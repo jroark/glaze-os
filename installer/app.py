@@ -10,7 +10,7 @@ import threading
 import traceback
 
 from engine import Installer, digest
-from app_selection import load_catalog, select
+from app_selection import load_catalog, select, customize_logical
 
 
 def main():
@@ -103,6 +103,9 @@ def main():
         log_folder = Path(os.environ.get('LOCALAPPDATA', tempfile.gettempdir())) / 'Glaze Installer/Logs'
     log_path = log_folder / ('session-' + __import__('datetime').datetime.now().strftime('%Y%m%d-%H%M%S') + '.jsonl')
 
+    def selected_app_count():
+        return sum(a['id'] in selected for a in catalog if a['kind'] != 'firmware')
+
     def choose_apps():
         window = tk.Toplevel(root)
         window.title('Choose apps')
@@ -112,7 +115,7 @@ def main():
         panel.pack(fill='both', expand=True)
         ttk.Label(panel, text='Files and Settings are always included.').pack(anchor='w', pady=8)
         variables = {}
-        for kind, title in [('builtin', 'Built-in apps'), ('package', 'Additional apps')]:
+        for kind, title in [('builtin', 'Built-in apps'), ('package', 'Additional apps'), ('firmware', 'Optional hardware')]:
             group = ttk.LabelFrame(panel, text=title, padding=10)
             group.pack(fill='x', pady=5)
             for index, app in enumerate(a for a in catalog if a['kind'] == kind):
@@ -125,18 +128,26 @@ def main():
         row = ttk.Frame(panel)
         row.pack(fill='x', pady=10)
         def preset(all_apps):
-            wanted = {a['id'] for a in catalog if all_apps or a.get('required')}
+            wanted = {a['id'] for a in catalog if (all_apps and a['kind'] != 'firmware') or a.get('required')}
+            if all_apps:
+                wanted.update(a['id'] for a in catalog if a['kind'] == 'firmware' and variables[a['id']].get())
             for key, variable in variables.items():
                 variable.set(key in wanted)
         def save():
+            chosen = select(catalog, [key for key, value in variables.items() if value.get()])
+            try:
+                customize_logical((args.resources / 'glaze.bin').read_bytes(), catalog, chosen, args.resources)
+            except ValueError as error:
+                messagebox.showerror('Choose fewer options', str(error), parent=window)
+                return
             selected.clear()
-            selected.update(select(catalog, [key for key, value in variables.items() if value.get()]))
-            apps_button.configure(text=f'Choose apps… ({len(selected)} selected)')
+            selected.update(chosen)
+            apps_button.configure(text=f'Choose apps… ({selected_app_count()} selected)')
             window.destroy()
         ttk.Button(row, text='Select all', command=lambda: preset(True)).pack(side='left')
         ttk.Button(row, text='Required only', command=lambda: preset(False)).pack(side='left', padx=8)
         ttk.Button(row, text='Done', command=save).pack(side='right')
-    apps_button = ttk.Button(frame, text=f'Choose apps… ({len(selected)} selected)', command=choose_apps)
+    apps_button = ttk.Button(frame, text=f'Choose apps… ({selected_app_count()} selected)', command=choose_apps)
     apps_button.pack(anchor='w', pady=(0, 14))
     controls.append(apps_button)
     options = ttk.Frame(frame)

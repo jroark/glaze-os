@@ -35,17 +35,40 @@ def stage_resources(out, native_dir, build_id, ext=''):
         catalog.append({'id': 'builtin:' + program, 'name': name, 'program': program,
                         'kind': 'builtin', 'required': program in ('files', 'settings'), 'default': True})
     catalog.append({'id': 'builtin:wince', 'name': 'Windows CE compatibility', 'program': 'wince',
-                    'kind': 'builtin', 'required': False, 'default': True})
+                    'kind': 'builtin', 'required': False, 'default': False})
     (resources / 'packages').mkdir()
     for info in sorted((ROOT / 'packages').glob('*/Info')):
         metadata = dict(line.split('=', 1) for line in info.read_text().splitlines() if '=' in line)
         program = metadata['id']
+        if program == 'hello':
+            continue
         shutil.copy2(ROOT / 'out/pkg' / (program + '.gzp'), resources / 'packages')
         catalog.append({'id': 'package:' + program, 'name': metadata['name'], 'program': program,
                         'kind': 'package', 'required': False, 'default': False})
+    catalog.append({'id': 'firmware:wl54cf', 'name': 'WL54-CF Wi-Fi firmware', 'program': 'wl54cf',
+                    'kind': 'firmware', 'required': False, 'default': False,
+                    'files': ['firmware/cf8385_helper.bin', 'firmware/cf8385.bin']})
     (resources / 'apps.json').write_text(json.dumps(catalog, indent=2))
     notices = resources / 'licenses'
     notices.mkdir()
+    # Only the exact redistributable Linux pair is included, with provenance
+    # and its complete notice. The vendor-CAB helper is deliberately rejected.
+    firmware_manifest = json.loads((ROOT / 'firmware/wl54cf-linux.json').read_text())
+    (resources / 'firmware').mkdir()
+    for name, entry in firmware_manifest['files'].items():
+        if not name.startswith('libertas/'):
+            continue
+        source = ROOT / 'firmware/wl54cf' / Path(name).name
+        data = source.read_bytes()
+        if len(data) != entry['size_bytes'] or hashlib.sha256(data).hexdigest() != entry['sha256']:
+            raise ValueError('Unexpected WL54-CF firmware: ' + str(source))
+        (resources / 'firmware' / source.name).write_bytes(data)
+    notice = (ROOT / 'firmware/LICENCE.Marvell').read_bytes()
+    expected = firmware_manifest['files']['LICENCE.Marvell']
+    if len(notice) != expected['size_bytes'] or hashlib.sha256(notice).hexdigest() != expected['sha256']:
+        raise ValueError('Unexpected Marvell redistribution notice')
+    (notices / 'LICENCE.Marvell').write_bytes(notice)
+    shutil.copy2(ROOT / 'firmware/wl54cf-linux.json', notices)
     for component in ('littlefs', 'dhara'):
         for path in (ROOT / 'third_party' / component).glob('*'):
             if path.is_file() and path.name.lower().startswith(('license', 'copying')):

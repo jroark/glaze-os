@@ -14,7 +14,7 @@ Produced:
 Passed:
 
 - Matching NAND, RAM kernel/romfs, CE loaders and package builds.
-- Sixteen installer tests and five app-selection tests. These cover executable
+- Sixteen installer tests and seven app-selection tests. These cover executable
   exclusion, required-app preservation, aligned ROMFS repacking, bundle layout,
   malformed archive rejection, actual image encoding and fresh restore plans.
 - Four physical NAND tests, five transaction tests, and native NAND ECC,
@@ -29,7 +29,7 @@ Passed:
   installed private Python 3.11.9 runtime passed the bundle self-check, and
   the installed GUI/app chooser initialized and closed successfully.
 - The installed Windows runtime prepared a full physical NAND image selecting
-  all 29 apps, using the real Windows encoder/filesystem helpers and a synthetic
+  optional apps, using the real Windows encoder/filesystem helpers and a synthetic
   CE backup with bad blocks. USB operations were simulated; no hardware was used.
 
 USB reconnect fix:
@@ -77,6 +77,21 @@ Simplified automatic flow:
   NAND data; its transient CE source was removed afterward.
 - Required physical inventory, source binding and NAND writer checks remain on.
   This flow was tested with synthetic data; no hardware programming was performed.
+
+Catalog and optional firmware:
+
+- Hello is absent from the catalog and package payloads; the Windows upgrade
+  also removes its obsolete bundled payload. Windows CE compatibility
+  and WL54-CF firmware start unchecked. The 16 remaining optional packages remain
+  available offline.
+- The hardware firmware pair and full Marvell notice match the repository's
+  pinned Linux sizes/hashes; provenance accompanies the files in both packages.
+- The installed Windows bundle under Wine prepared a physical image with
+  optional firmware selected using synthetic NAND source data; no firmware
+  execution or USB access was involved.
+- Selection tests cover firmware insertion/removal, defaults, required apps and
+  ROMFS capacity. The default app set plus firmware fits; oversized choices are
+  rejected before installation. Real firmware is not executed in emulator tests.
 
 Incomplete:
 

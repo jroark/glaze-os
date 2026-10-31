@@ -24,6 +24,8 @@ Function .onInit
 FunctionEnd
 Section "Glaze Installer"
   SetOutPath "$INSTDIR"
+  ; Remove the obsolete bundled Hello payload when upgrading an older setup.
+  Delete "$INSTDIR\resources\packages\hello.gzp"
   File /r "${PRODUCT_DIR}/*"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\Glaze BE-300 Installer.lnk" "$INSTDIR\Glaze Installer.exe"

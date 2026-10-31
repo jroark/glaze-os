@@ -231,10 +231,10 @@ class OfflinePipelineTest(unittest.TestCase):
                     Path(args[1]).write_bytes(factory)
                 return []
             with patch.object(engine, 'run', side_effect=run), patch.object(engine, 'ram_boot'):
-                engine.prepare(tmp, ['builtin:files', 'builtin:settings', 'package:hello'])
+                engine.prepare(tmp, ['builtin:files', 'builtin:settings', 'package:sketch'])
             record = Path(next(e['record'] for e in events if e['event'] == 'prepared'))
             folder = record.parent
-            self.assertEqual(json.loads(record.read_text())['apps'], ['builtin:files', 'builtin:settings', 'package:hello'])
+            self.assertEqual(json.loads(record.read_text())['apps'], ['builtin:files', 'builtin:settings', 'package:sketch'])
             # Retry after a failed handoff can reuse this installer's RO RAM
             # session instead of requiring another CE boot or touching NAND.
             resumed = Installer(root / 'out/installer/resources', events.append, '1.2')

@@ -134,7 +134,7 @@ class Installer:
             raise ValueError('New installation requires stock Windows CE or this installer’s read-only Glaze RAM session. Use Restore for a saved installation.')
         catalog = load_catalog(self.resources)
         chosen = select(catalog, requested_apps)
-        logical = customize_logical((self.resources / 'glaze.bin').read_bytes(), catalog, chosen)
+        logical = customize_logical((self.resources / 'glaze.bin').read_bytes(), catalog, chosen, self.resources)
         self.n.validate_logical(logical)
         destination = Path(destination).resolve()
         if shutil.disk_usage(destination).free < 256 * 1024 * 1024:

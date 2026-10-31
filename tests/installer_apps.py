@@ -78,6 +78,60 @@ class AppSelectionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             entries(blob, b'GZPK')
 
+    def test_optional_firmware_is_inserted_only_when_selected(self):
+        feature = {'id': 'firmware:wl54cf', 'name': 'WL54-CF Wi-Fi firmware', 'kind': 'firmware',
+                   'program': 'wl54cf', 'default': False,
+                   'files': ['firmware/cf8385_helper.bin', 'firmware/cf8385.bin']}
+        catalog = CATALOG + [feature]
+        with tempfile.TemporaryDirectory() as tmp:
+            resources = Path(tmp)
+            (resources / 'firmware').mkdir()
+            # Structural fixtures only; no real Marvell firmware is emulated.
+            for name in feature['files']:
+                (resources / name).write_bytes(b'synthetic-firmware-fixture')
+            result = customize_logical(self.logical(), catalog, select(catalog), resources)
+            size = struct.unpack_from('<I', result, 76)[0] * 512
+            self.assertNotIn('firmware/cf8385.bin', entries(result[0x40000:0x40000 + size], b'GZRF'))
+            enabled = select(catalog) + ['firmware:wl54cf']
+            result = customize_logical(self.logical(), catalog, enabled, resources)
+            size = struct.unpack_from('<I', result, 76)[0] * 512
+            files = entries(result[0x40000:0x40000 + size], b'GZRF')
+            for name in feature['files']:
+                self.assertEqual(files[name], b'synthetic-firmware-fixture')
+            disabled = customize_logical(result, catalog, select(catalog), resources)
+            size = struct.unpack_from('<I', disabled, 76)[0] * 512
+            self.assertNotIn('firmware/cf8385.bin', entries(disabled[0x40000:0x40000 + size], b'GZRF'))
+
+    def test_packaged_catalog_and_firmware_defaults(self):
+        import hashlib
+        from app_selection import load_catalog
+        resources = Path(__file__).resolve().parents[1] / 'out/installer/resources'
+        if not (resources / 'firmware/cf8385.bin').exists():
+            self.skipTest('requires newly staged firmware resources')
+        catalog = load_catalog(resources)
+        indexed = {a['id']: a for a in catalog}
+        self.assertNotIn('package:hello', indexed)
+        self.assertFalse((resources / 'packages/hello.gzp').exists())
+        self.assertFalse(indexed['builtin:wince']['default'])
+        self.assertFalse(indexed['firmware:wl54cf']['default'])
+        manifest = json.loads((resources / 'licenses/wl54cf-linux.json').read_text())
+        for name, expected in manifest['files'].items():
+            path = resources / ('firmware/' + Path(name).name if name.startswith('libertas/') else 'licenses/' + name)
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected['sha256'])
+        logical = (resources / 'glaze.bin').read_bytes()
+        default = select(catalog)
+        image = customize_logical(logical, catalog, default, resources)
+        size = struct.unpack_from('<I', image, 76)[0] * 512
+        files = entries(image[0x40000:0x40000 + size], b'GZRF')
+        self.assertNotIn('bin/wince', files)
+        self.assertNotIn('firmware/cf8385.bin', files)
+        image = customize_logical(logical, catalog, default + ['firmware:wl54cf'], resources)
+        size = struct.unpack_from('<I', image, 76)[0] * 512
+        files = entries(image[0x40000:0x40000 + size], b'GZRF')
+        self.assertEqual(files['firmware/cf8385.bin'], (resources / 'firmware/cf8385.bin').read_bytes())
+        with self.assertRaisesRegex(ValueError, 'exceed device space'):
+            customize_logical(logical, catalog, [a['id'] for a in catalog], resources)
+
     def test_all_bundled_packages_fit_and_have_metadata(self):
         resources = Path(__file__).resolve().parents[1] / 'out/installer/resources'
         if not (resources / 'apps.json').exists():
