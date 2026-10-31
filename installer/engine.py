@@ -79,20 +79,33 @@ class Installer:
         events = self.run('probe')
         device = next(e for e in events if e.get('event') == 'device')
         self.device = device['location']
+        device['capabilities'] = next((e['value'] for e in events if e.get('event') == 'capabilities'), 0)
         return device
 
     def wait_glaze(self, required=0):
-        deadline = time.monotonic() + 90
+        start = time.monotonic()
+        deadline, reset_at = start + 90, start + 3
         while time.monotonic() < deadline:
             time.sleep(1)
             try:
                 events = self.run('probe')
-                caps = next((e['value'] for e in events if e.get('event') == 'capabilities'), 0)
-                if caps & required == required and any(e.get('runtime') == 'Glaze' for e in events):
-                    return
             except RuntimeError:
-                pass
-        raise RuntimeError('Glaze did not reconnect with the required capabilities. Reconnect USB and retain the backup.')
+                events = []
+            if any(e.get('runtime') == 'Glaze' for e in events):
+                caps = next((e['value'] for e in events if e.get('event') == 'capabilities'), 0)
+                if caps & required == required:
+                    return
+                raise RuntimeError(f'Glaze connected but lacks required USB capabilities (need {required:#x}, got {caps:#x}).')
+            if time.monotonic() >= reset_at:
+                self.emit({'event': 'phase', 'text': 'Refreshing the USB connection after GlazeBoot handoff…'})
+                try:
+                    # Match glaze-usb's proven reconnect sequence. The helper
+                    # resets an unclaimed device even if set-configuration fails.
+                    self.run('reset-link')
+                except RuntimeError:
+                    pass  # GlazeBoot can still have USB powered down; retry.
+                reset_at = time.monotonic() + 5
+        raise RuntimeError('Glaze did not reconnect after USB refresh attempts. Unplug and reconnect USB once, then click Prepare installation again. No NAND programming was started by this reconnect step.')
 
     def ram_boot(self, mode):
         # ce_test writes its nonce reply beside the payload; bundles are read-only.
@@ -106,8 +119,12 @@ class Installer:
     def prepare(self, destination, requested_apps=None):
         self.verify()
         device = self.probe()
-        if device['runtime'] != 'CE':
-            raise ValueError('New installation requires stock Windows CE. Use Restore for a saved installation.')
+        ram_readonly = (device['runtime'] == 'Glaze' and
+                        device.get('capabilities', 0) & 4096 and
+                        not device.get('capabilities', 0) & 16384 and
+                        self.build == self.manifest['build_id'])
+        if device['runtime'] != 'CE' and not ram_readonly:
+            raise ValueError('New installation requires stock Windows CE or this installer’s read-only Glaze RAM session. Use Restore for a saved installation.')
         catalog = load_catalog(self.resources)
         chosen = select(catalog, requested_apps)
         logical = customize_logical((self.resources / 'glaze.bin').read_bytes(), catalog, chosen)
@@ -119,7 +136,8 @@ class Installer:
         if os.name != 'nt':
             folder.chmod(0o700)
         self.emit({'event': 'folder', 'path': str(folder)})
-        self.ram_boot('ro')
+        if not ram_readonly:
+            self.ram_boot('ro')
         backup = folder / 'original-ce.raw'
         self.run('backup', backup)
         inv = self.n.inspect(backup)

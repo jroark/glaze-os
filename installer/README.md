@@ -15,7 +15,10 @@ setup is guided and uses the bundled Zadig; it may request administrator access.
 
 Open the Mac app or run Windows setup. Connect USB and external power and wake
 stock Windows CE. Choose apps, prepare the installation, choose a permanent backup
-folder, then review and click Install Glaze. Files, Settings, and system services
+folder, then review and click Install Glaze. After GlazeBoot, the app refreshes
+the USB connection automatically if macOS retains CE’s old device state. If a
+previous attempt stopped at that step, reconnect USB and click Prepare again;
+the matching read-only Glaze RAM session can be reused without rebooting CE. Files, Settings, and system services
 are required. Built-ins are selected by default; the 17 additional packages start
 unselected. Selected packages are preinstalled in `/Applications` on NAND. The
 app chooser also supports Select all and Required only.

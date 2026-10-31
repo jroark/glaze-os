@@ -13,6 +13,13 @@ int main(int argc,char **argv) {
     if(argc<3) return 2;
     struct usb_link l={0}; struct gu_client c; int r=-1;
     const char *device=strcmp(argv[1],"auto") ? argv[1] : NULL;
+    /* Reset before claiming an interface: stale CE configuration can make
+     * claiming/set-configuration fail after Glaze takes over the controller. */
+    if(!strcmp(argv[2],"reset-link") && argc==3) {
+        r=usb_reset_link(device,0);
+        printf("{\"event\":\"complete\",\"ok\":%s}\n",r ? "false" : "true");
+        return r ? 1 : 0;
+    }
     if(usb_open(&l,device,0)) return 1;
     if(!strcmp(argv[2],"probe") && argc==3) {
         printf("{\"event\":\"device\",\"location\":\"%u",l.bus);

@@ -14,7 +14,7 @@ Produced:
 Passed:
 
 - Matching NAND, RAM kernel/romfs, CE loaders and package builds.
-- Nine installer tests and five app-selection tests. These cover executable
+- Thirteen installer tests and five app-selection tests. These cover executable
   exclusion, required-app preservation, aligned ROMFS repacking, bundle layout,
   malformed archive rejection, actual image encoding and fresh restore plans.
 - Four physical NAND tests, five transaction tests, and native NAND ECC,
@@ -31,6 +31,19 @@ Passed:
 - The installed Windows runtime prepared a full physical NAND image selecting
   all 29 apps, using the real Windows encoder/filesystem helpers and a synthetic
   CE backup with bad blocks. USB operations were simulated; no hardware was used.
+
+USB reconnect fix:
+
+- Reproduced the physical macOS failure: the host retained CE revision 0000
+  and configuration 0 after GlazeBoot; setting configuration returned
+  `LIBUSB_ERROR_OTHER`.
+- Resetting the unclaimed USB device recovered the connection. A live HELLO
+  returned the expected Glaze build and read-only NAND backup capabilities.
+- The installer now mirrors the existing CLI: reset after three seconds of
+  failed reconnects, then retry every five seconds within a 90-second deadline.
+  Regression tests cover stale state, reset failure, timeout, and capability
+  mismatch. Preparation can continue from the same matching read-only RAM boot.
+- This diagnostic reset/probe did not erase or program physical NAND.
 
 Incomplete:
 
