@@ -339,3 +339,55 @@ stays silent unless they are all on (`spl-io` covers both cases), so a NAND
 power-on boot prints nothing until the kernel's console.
 A ktest NAND image overflows the romfs slot (4 KiB over at `bad936b`, 16 KiB
 with the working tree), so ktest ran from a CF recovery boot instead (ALL PASS).
+
+## Boot beeps
+
+A NAND boot has no LCD (its gates are off until `display_init`), no serial
+(the SIU is gated) and no USB until the kernel's driver is up. The piezo is
+the only signal, and it needs only gate `1128`, which the SPL and kernel set
+themselves and then put back. Beeps are timed by CP0 Count (near 10 MHz).
+
+| Who | Sound | Meaning |
+| --- | --- | --- |
+| SPL, `BOOT_BEEP=1` | 1 short 1 kHz | ROM started the SPL |
+| | 2 short 1 kHz | NAND reset (command phases only) |
+| | 3 short 1 kHz | companion gates on (`1104 1108 1120 112C 1138 113C`) |
+| | 4 short 1 kHz | NAND DMA released (`1CF4=1`, `1CC0=0`), engine reset again |
+| | 5 short 1 kHz | boot block map read (first stream-port page data) |
+| | 6 short 1 kHz | kernel loaded, jumping |
+| SPL, every build | 1 s 500 Hz, then *n* short 1 kHz, three times | fatal stop: 1 NAND timeout, 2 missing or uncorrectable boot page, 3 ambiguous boot block map |
+| Kernel, `BOOT_BEEP=1` | 1–6 short 2 kHz | `kmain` entry, after the entry snapshot, console up, `usb_init`, `irq_init`, `timer_init` |
+| CF recovery stub | 400 ms 1 kHz | entry, and before the kernel jump |
+
+So a `BOOT_BEEP=1` NAND boot should sound 1 to 6 low then 1 to 6 high. The
+last group heard places a hang.
+
+The first NAND boot (2026-10-30) beeped 1 and went silent, with the old
+three-checkpoint SPL. Dropping its writes to the NAND DMA words `1CC0/1CF4`
+changed nothing. Later builds got further: through the gates, through the DMA
+word and engine reset, and then went silent at the first page read every time.
+Casio's own SPL, extracted from the device's CE backup and traced in the
+emulator, gave the two missing pieces:
+
+- **Page reads are split.** The ROM (`9FC01A98..1AAE`) and Casio's SPL
+  (`80F0ADFC..AE28`) read 520 bytes in MODE 5, then switch to MODE 4 for the
+  last 8 spare bytes, just as programming splits MODE 7/6. Glaze read all 528
+  bytes in MODE 5, and the 131st word never came. The SPL and the kernel's
+  `nand_read_page`/`nand_read_raw` now split the same way. The kernel's
+  unsplit raw reads had worked in recovery boots, so something there differs;
+  that is still open.
+- **Gates before the DMA word.** Casio's SPL turns on `1128`, `1100` and `110C`
+  (for its LCD splash) before it writes `1CC0 = 0`, and it never writes
+  `1CF4`. The SPL now does the same, plus the kernel's gate set.
+
+With both, the sixth build booted from NAND to SpringBoard on 2026-10-31,
+with USB working. Builds with `BOOT_BEEP=1` also play seven 3 kHz ticks
+through the first page read (selected, READ0, address, ready, first word,
+520 bytes, last spare bytes), between SPL checkpoints 4 and 5.
+
+The emulator models neither the read split nor these gates, so it booted every
+failing build. Its NAND model accepts the split reads. The SPL's fatal stops never jump to a partly
+loaded kernel. The emulator plays the same tones with `--audio`, and
+`--log-mmio` shows the `9A0`/`9A4` writes. A physical candidate with a kernel
+page corrupted past its ECC gives checkpoints 1 and 2 and then error 2.
+`tests/spl_io.c` checks the error pattern at power-on gate state.

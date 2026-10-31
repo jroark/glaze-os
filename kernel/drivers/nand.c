@@ -9,7 +9,9 @@
  * A40C and CTRL are set to 1 first, and phase 0, CTRL 0 after; phases are
  * closed with phase 2, and ACK is read. The boot ROM leaves the engine set
  * up, but Windows CE's nanddisk.dll leaves A40C and CTRL clear. A read
- * drains the whole 528-byte page as Windows CE does. After Windows CE (a
+ * drains the whole 528-byte page as the ROM (9FC01A98-9FC01AAE) and
+ * Casio's SPL (80F0ADFC-80F0AE28) do: 520 bytes in MODE 5, then MODE 4
+ * for the last 8 spare bytes, as programming splits MODE 7/6. After Windows CE (a
  * RAM boot) nand_reset() runs first. On a real BE-300 that reads Windows
  * CE's FAT volume, but without nanddisk.dll's ECC correction and
  * bad-sector replacement some sectors come back wrong, so /NAND stays off
@@ -35,7 +37,8 @@
 #define PHASE_ADDR      0x06u
 
 #define MODE_RESET      0x00u
-#define MODE_READ       0x05u   /* page read burst */
+#define MODE_READ       0x05u   /* page read burst: 512 data + first 8 OOB */
+#define MODE_OOB2_READ  0x04u   /* last 8 OOB bytes */
 #define MODE_PROGRAM    0x07u   /* 512 data + first 8 OOB bytes */
 #define MODE_OOB2       0x06u   /* last 8 OOB bytes */
 
@@ -121,8 +124,11 @@ void nand_read_page(uint32_t page, void *buf)
     wait_ready();
     for (uint32_t i = 0; i < NAND_PAGE_DATA / 4; i++)
         dst[i] = NAND_STREAM32;
-    for (int i = 0; i < 4; i++)
-        (void)NAND_STREAM32;    /* the 16 spare bytes */
+    for (int i = 0; i < 2; i++)
+        (void)NAND_STREAM32;    /* the first 8 spare bytes */
+    NAND_XFER_MODE = MODE_OOB2_READ;
+    for (int i = 0; i < 2; i++)
+        (void)NAND_STREAM32;    /* the last 8 */
     NAND_XFER_MODE = MODE_RESET;
     deselect();
 }
@@ -135,7 +141,10 @@ void nand_read_raw(uint32_t page, uint8_t buf[528])
     NAND_XFER_KICK = 1;
     NAND_XFER_MODE = MODE_READ;
     wait_ready();
-    for (uint32_t i = 0; i < 528 / 4; i++)
+    for (uint32_t i = 0; i < 520 / 4; i++)
+        ((uint32_t *)buf)[i] = NAND_STREAM32;
+    NAND_XFER_MODE = MODE_OOB2_READ;
+    for (uint32_t i = 520 / 4; i < 528 / 4; i++)
         ((uint32_t *)buf)[i] = NAND_STREAM32;
     NAND_XFER_MODE = MODE_RESET;
     deselect();

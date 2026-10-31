@@ -42,6 +42,82 @@
 #define STREAM_DATA  SPL_REG32(0xAA00B000u)
 #define SIU_THR      SPL_REG8(0xAA008680u)
 #define SIU_LSR      SPL_REG8(0xAA008694u)
+#define BLG_CONFIG   SPL_REG32(0xAA000984u)
+#define BUZZ_CONTROL SPL_REG32(0xAA0009A0u)
+#define BUZZ_PERIOD  SPL_REG32(0xAA0009A4u)
+#define BUZZ_DUTY    SPL_REG32(0xAA0009A8u)
+#define CMM_GATE     SPL_REG32(0xAA001128u)
+#ifndef SPL_COUNT
+#define SPL_COUNT() ({ uint32_t c_; __asm__ volatile("mfc0 %0, $9" : "=r"(c_)); c_; })
+#endif
+
+/*
+ * Piezo beeps (BLG channel 09A0, docs/BUZZER.md), the only signal a NAND
+ * boot has before the kernel: the LCD is off and the SIU is gated. Gate
+ * 1128 is the only gate touched, and the recovery stub beeps the same way
+ * from the ROM at power-on. Timed by CP0 Count, near 10 MHz as in
+ * kernel/drivers/buzzer.c. The shared gate and BLG configuration are put
+ * back afterwards.
+ */
+static void count_wait(uint32_t ms)
+{
+    uint32_t t0 = SPL_COUNT();
+    while (SPL_COUNT() - t0 < ms * 10000u)
+        ;
+}
+
+static void spl_beeps(unsigned n, uint32_t hz, uint32_t on_ms)
+{
+    uint32_t gate = CMM_GATE, config = BLG_CONFIG;
+    uint32_t period = 1411200u / hz - 1u;
+
+    CMM_GATE = gate | 1u;
+    BLG_CONFIG = config | 0x0202u;
+    for (unsigned i = 0; i < n; i++) {
+        BUZZ_PERIOD = period;
+        BUZZ_DUTY = period / 2u;
+        BUZZ_CONTROL = 1;
+        count_wait(on_ms);
+        BUZZ_CONTROL = 0;
+        count_wait(180);
+    }
+    BLG_CONFIG = config;
+    CMM_GATE = gate;
+}
+
+/* BOOT_BEEP=1 checkpoints: n short 1 kHz beeps, lower than the kernel's
+ * 2 kHz groups and shorter than the recovery stub's 400 ms ones.
+ *   1  the ROM started the SPL
+ *   2  NAND reset (command phases only, no page data yet)
+ *   3  companion gates on
+ *   4  NAND DMA off, engine reset again
+ *   5  boot block map read (page data through the stream port)
+ *   6  kernel loaded, jumping to it (the kernel's own beeps follow) */
+#ifdef SPL_BOOT_BEEP
+#define CHECKPOINT(n) (spl_beeps((n), 1000u, 120u), count_wait(700))
+#else
+#define CHECKPOINT(n) ((void)0)
+#endif
+
+/* Fatal stops, in every build: a 1 s 500 Hz tone, then `code` short
+ * beeps, three times. 1 NAND timeout, 2 missing or corrupt boot page,
+ * 3 ambiguous boot block map. Never returns: a partly loaded kernel must
+ * not run. */
+static void uart_puts(const char *s);
+static void __attribute__((noreturn)) spl_fail(unsigned code, const char *why)
+{
+    uart_puts(why);
+    for (unsigned i = 0; i < 3; i++) {
+        spl_beeps(1, 500u, 1000u);
+        count_wait(300);
+        spl_beeps(code, 1000u, 120u);
+        count_wait(1500);
+    }
+#ifdef SPL_TEST_STOP
+    SPL_TEST_STOP();
+#endif
+    for (;;) ;
+}
 
 static uint32_t uart_dead;
 
@@ -89,6 +165,30 @@ static void uart_puthex32(uint32_t v)
         uart_putc(hex[(v >> i) & 0xFu]);
 }
 
+/*
+ * Gates on before the NAND DMA word and the first page read. The ROM's NAND
+ * path turns on only 111C, 1120, 1134 and 1104 (docs/NAND_ROM_HANDOFF.md).
+ * Casio's own SPL, started from the same handoff, turns on 1128, 1100 and
+ * 110C (its LCD splash) before it writes 0x1CC0 and streams pages from
+ * B000 (traced from the device's CE backup in the emulator). Glaze's NAND
+ * boots hung at the DMA words and then at the first stream read while 1128
+ * (which spl_beeps() puts back) and 1100/110C were off. The rest are the
+ * kernel's companion_gates_on() set (kernel/main.c), as Windows CE leaves
+ * them. 0x0A00A0DC after 1104, as the ROM and kernel do. Gate words
+ * themselves are always clocked.
+ */
+static void companion_gates_on(void)
+{
+    static const uint16_t gates[] = {
+        0x1128, 0x1100, 0x110C,                         /* Casio's SPL */
+        0x1104, 0x1108, 0x1120, 0x112C, 0x1138, 0x113C, /* the kernel's set */
+    };
+
+    for (unsigned i = 0; i < sizeof(gates) / sizeof(gates[0]); i++)
+        SPL_REG32(0xAA000000u + gates[i]) = 1;
+    SPL_REG32(0xAA00A0DCu) = 0xFF;
+}
+
 static void nand_deselect(void)
 {
     XFER_CMD = 0;
@@ -101,11 +201,7 @@ static void nand_wait_ready(void)
         if (XFER_STATUS & 1u)
             return;
     nand_deselect();
-    uart_puts("SPL: NAND timeout; boot stopped\n");
-#ifdef SPL_TEST_STOP
-    SPL_TEST_STOP();
-#endif
-    for (;;) ;  /* Never jump to a partially loaded kernel. */
+    spl_fail(1, "SPL: NAND timeout; boot stopped\n");
 }
 
 static void nand_select(void)
@@ -129,10 +225,9 @@ static void nand_command(uint8_t cmd)
 
 static void nand_init(void)
 {
-    /* Reclaim PIO from ROM/CE DMA, as kernel/drivers/nand.c does. */
+    /* Before companion_gates_on() this leaves the NAND DMA words alone:
+     * see nand_release_dma(). */
     SPL_REG32(0xAA001134u) = 1;
-    SPL_REG32(0xAA001CF4u) = 1;
-    SPL_REG32(0xAA001CC0u) = 0;
     SPL_REG32(0xAA00A400u) = 0;
     XFER_MODE = 0;
     nand_deselect();
@@ -141,12 +236,39 @@ static void nand_init(void)
     nand_deselect();
 }
 
-/* Use the hardware-tested kernel PIO framing, including read ACK and all
- * 16 spare bytes. Do not depend on the ROM leaving the engine selected. */
+/*
+ * NAND DMA off (0x1CC0 = 0, kernel/hw.h) so page data reaches the stream
+ * port, then an engine reset. Casio's SPL writes only 0x1CC0, after its
+ * gates and A400 = 0; 0x1CF4 is Windows CE's and is left alone here.
+ */
+static void nand_release_dma(void)
+{
+    SPL_REG32(0xAA00A400u) = 0;
+    SPL_REG32(0xAA001CC0u) = 0;
+    nand_init();
+}
+
+/* BOOT_BEEP=1: high 3 kHz ticks through the first page read only, so a
+ * hang inside it can be placed: 1 selected, 2 READ0 sent, 3 address sent,
+ * 4 burst ready, 5 first word, 6 520 bytes, 7 last spare bytes. */
+#ifdef SPL_BOOT_BEEP
+static unsigned reads_done;
+#define TICK() do { if (!reads_done) spl_beeps(1, 3000u, 40u); } while (0)
+#else
+#define TICK() ((void)0)
+#endif
+
+/* Read ACK, phase close and deselect as the kernel frames them. The data
+ * goes as the ROM (9FC01A98-9FC01AAE) and Casio's SPL (80F0ADFC-80F0AE28)
+ * take it: 520 bytes in MODE 5, then MODE 4 for the last 8 spare bytes,
+ * as programming splits MODE 7/6. Do not depend on the ROM leaving the
+ * engine selected. */
 static void nand_read_raw_page(uint32_t page, uint32_t *dest)
 {
     nand_select();
+    TICK();
     nand_command(0);
+    TICK();
     XFER_CMD = 6;
     XFER_ADDR8 = 0;
     XFER_ADDR8 = (uint8_t)page;
@@ -154,11 +276,23 @@ static void nand_read_raw_page(uint32_t page, uint32_t *dest)
     (void)XFER_ACK;
     XFER_CMD = 2;
     nand_wait_ready();
+    TICK();
     XFER_KICK = 1;
     XFER_MODE = 5;
     nand_wait_ready();
-    for (uint32_t i = 0; i < 528u / 4; i++)
+    TICK();
+    dest[0] = STREAM_DATA;
+    TICK();
+    for (uint32_t i = 1; i < 520u / 4; i++)
         dest[i] = STREAM_DATA;
+    TICK();
+    XFER_MODE = 4;
+    for (uint32_t i = 520u / 4; i < 528u / 4; i++)
+        dest[i] = STREAM_DATA;
+    TICK();
+#ifdef SPL_BOOT_BEEP
+    reads_done = 1;
+#endif
     XFER_MODE = 0;
     nand_deselect();
 }
@@ -176,11 +310,7 @@ static void nand_read_page(uint32_t page, uint32_t *dest)
 {
     if (!nand_boot_read(&boot_map, boot_raw, 0, page, dest, true))
         return;
-    uart_puts("SPL: missing or corrupt NAND boot page; boot stopped\n");
-#ifdef SPL_TEST_STOP
-    SPL_TEST_STOP();
-#endif
-    for (;;) ;
+    spl_fail(2, "SPL: missing or corrupt NAND boot page; boot stopped\n");
 }
 
 #ifdef SPL_RAMBOOT
@@ -285,12 +415,17 @@ static void __attribute__((noreturn)) ramboot(void)
 
 uint32_t spl_main(void)
 {
-    uart_init();
+    CHECKPOINT(1);
+    uart_init();            /* before the gates: serial stays off in the SPL */
     nand_init();
-    if (nand_boot_scan(&boot_map, boot_raw, 0, true)) {
-        uart_puts("SPL: ambiguous NAND boot block map; boot stopped\n");
-        for (;;) ;
-    }
+    CHECKPOINT(2);
+    companion_gates_on();
+    CHECKPOINT(3);
+    nand_release_dma();
+    CHECKPOINT(4);
+    if (nand_boot_scan(&boot_map, boot_raw, 0, true))
+        spl_fail(3, "SPL: ambiguous NAND boot block map; boot stopped\n");
+    CHECKPOINT(5);
     uart_puts("\nGlaze SPL\n");
     uart_puts("kernel load = 0x");
     uart_puthex32(KERNEL_LOAD_VA);
@@ -316,6 +451,7 @@ uint32_t spl_main(void)
     }
 
     uart_puts("kernel loaded; jumping\n");
+    CHECKPOINT(6);
     /* Kernel entry performs its own cache setup before returning to KSEG0. */
     return KERNEL_ENTRY_VA | 0x20000000u;
 }

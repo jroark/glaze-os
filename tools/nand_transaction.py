@@ -2,7 +2,9 @@
 """Prepare a backup-bound NAND transaction for review; never opens a device.
 
 Installation needs the physical packer's plan. Restoration needs a fresh exact
-raw snapshot of the current NAND and the original CE backup/inventory. A failed
+raw snapshot of the current NAND and the original CE backup/inventory. An
+update replaces one installed Glaze image with another: --installed names the
+source's own placement plan, which must be bound to the same CE backup. A failed
 transaction is never resumed blindly or repaired by guessing new mappings.
 """
 import argparse
@@ -15,7 +17,11 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location('physical',Path(__file__).with_name('physical_nand.py'))
 n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n)
 
-def prepare(source,target,factory,inventory,placement=None,restore=False):
+def bound(placement,factory,image,bad):
+    return (placement and placement['backup_sha256']==n.sha(factory) and placement['physical_sha256']==n.sha(image)
+            and placement['preserve_blocks']==sorted(bad) and set(placement['erase_blocks'])==set(range(1024))-set(bad))
+
+def prepare(source,target,factory,inventory,placement=None,restore=False,installed=None):
     if any(len(data)!=n.RAW_SIZE for data in (source,target,factory)):raise ValueError('all images must be exact physical 512+16 snapshots')
     if inventory.get('version')!=1 or inventory['source_sha256']!=n.sha(factory):raise ValueError('factory inventory is not bound to the original CE backup')
     bad=inventory['quarantined']
@@ -23,7 +29,8 @@ def prepare(source,target,factory,inventory,placement=None,restore=False):
     if restore:
         if target!=factory:raise ValueError('restoration target must be the exact original CE backup')
     else:
-        if source!=factory:raise ValueError('first installation must start from the original CE snapshot')
+        if source!=factory and not bound(installed,factory,source,bad):
+            raise ValueError('installation must start from the original CE snapshot or an installed image\'s placement plan')
         if not placement or placement['backup_sha256']!=n.sha(factory) or placement['physical_sha256']!=n.sha(target):
             raise ValueError('physical placement plan is not bound to these images')
         if placement['preserve_blocks']!=sorted(bad) or set(placement['erase_blocks'])!=set(range(1024))-set(bad):
@@ -44,7 +51,7 @@ def prepare(source,target,factory,inventory,placement=None,restore=False):
     changed=[b for b in reversed(range(1024)) if source[b*n.BLOCK:(b+1)*n.BLOCK]!=target[b*n.BLOCK:(b+1)*n.BLOCK]]
     plan=b'GZNDTX1\0'+bytes.fromhex(n.sha(source))+bytes.fromhex(n.sha(target))+bitmap
     plan+=struct.pack('<I',zlib.crc32(plan))
-    review={'version':1,'operation':'restore' if restore else 'install','source_sha256':n.sha(source),
+    review={'version':1,'operation':'restore' if restore else 'install' if source==factory else 'update','source_sha256':n.sha(source),
             'target_sha256':n.sha(target),'factory_sha256':n.sha(factory),'preserve_blocks':sorted(bad),
             'write_order':changed,'commit_block_zero_last':not changed or changed[-1]==0 or 0 not in changed,
             'artifact':'offline transaction; execution requires nand=repair and explicit --execute'}
@@ -55,6 +62,7 @@ def main():
     for name in ('source','target','factory-backup','inventory','out'):
         p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--placement',type=Path);p.add_argument('--restore',action='store_true')
+    p.add_argument('--installed',type=Path,help="the source image's placement plan, for an update")
     args=p.parse_args()
     try:
         inventory=json.loads(args.inventory.read_text())
@@ -62,7 +70,8 @@ def main():
         if not args.restore:
             n.native(['--check-boot',args.target])
         plan,review=prepare(args.source.read_bytes(),args.target.read_bytes(),args.factory_backup.read_bytes(),inventory,
-                            json.loads(args.placement.read_text()) if args.placement else None,args.restore)
+                            json.loads(args.placement.read_text()) if args.placement else None,args.restore,
+                            json.loads(args.installed.read_text()) if args.installed else None)
         path=Path(str(args.out)+'.review.json')
         if args.out.exists() or path.exists():raise ValueError('output already exists')
         n.write_new(args.out,plan);n.write_new(path,(json.dumps(review,indent=2)+'\n').encode())

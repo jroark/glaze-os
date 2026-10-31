@@ -490,7 +490,14 @@ $(OUT)/kernel.elf: $(KERNEL_OBJS) kernel/kernel.lds $(OUT)/kernel/reboot.checked
 $(OUT)/kernel_consts.flags: $(OUT)/kernel.elf tools/elf_consts.py
 	$(PYTHON) tools/elf_consts.py $< > $@
 
-SPL_CFLAGS := $(CFLAGS_COMMON) -Os
+SPL_CFLAGS := $(CFLAGS_COMMON) -Os $(if $(BOOT_BEEP),-DSPL_BOOT_BEEP)
+
+# Rebuild the SPL when BOOT_BEEP changes.
+$(OUT)/boot/spl.flags: FORCE
+	@mkdir -p $(dir $@)
+	@echo '$(SPL_CFLAGS)' | cmp -s - $@ || echo '$(SPL_CFLAGS)' > $@
+
+$(OUT)/boot/spl.o: $(OUT)/boot/spl.flags
 
 $(OUT)/boot/%.o: boot/%.S $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
 	@mkdir -p $(dir $@)
