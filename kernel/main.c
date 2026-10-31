@@ -94,6 +94,8 @@ void kmain(const struct gz_bootinfo *bi)
 #endif
     BEEP(2);
     companion_gates_on();
+    if (!bi)
+        splash_start();         /* the SPL's splash, half filled */
     /* Disarm the PMU HALTimer watchdog (VR4131 UM §12.2.2): a single
      * HALTIMERRST write tells the PMU that software has started. */
     PMU_CNT = PMU_CNT | PMUCNT_HALTIMERRST;   /* keep what the boot ROM or Windows CE set */
@@ -120,17 +122,21 @@ void kmain(const struct gz_bootinfo *bi)
 
     trap_init();
     mm_init();
+    splash_step(540);
     usb_init();
     BEEP(4);
     TRACE(8, GZ_TRACE_GRAY);
     romfs_init();               /* reads the archive's table from NAND or RAM */
+    splash_step(580);
     TRACE(9, GZ_TRACE_PINK);
     irq_init();
     TRACE(12, GZ_TRACE_WHITE);
     BEEP(5);
     timer_init();
     BEEP(6);
-    display_init(ram_boot && !(ram_boot->flags & GZ_BOOT_FROM_ROM));
+    splash_step(620);
+    /* Keep a live Windows CE display, or the splash Glaze's SPL drew. */
+    display_init((ram_boot && !(ram_boot->flags & GZ_BOOT_FROM_ROM)) || splash_live());
     trace = bi != NULL;
     buzzer_init();
     cmcu_init();
@@ -139,6 +145,7 @@ void kmain(const struct gz_bootinfo *bi)
     TRACE(14, GZ_TRACE_WHITE);
     input_init();
     TRACE(15, GZ_TRACE_WHITE);
+    splash_step(660);
 #ifdef GLAZE_COLD_SOCKET_TEST
     pcmcia_cold_init(true);
 #else
@@ -150,6 +157,7 @@ void kmain(const struct gz_bootinfo *bi)
     TRACE(17, GZ_TRACE_WHITE);
     audio_init();
     TRACE(18, GZ_TRACE_WHITE);
+    splash_step(720);
 #ifdef GLAZE_NAND_BOOT_PROBE
     extern void nand_boot_probe(void);
     nand_boot_probe();
@@ -166,8 +174,10 @@ void kmain(const struct gz_bootinfo *bi)
 #endif
     services_init();
     TRACE(23, GZ_TRACE_WHITE);
+    splash_step(780);
     if (!proc_spawn(GLAZE_INIT, 0, PROC_PRIVILEGED))
         panic("cannot start %s", GLAZE_INIT);
+    splash_step(800);
     TRACE(10, GZ_TRACE_DKGREEN);
 #undef TRACE
 

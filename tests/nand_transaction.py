@@ -50,6 +50,34 @@ class Transaction(unittest.TestCase):
                     {**self.placement,'preserve_blocks':[]}):
             with self.assertRaises(ValueError):t.prepare(self.target,new,self.factory,self.inventory,placement,installed=bad)
 
+    def test_update_keeping_filesystem(self):
+        def block(img,b,v):
+            img=bytearray(img);img[b*n.BLOCK]=v;return bytes(img)
+        new=block(block(self.target,40,7),500,9)       # new boot block and fresh file system
+        placement={**self.placement,'physical_sha256':n.sha(new)}
+        snapshot=block(self.target,600,5)               # the device's file system after use
+        kept=t.keep_filesystem(snapshot,new,self.target,self.factory,[20],placement,self.placement)
+        self.assertEqual(kept[:n.FS_FIRST*n.BLOCK],new[:n.FS_FIRST*n.BLOCK])
+        self.assertEqual(kept[n.FS_FIRST*n.BLOCK:],snapshot[n.FS_FIRST*n.BLOCK:])
+        _,review=t.prepare(snapshot,kept,self.factory,self.inventory,placement,installed=self.placement,kept=True)
+        self.assertEqual(review['operation'],'update, file system kept');self.assertEqual(review['write_order'],[40])
+        # Outside the file system the snapshot must be the installed image.
+        with self.assertRaises(ValueError):
+            t.keep_filesystem(block(snapshot,41,1),new,self.target,self.factory,[20],placement,self.placement)
+        with self.assertRaises(ValueError):
+            t.keep_filesystem(block(snapshot,1010,1),new,self.target,self.factory,[20],placement,self.placement)
+        # A new manifest, or plans bound to other images, refuse.
+        moved=bytearray(new);moved[528+156]^=1;moved=bytes(moved)
+        with self.assertRaises(ValueError):
+            t.keep_filesystem(snapshot,moved,self.target,self.factory,[20],{**placement,'physical_sha256':n.sha(moved)},self.placement)
+        with self.assertRaises(ValueError):
+            t.keep_filesystem(snapshot,new,self.target,self.factory,[20],self.placement,self.placement)
+        with self.assertRaises(ValueError):
+            t.keep_filesystem(snapshot,new,self.target,self.factory,[20],placement,placement)
+        # prepare() refuses a kept update that reaches into the file system.
+        with self.assertRaises(ValueError):
+            t.prepare(snapshot,new,self.factory,self.inventory,placement,installed=self.placement,kept=True)
+
     def test_manifest_and_noop(self):
         broken=bytearray(self.target);broken[528+508]^=1
         placement={**self.placement,'physical_sha256':n.sha(broken)}

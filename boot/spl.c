@@ -189,6 +189,36 @@ static void companion_gates_on(void)
     SPL_REG32(0xAA00A0DCu) = 0xFF;
 }
 
+/* Boot splash (boot/splash.h): the SPL lights the panel as Casio's SPL does
+ * for its own splash (boot/lcd_start.h), after the gates are on, and fills
+ * the first half of the bar: the block-map scan, then the kernel load. */
+#define DISP_BL_GATE        SPL_REG32(0xAA001128u)
+#define DISP_LCD_CLOCK      SPL_REG32(0xAA001100u)
+#define DISP_LCD_GATE       SPL_REG32(0xAA00110Cu)
+#define DISP_LCD(offset)    SPL_REG32(0xAA000C00u + (offset))
+#define DISP_BL_CONTROL     SPL_REG32(0xAA000980u)
+#define DISP_BL_CONFIG      SPL_REG32(0xAA000984u)
+#define DISP_BL_PERIOD      SPL_REG32(0xAA000988u)
+#define DISP_BACKLIGHT      SPL_REG32(0xAA00098Cu)
+#define DISP_CONTRAST       SPL_REG32(0xAA000C4Cu)
+#ifndef SPL_FB
+#define SPL_FB ((volatile uint16_t *)(uintptr_t)0xAA200000u)
+#endif
+
+static void display_delay_us(uint32_t us)
+{
+    uint32_t t0 = SPL_COUNT();
+    while (SPL_COUNT() - t0 <= us * 10u)
+        ;
+}
+
+#include "lcd_start.h"
+#include "splash.h"
+
+#define SPLASH_SCAN_READS   5120u   /* nand_boot_scan: up to 5 pages a block */
+static unsigned splash_reads;
+static bool splash_scanning;
+
 static void nand_deselect(void)
 {
     XFER_CMD = 0;
@@ -302,6 +332,10 @@ static struct nand_boot_map boot_map;
 static int boot_raw(void *ctx, uint32_t page, uint8_t raw[528])
 {
     (void)ctx;
+    /* The scan fills 3-30% of the bar. */
+    if (splash_scanning && !(++splash_reads & 63u))
+        splash_progress(SPL_FB, 30u + (splash_reads < SPLASH_SCAN_READS ?
+            splash_reads : SPLASH_SCAN_READS) * 270u / SPLASH_SCAN_READS);
     nand_read_raw_page(page, (uint32_t *)raw);
     return 0;
 }
@@ -423,8 +457,13 @@ uint32_t spl_main(void)
     CHECKPOINT(3);
     nand_release_dma();
     CHECKPOINT(4);
+    lcd_start();
+    splash_draw(SPL_FB);
+    splash_progress(SPL_FB, 30);
+    splash_scanning = true;
     if (nand_boot_scan(&boot_map, boot_raw, 0, true))
         spl_fail(3, "SPL: ambiguous NAND boot block map; boot stopped\n");
+    splash_scanning = false;
     CHECKPOINT(5);
     uart_puts("\nGlaze SPL\n");
     uart_puts("kernel load = 0x");
@@ -448,7 +487,10 @@ uint32_t spl_main(void)
     for (uint32_t i = 0; i < pages; i++) {
         nand_read_page(start_page + i, dst);
         dst += NAND_PAGE_DATA / 4;
+        if (!(i & 15u))     /* the kernel load fills 30-50% */
+            splash_progress(SPL_FB, 300u + i * 200u / pages);
     }
+    splash_progress(SPL_FB, 500);
 
     uart_puts("kernel loaded; jumping\n");
     CHECKPOINT(6);

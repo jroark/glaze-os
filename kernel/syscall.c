@@ -128,6 +128,8 @@ static int sys_fb_map(void)
     if (!PRIV())
         return GZ_EPERM;
     uint32_t va = as_map_phys(AS, FB_PA, FB_SIZE, PTE_UNCACHED);
+    if (va)
+        splash_end();           /* the compositor draws from here on */
     return va ? (int)va : GZ_ENOMEM;
 }
 

@@ -62,28 +62,40 @@ int main(void)
     write_file(source_path,source,SIZE);write_file(target_path,target,SIZE);write_file(plan_path,plan,sizeof(plan));
     struct gu_client c={.caps=GU_CAP_NAND_REPAIR|GU_CAP_NAND_BACKUP};
     memcpy(device,source,SIZE);
-    assert(!gu_nand_apply(&c,source_path,target_path,plan_path));
+    assert(!gu_nand_apply(&c,source_path,target_path,plan_path,false));
     assert(completed==2 && order[0]==30 && order[1]==0 && !memcmp(device,target,SIZE));
     assert(!memcmp(device+20*32*528,source+20*32*528,32*528));
     /* Same verified transaction path restores every original data/OOB byte. */
     digest(target,SIZE,plan+8);digest(source,SIZE,plan+40);
     gu_put32(plan+200,~gu_crc(~0u,plan,200));write_file(plan_path,plan,sizeof(plan));completed=0;
-    assert(!gu_nand_apply(&c,target_path,source_path,plan_path) && !memcmp(device,source,SIZE));
+    assert(!gu_nand_apply(&c,target_path,source_path,plan_path,false) && !memcmp(device,source,SIZE));
     digest(source,SIZE,plan+8);digest(target,SIZE,plan+40);
     gu_put32(plan+200,~gu_crc(~0u,plan,200));write_file(plan_path,plan,sizeof(plan));
     memcpy(device,source,SIZE);device[33]^=1;erases=programs=completed=0;
-    assert(gu_nand_apply(&c,source_path,target_path,plan_path)<0 && !erases && !programs);
+    assert(gu_nand_apply(&c,source_path,target_path,plan_path,false)<0 && !erases && !programs);
     memcpy(device,source,SIZE);erase_failure=1;
-    assert(gu_nand_apply(&c,source_path,target_path,plan_path)<0 && !completed && !programs);
+    assert(gu_nand_apply(&c,source_path,target_path,plan_path,false)<0 && !completed && !programs);
     assert(!memcmp(device,source,32*528)); /* boot block not committed */
     erase_failure=0;erases=0;readback_failure=1;
-    assert(gu_nand_apply(&c,source_path,target_path,plan_path)<0 && !completed && programs==1);
+    assert(gu_nand_apply(&c,source_path,target_path,plan_path,false)<0 && !completed && programs==1);
     assert(!memcmp(device,source,32*528));
     readback_failure=0;memcpy(device,source,SIZE);programs=completed=0;final_failure=1;
-    assert(gu_nand_apply(&c,source_path,target_path,plan_path)<0 && completed==2);
+    assert(gu_nand_apply(&c,source_path,target_path,plan_path,false)<0 && completed==2);
     final_failure=0;memcpy(device,source,SIZE);programs=completed=erases=0;
     plan[8]^=1;gu_put32(plan+200,~gu_crc(~0u,plan,200));write_file(plan_path,plan,sizeof(plan));
-    assert(gu_nand_apply(&c,source_path,target_path,plan_path)<0 && !erases && !programs);
+    assert(gu_nand_apply(&c,source_path,target_path,plan_path,false)<0 && !erases && !programs);
+    /* --keep-filesystem: a file system block the running Glaze changed
+     * since the snapshot neither stops the update nor gets written. */
+    plan[8]^=1;gu_put32(plan+200,~gu_crc(~0u,plan,200));write_file(plan_path,plan,sizeof(plan));
+    memcpy(device,source,SIZE);device[500*32*528+7]^=0x10;programs=completed=erases=0;
+    assert(gu_nand_apply(&c,source_path,target_path,plan_path,false)<0 && !erases);
+    assert(!gu_nand_apply(&c,source_path,target_path,plan_path,true) && completed==2);
+    assert(!memcmp(device,target,500*32*528) && device[500*32*528+7]==(source[500*32*528+7]^0x10));
+    /* A plan that writes the kept file system is refused before any erase. */
+    memset(target+600*32*528,0x11,32*528);digest(target,SIZE,plan+40);
+    gu_put32(plan+200,~gu_crc(~0u,plan,200));write_file(plan_path,plan,sizeof(plan));write_file(target_path,target,SIZE);
+    memcpy(device,source,SIZE);erases=0;
+    assert(gu_nand_apply(&c,source_path,target_path,plan_path,true)<0 && !erases);
     free(source);free(target);unlink(source_path);unlink(target_path);unlink(plan_path);rmdir(dir);
-    puts("nand-writer: full preflight, image binding, quarantine preservation, boot block last, erase/readback/final failure stops PASS");
+    puts("nand-writer: full preflight, image binding, quarantine preservation, boot block last, erase/readback/final failure stops, kept file system PASS");
 }

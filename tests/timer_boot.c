@@ -27,6 +27,7 @@ void usb_poll(void) {}
 void net_irq(void) {}
 void audio_irq(void) {}
 void buzzer_poll(void) {}
+void splash_tick(void) {}
 int main(void)
 {
     for (mode = 0; mode < 3; mode++) {

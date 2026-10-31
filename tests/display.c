@@ -15,6 +15,7 @@ static volatile uint32_t bl_control = 1, bl_config = 0x202, bl_gate = 0xA5A50001
 static volatile uint32_t bl_period, lcd_clock, lcd_gate, lcd[0x50 / 4];
 static volatile uint32_t buzz_control;
 bool buzzer_active(void) { return buzz_control != 0; }
+bool splash_live(void) { return false; }
 #define DISP_BACKLIGHT backlight
 #define DISP_CONTRAST panel
 #define DISP_BL_CONTROL bl_control

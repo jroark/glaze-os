@@ -15,7 +15,9 @@ WPA/TKIP and CCMP; this version uses firmware data encryption only. Settings
 reports unsupported security explicitly. It does not flash firmware or
 silently downgrade a network. WPA Enterprise, WPA3, protected-management-frame
 requirements, ad-hoc mode, and hidden-network entry are not implemented.
-Physical-card interoperability remains unvalidated.
+A real WL54-CF has associated and taken a DHCP lease on a NAND-booted
+BE-300 (2026-10-31, WL54CF.md); the security modes are not yet checked on a
+real card.
 
 WEP accepts 5 or 13 printable ASCII bytes, or 10 or 26 hexadecimal digits.
 Key slots 1–4 and open/shared authentication are selectable. WPA accepts an

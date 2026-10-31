@@ -1,5 +1,9 @@
 /* Explicit NAND transaction, only exposed by a separate nand=repair RAM boot.
- * Files and the entire physical source are verified before the first erase. */
+ * Files and the entire physical source are verified before the first erase.
+ * With keep_fs, the before/after checks skip Glaze's file system blocks
+ * (tools/physical_nand.py FS_FIRST..RESERVE), which a NAND-booted Glaze
+ * changes as it runs, and a plan that writes any of them is refused. The
+ * device still checks each block it erases against the plan's copy. */
 #include "client.h"
 #include <glaze/nand_repair.h>
 #include <wolfssl/wolfcrypt/sha256.h>
@@ -7,6 +11,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #define RAW_BYTES (1024u*GZ_NAND_REPAIR_BLOCK_BYTES)
+#define FS_FIRST 320u
+#define FS_END 1004u
 static uint8_t *load(const char *path,size_t size)
 {
     FILE *f=fopen(path,"rb");if(!f)return NULL;
@@ -31,11 +37,13 @@ static int rpc(struct gu_client *c,uint32_t op,const void *data,uint32_t n)
     gu_put32(b,op);if(n)memcpy(b+4,data,n);
     return gu_call(c,GU_NAND_REPAIR,b,n+4);
 }
-static int compare(struct gu_client *c,const uint8_t *expected,const char *phase)
+static int compare(struct gu_client *c,const uint8_t *expected,const char *phase,bool keep_fs)
 {
     uint8_t request[8];
     for(uint32_t page=0;page<32768;) {
-        unsigned n=32768-page;if(n>7)n=7;
+        if(keep_fs && page==FS_FIRST*32)page=FS_END*32;
+        unsigned end=keep_fs && page<FS_FIRST*32 ? FS_FIRST*32 : 32768;
+        unsigned n=end-page;if(n>7)n=7;
         gu_put32(request,page);gu_put32(request+4,n);
         if(gu_call(c,GU_NAND_READ,request,sizeof(request))!=(int)(n*528) ||
            memcmp(c->frame+GU_HEADER,expected+page*528,n*528)) {
@@ -46,7 +54,7 @@ static int compare(struct gu_client *c,const uint8_t *expected,const char *phase
     }
     return 0;
 }
-int gu_nand_apply(struct gu_client *c,const char *source_path,const char *target_path,const char *plan_path)
+int gu_nand_apply(struct gu_client *c,const char *source_path,const char *target_path,const char *plan_path,bool keep_fs)
 {
     if(!(c->caps&GU_CAP_NAND_REPAIR)) {
         fputs("Requires an explicit nand=repair RAM boot; ordinary read-only boots cannot program NAND.\n",stderr);return -1;
@@ -60,10 +68,11 @@ int gu_nand_apply(struct gu_client *c,const char *source_path,const char *target
     for(unsigned b=0;b<1024;b++) {
         if(!memcmp(source+b*GZ_NAND_REPAIR_BLOCK_BYTES,target+b*GZ_NAND_REPAIR_BLOCK_BYTES,GZ_NAND_REPAIR_BLOCK_BYTES))continue;
         if((masks[b/8]>>(b%8))&1){fputs("Plan changes a quarantined block; refused\n",stderr);goto done;}
+        if(keep_fs && b>=FS_FIRST && b<FS_END){fputs("Plan writes into the file system it keeps; refused\n",stderr);goto done;}
         masks[128+b/8]|=1u<<(b%8);changed++;
     }
-    if(!changed){fputs("Source and target are identical; checking NAND without programming\n",stderr);result=compare(c,target,"verification");goto done;}
-    if(compare(c,source,"preflight"))goto done;
+    if(!changed){fputs("Source and target are identical; checking NAND without programming\n",stderr);result=compare(c,target,"verification",keep_fs);goto done;}
+    if(compare(c,source,"preflight",keep_fs))goto done;
     if(rpc(c,GZ_NAND_REPAIR_BEGIN,masks,sizeof(masks)))goto done;
     for(unsigned index=0;index<1024;index++) {
         unsigned block=1023-index;
@@ -82,8 +91,9 @@ int gu_nand_apply(struct gu_client *c,const char *source_path,const char *target
         if(rpc(c,GZ_NAND_REPAIR_COMMIT,NULL,0))goto failed;
         fprintf(stderr,"NAND verified block %u (%u remaining)\n",block,--changed);
     }
-    if(compare(c,target,"final verification") || rpc(c,GZ_NAND_REPAIR_END,NULL,0))goto failed;
-    fputs("Entire physical NAND matches the target, including spare data; no reboot requested.\n",stderr);
+    if(compare(c,target,"final verification",keep_fs) || rpc(c,GZ_NAND_REPAIR_END,NULL,0))goto failed;
+    fputs(keep_fs ? "NAND outside the kept file system matches the target, including spare data; no reboot requested.\n" :
+          "Entire physical NAND matches the target, including spare data; no reboot requested.\n",stderr);
     result=0;goto done;
 failed:
     rpc(c,GZ_NAND_REPAIR_ABORT,NULL,0);
