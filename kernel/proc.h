@@ -209,6 +209,9 @@ void sched_freeze_proc(struct proc *p, bool frozen);
 int sched_reap_threads(struct proc *p);
 int sched_live_threads(struct proc *p);
 uint64_t sched_account(uint64_t now);
+/* The idle thread's STANDBY (sched.c): trap() ends it on any interrupt. */
+extern uint64_t standby_since;
+void sched_standby_wake(void);
 void sched_task_info(struct proc *p, struct gz_task_info *info);
 int proc_count(void);
 int proc_snapshot(struct addrspace *as, uint32_t out, uint32_t size);

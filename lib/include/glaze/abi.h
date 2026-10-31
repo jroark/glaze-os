@@ -91,6 +91,7 @@ enum {
     SYS_NAND_CHIP_STATUS,  /* same read-only handoff: 70h status byte, no program/erase */
     SYS_NAND_REPAIR,       /* PROC_USB + explicit repair RAM boot: op, buffer, length */
     SYS_HWDUMP,            /* privileged, HWDUMP=1 builds: op, buffer (0 = size), length */
+    SYS_POWER_STATUS,      /* read-only: struct gz_power_status, its size */
     SYS_COUNT
 };
 
@@ -139,6 +140,7 @@ struct gz_msg {
 #define GZ_NOTIFY_CHILD     0x40000000u
 #define GZ_NOTIFY_NET       0x20000000u     /* frames waiting (SYS_NET_RECV) */
 #define GZ_NOTIFY_AUDIO     0x10000000u     /* PCM ring below half full */
+#define GZ_NOTIFY_POWER     0x08000000u     /* to the input port: SYS_POWER_STATUS changed */
 
 /* Input events (SYS_INPUT_READ). */
 enum {
@@ -193,6 +195,32 @@ struct gz_datetime {
     uint8_t month, day;     /* 1-based */
     uint8_t hour, minute, second;
     uint8_t weekday;        /* 0 = Sunday */
+};
+
+/* SYS_POWER_STATUS (glaze/battery.h, docs/POWER.md): battery, adapter and
+ * charger as Windows CE's battery driver reads them. Pass sizeof(struct
+ * gz_power_status); other sizes return GZ_EINVAL. */
+#define GZ_POWER_VERSION        1u
+#define GZ_POWER_VALID          (1u << 0)   /* a battery sample has been taken */
+#define GZ_POWER_AC             (1u << 1)   /* adapter in */
+#define GZ_POWER_CHARGING       (1u << 2)   /* adapter in and charging */
+#define GZ_POWER_LOW            (1u << 3)   /* on battery, CE band 25 % or less */
+#define GZ_POWER_CRITICAL       (1u << 4)   /* on battery, 10 % twice since the adapter */
+#define GZ_POWER_BATTINT        (1u << 5)   /* PMUINT BATTINTR (VR4131 UM 12.2.1) */
+#define GZ_POWER_CAL_EEPROM     (1u << 6)   /* calibration from the EEPROM, else CE's defaults */
+
+struct gz_power_status {
+    uint32_t version;           /* GZ_POWER_VERSION */
+    uint32_t flags;             /* GZ_POWER_* */
+    uint8_t percent;            /* Windows CE's band: 10, 25, 50, 75 or 100 */
+    uint8_t level;              /* 0-100 on CE's scale (glaze/battery.h), for display */
+    uint16_t adc_avg;           /* averaged 12-bit A/D counts */
+    uint16_t adc_last;          /* the latest sample */
+    uint16_t cal_min, cal_max;  /* counts at 3.7 V and 4.2 V */
+    uint16_t pad;
+    uint32_t samples;           /* battery samples taken since boot */
+    uint32_t idle_ms;           /* time the CPU spent in STANDBY since boot */
+    uint32_t standby_count;     /* STANDBY entries since boot */
 };
 
 struct gz_sysinfo {

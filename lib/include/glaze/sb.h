@@ -90,6 +90,8 @@ enum {
 #define SB_NOTIFY_TIME      0x2u
 /* Settings changed DISPLAY_TIMEOUT_PREF; reload and start a fresh interval. */
 #define SB_NOTIFY_DISPLAY   0x8u
+/* Settings changed POWER_PERCENT_PREF (glaze/power.h); redraw the status. */
+#define SB_NOTIFY_POWER     0x10u
 
 #define SB_RING             64
 

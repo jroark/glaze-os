@@ -202,6 +202,12 @@ buzzer-driver-test: ../tests/buzzer_driver.c ../kernel/drivers/buzzer.c ../kerne
 	../out/host/$@
 .PHONY: buzzer-driver-test
 
+battery-test: ../tests/battery_driver.c ../kernel/drivers/battery.c ../lib/include/glaze/battery.h ../kernel/hw.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/$@ ../tests/battery_driver.c
+	../out/host/$@
+.PHONY: battery-test
+
 audio-volume-test: ../tests/audio_volume.c ../tests/audio_volume_sys.h ../servers/audio/sound.c ../servers/audio/buzzer.c ../lib/media/wav.c ../lib/media/resample.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -include ../tests/audio_volume_sys.h -o ../out/host/$@ ../tests/audio_volume.c ../servers/audio/buzzer.c ../lib/media/wav.c ../lib/media/resample.c

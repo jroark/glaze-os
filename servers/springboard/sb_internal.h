@@ -101,6 +101,8 @@ struct sb_view {
     int num_switcher_apps;
     int switcher_pressed;       /* switcher slot under finger, or -1 */
     int switcher_minus_pressed; /* switcher '-' badge under finger, or -1 */
+    struct gz_power_status power;   /* the kernel's battery status */
+    bool battery_pct;           /* show the level as a percentage */
 };
 
 extern bool sb_24h;
@@ -114,7 +116,7 @@ bool sb_has_program(const char *path);
 void sb_set_icon(int app, const gfx_image *img);
 void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt);
 void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool padlock);
-gfx_rect sb_card_icon_rect(void);
+gfx_rect sb_card_icon_rect(const struct sb_view *v);
 struct sb_card_details {
     char title[32];
     char lines[8][48];

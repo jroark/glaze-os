@@ -89,6 +89,20 @@ static inline void irq_restore(uint32_t s)
 {
     write_c0_status(s);
 }
+
+/* VR4131 STANDBY (UM 12.1, 12.3): the pipeline clock stops until any
+ * interrupt; the timer, ICU and companion keep running. It sets Status.IE
+ * itself (Linux's vr41xx_cpu_wait, arch/mips/vr41xx/common/pmu.c, relies on
+ * that), but sched.c's idle loop doesn't, for emulators. The NOPs fill
+ * the pipeline after it, as the UM's sequence and Linux's have them. GAS
+ * takes the mnemonic only with -march=vr41xx, so it is spelled as a word. */
+static inline void vr41xx_standby(void)
+{
+    __asm__ __volatile__(".set push\n\t.set noreorder\n\t"
+                         ".word 0x42000021\n\t"    /* standby: COP0, function 0x21 */
+                         "nop\n\tnop\n\tnop\n\tnop\n\t"
+                         ".set pop" ::: "memory");
+}
 #endif
 
 #endif

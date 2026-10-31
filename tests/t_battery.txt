@@ -1,0 +1,10 @@
+# Settings > Battery: scroll to the last row, open Battery, turn on
+# Percentage. Boot it for about 16 s on battery, e.g.
+# BE300_ARGS="--battery 60 --battery-state battery" tests/run.sh tests/t_battery.txt 16:
+# the final screen shows the Battery page with the switch on, and the
+# status bar shows the level as a percentage.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 drag 120 280 120 60 400
+8500 tap 120 298
+10500 tap 200 148

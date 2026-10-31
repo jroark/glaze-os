@@ -4,7 +4,8 @@
 # CF=<image> boots with a copy of that CompactFlash image (tools/mkcfimg.sh);
 # NET=1 (or ne2000) inserts Ethernet; NET=wl54cf or xi825 selects Wi-Fi
 # (XI825=1 too). NO_BUILD=1 reuses the existing image; BE300 overrides the
-# emulator path.
+# emulator path and BE300_ARGS adds emulator options (--battery 15
+# --battery-state battery).
 # FS_FROM=<nand image> boots with that image's file system (from 0x500000),
 # e.g. a previous run's out/shots/<name>/glaze.bin with apps installed.
 set -e
@@ -53,7 +54,7 @@ elif [ -n "$NET" ]; then
         *) echo "unknown NET=$NET" >&2; exit 1 ;;
     esac
 fi
-gtimeout -k 5s "${secs}s" "$be300" --nand glaze.bin --rtc-host-time $cf \
+gtimeout -k 5s "${secs}s" "$be300" --nand glaze.bin --rtc-host-time $cf $BE300_ARGS \
     > stdout.log 2> stderr.log || true
 sips -s format png screenshot_*.bmp --out "$out/$name.png" >/dev/null
 grep -E "fault|PANIC|exception" stdout.log || true

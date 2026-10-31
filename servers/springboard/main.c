@@ -9,6 +9,7 @@
 #include "display.h"
 #include "idle.h"
 #include "clipboard.h"
+#include "power.h"
 
 #include <glaze/audio.h>
 #include <glaze/fs.h>
@@ -16,6 +17,7 @@
 #include <glaze/wifi.h>
 #include <glaze/notify.h>
 #include <glaze/passcode.h>
+#include <glaze/power.h>
 #include <glaze/prefs.h>
 #include <glaze/res.h>
 #include <glaze/sys.h>
@@ -67,6 +69,8 @@ static int sb_port;
 static struct sb_calibration calibration;
 static struct sb_display display_controls;
 static struct sb_idle idle;
+static struct sb_power power;
+static bool idle_clamped;          /* screen timeout shortened: battery critical */
 static unsigned debug_activity;
 static uint32_t debug_until;
 static int debug_app_pid;
@@ -532,7 +536,7 @@ static bool card_details_event(const struct gz_input_event *e)
         }
         return true;
     }
-    bool hit = gfx_rect_contains(sb_card_icon_rect(), e->x, e->y);
+    bool hit = gfx_rect_contains(sb_card_icon_rect(&view), e->x, e->y);
     bool stable = !anim.active && !touching && !dragging_knob && !alert.open &&
                   (state == ST_LOCK || state == ST_PASSCODE || state == ST_HOME ||
                    (state == ST_APP && !front_fullscreen()));
@@ -1646,15 +1650,9 @@ static void note_sound(const struct sb_note *n)
         audio_sound(AUDIO_SND_NOTIFY);
 }
 
-static void fire(const struct sb_note *n)
+/* On the lock screen when locked, else as a banner. */
+static void show_note(const struct sb_note *n)
 {
-    note_sound(n);
-    if (app_in_front(n->app)) {
-        struct gz_input_event e = { .type = GZ_EV_APP_NOTIFY, .code = (uint16_t)n->id, .time_ms = now_ms() };
-        send_event(&e);
-        return;
-    }
-    notify_add_badge(n->app, n->badge);
     if (state == ST_LOCK || state == ST_PASSCODE) {
         notify_deliver_locked(n);
         if (state == ST_LOCK && !dragging_knob && !anim.active)
@@ -1667,6 +1665,18 @@ static void fire(const struct sb_note *n)
     if (state == ST_HOME)
         render_home();
     show_queued_banner();
+}
+
+static void fire(const struct sb_note *n)
+{
+    note_sound(n);
+    if (app_in_front(n->app)) {
+        struct gz_input_event e = { .type = GZ_EV_APP_NOTIFY, .code = (uint16_t)n->id, .time_ms = now_ms() };
+        send_event(&e);
+        return;
+    }
+    notify_add_badge(n->app, n->badge);
+    show_note(n);
 }
 
 static void fire_due(void)
@@ -2027,6 +2037,78 @@ static void init_surfaces(void)
 }
 
 /* Settings may change while an app runs; re-read them on the way home. */
+/* ---- battery (power.c, docs/POWER.md) ---------------------------------- */
+
+/* True when what the status bar shows changed. */
+static bool power_refresh(void)
+{
+    struct gz_power_status st;
+
+    if (gz_power_status(&st) < 0)
+        return false;
+    bool changed = sb_power_set(&power, &st);
+    view.power = power.st;
+    return changed;
+}
+
+/* Battery notes come from Settings, whose Battery page explains them. */
+static void power_note(const char *title, const char *body)
+{
+    struct sb_note n = { .app = notify_app_for_path("bin/settings") };
+
+    if (n.app < 0)
+        return;
+    strlcpy(n.title, title, sizeof(n.title));
+    strlcpy(n.body, body, sizeof(n.body));
+    printf("springboard: %s: %s\n", title, body);
+    note_sound(&n);
+    if (idle.dark) {
+        notify_deliver_locked(&n);      /* seen on the lock screen at wake */
+        return;
+    }
+    show_note(&n);
+}
+
+/* Critical for SB_POWER_CRITICAL_MS: the front app is sent to the
+ * background, which makes it save, and the screen goes off. No power-off
+ * control is known (the CMCU protocol is its watchdog), so the battery's
+ * own cut-off still ends it if the adapter doesn't come. */
+static void power_safe_sleep(void)
+{
+    puts("springboard: battery critical, sleeping");
+    if (front() && (state == ST_APP || state == ST_ZOOM_IN || state == ST_LAUNCH_WAIT)) {
+        app_background();
+        state = ST_HOME;
+    }
+    audio_sound_stop();
+    if (!idle.dark)
+        screen_sleep();
+    power_note("Battery Critically Low", "Connect the power adapter. Your apps were saved.");
+}
+
+static void power_check(void)
+{
+    switch (sb_power_check(&power, now_ms())) {
+    case SB_POWER_WARN: {
+        char body[48];
+        snprintf(body, sizeof(body), "%d%% of battery remaining.", power.st.level);
+        power_note("Low Battery", body);
+        break;
+    }
+    case SB_POWER_SLEEP:
+        power_safe_sleep();
+        break;
+    case SB_POWER_NONE:
+        break;
+    }
+    bool clamp = sb_power_critical(&power);
+    if (clamp && (!idle.timeout_ms || idle.timeout_ms > SB_POWER_CRITICAL_IDLE))
+        idle.timeout_ms = SB_POWER_CRITICAL_IDLE;
+    else if (!clamp && idle_clamped)
+        idle.timeout_ms = (uint32_t)display_timeout_get() * 1000u;
+    idle_clamped = clamp;
+}
+
 static void load_settings(void)
 {
     int32_t wall = 0, h24 = 0;
@@ -2035,6 +2117,7 @@ static void load_settings(void)
         view.wallpaper = wall;
     if (pref_get("sb.24h", &h24, sizeof(h24)) == 4)
         sb_24h = h24 != 0;
+    view.battery_pct = power_percent_get();
     update_clock(true);
 }
 
@@ -2052,11 +2135,13 @@ int main(void)
     view.pressed = -1;
     view.badges = sb_badges;
     view.lock_notes = sb_delivered;
+    sb_power_init(&power);
 
     sb_port = gz_port_create();
     gz_port_register(sb_port, SB_PORT_NAME);
     gz_child_notify(sb_port);           /* GZ_NOTIFY_CHILD when an app exits */
     gz_input_bind(sb_port);
+    power_refresh();                    /* GZ_NOTIFY_POWER from here on */
 
     update_clock(true);
     update_card_status();
@@ -2107,14 +2192,25 @@ int main(void)
         int idle_wait = sb_idle_wait(&idle, t);
         if (idle_wait >= 0)
             timeout = MIN(timeout, idle_wait);
+        if (power.critical_since && !power.slept)
+            timeout = MIN(timeout, MAX((int)(power.critical_since + SB_POWER_CRITICAL_MS - t), 0));
 
+        bool power_changed = false;
         struct gz_msg m;
         int tok = gz_recv(sb_port, &m, timeout);
         if (tok == GZ_RECV_NOTIFY) {
             if (m.w[0] & GZ_NOTIFY_INPUT)
                 handle_input();
-            if (m.w[0] & SB_NOTIFY_DISPLAY)
+            if (m.w[0] & SB_NOTIFY_DISPLAY) {
                 sb_idle_load(&idle, now_ms());
+                idle_clamped = false;   /* power_check shortens it again */
+            }
+            if (m.w[0] & GZ_NOTIFY_POWER)
+                power_changed = power_refresh();
+            if (m.w[0] & SB_NOTIFY_POWER) {
+                view.battery_pct = power_percent_get();
+                power_changed = true;
+            }
             if (m.w[0] & SB_NOTIFY_TIME)
                 timesync_wake();
             if (m.w[0] & (SB_NOTIFY_TIME | SB_NOTIFY_CLOCK))
@@ -2130,6 +2226,7 @@ int main(void)
         if ((int32_t)(t - debug_until) >= 0) debug_activity = 0;
         if (debug_app_pid && !gz_proc_alive(debug_app_pid)) debug_app_pid = 0;
         view.debugger = debug_activity | (debug_app_pid ? GU_DEBUG_RUN : 0);
+        power_check();
         if (sb_idle_wait(&idle, t) == 0)
             screen_sleep();
         if (calibration.owner && calibration.preview && (int32_t)(t - calibration.until) >= 0)
@@ -2225,7 +2322,8 @@ int main(void)
             card_dialog.touching = card_dialog.pressed = false;
             render_card_dialog();
         }
-        if (minute_shown != old_minute || card_changed || view.debugger != debug_before) {
+        if (minute_shown != old_minute || card_changed || power_changed ||
+            view.debugger != debug_before) {
             if (state == ST_LOCK)
                 render_lock();
             else if (state == ST_PASSCODE)
