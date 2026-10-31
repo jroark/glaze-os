@@ -144,10 +144,12 @@ trampoline. Normal NAND and RAM-trampoline boots reach SpringBoard and save
 orderly-shutdown screenshots. These checks verify the software sequence;
 physical panel startup still needs a real-device test.
 
-The updated emulator models digital panel/backlight power but does not apply
-unmeasured optical brightness/contrast curves. Emulator tests can verify
-register writes, UI interaction and persistence;
-backlight intensity and contrast need confirmation on a physical BE-300.
+The emulator models digital panel/backlight power and shows brightness and
+contrast through an approximate, unmeasured presentation curve (be300
+`docs/BE300_LCD.md`), so the sliders visibly change its window and
+screenshots. Emulator tests can verify register writes, UI interaction and
+persistence; real backlight intensity and contrast need confirmation on a
+physical BE-300.
 Actual backlight shutdown, wake brightness and repeated sleep/wake cycles
 also require physical-device validation; emulator black pixels alone do not
 establish a power saving.
