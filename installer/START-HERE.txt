@@ -10,6 +10,8 @@ in the app. In the bundled Zadig, select only the BE-300 (07CF:2002) and WinUSB.
 On the BE-300, open Connections -> PC Connect -> Connection method and select
 'USB' (not serial). Then connect USB and external power, choose your apps, and
 click Install Glaze.
+If NAND space is insufficient, use Windows CE to delete built-in apps you no
+longer need, keeping PC Connect available, then retry installation.
 Hello is not included; Windows CE compatibility starts unchecked. WL54-CF
 Wi-Fi firmware is an optional hardware choice.
 Detection, preparation, flashing and restart happen automatically. Keep USB

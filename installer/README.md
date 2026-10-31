@@ -21,6 +21,10 @@ restart automatically after one replacement confirmation. The main window shows
 one status line and progress; diagnostic output and manual USB selection are
 hidden under **Show details**. No separate Detect or Prepare steps are needed.
 
+If NAND space is insufficient for staging GlazeBoot, use Windows CE to delete
+unwanted built-in apps, keeping PC Connect available, then retry installation.
+The installer reuses matching staged files and does not delete CE apps itself.
+
 **Save Windows CE backup** and **Verify Windows CE** start enabled and can be
 unchecked independently. Backups go automatically to `Documents/Glaze Backups`,
 with an optional folder chooser and an **Open backup** button after success.

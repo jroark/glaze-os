@@ -36,6 +36,10 @@ The tool stages files in `\Storage Card\GlazeUSB` when that volume has enough
 space, otherwise `\Nand Disk\GlazeUSB`. No card or preinstalled helper is
 required. CE uploads are read back before replacing a previous file.
 
+If internal NAND lacks space for staging, Windows CE allows deleting many
+built-in apps. Delete apps you no longer need through CE, keep PC Connect
+available, and retry. The installer does not remove CE apps automatically.
+
 To reclaim an old internal staging copy after moving to CF, boot Windows CE
 and run `out/host/glaze-usb ce-clean-nand` (`--dry-run` lists candidates).
 It removes only the seven known debugger files in `\Nand Disk\GlazeUSB`,

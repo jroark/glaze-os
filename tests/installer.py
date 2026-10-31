@@ -27,6 +27,19 @@ class InstallerTest(unittest.TestCase):
         path.write_text(json.dumps(record))
         return path
 
+    def test_staging_space_failure_explains_ce_app_removal(self):
+        from unittest.mock import Mock
+        process = Mock()
+        process.stdout = iter(['No CE staging volume has enough additional free space; existing files were preserved\n'])
+        process.wait.return_value = 1
+        with patch('engine.subprocess.Popen', return_value=process):
+            with self.assertRaisesRegex(RuntimeError, 'In Windows CE, delete built-in apps'):
+                self.engine.run('boot', 'artifacts')
+        process.stdout = iter(['Waiting for CE PC Connect (up to 60 seconds)...\n'])
+        with patch('engine.subprocess.Popen', return_value=process):
+            with self.assertRaisesRegex(RuntimeError, '^boot failed'):
+                self.engine.run('boot', 'artifacts')
+
     def test_automatic_install_keeps_chosen_backup(self):
         calls = []
         def prepare(destination, apps, verify_wince):

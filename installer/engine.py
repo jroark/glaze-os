@@ -73,6 +73,8 @@ class Installer:
                     self.emit({'event': 'progress', 'phase': progress[1], 'current': int(progress[2]), 'total': int(progress[3])})
             self.emit(event)
         if p.wait():
+            if args[0] == 'boot' and any('No CE staging volume has enough' in e.get('text', '') for e in events):
+                raise RuntimeError('Not enough NAND space to start Glaze. In Windows CE, delete built-in apps you no longer need, keeping PC Connect available, then try again.')
             raise RuntimeError(f'{args[0]} failed. See the saved log; no automatic retry was attempted.')
         return events
 

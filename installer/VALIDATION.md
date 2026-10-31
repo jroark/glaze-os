@@ -14,7 +14,7 @@ Produced:
 Passed:
 
 - Matching NAND, RAM kernel/romfs, CE loaders and package builds.
-- Sixteen installer tests and seven app-selection tests. These cover executable
+- Seventeen installer tests and seven app-selection tests. These cover executable
   exclusion, required-app preservation, aligned ROMFS repacking, bundle layout,
   malformed archive rejection, actual image encoding and fresh restore plans.
 - Four physical NAND tests, five transaction tests, and native NAND ECC,
