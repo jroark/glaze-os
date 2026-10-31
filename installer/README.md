@@ -14,7 +14,10 @@ setup is guided and uses the bundled Zadig; it may request administrator access.
 ## End-user flow
 
 Open the Mac app or run Windows setup. Connect USB and external power and wake
-stock Windows CE. Choose apps, prepare the installation, choose a permanent backup
+stock Windows CE. Existing GlazeBoot staging files are compared byte for byte and
+reused when they match. Free-space checks cover only missing or changed files
+plus a small workspace; previous files stay intact until a verified replacement
+is ready. Choose apps, prepare the installation, choose a permanent backup
 folder, then review and click Install Glaze. After GlazeBoot, the app refreshes
 the USB connection automatically if macOS retains CE’s old device state. If a
 previous attempt stopped at that step, reconnect USB and click Prepare again;
@@ -102,6 +105,7 @@ python3 tests/installer.py
 python3 tests/installer_apps.py
 python3 tests/physical_nand.py
 python3 tests/nand_transaction.py
+make -C host usb-pcconnect-test usb-ce-staging-test
 ```
 
 The ready-to-share files and `SHA256SUMS` are collected under

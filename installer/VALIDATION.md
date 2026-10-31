@@ -45,6 +45,22 @@ USB reconnect fix:
   mismatch. Preparation can continue from the same matching read-only RAM boot.
 - This diagnostic reset/probe did not erase or program physical NAND.
 
+CE staging reuse fix:
+
+- Production PC Connect tests verify exact file matches, missing and changed
+  files, shorter/longer remote files, multi-chunk reads, EOF boundaries, and
+  read/close failures. Comparison makes no CE filesystem mutations.
+- Production staging planner tests cover matching large artifacts on a nearly
+  full volume, allocating only changed files, missing local inputs, and stopping
+  on failed inspection. Previous staged files are preserved.
+- On the physical BE-300, all five existing artifacts matched and were reused,
+  including the 4,669,440-byte ROMFS. The fresh nonce execution check passed,
+  GlazeBoot launched without reuploading boot files, and the automatic USB reset
+  reconnected to the expected read-only Glaze RAM build. No raw NAND was programmed.
+- Reused boot files still go through the fresh nonce-based execution check.
+  Changed files keep the existing temporary upload/read-back/atomic publication
+  path; no unchecked executable is launched.
+
 Incomplete:
 
 - Wine checks do not validate a physical Windows machine or USB driver binding.

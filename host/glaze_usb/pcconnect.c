@@ -186,7 +186,7 @@ static int handle_close(struct pc_link *p, uint32_t h)
     uint8_t b[4]; pc_put32(b, h);
     return success(p, pc_call(p, 0x0309, b, 4));
 }
-static int handle_open(struct pc_link *p, const char *path, int write, uint32_t *h)
+static int handle_open_mode(struct pc_link *p, const char *path, int write, uint32_t *h, int quiet_missing)
 {
     uint8_t b[600]; int n = pc_path(b, sizeof(b) - 16, path);
     if (n < 0) return -1;
@@ -196,9 +196,41 @@ static int handle_open(struct pc_link *p, const char *path, int write, uint32_t 
     pc_put32(b + n + 12, 0x80); /* FILE_ATTRIBUTE_NORMAL */
     int r = pc_call(p, 0x030c, b, (unsigned)n + 16);
     if (r < 0 || p->result == ~0u) {
-        fprintf(stderr, "CE open %s: error %u\n", path, p->error); return -1;
+        if (!quiet_missing || (p->error != 2 && p->error != 3))
+            fprintf(stderr, "CE open %s: error %u\n", path, p->error);
+        return -1;
     }
     *h = p->result; return 0;
+}
+static int handle_open(struct pc_link *p, const char *path, int write, uint32_t *h)
+{
+    return handle_open_mode(p, path, write, h, 0);
+}
+int pc_file_matches(struct pc_link *p, const char *local, const char *remote)
+{
+    FILE *f = fopen(local, "rb");
+    if (!f) { perror(local); return -1; }
+    uint32_t h;
+    if (handle_open_mode(p, remote, 0, &h, 1)) {
+        fclose(f);
+        return p->error == 2 || p->error == 3 ? 0 : -1;
+    }
+    int result = -1;
+    uint8_t request[8], expected[4096];
+    for (;;) {
+        size_t n = fread(expected, 1, sizeof(expected), f);
+        if (ferror(f)) break;
+        pc_put32(request, h); pc_put32(request + 4, sizeof(expected));
+        int r = pc_call(p, 0x0319, request, sizeof(request));
+        if (r < 22 || !p->result) break;
+        unsigned got = pc_be32(p->rx + 18);
+        if (got > sizeof(expected) || got > (unsigned)r - 22) break;
+        if (got != n || memcmp(expected, p->rx + 22, n)) { result = 0; break; }
+        if (n < sizeof(expected)) { result = 1; break; }
+    }
+    fclose(f);
+    if (handle_close(p, h)) result = -1;
+    return result;
 }
 int pc_mkdir(struct pc_link *p, const char *path)
 {
