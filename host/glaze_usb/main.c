@@ -90,7 +90,9 @@ static int usage(void)
           "  logs [--once]                 stream/drain Glaze console\n", stderr);
     fputs("  nand-backup OUTPUT.raw         two-pass physical NAND backup (read-only)\n"
           "  nand-status                   read chip ready/failure/write-protect bits\n"
-          "  nand-apply SOURCE TARGET PLAN --execute  raw NAND program/verify (repair boot only)\n"
+          "  nand-apply SOURCE TARGET PLAN --execute [--keep-filesystem]\n"
+          "                                raw NAND program/verify (repair boot only); --keep-filesystem\n"
+          "                                leaves blocks 320-1003 unchecked and refuses to write them\n"
           "  cf-info                       CF card geometry (read-only)\n"
           "  cf-read LBA COUNT OUTPUT       two-pass raw CF extent snapshot (read-only)\n"
           "  cf-format-recovery SECTORS GENERATION  erase CF filesystem; create recovery FAT16\n"
@@ -123,7 +125,8 @@ int main(int argc, char **argv)
         !strcmp(cmd,"peek-dump") ? left != 3 :
         !strcmp(cmd,"poke") ? (left < 2 || left > 3 || (left == 3 && strcmp(argv[i + 2], "16"))) :
         !strcmp(cmd,"cf-format-recovery") ? left != 2 :
-        !strcmp(cmd,"nand-apply") ? (left!=4 || strcmp(argv[i+3],"--execute")) :
+        !strcmp(cmd,"nand-apply") ? ((left!=4 && left!=5) || strcmp(argv[i+3],"--execute") ||
+                                     (left==5 && strcmp(argv[i+4],"--keep-filesystem"))) :
         (!strcmp(cmd, "screenshot") || !strcmp(cmd,"net-enable") || !strcmp(cmd,"nand-backup")) ? left != 1 :
         !strcmp(cmd, "script") ? (left < 1 || left > 2) :
         !strcmp(cmd, "usb-net") ? left > 1 :
@@ -294,7 +297,7 @@ int main(int argc, char **argv)
                 }
             }
             else if (!strcmp(cmd, "nand-backup")) r = gu_nand_backup(&c, argv[i]);
-            else if (!strcmp(cmd,"nand-apply")) r=gu_nand_apply(&c,argv[i],argv[i+1],argv[i+2]);
+            else if (!strcmp(cmd,"nand-apply")) r=gu_nand_apply(&c,argv[i],argv[i+1],argv[i+2],left==5);
             else if (!strcmp(cmd, "nand-status")) {
                 r=gu_call(&c,GU_NAND_STATUS,NULL,0);
                 if (r==4) {

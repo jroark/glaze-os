@@ -14,6 +14,8 @@
 #define EPOCH_YEAR      1850
 #define EPOCH_WEEKDAY   2       /* 1850-01-01 was a Tuesday */
 
+/* tests/rtc_boot.c supplies these two with a model of the write latency. */
+#ifndef RTC_ETIME_MODEL
 static uint64_t etime_read(void)
 {
     uint16_t h, m, l, m2;
@@ -32,6 +34,39 @@ static void etime_write(uint64_t t)
     RTC_ETIME_L = (uint16_t)t;
     RTC_ETIME_M = (uint16_t)(t >> 16);
     RTC_ETIME_H = (uint16_t)(t >> 32);
+}
+#endif
+
+/*
+ * VR4131 UM §13.2.1: a new count is valid once all three words are written,
+ * and setting them again must wait at least 100 us (three 32.768 kHz clocks).
+ * The RTC runs in its own clock domain, so a read straight after the write
+ * still sees the old count: on a real BE-300 rtc_init's default read back as
+ * 1850 (the emulator applies writes at once). Read back only after the RTC
+ * has taken the value, and write again if it did not.
+ */
+#define ETIME_SETTLE_US 200u
+static uint64_t written_us;
+
+static void settle(void)
+{
+    uint64_t t0 = written_us;
+    while (time_us() - t0 < ETIME_SETTLE_US)
+        ;
+}
+
+static bool etime_set(uint64_t t)
+{
+    for (int attempt = 0; attempt < 3; attempt++) {
+        settle();               /* after any previous write */
+        etime_write(t);
+        written_us = time_us();
+        settle();
+        uint64_t now = etime_read();
+        if (now >= t && now - t < RTC_HZ)
+            return true;
+    }
+    return false;
 }
 
 static bool leap(uint32_t y)
@@ -96,9 +131,9 @@ void rtc_init(void)
         /* Battery-removed cold boot: the counter restarted at the epoch.
          * Start the clock at a plausible date until Settings sets it. */
         static const struct gz_datetime def = { 2009, 1, 1, 9, 41, 0, 0 };
-        etime_write(dt_to_secs(&def) * RTC_HZ);
+        bool ok = etime_set(dt_to_secs(&def) * RTC_HZ);
         secs_to_dt(etime_read() / RTC_HZ, &dt);
-        kputs("rtc: clock was unset, defaulted\n");
+        kputs(ok ? "rtc: clock was unset, defaulted\n" : "rtc: clock was unset; the RTC ignored the default\n");
     }
     kprintf("rtc: %u-%02u-%02u %02u:%02u:%02u\n",
             dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
@@ -118,6 +153,5 @@ int sys_rtc_set(struct addrspace *as, uint32_t uin)
 
     if (copy_from_as(as, &dt, uin, sizeof(dt)) || !dt_valid(&dt))
         return GZ_EINVAL;
-    etime_write(dt_to_secs(&dt) * RTC_HZ);
-    return 0;
+    return etime_set(dt_to_secs(&dt) * RTC_HZ) ? 0 : GZ_EIO;
 }

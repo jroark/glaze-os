@@ -649,7 +649,7 @@ wince-nand-test: ../tests/wince_assets_native.c ../tests/wince_nand_assets.py ..
 .PHONY: wince-nand-test
 
 # Production early boot I/O with fake registers and failure injection.
-boot-init-test: ../tests/spl_io.c ../boot/spl.c ../kernel/drivers/nand.c ../tests/timer_boot.c ../kernel/timer.c ../tests/irq_boot.c ../kernel/drivers/irq.c
+boot-init-test: ../tests/spl_io.c ../boot/spl.c ../kernel/drivers/nand.c ../tests/timer_boot.c ../kernel/timer.c ../tests/irq_boot.c ../kernel/drivers/irq.c ../tests/rtc_boot.c ../kernel/drivers/rtc.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/spl_io.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c -o ../out/host/spl-io-test
 	../out/host/spl-io-test
@@ -657,6 +657,8 @@ boot-init-test: ../tests/spl_io.c ../boot/spl.c ../kernel/drivers/nand.c ../test
 	../out/host/timer-boot-test
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/irq_boot.c -o ../out/host/irq-boot-test
 	../out/host/irq-boot-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -I../kernel ../tests/rtc_boot.c -o ../out/host/rtc-boot-test
+	../out/host/rtc-boot-test
 .PHONY: boot-init-test
 
 nand-boot-test: ../tests/nand_boot.c ../tests/nand_ecc.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_boot.h ../kernel/drivers/nand_ecc.c

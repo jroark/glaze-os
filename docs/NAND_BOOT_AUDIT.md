@@ -399,3 +399,33 @@ loaded kernel. The emulator plays the same tones with `--audio`, and
 `--log-mmio` shows the `9A0`/`9A4` writes. A physical candidate with a kernel
 page corrupted past its ECC gives checkpoints 1 and 2 and then error 2.
 `tests/spl_io.c` checks the error pattern at power-on gate state.
+
+## Boot splash
+
+A NAND boot used to stay dark until SpringBoard's first frame. The SPL now
+lights the panel after its gates and DMA setup, with the same sequence Casio's
+SPL uses for its own splash (`boot/lcd_start.h`, shared with
+`kernel/drivers/display.c`). It draws the "Glaze" wordmark and a progress bar
+(`boot/splash.h`; the wordmark is `boot/bootlogo.h`, rendered by
+`tools/mkbootlogo.swift` from Vera Bold). The bar fills to 30% during the
+block-map scan and to 50% during the kernel load. `kernel/bootsplash.c` carries
+it on through `kmain`'s stages to 80%, then creeps towards 95% on the timer
+tick while the file server mounts and SpringBoard starts. It stops at
+`SYS_FB_MAP`. `display_init` keeps the panel the SPL lit instead of
+restarting it. RAM boots are unchanged.
+
+## Updates that keep the file system
+
+A NAND-booted Glaze changes its file system as it runs (blocks 320-1003), so a
+snapshot taken at install time no longer matches the chip. Two tools allow for
+that:
+
+- `tools/nand_transaction.py --keep-filesystem --installed PLAN
+  --installed-image IMAGE` plans from a snapshot whose blocks outside the file
+  system still match the installed image. The new image's blocks 0-319 go over
+  the snapshot's file system, and the manifest must be unchanged.
+- `glaze-usb nand-apply ... --execute --keep-filesystem` skips blocks 320-1003
+  in its before and after checks, and refuses a plan that writes them. The
+  device still checks each block it erases against the plan's copy. So an
+  update needs no fresh backup, and the file system stays as it is on the
+  chip.

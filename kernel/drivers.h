@@ -42,6 +42,12 @@ void input_init(void);
 /* display.c: physical backlight and panel contrast, stock BE-300 levels. */
 /* After timer_init(); inherit only for a validated GlazeBoot RAM handoff. */
 void display_init(bool inherit);
+/* Boot splash progress after a NAND boot (kernel/bootsplash.c). */
+void splash_start(void);
+bool splash_live(void);
+void splash_step(unsigned permille);
+void splash_tick(void);
+void splash_end(void);
 int display_set(int brightness, int contrast);
 int display_power(int on);
 void input_push(uint16_t type, uint16_t code, int x, int y);

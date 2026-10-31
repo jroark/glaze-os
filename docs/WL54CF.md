@@ -94,10 +94,17 @@ interrupts masked. Physical removal is outside this version's scope.
 attribute alias at `0x0b400100`; that alias/bridge configuration still needs
 physical BE-300 validation. `0x0a00d200` is deliberately avoided because it is
 NAND direct I/O on this board. The minimal CIS/B1 revision are model choices,
-not a captured physical card EEPROM. This is not yet a claim that the driver
-operates a real WL54-CF.
+not a captured physical card EEPROM.
 
-Physical-card interoperability remains unvalidated. The card can be inserted
+**On a real card (2026-10-31).** A WL54-CF inserted into a BE-300 booted from
+NAND (`NAND_DROP=wince WL54CF=1` with the pinned Linux pair) came up with the
+Linux helper: its CIS reads `2df:8103` (revision 10, the emulator models 12),
+COR 0x41 at attribute 0x200 reads back, `firmware ready`, the station address
+from the CIS (`00:02:2d:...`), then association with the user's network and a
+DHCP lease. Which security mode that network used is not recorded, and
+removal, WEP/WPA/WPA2 and throughput are not yet checked on hardware.
+
+The card can be inserted
 and pulled at run time (`kernel/drivers/cf.c`'s `pcmcia_poll`, `net.c`); a
 GlazeBoot boot swaps it in for the CF card (`EMU_ARGS="--cf-eject-after 40
 --wl54cf --net-insert-after 45" tests/run_ceboot.sh 85 WL54CF=1`). The emulator's station implementation
