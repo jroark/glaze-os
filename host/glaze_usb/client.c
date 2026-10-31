@@ -247,7 +247,8 @@ fail:
 static int ce_folder(struct pc_link *p, uint64_t need, char folder[512], int cf_only)
 {
     const char *roots[] = {"\\Storage Card", "\\Nand Disk"};
-    for (unsigned i = 0; i < (cf_only ? 1u : 2u); i++) {
+    /* Negative mode is reserved for the installer: internal CE staging only. */
+    for (unsigned i = cf_only < 0 ? 1u : 0u; i < (cf_only > 0 ? 1u : 2u); i++) {
         uint64_t free_bytes;
         if (pc_free_space(p, roots[i], &free_bytes) || free_bytes < need) continue;
         snprintf(folder, 512, "%s\\GlazeUSB", roots[i]);
