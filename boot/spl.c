@@ -170,9 +170,9 @@ static void uart_puthex32(uint32_t v)
  * path turns on only 111C, 1120, 1134 and 1104 (docs/NAND_ROM_HANDOFF.md).
  * Casio's own SPL, started from the same handoff, turns on 1128, 1100 and
  * 110C (its LCD splash) before it writes 0x1CC0 and streams pages from
- * B000 (traced from the device's CE backup in the emulator). Glaze's NAND
- * boots hung at the DMA words and then at the first stream read while 1128
- * (which spl_beeps() puts back) and 1100/110C were off. The rest are the
+ * B000 (traced from the device's CE backup in the emulator). That they are
+ * needed is unproven: every failed NAND boot hung at the first page read,
+ * which the MODE 4 split fixed (nand_read_raw_page()). The rest are the
  * kernel's companion_gates_on() set (kernel/main.c), as Windows CE leaves
  * them. 0x0A00A0DC after 1104, as the ROM and kernel do. Gate words
  * themselves are always clocked.

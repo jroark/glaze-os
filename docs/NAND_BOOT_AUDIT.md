@@ -378,15 +378,23 @@ emulator, gave the two missing pieces:
   that is still open.
 - **Gates before the DMA word.** Casio's SPL turns on `1128`, `1100` and `110C`
   (for its LCD splash) before it writes `1CC0 = 0`, and it never writes
-  `1CF4`. The SPL now does the same, plus the kernel's gate set.
+  `1CF4`. The SPL now does the same, plus the kernel's gate set. This was
+  never shown to be needed. Every failing build hung at the first page read,
+  including the first two (whose silence after checkpoint 1 covered both the
+  DMA writes and the scan). Only the split read changed between the last
+  failing build and the one that booted. The gates match Casio's SPL and do no
+  harm, so they stay.
 
 With both, the sixth build booted from NAND to SpringBoard on 2026-10-31,
 with USB working. Builds with `BOOT_BEEP=1` also play seven 3 kHz ticks
 through the first page read (selected, READ0, address, ready, first word,
 520 bytes, last spare bytes), between SPL checkpoints 4 and 5.
 
-The emulator models neither the read split nor these gates, so it booted every
-failing build. Its NAND model accepts the split reads. The SPL's fatal stops never jump to a partly
+The emulator then modelled neither, so it booted every failing build. Since
+be300 `docs/POWER_ON_STATE.md` it models the 520-byte burst after the ROM's
+NAND boot, so the failing builds stall at their first page read
+(`[BUS] stall: read of NAND stream`). It doesn't model the gates, because
+nothing shows they matter. The SPL's fatal stops never jump to a partly
 loaded kernel. The emulator plays the same tones with `--audio`, and
 `--log-mmio` shows the `9A0`/`9A4` writes. A physical candidate with a kernel
 page corrupted past its ECC gives checkpoints 1 and 2 and then error 2.
