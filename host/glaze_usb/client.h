@@ -9,7 +9,7 @@ int gu_call(struct gu_client *, uint32_t op, const void *data, uint32_t len);
 int gu_hello(struct gu_client *, struct usb_link *);
 int gu_upload(struct gu_client *, const char *local, const char *remote);
 int gu_nand_backup(struct gu_client *, const char *path);
-int gu_nand_apply(struct gu_client *, const char *source, const char *target, const char *plan, bool keep_fs);
+int gu_nand_apply(struct gu_client *, const char *source, const char *target, const char *plan, bool keep_fs, bool allow_mismatch);
 int gu_cf_info(struct gu_client *, uint32_t *sectors, uint32_t *generation);
 int gu_cf_read(struct gu_client *, uint32_t lba, uint32_t count, const char *path);
 int gu_download(struct gu_client *, const char *remote, const char *local);

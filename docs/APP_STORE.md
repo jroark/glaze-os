@@ -3,9 +3,11 @@
 The built-in App Store has Search and Updates tabs. Search lists every app
 before a query is entered and matches names, developers, summaries and descriptions.
 Apps are free and curated in `store/apps.json`; there are no accounts or payments.
-The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manager, AIM, Gmail,
-and the NES, Game Boy, Master System, Genesis, Game Gear and TurboGrafx-16 emulators. The
-emulators include only original demo cartridges; players supply their own ROMs.
+The catalog includes Fifteen, Sketch, Minesweeper, Solitaire, Task Manager, AIM, Gmail,
+SomaFM, Chat, Doom, and the NES, Game Boy, Master System, Genesis, Game Gear and
+TurboGrafx-16 emulators. The emulators include only original demo cartridges;
+players supply their own ROMs.
+Hello remains a development test package and is not listed in the public store.
 
 Updates also offers Glaze OS updates when the host has an `os/catalog.txt`
 newer than the running OS and the device can install one: a physical NAND

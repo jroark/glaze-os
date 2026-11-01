@@ -1,11 +1,5 @@
 [
   {
-    "id": "hello",
-    "developer": "Glaze",
-    "summary": "A friendly first app for Glaze.",
-    "description": "Say hello to your Glaze. Tap the button and watch your count grow. Hello remembers every tap, even after you return Home."
-  },
-  {
     "id": "fifteen",
     "developer": "Glaze",
     "summary": "Fifteen tiles. One little challenge.",
@@ -88,5 +82,17 @@
     "developer": "Glaze",
     "summary": "SomaFM radio, live on your Glaze.",
     "description": "Listen to 51 SomaFM stations, save your favorites, and see the current song. Music keeps playing when you return Home or open another app. An unofficial player for personal listening; SomaFM is listener supported. Requires an Ethernet card and a Glaze OS version with radio playback support."
+  },
+  {
+    "id": "chatgpt",
+    "developer": "Glaze",
+    "summary": "Chat on your Glaze with your ChatGPT account.",
+    "description": "Send text messages using your ChatGPT account's Codex access. Sign in with a device code or import a Codex login from your computer, then chat directly from Glaze. Requires a network connection, an eligible account and an updated Glaze OS with TLS support."
+  },
+  {
+    "id": "doom",
+    "developer": "Glaze",
+    "summary": "Classic Doom with pocket-sized controls and sound.",
+    "description": "Play classic single-player Doom with BE-300 buttons, sound effects and save games. Supply your own compatible Doom, Doom II or Freedoom IWAD in Documents or on a card, then select it in the app. Game data is supplied separately. Requires an updated Glaze OS."
   }
 ]
