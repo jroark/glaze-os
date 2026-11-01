@@ -42,6 +42,7 @@ Start with the [top-level README](../README.md) for building and running.
 
 ## Other repositories
 
-The console emulators and their guides are in [glaze-emulators](https://github.com/jroark/glaze-emulators),
+[Glaze repositories](REPOS.md) maps all five, their sibling layout and build order. The console emulators and their guides are in [glaze-emulators](https://github.com/jroark/glaze-emulators),
 Chat, Doom and SomaFM's in [glaze-apps](https://github.com/jroark/glaze-apps), and the
-website and App Store publishing guides in [glaze-web](https://github.com/jroark/glaze-web).
+website and App Store publishing guides in [glaze-web](https://github.com/jroark/glaze-web), and the
+desktop installer in [glaze-installer](https://github.com/jroark/glaze-installer).

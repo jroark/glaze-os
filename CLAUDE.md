@@ -84,7 +84,10 @@ working in that directory:
 | `wince/glazeboot/` | RAM boot from Windows CE |
 | `packages/` | system packages (hello, taskmanager, maintenance) |
 
-Longer design notes are indexed in `docs/README.md`.
+Longer design notes are indexed in `docs/README.md`. Apps, emulators, the website and the
+desktop installer are sibling repositories (glaze-apps, glaze-emulators, glaze-web,
+glaze-installer) that build against this one; see `docs/REPOS.md` before changing the SDK,
+libui/libgfx, `tests/run.sh` or `tools/mkstore.py`, which they use.
 
 ## Hardware notes
 
