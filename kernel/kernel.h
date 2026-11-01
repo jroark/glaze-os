@@ -8,6 +8,8 @@
 struct gz_nand_manifest;
 void boot_nand_read(uint32_t page, void *buf);
 const struct gz_nand_manifest *boot_nand_manifest(void);
+struct nand_boot_map;
+const struct nand_boot_map *boot_nand_map(void);   /* the scan boot_nand_read uses */
 
 /* console.c */
 void uart_putc(char c);

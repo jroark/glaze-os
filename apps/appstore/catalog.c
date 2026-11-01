@@ -150,6 +150,64 @@ bool store_parse(struct store_catalog *out, const char *data, size_t len)
                 return false;
     return true;
 }
+/* GZOS1: one [os] record of key=value lines; build and notes optional. */
+bool store_os_parse(struct store_os *out, const char *data, size_t len)
+{
+    unsigned seen = 0;
+
+    if (len < 6 || len > STORE_OS_CATALOG_MAX || memcmp(data, "GZOS1\n", 6))
+        return false;
+    memset(out, 0, sizeof(*out));
+    for (size_t i = 6; i < len;) {
+        size_t end = i;
+        while (end < len && data[end] != '\n') {
+            if ((unsigned char)data[end] < 32 || (unsigned char)data[end] > 126)
+                return false;
+            end++;
+        }
+        const char *line = data + i, *eq = memchr(line, '=', end - i);
+        size_t n = end - i;
+        i = end + (end < len);
+        if (!n || (n == 4 && !memcmp(line, "[os]", 4) && !(seen & 128))) {
+            seen |= n ? 128 : 0;
+            continue;
+        }
+        if (!eq || !(seen & 128))
+            return false;
+        size_t k = eq - line, v = n - k - 1;
+        static const struct { const char *key; size_t at, cap; } fields[] = {
+            {"version", offsetof(struct store_os, version), sizeof(out->version)},
+            {"build", offsetof(struct store_os, build), sizeof(out->build)},
+            {"package", offsetof(struct store_os, package), sizeof(out->package)},
+            {"sha256", offsetof(struct store_os, sha256), sizeof(out->sha256)},
+            {"notes", offsetof(struct store_os, notes), sizeof(out->notes)},
+        };
+        unsigned f;
+        for (f = 0; f < 5; f++)
+            if (strlen(fields[f].key) == k && !memcmp(line, fields[f].key, k))
+                break;
+        if (f < 5) {
+            if (v >= fields[f].cap || (seen & (1u << f)))
+                return false;
+            memcpy((char *)out + fields[f].at, eq + 1, v);
+            seen |= 1u << f;
+        } else if ((k == 4 && !memcmp(line, "size", 4)) || (k == 7 && !memcmp(line, "spl_min", 7))) {
+            uint32_t *dst = k == 4 ? &out->size : &out->spl_min, bit = k == 4 ? 32 : 64;
+            if (!v || v > 8 || (seen & bit))
+                return false;
+            for (size_t j = 0; j < v; j++) {
+                if (eq[1 + j] < '0' || eq[1 + j] > '9')
+                    return false;
+                *dst = *dst * 10 + (uint32_t)(eq[1 + j] - '0');
+            }
+            seen |= bit;
+        } else
+            return false;
+    }
+    return (seen & (1 | 4 | 8 | 32 | 64 | 128)) == (1 | 4 | 8 | 32 | 64 | 128) &&
+           store_version_ok(out->version) && store_path_ok(out->package) && hash_ok(out->sha256) &&
+           out->size > 512 && out->size <= STORE_OS_MAX;
+}
 static unsigned lower(unsigned c)
 {
     return c >= 'A' && c <= 'Z' ? c + 32 : c;

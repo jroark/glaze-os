@@ -7,6 +7,9 @@
 #ifndef GLAZE_BUILD
 #define GLAZE_BUILD "dev"
 #endif
+#ifndef GLAZE_VERSION
+#define GLAZE_VERSION "0"       /* the VERSION file, which OTA updates compare */
+#endif
 
 /* main.c: the companion clock gates Glaze relies on, at boot and after a
  * HIBERNATE. */
@@ -16,6 +19,11 @@ void companion_gates_on(void);
 int power_sleep(int mode, uint32_t alarm_s);
 bool power_trap(void *tf);              /* trap(): the wake interrupt, while asleep */
 void power_boot(void);                  /* kmain: drop a stale resume record */
+
+/* ota.c: OTA updates (docs/OTA.md). */
+void ota_boot(void);                    /* kmain: what the SPL left (glaze/ota.h) */
+int sys_ota_status(struct addrspace *as, uint32_t uout, uint32_t size);
+int sys_ota_stage(struct proc *p, uint32_t op, uint32_t a1, uint32_t a2, uint32_t a3);
 
 /* irq.c: VR4131 ICU / GIU / VRC4173 cascade. */
 void irq_init(void);
@@ -35,6 +43,7 @@ int usb_input_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
 void usb_input_poll(void);
 void usb_input_cancel(void);
 void machine_reboot_ce(void) __attribute__((noreturn));
+void machine_reboot(void) __attribute__((noreturn));    /* a cold restart through the ROM */
 int sys_boot_mode(void);
 int sys_reboot_ce(struct proc *p);
 

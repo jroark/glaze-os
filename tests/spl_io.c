@@ -101,12 +101,9 @@ static volatile uint16_t *reg16(uint32_t a)
 static uint32_t ram[RAM_BYTES / 4];
 static unsigned hibernations, resumes;
 static jmp_buf resumed;
-#define KERNEL_LOAD_VA 0x80010000u
-#define KERNEL_TEXT_LEN 0x1000u
-#define KERNEL_TEXT_SUM 0u
 #define SPL_REG16(a) (*reg16(a))
 #define SPL_RESUME_RECORD ((struct gz_resume *)&ram[GZ_RESUME_PA / 4])
-#define SPL_KERNEL_TEXT ((const volatile uint32_t *)&ram[0x10000 / 4])
+#define SPL_KERNEL_TEXT(va) ((const volatile uint32_t *)&ram[((va) & 0x1FFFFFFFu) / 4])
 #define SPL_SAVED_PAGE(pa) ((volatile uint32_t *)&ram[(pa) / 4])
 #define SPL_HIBERNATE() (hibernations++, pmu_int_written = pmu_int)
 #define SPL_RESUME(r) (resumes++, longjmp(resumed, 1))
@@ -115,6 +112,20 @@ static jmp_buf resumed;
 #define SPL_TEST_STOP() longjmp(stopped, 1)
 #define SPL_COUNT() (fake_count += 50000u)  /* 5 ms a read */
 #include "../boot/spl.c"
+/* OTA is tested by ota-test (tests/ota.c); here only its CRC is needed. */
+int ota_apply(const struct ota_nand *io, struct nand_boot_map *map, struct gz_spl_info *info)
+{
+    (void)io; (void)map; info->ota_result = GZ_OTA_NONE;
+    return OTA_APPLY_NONE;
+}
+uint32_t ota_crc32(uint32_t crc, const volatile uint8_t *p, uint32_t n)
+{
+    return gz_crc32(crc, (const void *)p, n);
+}
+bool ota_kernel_header_ok(const struct gz_kernel_header *h)
+{
+    return h->magic == GZ_KHDR_MAGIC;
+}
 /* The kernel reader must also stop before exposing a timed-out page. */
 #define GLAZE_HW_H
 #define NAND_PAGES_PER_BLOCK 32u
@@ -151,6 +162,9 @@ static struct gz_resume *hibernated(uint32_t alarm)
     r->nsaved = 1;
     r->saved[0].pa = 0x10000;
     r->saved[0].copy = 0x50000;
+    r->text_va = 0x80010000u;           /* power.c's sum of the kernel text: zeros */
+    r->text_len = 0x1000u;
+    r->text_sum = 0;
     ram[0x10000 / 4] = 0x00010000u;     /* the ROM's probe */
     pmu_int = 0; pmu_cnt = 0; keys_latch = keys_word = 0;
     etime16[0] = etime16[1] = etime16[2] = 0;
@@ -192,6 +206,11 @@ static void resume_tests(void)
     r = hibernated(0x10000u);           /* the alarm across a halfword */
     etime16[1] = 1;
     assert(try_resume() && r->wake == 2);
+
+    r = hibernated(0);                  /* a record without the kernel's text range */
+    keys_word = 0x8000;
+    r->text_len = 0;
+    assert(!try_resume() && !r->magic && spl_resume_failed && !resumes);
 
     r = hibernated(0);                  /* the saved copy is no good */
     keys_word = 0x8000;

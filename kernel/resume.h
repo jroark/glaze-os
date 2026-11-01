@@ -4,8 +4,9 @@
  * (boot/spl.c). HIBERNATE wakes through the reset vector: the boot ROM
  * loads the SPL again, and the SPL resumes the kernel still in RAM instead
  * of loading it when this record is valid and the kernel's text and
- * read-only data still sum to KERNEL_TEXT_SUM, what tools/elf_consts.py
- * found in the kernel the SPL was built with.
+ * read-only data still sum to text_sum, which the kernel computed just
+ * before it hibernated. (The SPL isn't built against a particular kernel:
+ * an OTA update, docs/OTA.md, replaces the kernel but never the SPL.)
  *
  * It sits in the page below GZ_BOOTINFO_PA (glaze/bootinfo.h), which the
  * kernel never allocates, clear of the reset stub at PA 0x1000 and of
@@ -52,7 +53,9 @@ struct gz_resume {
     uint32_t wake;              /* GZ_WAKE_*, set by the SPL */
     uint32_t rests;             /* wakes the SPL slept through again */
     uint32_t pmuint;            /* PMUINT as the SPL found it */
-    uint32_t pad[5];
+    uint32_t text_va, text_len; /* the kernel's text and read-only data, KSEG0 */
+    uint32_t text_sum;          /* their gz_resume_sum */
+    uint32_t pad[2];
     uint32_t ctx[GZ_CTX_WORDS]; /* power_save() */
     uint32_t nsaved;
     struct { uint32_t pa, copy; } saved[GZ_RESUME_SAVES];  /* page, its copy's PA */
@@ -60,7 +63,6 @@ struct gz_resume {
 
 _Static_assert(__builtin_offsetof(struct gz_resume, ctx) == GZ_RESUME_CTX_OFF, "ctx offset");
 
-/* tools/elf_consts.py computes the same sum. */
 static inline uint32_t gz_resume_sum(const volatile uint32_t *w, uint32_t bytes)
 {
     uint32_t sum = 0;

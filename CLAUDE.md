@@ -114,6 +114,21 @@ handwriting-test ui-events-test settings-test mirror-test usb-input-test`,
 `browser-test`, full builds and `sdk-test`; `tests/t_clipboard.txt` exercises
 cross-app touch copy/paste. Clear INPUT_SCRIPT for normal builds afterward.
 
+OTA updates (`docs/OTA.md`, `glaze/ota.h`) replace the kernel and romfs
+(logical boot blocks 5-319) on a physical NAND image. App Store → Updates
+downloads a signed `.gzu` (per-block deflate) to `/Library/Updates`; the
+file server streams it to the kernel (`FS_OS_UPDATE`, `SYS_OTA_STAGE`,
+`kernel/ota_stage.c`: Ed25519 with the key in `config/ota_pubkey.bin`,
+SHA-256, block CRCs), which writes a `GZOJ` journal to a reserve block and
+resets; the SPL (`boot/ota_apply.c`, read-only `ftl.c` with
+`FTL_READONLY`, puff) installs it, resuming after any power cut. The SPL is
+never updated over the air. `VERSION` is the OS version; bump it per
+release. `make ota` signs `out/ota/os/` natively with
+`~/.config/glaze/ota-ed25519.pem` (never commit it); `OTA_PUBKEY=` builds
+an image trusting a test key. Use `make -C host ota-test boot-init-test`,
+`host/fstest` after `ftl.c` changes, and `tests/run_ota.py` (emulator, power
+cuts).
+
 ## Running and testing
 
 `make out/pkg/chatgpt.gzp` builds the direct Codex chat package. Its device-code
@@ -146,7 +161,7 @@ be300 --nand out/glaze.bin --rtc-host-time --cf out/cf.img    # with a CompactFl
 
 ## Architecture
 
-**Boot.** The boot ROM loads the SPL (`boot/`) from the B000FF container at NAND 0x4000. The SPL streams the flat kernel from 0x14000 to 0x80010000 and jumps to it. The SPL bakes in the kernel's load, entry and size from `tools/elf_consts.py`; `tools/mk_nand.py` packs the image.
+**Boot.** The boot ROM loads the SPL (`boot/`) from the B000FF container at NAND 0x4000. The SPL reads the kernel slot's 512-byte header at 0x14000 (`struct gz_kernel_header`, `glaze/ota.h`: load, entry, size, CRC, version), streams the flat kernel from 0x14200, checks its CRC and jumps to it; it isn't built against a particular kernel. `tools/mk_nand.py` packs the image (`--version` from `VERSION`).
 
 **Flash layout.** The SPL loads only the kernel (about 56 KB) from 0x14000. The romfs (`tools/mkromfs.py`: apps, libraries and assets, files page-aligned) sits raw at `ROMFS_OFFSET` 0x40000 up to 0x500000 (`tools/mk_nand.py --romfs` checks the 4.75 MiB slot), and 0x500000 to the end is the file server's region (`FLASH_FS_OFFSET`, `GZ_FLASH_BLOCKS`). There is no other persistent store on the device; a CompactFlash card mounts as `/Card`.
 

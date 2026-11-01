@@ -22,6 +22,8 @@ __pycache__/
 *.[sS][mM][dD]
 *.[pP][cC][eE]
 *.[sS][gG][xX]
+# Not a ROM: the OTA release public key (docs/OTA.md); the private key never enters the tree.
+!/config/ota_pubkey.bin
 *.[wW][aA][dD]
 
 # Browser native objects and private JavaScript archive.

@@ -6,6 +6,7 @@ ENTRY(_start)
 
 SECTIONS {
     . = 0x80010000;
+    __text_start = .;
     .text : {
         *(.text.start)
         *(.text)

@@ -16,7 +16,8 @@ Vendored projects (local changes are listed below):
 | `dhara/` | [Dhara](https://github.com/dlbeer/dhara) NAND translation layer, plus its BCH ECC | `1b166e41b74b` | ISC-style, `dhara/LICENSE` |
 | `helix-mp3/` | RealNetworks [Helix](https://github.com/ultraembedded/libhelix-mp3) fixed-point MP3 decoder: `pub/` headers, `real/` C sources, `mp3dec.c`, `mp3tabs.c` | `0a0e0673f82b` (2019 mirror of the 2003 release) | RPSL 1.0 / RCSL, `helix-mp3/LICENSE.txt` |
 | `fatfs/` | ChaN's [FatFs](http://elm-chan.org/fsw/ff/) FAT12/16/32 module: `ff.c`, `ff.h`, `diskio.h`, `ffunicode.c` (via the [abbrev/fatfs](https://github.com/abbrev/fatfs) mirror) | R0.16 (`ab992fcf2926`) | 1-clause BSD-style, `fatfs/LICENSE.txt` |
-| `wolfssl/` | [wolfSSL](https://github.com/wolfSSL/wolfssl) TLS 1.2/1.3 client: `src/`, `wolfcrypt/src/` and the `wolfssl/` headers they include | v5.9.4-stable (`3c5eead44904`) | GPLv3, `wolfssl/COPYING` and `wolfssl/LICENSING` |
+| `wolfssl/` | [wolfSSL](https://github.com/wolfSSL/wolfssl) TLS 1.2/1.3 client: `src/`, `wolfcrypt/src/` and the `wolfssl/` headers they include; also `ed25519.c` and `ge_low_mem.c` for the kernel's OTA signature check (`kernel/crypto/user_settings.h`) | v5.9.4-stable (`3c5eead44904`) | GPLv3, `wolfssl/COPYING` and `wolfssl/LICENSING` |
+| `puff/` | [puff](https://github.com/madler/zlib/tree/develop/contrib/puff), zlib's small inflater, for the SPL's OTA install (`boot/ota_apply.c`) | 2.3, from zlib v1.3.1 | zlib license, top of `puff/puff.h` |
 | `hostap/` | [wpa_supplicant](https://w1.fi/wpa_supplicant/) PSK-only WPA/RSN core and internal crypto; port details in `hostap/UPSTREAM.md` | 2.11 | BSD-3-Clause; `hostap/COPYING` |
 | `lwip/` | [lwIP](https://github.com/lwip-tcpip/lwip) TCP/IP stack: IPv4 core, Ethernet, and the netconn and sockets APIs (`src/api`) | 2.2.1 (`STABLE-2_2_1_RELEASE`, `77dcd25a7250`) | BSD-3-Clause, `lwip/COPYING` |
 

@@ -2,36 +2,19 @@
  * Stage-1 SPL for the Casio BE-300.
  *
  * Loaded into SDRAM at 0x80F00000 by the boot ROM's record walker after
- * parsing the partition-1 B000FF container. Reads the kernel image as a
- * flat binary from NAND offset KERNEL_NAND_OFFSET and jumps to the kernel
- * entry. The kernel's load VA, entry, and size are baked in by the build
- * script as compile-time constants extracted from vmlinux.
+ * parsing the partition-1 B000FF container. Applies an armed OTA journal
+ * (boot/ota_apply.c, docs/OTA.md), then reads the kernel slot's header
+ * (struct gz_kernel_header, glaze/ota.h) at GZ_KERNEL_NAND_OFFSET, loads the
+ * flat image after it, checks its CRC and jumps to the kernel entry. The
+ * SPL isn't built against a particular kernel: OTA replaces the kernel and
+ * romfs but never this.
  */
 
 #include <stdint.h>
+#include <glaze/ota.h>
 #include "../kernel/drivers/nand_boot.h"
 #include "../kernel/resume.h"
-
-/* Kernel layout — overridden by -DKERNEL_* on the SPL command line. */
-#ifndef KERNEL_LOAD_VA
-#define KERNEL_LOAD_VA      0x80020000u
-#endif
-#ifndef KERNEL_ENTRY_VA
-#define KERNEL_ENTRY_VA     0x8020E890u
-#endif
-#ifndef KERNEL_SIZE
-#define KERNEL_SIZE         0x30A81Cu
-#endif
-#ifndef KERNEL_NAND_OFFSET
-#define KERNEL_NAND_OFFSET  0x14000u
-#endif
-/* The kernel's text and read-only data, and their gz_resume_sum. */
-#ifndef KERNEL_TEXT_LEN
-#define KERNEL_TEXT_LEN     0x1000u
-#endif
-#ifndef KERNEL_TEXT_SUM
-#define KERNEL_TEXT_SUM     0u
-#endif
+#include "ota_apply.h"
 
 #define NAND_PAGE_DATA      512u
 
@@ -50,7 +33,9 @@
 #define XFER_STATUS  SPL_REG32(0xAA00A440u)
 #define XFER_KICK    SPL_REG32(0xAA00A460u)
 #define XFER_MODE    SPL_REG32(0xAA00A464u)
+#define XFER_DATA32  SPL_REG32(0xAA00A420u)
 #define STREAM_DATA  SPL_REG32(0xAA00B000u)
+#define STREAM_BYTE  SPL_REG8(0xAA00B000u)
 #define SIU_THR      SPL_REG8(0xAA008680u)
 #define SIU_LSR      SPL_REG8(0xAA008694u)
 #define BLG_CONFIG   SPL_REG32(0xAA000984u)
@@ -58,6 +43,8 @@
 #define BUZZ_PERIOD  SPL_REG32(0xAA0009A4u)
 #define BUZZ_DUTY    SPL_REG32(0xAA0009A8u)
 #define CMM_GATE     SPL_REG32(0xAA001128u)
+#define CMCU_TIMEOUT SPL_REG32(0xAA007814u)
+#define CMCU_STATUS  SPL_REG32(0xAA007834u)
 #ifndef SPL_COUNT
 #define SPL_COUNT() ({ uint32_t c_; __asm__ volatile("mfc0 %0, $9" : "=r"(c_)); c_; })
 #endif
@@ -112,8 +99,9 @@ static void spl_beeps(unsigned n, uint32_t hz, uint32_t on_ms)
 
 /* Fatal stops, in every build: a 1 s 500 Hz tone, then `code` short
  * beeps, three times. 1 NAND timeout, 2 missing or corrupt boot page,
- * 3 ambiguous boot block map. Never returns: a partly loaded kernel must
- * not run. */
+ * 3 ambiguous boot block map, 4 kernel header or CRC wrong, 5 an OTA
+ * update failed part-way (the next boot tries again). Never returns: a
+ * partly loaded kernel must not run. */
 static void uart_puts(const char *s);
 static void __attribute__((noreturn)) spl_fail(unsigned code, const char *why)
 {
@@ -338,6 +326,67 @@ static void nand_read_raw_page(uint32_t page, uint32_t *dest)
     nand_deselect();
 }
 
+/* Programs a page's data and all 16 spare bytes, as the kernel does
+ * (kernel/drivers/nand.c): SEQIN, MODE 7 for 520 bytes, MODE 6 for the last
+ * 8, PAGEPROG, then the chip's status (70h) until ready. OTA only. */
+static uint8_t nand_chip_status(void)
+{
+    uint8_t status = 0;
+
+    for (uint32_t n = 0; n < 100000u; n++) {
+        nand_command(0x70);
+        status = (uint8_t)XFER_DATA32;
+        if (status & 0x40u)
+            break;
+    }
+    return status;
+}
+
+static void nand_address_row(uint32_t page)
+{
+    XFER_ADDR8 = (uint8_t)page;
+    XFER_ADDR8 = (uint8_t)(page >> 8);
+    (void)XFER_ACK;
+    XFER_CMD = 2;
+    nand_wait_ready();
+}
+
+static int spl_program_raw(uint32_t page, const uint8_t raw[528])
+{
+    nand_select();
+    nand_command(0);
+    nand_command(0x80);
+    XFER_CMD = 6;
+    XFER_ADDR8 = 0;
+    nand_address_row(page);
+    XFER_KICK = 1;
+    XFER_MODE = 7;
+    nand_wait_ready();
+    for (uint32_t i = 0; i < 520u; i++)
+        STREAM_BYTE = raw[i];
+    XFER_MODE = 6;
+    nand_wait_ready();
+    for (uint32_t i = 520u; i < 528u; i++)
+        STREAM_BYTE = raw[i];
+    nand_command(0x10);
+    uint8_t status = nand_chip_status();
+    XFER_MODE = 0;
+    nand_deselect();
+    return (status & 0xC1u) == 0xC0u ? 0 : -1;
+}
+
+static int spl_erase(uint32_t block)
+{
+    nand_select();
+    nand_command(0x60);
+    XFER_CMD = 6;
+    nand_address_row(block * 32u);
+    nand_command(0xD0);
+    uint8_t status = nand_chip_status();
+    nand_deselect();
+    return (status & 0xC1u) == 0xC0u ? 0 : -1;
+}
+
 static struct nand_boot_map boot_map;
 
 static int boot_raw(void *ctx, uint32_t page, uint8_t raw[528])
@@ -356,6 +405,84 @@ static void nand_read_page(uint32_t page, uint32_t *dest)
     if (!nand_boot_read(&boot_map, boot_raw, 0, page, dest, true))
         return;
     spl_fail(2, "SPL: missing or corrupt NAND boot page; boot stopped\n");
+}
+
+/* The kernel slot's header page, checked: magic, format, its own CRC, and a
+ * load range clear of low RAM and of this SPL. */
+static struct gz_kernel_header kernel_header;
+
+static const struct gz_kernel_header *spl_kernel_header(void)
+{
+    struct gz_kernel_header *h = &kernel_header;
+
+    nand_read_page(GZ_KERNEL_NAND_OFFSET / NAND_PAGE_DATA, (uint32_t *)h);
+    if (!ota_kernel_header_ok(h))
+        spl_fail(4, "SPL: no valid kernel header; boot stopped\n");
+    return h;
+}
+
+/* ---- OTA (boot/ota_apply.c) ------------------------------------------------ */
+
+static struct gz_spl_info *const spl_info = (struct gz_spl_info *)(0xA0000000u | GZ_SPL_INFO_PA);
+
+static int ota_read_raw(uint32_t page, uint8_t raw[528])
+{
+    nand_read_raw_page(page, (uint32_t *)raw);
+    return 0;
+}
+
+/*
+ * An update takes minutes, and Casio's power-management microcontroller
+ * resets the device 150 s after its watchdog was last reloaded
+ * (kernel/drivers/cmcu.c). Reload it as cmcu_tick() does, every 5 s by CP0
+ * Count, after the companion gates the kernel has on when it does the same.
+ */
+static uint32_t ota_reloaded;
+
+static void ota_progress(uint32_t done, uint32_t total)
+{
+    if (SPL_COUNT() - ota_reloaded > 5000u * 10000u) {
+        (void)CMCU_STATUS;
+        CMCU_TIMEOUT = 0x96u;
+        ota_reloaded = SPL_COUNT();
+    }
+    splash_ota(SPL_FB, done * 1000u / total);
+}
+
+static const struct ota_nand ota_io = {
+    .read_raw = ota_read_raw,
+    .program_raw = spl_program_raw,
+    .erase = spl_erase,
+    .progress = ota_progress,
+};
+
+static void spl_ota(void)
+{
+    spl_info->magic = GZ_SPL_INFO_MAGIC;
+    spl_info->version = GZ_SPL_VERSION;
+    spl_info->features = GZ_SPL_F_OTA;
+    if (boot_map.journal == NAND_BOOT_NONE) {
+        spl_info->ota_result = GZ_OTA_NONE;
+        return;
+    }
+    uart_puts("SPL: installing an OTA update\n");
+    ota_reloaded = SPL_COUNT();
+    switch (ota_apply(&ota_io, &boot_map, spl_info)) {
+    case OTA_APPLY_DONE:
+        uart_puts("SPL: update installed\n");
+        /* Scan again: blocks may have moved, and the journal is gone. */
+        if (nand_boot_scan(&boot_map, boot_raw, 0, true))
+            spl_fail(3, "SPL: ambiguous NAND boot block map; boot stopped\n");
+        break;
+    case OTA_APPLY_REJECTED:
+        uart_puts("SPL: update rejected, reason 0x");
+        uart_puthex32(spl_info->ota_detail);
+        uart_puts("; booting the installed OS\n");
+        break;
+    case OTA_APPLY_FAILED:
+        splash_ota_failed(SPL_FB);
+        spl_fail(5, "SPL: update failed part-way; it resumes on the next boot\n");
+    }
 }
 
 #ifdef SPL_RAMBOOT
@@ -390,7 +517,7 @@ static void rb_read(uint32_t frame, uint32_t nand_offset)
         nand_read_page(nand_offset / NAND_PAGE_DATA + i, GB_PAGE_PTR(frame) + i * NAND_PAGE_DATA / 4);
 }
 
-static void __attribute__((noreturn)) ramboot(void)
+static void __attribute__((noreturn)) ramboot(const struct gz_kernel_header *kh)
 {
     static uint32_t table[NAND_PAGE_DATA / 4];
     uint32_t romfs_sectors = 0;
@@ -406,7 +533,7 @@ static void __attribute__((noreturn)) ramboot(void)
     }
     uint32_t romfs_size = romfs_sectors * NAND_PAGE_DATA;
     uint32_t romfs_pages = (romfs_size + GB_PAGE - 1) / GB_PAGE;
-    uint32_t kernel_pages = (KERNEL_SIZE + GB_PAGE - 1) / GB_PAGE;
+    uint32_t kernel_pages = (kh->size + GB_PAGE - 1) / GB_PAGE;
     uint32_t romfs_pa = (RB_SDRAM - romfs_pages * GB_PAGE) & ~0x1FFFu;
 
     struct gb_control *c = (struct gb_control *)GB_PAGE_PTR(RB_PLAN_FIRST);
@@ -431,16 +558,16 @@ static void __attribute__((noreturn)) ramboot(void)
     *gb_move_at(c, n) = (struct gb_move){ (uint16_t)rb_src(n), GZ_BOOTINFO_PA / GB_PAGE, 0, 0 };
     n++;
     for (uint32_t i = 0; i < kernel_pages; i++, n++) {
-        rb_read(rb_src(n), KERNEL_NAND_OFFSET + i * GB_PAGE);
+        rb_read(rb_src(n), GZ_KERNEL_IMAGE_OFFSET + i * GB_PAGE);
         *gb_move_at(c, n) = (struct gb_move){ (uint16_t)rb_src(n),
-            (uint16_t)(((KERNEL_LOAD_VA & 0x1FFFFFFFu) >> 12) + i), 0, 0 };
+            (uint16_t)(((kh->load & 0x1FFFFFFFu) >> 12) + i), 0, 0 };
     }
     for (uint32_t i = 0; i < romfs_pages; i++, n++) {
         rb_read(rb_src(n), RB_ROMFS_SECTOR * NAND_PAGE_DATA + i * GB_PAGE);
         *gb_move_at(c, n) = (struct gb_move){ (uint16_t)rb_src(n), (uint16_t)((romfs_pa >> 12) + i), 0, 0 };
     }
     c->count = n;
-    c->entry = KERNEL_ENTRY_VA;
+    c->entry = kh->entry;
     c->arg = 0x80000000u | GZ_BOOTINFO_PA;
 
     /* Through KSEG1: the trampoline runs before it flushes the D-cache. */
@@ -481,7 +608,7 @@ static void __attribute__((noreturn)) ramboot(void)
 #define PMU_RESETS      0x0138u     /* RSTSW, RTCRST, TIMOUTRST, BATTINH */
 #ifndef SPL_RESUME_RECORD
 #define SPL_RESUME_RECORD ((struct gz_resume *)(0xA0000000u | GZ_RESUME_PA))
-#define SPL_KERNEL_TEXT ((const volatile uint32_t *)(KERNEL_LOAD_VA | 0x20000000u))
+#define SPL_KERNEL_TEXT(va) ((const volatile uint32_t *)((va) | 0x20000000u))
 #define SPL_SAVED_PAGE(pa) ((volatile uint32_t *)(0xA0000000u | (pa)))
 #define SPL_HIBERNATE() __asm__ volatile(".word 0x42000023\n\tnop\n\tnop\n\tnop\n\tnop" ::: "memory")
 #define SPL_RESUME(r) ((void (*)(struct gz_resume *))((r)->entry | 0x20000000u))(r)
@@ -538,8 +665,15 @@ static void spl_resume(void)
         for (uint32_t w = 0; w < 1024; w++)
             to[w] = from[w];
     }
-    uint32_t sum = gz_resume_sum(SPL_KERNEL_TEXT, KERNEL_TEXT_LEN);
-    if (sum != KERNEL_TEXT_SUM) {
+    if (r->text_len == 0 || r->text_va < GZ_KERNEL_LOAD_MIN || r->text_va > GZ_KERNEL_LOAD_END ||
+        r->text_len > GZ_KERNEL_LOAD_END - r->text_va) {
+        spl_resume_failed = "no kernel text recorded, length 0x";
+        spl_resume_value = r->text_len;
+        r->magic = 0;
+        return;
+    }
+    uint32_t sum = gz_resume_sum(SPL_KERNEL_TEXT(r->text_va), r->text_len);
+    if (sum != r->text_sum) {
         spl_resume_failed = "kernel text changed, sum 0x";
         spl_resume_value = sum;
         r->magic = 0;
@@ -577,34 +711,43 @@ uint32_t spl_main(void)
         uart_puthex32(spl_resume_value);
         uart_puts("\n");
     }
-    uart_puts("kernel load = 0x");
-    uart_puthex32(KERNEL_LOAD_VA);
+    spl_ota();
+    const struct gz_kernel_header *kh = spl_kernel_header();
+    uart_puts("kernel ");
+    uart_puts(kh->version[15] ? "?" : kh->version);
+    uart_puts(": load = 0x");
+    uart_puthex32(kh->load);
     uart_puts(", entry = 0x");
-    uart_puthex32(KERNEL_ENTRY_VA);
+    uart_puthex32(kh->entry);
     uart_puts(", size = 0x");
-    uart_puthex32(KERNEL_SIZE);
+    uart_puthex32(kh->size);
     uart_puts("\n");
 #ifdef SPL_RAMBOOT
-    ramboot();
+    ramboot(kh);
 #endif
 
-    uint32_t pages = (KERNEL_SIZE + NAND_PAGE_DATA - 1u) / NAND_PAGE_DATA;
-    uint32_t start_page = KERNEL_NAND_OFFSET / NAND_PAGE_DATA;
+    uint32_t pages = (kh->size + NAND_PAGE_DATA - 1u) / NAND_PAGE_DATA;
+    uint32_t start_page = GZ_KERNEL_IMAGE_OFFSET / NAND_PAGE_DATA;
 
     /* Write through the uncached KSEG1 alias so the data is visible to the
      * cached kernel-entry fetch without an explicit cache flush. */
-    uint32_t *dst = (uint32_t *)((KERNEL_LOAD_VA & 0x1FFFFFFFu) | 0xA0000000u);
+    uint32_t *dst = (uint32_t *)(uintptr_t)((kh->load & 0x1FFFFFFFu) | 0xA0000000u);
+    uint32_t crc = 0, left = kh->size;
 
     for (uint32_t i = 0; i < pages; i++) {
         nand_read_page(start_page + i, dst);
+        crc = ota_crc32(crc, (const volatile uint8_t *)dst, left < NAND_PAGE_DATA ? left : NAND_PAGE_DATA);
+        left -= left < NAND_PAGE_DATA ? left : NAND_PAGE_DATA;
         dst += NAND_PAGE_DATA / 4;
         if (!(i & 15u))     /* the kernel load fills 30-50% */
             splash_progress(SPL_FB, 300u + i * 200u / pages);
     }
+    if (crc != kh->image_crc)
+        spl_fail(4, "SPL: kernel image CRC mismatch; boot stopped\n");
     splash_progress(SPL_FB, 500);
 
     uart_puts("kernel loaded; jumping\n");
     CHECKPOINT(6);
     /* Kernel entry performs its own cache setup before returning to KSEG0. */
-    return KERNEL_ENTRY_VA | 0x20000000u;
+    return kh->entry | 0x20000000u;
 }

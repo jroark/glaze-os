@@ -655,14 +655,17 @@ static void draw_sleep_mode(gfx_surface *s)
 static void draw_about(gfx_surface *s)
 {
     struct gz_sysinfo si;
+    struct gz_ota_status ota;
     char ver[48], cap[16], avail[16], procs[8], up[24];
 
     gz_sysinfo(&si);
+    if (gz_ota_status(&ota))
+        strcpy(ota.version, "?");
     nhits = 0;
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
     ui_draw_navbar(s, "About", "Settings", &back_rect, 0);
     add_hit(back_rect, R_BACK);
-    snprintf(ver, sizeof(ver), "Glaze 1.0 (%s)", si.build);
+    snprintf(ver, sizeof(ver), "Glaze %.15s (%s)", ota.version, si.build);
     snprintf(cap, sizeof(cap), "%u MB", (si.total_pages * 4 + 1023) / 1024);
     snprintf(avail, sizeof(avail), "%u KB", si.free_pages * 4);
     snprintf(procs, sizeof(procs), "%u", si.nprocs);

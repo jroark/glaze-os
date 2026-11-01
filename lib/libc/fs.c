@@ -305,6 +305,36 @@ int fs_card_format(uint32_t generation, uint32_t sectors)
     return rv ? rv : call(FS_CARD_FORMAT,generation,sectors,0,NULL);
 }
 
+int fs_ota_begin(const char *path)
+{
+    SESSION_LOCKED();
+    return path_call(FS_OS_UPDATE, path, FS_OTA_BEGIN);
+}
+
+int fs_ota_step(void)
+{
+    SESSION_LOCKED();
+    int rv = connect();
+
+    return rv ? rv : call(FS_OS_UPDATE, FS_OTA_STEP, 0, 0, NULL);
+}
+
+int fs_ota_arm(void)
+{
+    SESSION_LOCKED();
+    int rv = connect();
+
+    return rv ? rv : call(FS_OS_UPDATE, FS_OTA_ARM, 0, 0, NULL);
+}
+
+int fs_ota_cancel(void)
+{
+    SESSION_LOCKED();
+    int rv = connect();
+
+    return rv ? rv : call(FS_OS_UPDATE, FS_OTA_CANCEL, 0, 0, NULL);
+}
+
 int fs_read_file(const char *path, void *dst, uint32_t max)
 {
     SESSION_LOCKED();

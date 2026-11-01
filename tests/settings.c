@@ -49,6 +49,12 @@ int gz_sysinfo(struct gz_sysinfo *si)
     si->total_pages = 4096;
     return 0;
 }
+int gz_ota_status(struct gz_ota_status *st)
+{
+    memset(st, 0, sizeof(*st));
+    strcpy(st->version, "1.0");
+    return 0;
+}
 int gz_boot_mode(void) { return boot_mode; }
 int gz_power_status(struct gz_power_status *st)
 {

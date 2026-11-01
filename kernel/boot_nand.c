@@ -23,6 +23,14 @@ void boot_nand_read(uint32_t page, void *buf)
     if (nand_boot_read(&map, raw_read, NULL, page, buf, true))
         panic("nand: missing or corrupt boot page %u", page);
 }
+const struct nand_boot_map *boot_nand_map(void)
+{
+    if (!ready) {
+        if (nand_boot_scan(&map, raw_read, NULL, true)) panic("nand: ambiguous boot map");
+        ready = true;
+    }
+    return &map;
+}
 const struct gz_nand_manifest *boot_nand_manifest(void)
 {
     if (!manifest_ready) {

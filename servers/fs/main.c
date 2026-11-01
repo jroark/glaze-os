@@ -9,6 +9,7 @@
  */
 
 #include <glaze/fs.h>
+#include <glaze/ota.h>
 #include <glaze/sys.h>
 #include <stdio.h>
 #include <string.h>
@@ -37,6 +38,17 @@ struct file {
 
 static lfs_t lfs;
 static int mount_err;       /* 0 when mounted */
+
+/* An OTA update being verified (FS_OS_UPDATE, docs/OTA.md). */
+static struct {
+    int session;            /* -1 = none */
+    char path[GZ_OTA_PATH_MAX];
+    lfs_file_t f;
+    uint32_t size, done;
+    bool verified;
+} ota = { .session = -1 };
+
+static void ota_cancel(void);
 static struct session sessions[MAX_SESSIONS];
 static struct file files[MAX_FILES];
 
@@ -183,6 +195,8 @@ static int op_hello(int pid, struct gz_msg *r)
         return GZ_EFULL;
     struct session *s = &sessions[pick];
     close_session_files(pick);
+    if (ota.session == pick)
+        ota_cancel();
     if (!s->buf) {
         s->shm = gz_shm_create(FS_BUF_SIZE);
         s->buf = s->shm > 0 ? gz_shm_map(s->shm) : NULL;
@@ -382,6 +396,128 @@ static int op_nand_read(struct session *s,uint32_t offset,uint32_t len)
     return (int)done;
 }
 
+/* ---- OTA updates ---------------------------------------------------------------- */
+
+/* The kernel verifies an update file as it streams through here
+ * (SYS_OTA_STAGE, kernel/ota_stage.c) a step at a time, so other clients
+ * are served in between; the SPL later reads the same file through its own
+ * read-only littlefs, so it mustn't change until the reset. */
+static void ota_cancel(void)
+{
+    if (ota.session < 0)
+        return;
+    lfs_file_close(&lfs, &ota.f);
+    gz_ota_stage(GZ_OTA_OP_ABORT, NULL, 0, 0);
+    ota.session = -1;
+}
+
+/* Whether changing `path` could change the staged file: it, or a folder holding it. */
+static bool ota_locked(const char *path)
+{
+    size_t n = strlen(path);
+
+    return ota.session >= 0 && !strncmp(ota.path, path, n) && (!ota.path[n] || ota.path[n] == '/');
+}
+
+static int ota_begin(int sess, const char *path)
+{
+    struct gz_ota_header h;
+    struct lfs_info st;
+
+    ota_cancel();
+    if (!path || card_path(path) || strlen(path) >= sizeof(ota.path))
+        return GZ_EINVAL;
+    if (mount_err)
+        return mount_err;
+    int rv = gz_err(lfs_stat(&lfs, path, &st));
+    if (rv)
+        return rv;
+    if (st.type != LFS_TYPE_REG || st.size < sizeof(h) || st.size > INT32_MAX)
+        return GZ_OTA_ERR(GZ_OTA_E_FORMAT);
+    rv = gz_err(lfs_file_open(&lfs, &ota.f, path, LFS_O_RDONLY));
+    if (rv)
+        return rv;
+    if (lfs_file_read(&lfs, &ota.f, &h, sizeof(h)) != (lfs_ssize_t)sizeof(h)) {
+        lfs_file_close(&lfs, &ota.f);
+        return GZ_EIO;
+    }
+    rv = gz_ota_stage(GZ_OTA_OP_BEGIN, &h, (uint32_t)(uintptr_t)path, st.size);
+    if (rv) {
+        lfs_file_close(&lfs, &ota.f);
+        return rv;
+    }
+    strcpy(ota.path, path);
+    ota.session = sess;
+    ota.size = st.size;
+    ota.done = sizeof(h);
+    ota.verified = false;
+    return (int)st.size;
+}
+
+static int ota_step(void)
+{
+    static uint8_t chunk[GZ_OTA_DATA_MAX];
+    uint32_t budget = FS_OTA_STEP_BYTES;
+
+    while (ota.done < ota.size && budget) {
+        uint32_t n = MIN(MIN(ota.size - ota.done, (uint32_t)sizeof(chunk)), budget);
+        lfs_ssize_t got = lfs_file_read(&lfs, &ota.f, chunk, n);
+        int rv = got == (lfs_ssize_t)n ? gz_ota_stage(GZ_OTA_OP_DATA, chunk, n, 0) : GZ_EIO;
+        if (rv) {
+            ota_cancel();
+            return rv;
+        }
+        ota.done += n;
+        budget -= n;
+    }
+    if (ota.done < ota.size)
+        return (int)ota.done;
+    if (!ota.verified) {
+        int rv = gz_ota_stage(GZ_OTA_OP_COMMIT, NULL, 0, 0);
+        if (rv) {
+            ota_cancel();
+            return rv;
+        }
+        ota.verified = true;
+    }
+    return (int)ota.size;
+}
+
+static int ota_arm(void)
+{
+    /* Everything other clients wrote goes to the flash first: nothing is
+     * written after the journal, since the kernel resets at once. */
+    for (int i = 0; i < MAX_FILES; i++)
+        if (files[i].used && !files[i].card)
+            lfs_file_sync(&lfs, &files[i].f);
+    lfs_file_close(&lfs, &ota.f);
+    lfs.cfg->sync(lfs.cfg);
+    card_sync();
+    int rv = gz_ota_stage(GZ_OTA_OP_ARM, NULL, 0, 0);
+    /* Still here: the journal wasn't written. Start again from BEGIN. */
+    gz_ota_stage(GZ_OTA_OP_ABORT, NULL, 0, 0);
+    ota.session = -1;
+    return rv;
+}
+
+static int op_os_update(int sess, struct session *s, uint32_t step)
+{
+    if (step == FS_OTA_BEGIN)
+        return ota_begin(sess, path_arg(s, 0));
+    if (ota.session != sess)
+        return GZ_EPERM;
+    switch (step) {
+    case FS_OTA_STEP:
+        return ota_step();
+    case FS_OTA_ARM:
+        return ota.verified ? ota_arm() : GZ_EPERM;
+    case FS_OTA_CANCEL:
+        ota_cancel();
+        return 0;
+    }
+    return GZ_EINVAL;
+}
+
 static int dispatch(const struct gz_msg *m, struct gz_msg *r)
 {
     uint32_t op = m->w[0];
@@ -396,8 +532,12 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
     if (op == FS_NAND_READ) return op_nand_read(s,m->w[2],m->w[3]);
     if (op == FS_STATFS)
         return op_statfs(s, m->w[2]);
-    if (op == FS_FORMAT)
+    if (op == FS_OS_UPDATE)
+        return op_os_update(sess, s, m->w[2]);
+    if (op == FS_FORMAT) {
+        ota_cancel();
         return op_format();
+    }
     if (op == FS_CARD_FORMAT) {
         for (int i=0;i<MAX_FILES;i++) {
             if (files[i].used && files[i].card && files[i].cf.f.obj.fs &&
@@ -421,6 +561,8 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
     case FS_LIST:
         return path ? op_list(s, path, m->w[2], r) : GZ_EINVAL;
     case FS_OPEN:
+        if (path && (m->w[2] & ~FS_O_READ) && ota_locked(path))
+            return GZ_EBUSY;
         return path ? op_open(sess, path, m->w[2]) : GZ_EINVAL;
     case FS_READ:
         if (!f)
@@ -470,6 +612,8 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
             return op == FS_MKDIR ? card_mkdir(cpath) : card_remove(cpath);
         if (mount_err)
             return mount_err;
+        if (op == FS_REMOVE && ota_locked(path))
+            return GZ_EBUSY;
         return gz_err(op == FS_MKDIR ? lfs_mkdir(&lfs, path) : lfs_remove(&lfs, path));
     case FS_RENAME: {
         const char *to = path_arg(s, FS_PATH_MAX);
@@ -484,6 +628,8 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
             return card_rename(cpath, cto);
         if (mount_err)
             return mount_err;
+        if (ota_locked(path) || ota_locked(to))
+            return GZ_EBUSY;
         return gz_err(lfs_rename(&lfs, path, to));
     }
     default:

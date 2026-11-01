@@ -22,6 +22,7 @@ static inline int __gz_sc(int n, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 #define GZ_SC1(n, a)        __gz_sc((n), (uint32_t)(a), 0, 0, 0)
 #define GZ_SC2(n, a, b)     __gz_sc((n), (uint32_t)(a), (uint32_t)(b), 0, 0)
 #define GZ_SC3(n, a, b, c)  __gz_sc((n), (uint32_t)(a), (uint32_t)(b), (uint32_t)(c), 0)
+#define GZ_SC4(n, a, b, c, d) __gz_sc((n), (uint32_t)(a), (uint32_t)(b), (uint32_t)(c), (uint32_t)(d))
 
 #define GZ_SPAWN_PRIVILEGED 0x1
 /* Only privileged spawners may mark a romfs program as a managed app. */
@@ -155,6 +156,11 @@ static inline int gz_sysinfo(struct gz_sysinfo *si) { return GZ_SC1(SYS_SYSINFO,
 static inline int gz_boot_mode(void) { return GZ_SC0(SYS_BOOT_MODE); }
 static inline int gz_power_status(struct gz_power_status *st) { return GZ_SC2(SYS_POWER_STATUS, st, sizeof(*st)); }
 static inline int gz_power_sleep(int mode, uint32_t alarm_s) { return GZ_SC2(SYS_POWER_SLEEP, mode, alarm_s); }
+/* OTA updates (glaze/ota.h, docs/OTA.md); staging is the file server's. */
+#include <glaze/ota.h>
+static inline int gz_ota_status(struct gz_ota_status *st) { return GZ_SC2(SYS_OTA_STATUS, st, sizeof(*st)); }
+static inline int gz_ota_stage(uint32_t op, const void *a1, uint32_t a2, uint32_t a3)
+{ return GZ_SC4(SYS_OTA_STAGE, op, a1, a2, a3); }
 static inline int gz_reboot_ce(void) { return GZ_SC0(SYS_REBOOT_CE); }
 static inline int gz_task_snapshot(struct gz_task_snapshot *s)
 { return GZ_SC2(SYS_TASK_SNAPSHOT, s, sizeof(*s)); }
