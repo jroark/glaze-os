@@ -726,3 +726,10 @@ nand-writer-test: ../tests/nand_writer.c glaze_usb/nand_write.c ../kernel/nand_r
 	$(USB_CC) $(CFLAGS) $(USB_FLAGS) $(USB_TLS) -fsanitize=address,undefined ../tests/nand_writer.c glaze_usb/nand_write.c libwolfssl.a -o ../out/host/nand-writer-test
 	../out/host/nand-writer-test
 .PHONY: nand-writer-test
+
+# Portable falling-block rules and versioned save-state validation.
+tetris-test: ../tests/tetris.c ../packages/tetris/game.c ../packages/tetris/game.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined $(filter %.c,$^) -o ../out/host/tetris-test
+	UBSAN_OPTIONS=halt_on_error=1 ../out/host/tetris-test
+.PHONY: tetris-test
