@@ -32,119 +32,17 @@ See `docs/dev/SDK.md`. Keep packaged SDKs and generated apps under ignored outpu
 
 `main.o`, `input.o` and `romfs.img` are always rebuilt because `INIT`, `BUILD_ID` and `INPUT_SCRIPT` are baked into them. Every directory under `apps/` and `servers/` becomes a program, `bin/<dirname>` in romfs, with no Makefile edit, except the optional `ldtest*` and `ldmem` test apps, and `ktest`/`ktest_pong`, which go in only when `INIT=bin/ktest`. romfs is nearly full (its slot ends at 0x500000), which is why wolfSSL is built `-Os`; `NAND_DROP=<apps>` leaves apps out of a NAND image's romfs (`NAND_DROP=wince` makes room for `WL54CF=1`'s firmware, and for `INIT=bin/ktest`). Assets in `assets/gen/` are checked in; they are regenerated only on macOS with `swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures`. The system sounds in `assets/sounds/` (romfs `sounds/`) are checked in too, synthesized by `tools/mksounds.py assets/sounds`.
 
-`packages/<name>/` holds an installable app (sources, `Info`, `icon.gzi`): it is linked like a built-in app but never put in romfs, and `tools/mkromfs.py --package` packs it as `out/pkg/<name>.gzp` (dynamic builds only). Packages are not on the factory volume; put them on a card image (`tools/mkcfimg.sh out/cf.img 16 16 out/pkg/*.gzp`) and install them from Files. `tools/mkgzi.py` turns a PNG into a GZI icon. `hello` is the test package (ktest uses it); `minesweeper` and `solitaire` are games, which keep their saved game in `<bundle>/data/state` (`CF=out/cf.img tests/run.sh tests/ui/t_minesweeper.txt 34`, likewise `t_solitaire.txt`; their taps in Files assume a card holding only hello, minesweeper and solitaire). `tests/run.sh` takes `NET=1` to boot with `--ne2000`, and `FS_FROM=<nand image>` to boot another run's file system (apps installed from a card, then a network boot). `aim` is an AIM client speaking OSCAR to a server the user names (AOL's are gone; test against a self-hosted Open OSCAR Server): `make -C host aim-test` checks its protocol engine (`packages/aim/oscar.c`) natively, `--live host port sn pw [buddy msg]` signs on to a real one, and `tests/ui/t_aim_install.txt` then `tests/ui/t_aim.txt` drive the app. `gmail` is a Gmail client speaking IMAPS (`imap.gmail.com:993`) and SMTPS (`smtp.gmail.com:465`) over wolfSSL with an App Password (or a custom IMAP/SMTP server): `make -C host gmail-test` checks its MIME, IMAP4rev1 and ESMTP engines (`packages/gmail/mime.c`, `imap.c`, `smtp.c`) natively, `--serve <imap_port> <smtp_port>` runs a local mock IMAP/SMTP server, `--live` tests a live server, and `tests/ui/t_gmail_install.txt` then `tests/ui/t_gmail.txt` drive the app. Files in `packages/<name>/res/` are packed as `res/<file>`; AIM's and Gmail's sounds come from `tools/mksounds.py --aim packages/aim/res` and `tools/mksounds.py --gmail packages/gmail/res`.
-
-The website (glaze-os.com) is static HTML in `site/`; `tools/mksite.py` builds its images from emulator screenshots and `tools/publish_site.py` publishes it to the `glaze-os-site` stack (`infra/site/stack.json`). See `docs/WEBSITE.md`.
-
-The built-in piezo (`docs/hardware/BUZZER.md`) is BLG channel `09A0/9A4/9A8`, not
-backlight `0980/988/98C`. Its kernel driver is `kernel/drivers/buzzer.c`;
-the audio server sequences patterns in `servers/audio/buzzer.c`. Preserve
-shared BLG config `0984` and gate `1128` across display power changes.
-Use `buzzer-driver-test audio-driver-test audio-volume-test display-test`.
-
 Romfs is for the OS and built-in apps only. User files, settings and app data belong in the file system: `userdata/` is the factory volume, which `mkfsimg` (`out/buildtools/mkfsimg`, built with `HOSTCC`, default `cc`; `make -C host mkfsimg` builds a native copy in `out/host`) formats into `out/fs.img` and `tools/mk_nand.py --fs-image` places at 0x500000. Don't name files in `userdata/` with spaces, since make lists them.
 
 ROM binaries must not be committed, including original demos and uploaded test games.
 Generate demo cartridges only under ignored `out/pkg-res/`; keep external ROMs outside
 the source tree or under ignored `out/`. Build and native-test targets generate their own demos.
 
-`make out/pkg/doom.gzp` builds the DoomGeneric port (no WAD is packed or
-fetched). Platform I/O, buttons, indexed video and PCM effects live in
-`packages/doom/`; pinned engine patches are in `third_party/doomgeneric/UPSTREAM.md`.
-`make -C host doom-test` uses synthetic data; `DOOM_WAD=/external/doom1.wad`
-adds real-engine movement/audio/save/load checks. See `docs/DOOM.md`.
-
-Battery, charging and idle power (`docs/hardware/POWER.md`) follow Windows CE's
-gwes.exe battery driver: GIUPIODL bits 12/2, a PIU A/D port sample at
-`0x0A000390` from `kernel/drivers/battery.c`'s tick, EEPROM calibration and
-the averaging/bands in `glaze/battery.h`. `gz_power_status()` is
-size-checked; SpringBoard draws and warns (`servers/springboard/power.c`).
-The idle thread runs VR4131 STANDBY (`IDLE_STANDBY=0` disables it). Use
-`make -C host battery-test settings-test` and be300's `--battery`,
-`--battery-state`, `--battery-drain` through `BE300_ARGS`.
-
-Power off (`docs/hardware/POWER.md` "Power off") follows Windows CE's OEMPowerOff:
-holding Power (or the Settings → Battery → Sleep delay after the screen goes
-off) shows Goodbye, then `SYS_POWER_SLEEP` (`kernel/drivers/power.c`)
-suspends or hibernates until Power or the next notification's RTC alarm.
-Hibernate resumes through the SPL (`kernel/resume.h`): the boot ROM
-overwrites low RAM and probes powers of two, so the kernel saves those pages
-and `mm.c` reserves the SPL's; keep this in mind when moving anything in low
-RAM. Use `make -C host idle-test boot-init-test`, `tests/ui/t_poweroff.txt`,
-`t_hibernate.txt`, `t_poweroff_alarm.txt` and `HIBERNATE_VERIFY=1`.
-
-Network development transport is in `servers/usb/network.c`, sharing the
-USB dispatcher's capabilities and lifecycle. `glaze-usb --host HOST --key FILE`
-uses TLS 1.2 ECDHE-PSK; it is off by default. See `docs/dev/NETWORK_DEBUG.md`.
-`make -C host debug-net-test` runs native paired-TLS tests; the opt-in
-`NETDEBUG_TESTS=1 INIT=bin/debug_guest DEBUG_RELOAD_ADDR=HOST_LAN_IP` image and
-`tests/debug_runtime.py` check real lwIP/RPC and reload/reconnect. Rebuild normally
-after testing. Never commit `DEBUG.KEY`, other pairing files, or fixture images.
-
-USB networking (`docs/hardware/USB_NETWORK.md`) uses `kernel/drivers/usbnet.c` queues
-and `servers/usb/ethernet.c`'s independent framed tunnel parser. macOS uses
-utun (IPv4 plus an AF_INET prefix, ARP adaptation); Linux uses TAP. Native
-`make -C host usb-net-test net-driver-test service-test usb-driver-test` covers
-packet framing, backpressure/replay and lifecycle. USB takes routing precedence
-while the host helper runs; changing transport restarts the network service.
-
-Screen mirroring (`docs/dev/MIRRORING.md`) adds a localhost-only VNC bridge to
-`glaze-usb mirror`. Device snapshots/deltas are in `servers/usb/mirror.c`;
-the host bridge/RFB engine are `tools/glaze-usb/mirror.c` and `rfb.c`. Input is
-capability-gated and shares timed input's disconnect release state. Use
-`make -C host mirror-test usb-input-test usb-driver-test`; the network guest
-fixture also checks complete mirror CRCs and live input. No capture buffer
-exists until a viewer connects; no VNC listener is opened on the device.
-
-Handwriting input (`docs/os/HANDWRITING.md`) is shared by the existing keyboard
-API: `lib/ui/handwriting.c` renders/captures ink and `recognize.c` performs
-bounded integer point-cloud recognition using original `ink_shapes.h` data.
-The new method byte uses `ui_keyboard`'s former padding; size and old field
-offsets stay unchanged. Do not extend this structure without considering SDK
-clients. Use `make -C host handwriting-test ui-events-test settings-test` and
-`make sdk-test`; `tests/ui/t_handwriting_notes.txt` checks Notes with scripted input.
-
-Hard icons (`docs/os/HARD_ICONS.md`) are the seven printed touch buttons below
-the LCD (panel rows 320..359). Their zones and Windows CE's assignments come
-from touch.dll and COShell's registry. SpringBoard captures strokes that start
-there (`servers/springboard/hardicon.c`) and runs the `sb.icons` assignment
-(`glaze/hardicon.h`, Settings → Icon Buttons). It never fires while locked.
-`ui_claim_hard_icons` lets a front app receive `GZ_KEY_ICON1..7` instead,
-through the appended `sb_shared.hard_icons`. Use `make -C host hardicon-test
-settings-test` and `tests/ui/t_hardicon.txt`.
-
-The text clipboard (`docs/os/CLIPBOARD.md`) is volatile SpringBoard state in
-`servers/springboard/clipboard.c`, with chunked, atomic IPC through the existing
-request area. `lib/ui/edit.c` owns one focused selection per process; apps opt
-into keyboard commands with `ui_keyboard_edit_init` and route text through
-`ui_edit_key`/`ui_edit_event`, using matching flags for secret/filtered fields.
-Preserve the keyboard/shared-memory ABI. Run `clipboard-test stowaway-test
-handwriting-test ui-events-test settings-test mirror-test usb-input-test`,
-`browser-test`, full builds and `sdk-test`; `tests/ui/t_clipboard.txt` exercises
-cross-app touch copy/paste. Clear INPUT_SCRIPT for normal builds afterward.
-
-OTA updates (`docs/os/OTA.md`, `glaze/ota.h`) replace the kernel and romfs
-(logical boot blocks 5-319) on a physical NAND image. App Store → Updates
-downloads a signed `.gzu` (per-block deflate) to `/Library/Updates`; the
-file server streams it to the kernel (`FS_OS_UPDATE`, `SYS_OTA_STAGE`,
-`kernel/ota_stage.c`: Ed25519 with the key in `config/ota_pubkey.bin`,
-SHA-256, block CRCs), which writes a `GZOJ` journal to a reserve block and
-resets; the SPL (`boot/ota_apply.c`, read-only `ftl.c` with
-`FTL_READONLY`, puff) installs it, resuming after any power cut. The SPL is
-never updated over the air. `VERSION` is the OS version; bump it per
-release. `make ota` signs `out/ota/os/` natively with
-`~/.config/glaze/ota-ed25519.pem` (never commit it); `OTA_PUBKEY=` builds
-an image trusting a test key. Use `make -C host ota-test boot-init-test`,
-`out/host/fstest` after `ftl.c` changes, and `tests/run_ota.py` (emulator, power
-cuts).
+Never commit secrets or vendor material: the OTA signing key (`~/.config/glaze/ota-ed25519.pem`),
+`DEBUG.KEY` and other pairing files, `CODEX.AUTH` login exports and other credentials,
+Doom WADs, or binaries, dictionaries, maps and NAND images recovered from Windows CE.
 
 ## Running and testing
-
-`make out/pkg/chatgpt.gzp` builds the direct Codex chat package. Its device-code
-OAuth, login import, token refresh and SSE client live in `packages/chatgpt/`;
-`tools/chatgpt_signin.py` uses a dedicated official Codex CLI login for browser
-authorization. `make -C host chatgpt-test` runs native protocol/TLS fixtures.
-See `docs/CHATGPT.md`. Credentials and `CODEX.AUTH` exports must never be committed.
 
 ```sh
 be300 --nand out/glaze.bin --rtc-host-time > stdout.log 2> stderr.log
@@ -170,118 +68,23 @@ be300 --nand out/glaze.bin --rtc-host-time --cf out/cf.img    # with a CompactFl
 
 ## Architecture
 
-**Boot.** The boot ROM loads the SPL (`boot/`) from the B000FF container at NAND 0x4000. The SPL reads the kernel slot's 512-byte header at 0x14000 (`struct gz_kernel_header`, `glaze/ota.h`: load, entry, size, CRC, version), streams the flat kernel from 0x14200, checks its CRC and jumps to it; it isn't built against a particular kernel. `tools/mk_nand.py` packs the image (`--version` from `VERSION`).
+Subsystem notes live next to the code, in CLAUDE.md files that Claude Code loads when
+working in that directory:
 
-**Flash layout.** The SPL loads only the kernel (about 56 KB) from 0x14000. The romfs (`tools/mkromfs.py`: apps, libraries and assets, files page-aligned) sits raw at `ROMFS_OFFSET` 0x40000 up to 0x500000 (`tools/mk_nand.py --romfs` checks the 4.75 MiB slot), and 0x500000 to the end is the file server's region (`FLASH_FS_OFFSET`, `GZ_FLASH_BLOCKS`). There is no other persistent store on the device; a CompactFlash card mounts as `/Card`.
+| Directory | Covers |
+| --- | --- |
+| `kernel/` | boot, flash layout, romfs paging, scheduling, IPC, processes, threads, drivers, CompactFlash, buzzer, battery and power off, OTA |
+| `servers/springboard/` | input, the SpringBoard and app protocol, multitasking, passcode, home screen, notifications, hard icons, clipboard, time |
+| `servers/fs/` | littlefs and Dhara, ECC, packages, volume layout, `/Card` |
+| `servers/net/` | lwIP server and BSD sockets |
+| `servers/usb/` | network debugging, USB networking, screen mirroring |
+| `servers/audio/` | wave output, player and stream modes, system sounds, libmedia |
+| `lib/` | libgfx, libui, handwriting, dynamic linking |
+| `apps/browser/`, `apps/wince/` | Browser engine, network and JavaScript; Windows CE apps from NAND |
+| `wince/glazeboot/` | RAM boot from Windows CE |
+| `packages/`, `site/` | installable apps (AIM, Gmail, Chat, Doom, games); the website |
 
-**romfs paging** (`kernel/romfs.c`). Only the archive's entry table is read at boot; its 4 KiB pages come from NAND into a shared page cache on first use, so RAM holds only what is used. `gz_romfs_map` makes a `REGION_ROMFS` mapping with no pages, and a romfs program's read-only shared pages are left unmapped (`image.c`); the first user access takes a TLB fault that `trap()` hands to `as_fault`, which reads the page in and maps it read-only (writes still kill the process), and `uva_to_kva` does the same when a syscall reads such memory first. The kernel reads ELF headers, private (writable or off-colour) pages and the input script through `romfs_read`. A cache frame's colour is its archive offset's bit 12; a per-frame map count pins mapped pages, and the page allocator takes back unmapped ones when it runs out (`romfs_reclaim`), so `gz_sysinfo` counts those as free (`cache_pages`, `reclaimable_pages`). romfs images are shared by entry without being read, and byte images by content.
-
-**Kernel** (`kernel/`):
-- Non-preemptive: kernel code runs with interrupts disabled, and user threads are preempted from the timer tick.
-- Scheduling is strict priority (high, normal, low, idle) with round-robin within a level.
-- Two-level page tables hold PTEs in VR41xx EntryLo format (`mips.h`). The VR41xx TLB layout differs from standard R4000.
-- IPC is synchronous send/recv/reply on named ports with 64-byte messages (`struct gz_msg`), plus per-port notification bits. Bulk data goes through shared memory (`SYS_SHM_*`).
-- Syscall numbers and the ABI are in `lib/include/glaze/abi.h` (shared with userspace); user wrappers are in `glaze/sys.h`.
-- Device access is gated by process flags. `PROC_PRIVILEGED` (framebuffer, input) can be passed down by a privileged spawner. `PROC_FLASH` (raw NAND and the CF card's sectors), `PROC_NET` (Ethernet frames) and `PROC_AUDIO` (wave output) are granted only by the kernel, to `bin/fs`, `bin/net` and `bin/audio`; `sys_spawn` masks other flags.
-- The trusted `config/services.json` catalog starts `bin/fs` and `bin/audio`; `bin/net` starts only when a network driver is up. A deferred kernel worker handles hardware dependencies and service restarts. `INIT` (default `bin/springboard`) remains the compositor/test entry point.
-- Network backends are separate romfs `drivers/*.ko` ELF32/MIPS ET_REL modules, loaded by CIS identity and released on removal; they are excluded from the linked kernel. See `docs/os/DRIVERS_SERVICES.md`. Use `make -C host module-test net-driver-test service-test`, `python3 tests/services_catalog.py`, and `SERVICE_TESTS=1 INIT=bin/service_hotplug` for lifecycle validation.
-- Managed apps have three `SYS_PROC_BG` states (`GZ_PROC_FG`, `GZ_PROC_BG` at `PRIO_LOW`, `GZ_PROC_SUSPENDED`): a suspended process's runnable threads stay off the run queue until another state thaws them (`sched_freeze_proc`). Only a privileged caller sets them, except that an app in the background may suspend itself. A parent that registers a port with `SYS_CHILD_NOTIFY` gets `GZ_NOTIFY_CHILD` when a child exits. `SYS_SHM_UNMAP` drops a mapping (the object is freed with its last one), and shm mappings reuse freed address ranges.
-- `SYS_SPAWN_IMAGE` (`gz_spawn_image`) starts an installed app from an ELF in the caller's memory: `image_map_exec` copies it into shared image frames like a `GZ_IMAGE_BYTES` library, `elf_load` serves both it and romfs, and the result is always unprivileged and must use `/lib/ld-glaze.so.1`.
-- `tests/bench.py LABEL` boots a launch-script image and ktest a few times headless and writes medians to `out/bench/LABEL.txt` (boot time, free memory, cold/warm app launch, ktest), from SpringBoard's `sb: ...` lines and ktest's `done` line; compare two labels around a change that affects memory or speed.
-- Processes may have extra threads (`SYS_THREAD_CREATE`, libc `gz_thread_create`). Each gets a 64 KiB stack in a 64 KiB-aligned slot below the main stack (with an unmapped guard); libc keeps a per-thread block at the stack's base (`gz_self()`: tid, `errno`, TLS slots). The last thread to exit ends the process. Stacks are faulted in a page at a time (`REGION_STACK`); `SYS_MMAP_ANON` still commits at once, and malloc gives requests of 64 KiB or more their own mapping, which `free` returns with `SYS_MUNMAP_ANON`. Synchronization is the kernel's process-private counting semaphores (`kernel/sem.c`, `SYS_SEM_*`, with timeouts); libc's recursive `gz_mutex` sits on them, and malloc and the fs/net clients lock only once a process has a second thread.
-
-**Input.** Touch comes from the VRC4173 PIU, through GIRQ0 to GIU line 0 to IP2 (`kernel/drivers/irq.c`, `input.c`); buttons are polled and also arrive on GIRQ0. Events go into a kernel ring that only the bound compositor drains. SpringBoard forwards events to the foreground app through the shared ring in `struct sb_shared`. `ui_next_event` coalesces consecutive moves. Stowaway is detected once at boot
-(`kernel/drivers/stowaway*.c`); UART RX is polled on the timer tick. `GZ_EV_TEXT`
-and keyboard key events pass through SpringBoard to the foreground app.
-`SYS_INPUT_STATUS` reports dock presence, passed in `SB_HELLO` reply word 4;
-`ui_has_hardware_keyboard()` / `ui_keyboard_height()` separate editing focus
-from on-screen keyboard layout. `make -C host stowaway-test` checks the decoder
-and shared text editor.
-
-**SpringBoard ↔ app protocol** (`glaze/sb.h`, `lib/ui/app.c`):
-- An app sends `SB_HELLO` and receives a shared-memory 240x304 surface; the top 16 rows of the screen are SpringBoard's status bar.
-- The app draws into the surface and calls `ui_present()`, which blocks until the dirty rectangle is on screen.
-- Pressing Home moves the foreground app to the background (`GZ_EV_APP_DEACTIVATE`, `PROC_BACKGROUND` / `PRIO_LOW`); tapping its icon again warm-resumes it (`GZ_EV_APP_ACTIVATE`). libui first ends a touch in progress with `GZ_EV_TOUCH_CANCEL` (its last position; libui's scroll views, lists and keyboard drop it, and every app clears its own press state without acting), returns the DEACTIVATE, and then suspends the whole process (`GZ_PROC_SUSPENDED`) inside its next `ui_next_event` until ACTIVATE. SpringBoard freezes a background app itself `SUSPEND_MS` (1 s) after Home unless it called `ui_set_background_running(true)` (AIM and Gmail, which keep running at `PRIO_LOW`). DEACTIVATE is the moment to save and to release shared resources (Notes, Browser and Sketch flush pending saves; Video pauses, freeing the audio stream), because a suspended app may be ended without warning. Up to `SB_MAX_RUNNING` (4, all shown in the switcher) apps stay resident, with LRU and low-memory eviction (`LOW_MEM_PAGES` = 512). Slot 0 keeps its surface; the others unmap theirs (`gz_shm_unmap`) when their app ends. SpringBoard learns of exits from `GZ_NOTIFY_CHILD` rather than polling. Each install bumps the bundle's `.install-id` (`pkg_install_id`), so a reinstall, even at the same version, ends the app's background copy. Double-pressing Home on the home screen opens the bottom multitasking switcher bar (tap to switch, hold to enter quit mode with `-` badges).
-- Passcode lock: with the `sb.passcode` preference set (salted hash, `glaze/passcode.h`, set from Settings → Passcode Lock), slide to unlock leads to `ST_PASSCODE`, a keypad drawn by libui's `ui_draw_passcode`; five wrong codes disable entry for a minute, doubling. `tests/ui/t_passcode.txt` exercises it.
-- The home-screen app list is the `builtin_apps[]` table in `servers/springboard/draw.c` (icons are `assets/gen/icon_*.gzi`), copied into the runtime `sb_apps[]`. Installed apps (`servers/springboard/apps.c`) are appended from `pkg_list` of `/Applications` and `/Card/Applications`, rescanned on returning home and polled on the card every 2 s; an app keeps its index for the session (`!present` while its card is out, an empty `path` once uninstalled), since badges and notes are indexed by it. Holding an icon for 1 s enters jiggle mode, where installed apps get a delete button. SpringBoard reads an installed app's executable and spawns it with `gz_spawn_image`, and puts its bundle path in `sb_shared.bundle`; `ui_init` passes it to `res_set_bundle`, so `res_map` falls back to `<bundle>/res/`.
-- Badges and notifications belong to SpringBoard (`servers/springboard/notify.c`), so they outlive the app. The front app calls `ui_set_badge` and `ui_notify_post/cancel/pending` (`lib/ui/notify.c`). Text travels in `sb_shared.req`, and fire times are `glaze/notify.h` wall-clock seconds. A note fires as a banner, on the lock screen when locked, or as `GZ_EV_APP_NOTIFY` with no badge when its own app is in front. Badges and pending notes persist as the `sb.badges`/`sb.notes` preferences, keyed by binary path. Other processes post for an app by path through `sb_*_for` (`lib/libc/notify.c`), which is unauthenticated because the kernel does not identify senders. Clock's timer and Calendar's reminders use it; `tests/ui/t_notify.txt` exercises it.
-
-**Networking** (`kernel/drivers/ne2000.c`, `servers/net`, `glaze/net.h`, client in `lib/libc/net.c`):
-- The NE2000 sits in the PCMCIA card I/O window at 0x0A00C300 once bit 2 of the bridge register 0x0A00A01C is set; its interrupt is GIRQ0 bit 0, which also carries CF state changes. The driver queues received frames in the kernel and notifies the port bound with `SYS_NET_BIND` (`GZ_NOTIFY_NET`); the timer tick polls it too.
-- The server runs lwIP (vendored unmodified in `third_party/lwip`, built into `libnetstack.a`) in its tcpip thread on the OS port in `servers/net/sys_arch.c` (semaphores, mailboxes, threads; `LWIP_NETCONN_SEM_PER_THREAD` keeps its semaphore in the thread block). Options are in `servers/net/lwipopts.h`.
-- The main thread receives requests and frame notifications (frames go to `tcpip_input`). Calls that finish at once run there on lwIP's sockets; calls that wait (connect, accept, send, recv, resolve, ping, poll) go to worker threads, which make the blocking `lwip_*` call and reply to the sender's token. lwIP's poll bits differ from POSIX's, which the protocol uses.
-- Sessions mirror the file server's (8 KiB shared buffer). A timeout of 0 means non-blocking. BSD sockets for apps (`sys/socket.h`, `poll.h`, `netdb.h`, ...) are `lib/libc/socket.c` on top of `glaze/net.h`: an fd is a net socket handle, IPv4 TCP/UDP only.
-- lwIP won't route 127.0.0.0/8 out of the Ethernet interface, so the guest can't reach the host's loopback through the NAT; use the host's own address.
-
-**Time** (`glaze/tz.h`, `glaze/ntp.h`, `lib/libc/tz.c`, `ntp.c`):
-- The RTC holds local time, and everything (notifications, file times, the TLS date check) reads it as such. Zones are a table of cities with a standard offset and a US, EU or Australian daylight saving rule; `tz_local_to_utc`/`tz_utc_to_local` convert. Settings → Date & Time keeps the zone index in `set.zone` (default Los Angeles) and moves the RTC when it changes.
-- With "Set Automatically" (`set.ntp`, default on), SpringBoard's `timesync.c` thread runs `ntp_sync` (SNTP over `glaze/net.h` UDP to `pool.ntp.org`, converted through the zone) once the network is up and every 6 hours, backing off after failures. Settings syncs at once when the switch is turned on, and notifies SpringBoard's port with `SB_NOTIFY_TIME` after changing the clock or these settings. `set.ntp_last` is the local time of the last sync.
-
-**UI libraries.** `libgfx` (`lib/gfx`) is a software RGB565 renderer for GZI images and GZF fonts; the formats are described in `lib/include/glaze/gfx.h`. `libui` (`lib/ui`) provides the nav bar, bar buttons, grouped cells, alerts, the keyboard, inertial scroll views and push/pop transitions. Apps follow the Settings/Notes pattern: draw the whole view, keep hit rects, `redraw()` after events, and use `ui_transition(draw_fn, forward)` for navigation. `host/` builds `libgfx` natively to render SpringBoard previews.
-
-**Dynamic linking.** Apps and SpringBoard are PIE by default, sharing libc, gfx and UI through `lib/ldso` and `kernel/image.c`. `fs` and `net` stay static; `bin/audio` is dynamic. Read-only image frames are shared; writable data/GOT/BSS are private. Use the export maps and existing PIC rules for libraries; never embed another libc or static client archive in a plugin. `dlclose` releases an unreachable library after destructors: callers must stop its threads/callbacks and discard pointers first. No Linux compatibility, compiler TLS or C++ runtime. See `docs/os/DYNAMIC_LIBRARIES.md`. Run `make -C host elf-test`, `LD_TESTS=1 INIT=bin/ldtest`, and ordinary `ktest` after loader changes. Use `OUT=out/static DYNAMIC=0` for the fallback; keep build variants in separate output directories.
-
-**File system** (`servers/fs`, `glaze/fs.h`, client in `lib/libc/fs.c`):
-- littlefs runs on the Dhara NAND translation layer, both vendored unmodified in `third_party/` and built into `libfsstack.a`. Don't edit them; put changes in `servers/fs/ftl.c`.
-- ECC is in-band: the spare area is synthesized by the emulator and absent from image files. Each page gets a 4-bit BCH code stored in the unused tail (bytes 480–511) of the checkpoint page Dhara writes after every 3 data pages.
-- The rest of `ftl.c`'s design is documented in its header comment and depends on Dhara's journal layout (`log2_ppc == 2` for 512-byte pages): the ECC cache, the bad-block table in the region's first two blocks, read-back verification, and torn-checkpoint handling. Re-run `out/host/fstest` after any change to `ftl.c`.
-- littlefs's block count is fixed from the geometry, not from `dhara_map_capacity`, which changes between mounts.
-- Clients get a session with an 8 KiB shared buffer; paths and data travel in it.
-- Packages (`glaze/pkg.h`, `lib/libc/pkg.c`): a `.gzp` is the romfs container with the magic `GZPK` (entries `Info`, the executable, `res/...`). `pkg_install` unpacks into `<id>.app.tmp` and renames it, replacing an install with the same id on either volume; `pkg_list` removes interrupted `.tmp` installs. An app's bundle path (at most 47 characters) is its identity for badges and notes; its data lives in `<bundle>/data`. `fs_remove_all` deletes a tree.
-- Layout: `/Documents`, `/Pictures` (Photos' Camera Roll), `/Applications` (installed apps), `/Music`, `/Movies`, `/Library/Preferences` (settings, one file per key, via `glaze/prefs.h`), `/Library/Notes`, `/Library/Caches` (rebuildable). A blank or erased volume gets only the folders in `servers/fs/folders.h`.
-- A CompactFlash card with a FAT volume appears as `/Card` (`servers/fs/card.c`, FatFs in `third_party/fatfs`, configured by its `ffconf.h`): a synthetic first entry of `/`, mounted from a partition table's first FAT partition or a table-less volume. `/Card` itself can't be removed, renamed or created on the flash, and renames between volumes fail. `fs_statvfs(path)` reports the volume holding a path. The server calls `card_check()` before each request; it compares the kernel's card generation and remounts, and handles from a previous card fail with `GZ_EIO`. Long names are UTF-8; hidden and system entries are not listed.
-- Reads are slow, about 1.5 s for a 150 KB picture in the emulator, so apps should cache derived data (Photos keeps thumbnails in `/Library/Caches/Photos`) and load in the background.
-
-**CompactFlash** (`kernel/drivers/cf.c`, `SYS_CF_*`, file server only):
-- The card shares the PCMCIA socket with the NE2000; `cf_init()` runs after `ne2000_init()` and only probes when no NE2000 answered. Its CIS (attribute memory at 0x0A00D000, even bytes) must not have a FUNCID other than fixed disk.
-- ATA in I/O mode at the secondary IDE ports: taskfile at 0x0A00C170, device control at 0x0A00C376 (`hw.h`). Polled PIO, LBA28, IDENTIFY / READ SECTORS / WRITE SECTORS only, at most 8 sectors per call; the emulator signals no command completion and implements no MULTIPLE commands.
-- No hot-plug interrupt: `SYS_CF_INFO` resamples the socket status and re-identifies on a change, bumping `generation`. The emulator's `--cf` and `--ne2000` together put the card in an undecoded slot, so use one or the other.
-
-**Audio** (`kernel/drivers/audio.c`, `servers/audio`, `glaze/audio.h`, client in `lib/libc/audio.c`, decoders in `lib/media`):
-- Wave output is a Casio ping-pong DMA block in the Kj window (registers `AUD_*` in `kernel/hw.h`), not the VRC4173 AIU. Its map and start/stop sequences come from WinCE's wavedev.dll (be300 `docs/BE300_AUDIO.md`, emulator model `src/hw/aiu.c`). Samples are S16LE, mono or interleaved stereo, at 8000/11025/16000/22050/32000/44100 Hz.
-- The driver refills two 4 KiB DMA buffers (written through KSEG1) from a 64 KiB ring that `SYS_AUDIO_WRITE` fills, pads with silence on underrun, and notifies the bound port with `GZ_NOTIFY_AUDIO` below half full. A drained buffer raises GIRQ0 bit 8; the timer tick polls too. `frames_played` counts only ring frames that have been played, and is the clock for positions and A/V sync.
-- The server is single-threaded: it decodes one MP3 frame or WAV chunk at a time between non-blocking receives while the ring has room. Player mode decodes files itself (Helix MP3, WAV PCM / IMA ADPCM) and survives the app; stream mode takes PCM from one client and resamples it (`media_rs_*`, linear, to the nearest hardware rate). Opening a stream pauses the player, which seeks back on resume.
-- System sounds (`servers/audio/sound.c`): clients ask with notification bits on the server's port (`audio_sound(AUDIO_SND_*)`, `audio_sound_stop`, `audio_sound_reload`), so nobody waits for the server and no session is used; `audio_sound_busy` is a message, for tests. Clips are 22050 Hz mono S16 WAVs used in place from romfs. A click voice (tap, key, swipe, lock, unlock) and an alert voice (tones; the timer repeats for up to 60 s until stopped) are mixed, scaled by the volume, resampled to the output and fed to `SYS_AUDIO_MIX`, a 16 KiB kernel ring added over the main ring at each DMA refill (kept at most 8 KiB ahead). With no player or stream running, the server starts the output at 22050 Hz mono with `GZ_AUDIO_START_IDLE` (silence isn't counted as underruns) and stops it once the sounds have played; a paused track is then resumed by seeking back. Settings → Sounds writes the `snd.*` preferences (`glaze/audio.h`: volume 0-10 for sounds and alerts only, switches, tone per timer/calendar/other notifications) and calls `audio_sound_reload`. libui plays the tap and swipe sounds from `ui_next_event` (`lib/ui/sound.c`) and the keyboard's clicks; SpringBoard plays lock, unlock, home-screen and notification sounds and stops the alert on unlock, Home or a banner tap.
-- `lib/media` is integer-only and builds `libmedia.so.1` (exports `media_*`, `lib/media/exports.map`); Helix is a private PIC archive (`out/pic/libhelix.a`) linked into `bin/audio` only, and `DYNAMIC=0` puts both in `libmedia.a`. Per-program extras for dynamic links are the `PROG_CFLAGS_*`/`PROG_DEPS_*`/`PROG_LDLIBS_*` variables in the Makefile. `lib/media` covers RIFF/WAV, IMA ADPCM, AVI index (idx1, or a movi walk), MP3 probing (ID3, Xing TOC), the resampler, and default Huffman tables for MJPEG frames that omit them. Helix is vendored with one change, a portable C branch in `real/assembly.h`.
-- Flash reads (about 70 KB/s sequentially, slower as seek-and-read) cost more than decoding. Videos therefore reads the AVI front to back through a read-ahead window and skips late frames; keep media at the bitrates of the samples in `userdata/Music` and `userdata/Movies`.
-
-**Browser** (`apps/browser`, "Browser" on the home screen):
-- The engine (`web.h`: `html.c`, `css.c`, `style.c`, `layout.c`, `paint.c`, `image.c`, `forms.c`, `page.c`) uses only libc and libgfx, so `make -C host browse` builds it natively (with ASan/UBSan): `out/host/browse <url | file.html> [out.bmp]` renders a page to a 240 px wide BMP, and `BROWSE_DUMP=1` prints the styled tree. `tests/web/basic.html` exercises it.
-- Engine text is Latin-1 plus libgfx's extra glyphs (`charset.c` maps everything else); the fonts cover 0xA0-0xFF. CSS px are laid out at 3/4 device px, so the screen is 320 CSS px wide. Layout is integer-only; wide tables are linearized; floats and positioning are ignored.
-- Network: `conn.c` (BSD sockets, TLS through wolfSSL's I/O callbacks), `http.c` (HTTP/1.1, chunked, gzip via stb's zlib), `loader.c` (queue, redirects, cookies, cache), `load.c` (document, then CSS, then images). `plat.h` is what differs between `main.c` (device) and `host/browse.c`.
-- https: `tls.c` runs vendored wolfSSL (`third_party/wolfssl`, GPLv3; TLS 1.2/1.3 client, configured by `apps/browser/tls/user_settings.h`, a private PIC archive of `bin/browser` like `libhelix.a`). Certificates are checked against Mozilla's roots (`assets/ssl/roots.der`, romfs `ssl/`, regenerated by `tools/mkroots.py`), by host name, and by date with a day of slack because the RTC is local time; a wrong RTC date fails every site. The context loads on the first https fetch; sessions are resumed per host. With no hardware RNG, the DRBG is seeded from `/Browser/seed` (rewritten each run) plus scheduler timing jitter. `WOLFSSL_USE_ALIGN` must stay: wolfSSL otherwise stores words to unaligned addresses, which fault on MIPS. `out/host/browse` builds wolfSSL natively; `BROWSE_ROOTS=ca.der` trusts a test CA (an `openssl s_server -WWW` makes a local https server).
-- `res:` URLs are the bundled pages in `assets/web` (romfs `web/`); the start page is `res:start.html`. State persists in `/Browser/state` and `/Browser/bookmarks`.
-- JavaScript and frame support, runtime bounds and native/device tests are documented in `docs/apps/BROWSER.md` and `docs/apps/BROWSER_WEB_APIS.md`. Bounded fetch
-and module graphs share the asynchronous loader; `script_web.inc` and
-`script_modules.inc` run inside script.c's VM failure boundary. Cancel their
-fetches and release native buffers on document retirement and VM failure.
-`js_web.js` is embedded into `js_dom.js` by mkjsbootstrap.py, never loaded from
-a mutable filesystem. Local storage uses exact-origin records with atomic
-replacement; preserve quota and origin checks when changing its backend. JerryScript, its DOM facade and soft-float helpers are private to Browser.
-- Images go through vendored `stb_image.h` (PNG, JPEG, GIF), downscaled at decode time; a document tree's decoded images are capped at 3 MiB.
-
-**RAM boot** (`wince/glazeboot`, `glaze/bootinfo.h`, `docs/dev/GLAZEBOOT.md`):
-- GlazeBoot is a Windows CE program, not a Glaze one, and lives outside `apps/`. The loader (`wince/glazeboot/GlazeBoot.c`) is C built with the be300-dev toolchain (clang and the Casio SDK; `make glazeboot-exe`, natively, since `./build.sh` runs in a container). `make glazeboot` supplies its generated headers in `out/glazeboot/gen`:
-  - `tramp_blob.h`: the trampoline (`tramp.c`, position independent) as bytes;
-  - `glazeboot_abi.h`: shared layouts from `wince/glazeboot/mkabi.c`.
-- Its `romfs.img` is GlazeBoot's own: a RAM boot holds all of romfs in RAM, so it carries only the apps in `GB_APPS` (default `appstore browser files settings wince`; `GB_APPS=all` for every app) and their icons, plus servers and test programs. SpringBoard shows only the built-in apps whose program romfs holds (`sb_has_program`).
-- It loads `kernel.bin` (`tools/mkkernelbin.py`) and `romfs.img` from a CF card (`tools/mkceboot.sh --autorun` makes one that Windows CE starts on insertion). The trampoline runs the page plan in `plan.h`. Until the console works, each stage paints the boot trace (`gz_boot_trace`, `glaze/bootinfo.h`) across the top of the screen.
-- The kernel gets a0 = `struct gz_bootinfo` (the SPL passes 0). `ram_boot` is then set:
-  - romfs pages come straight from reserved RAM, with no cache;
-  - `SYS_FLASH_*` are a RAM disk (`SYS_FLASH_INFO` gives its size);
-  - `SYS_NAND_*` open the whole NAND to the file server, never writing blocks 0-1.
-- The file server mounts Windows CE's FAT partition as `/NAND` (`servers/fs/nanddisk.c`, FatFs drive 1; the card is drive 0, and card paths go to FatFs unprefixed). The kernel maps NAND pages through Windows CE's block table (built from the spare tags as nanddisk.dll does) and corrects them with its spare-area Reed-Solomon ECC (`kernel/drivers/nand_ecc.c`, `make -C host nand-ecc-test`); erased-parity pages, as in the emulator, pass unchecked. Writes don't keep the tags or ECC, so `glaze.cfg` ships `nand=ro` and writes are opt-in (`nand=rw`); `nand=off` is `GZ_BOOT_NAND_OFF`.
-- `make ramboot` (`boot/spl.c` with `-DSPL_RAMBOOT`) hands over the same way from the SPL, so the emulator can test it.
-
-Direct CE NAND launches (`docs/apps/WINCE_NAND.md`) use Files' `sb_wince_launch`
-request and SpringBoard contexts under `/Library/WinCE`. `apps/wince/source.c`
-keeps original NAND assets read-only and stores mutations in the context;
-`assets.c` recovers matching NK exports/CCFS metadata and decodes CPK blocks.
-The appended `FS_NAND_READ` RPC remains bounded and read-only, using the existing
-kernel CE block-map/ECC path. Preserve packaged CE behavior and never commit
-recovered vendor binaries, dictionaries, maps or test NANDs. Run native
-`wince-test wince-nand-test`; `tests/run_wince_nand.py` checks actual Files launch
-through the RAM-boot trampoline and verifies unchanged source partitions.
+Longer design notes are indexed in `docs/README.md`.
 
 ## Hardware notes
 
