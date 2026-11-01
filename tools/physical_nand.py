@@ -21,7 +21,8 @@ BLOCK = 32 * RAW_PAGE
 DATA_BLOCK = 32 * 512
 RAW_SIZE = PAGES * RAW_PAGE
 FS_FIRST, FS_BLOCKS, RESERVE = 320, 684, 1004
-HELPER = ROOT / 'out/host/nand-inventory'
+HELPER = Path(os.environ.get('GLAZE_NAND_HELPER', ROOT / 'out/host/nand-inventory'))
+MKFS = Path(os.environ.get('GLAZE_MKFS_HELPER', ROOT / 'host/mkfsimg'))
 
 
 def sha(data):
@@ -215,7 +216,7 @@ def main():
             badfile, fsfile, candidate = tmp/'bad.bin', tmp/'fs.img', tmp/'candidate.raw'
             badfile.write_bytes(bitmap)
             seed = tmp/'net.entropy'; seed.write_bytes(os.urandom(32))
-            subprocess.run([str(ROOT/'host/mkfsimg'), str(args.userdata), str(FS_BLOCKS),
+            subprocess.run([str(MKFS), str(args.userdata), str(FS_BLOCKS),
                             str(fsfile), '--bad-blocks='+str(badfile),
                             '/Library/Preferences/net.entropy='+str(seed)], check=True)
             raw, plan = build(args.logical.read_bytes(), args.backup.read_bytes(), inventory, fsfile.read_bytes())

@@ -1,0 +1,33 @@
+GLAZE USB INSTALLER FOR CASIO BE-300
+
+Everything needed is included. No CF card, system Python, separate firmware
+or additional download is needed.
+
+macOS: drag Glaze Installer into Applications and open it.
+Windows: run setup and launch Glaze Installer. If needed, use USB driver setup
+in the app. In the bundled Zadig, select only the BE-300 (07CF:2002) and WinUSB.
+
+On the BE-300, open Connections -> PC Connect -> Connection method and select
+'USB' (not serial). Then connect USB and external power, choose your apps, and
+click Install Glaze.
+If NAND space is insufficient, use Windows CE to delete built-in apps you no
+longer need, keeping PC Connect available, then retry installation.
+Hello is not included; Windows CE compatibility starts unchecked. WL54-CF
+Wi-Fi firmware is an optional hardware choice.
+Detection, preparation, flashing and restart happen automatically.
+During GlazeBoot, the BE-300 shows a temporary installation screen and stays
+awake. Glaze is fully installed only after the final NAND boot completes. Keep USB
+and power connected until the app finishes. Details are available if needed.
+
+Save Windows CE backup and Verify Windows CE are optional. They start enabled.
+Uncheck backup to keep no CE restore copy. Uncheck verification to skip the
+extra CE read and execution probe. A temporary device read is still needed
+for image placement and flash consistency. Glaze image and write checks stay on.
+
+Backups are saved automatically to Documents/Glaze Backups unless changed.
+After installation, Open backup shows the saved folder. Keep that entire folder
+for Restore Windows CE. CE RAM files are cleared when Glaze starts, so save
+anything important from CE's volatile object store beforehand.
+
+These are development builds. Physical flashing and Windows USB driver setup
+still need validation; Windows GUI/runtime checks were performed under Wine.

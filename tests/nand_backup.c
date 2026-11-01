@@ -32,6 +32,13 @@ int main(void)
     assert(gu_nand_backup(&c,path)<0 && access(path,F_OK) && !access(partial,F_OK));
     assert(!unlink(partial)); fail=1;
     assert(gu_nand_backup(&c,path)<0 && access(path,F_OK));
-    assert(!unlink(partial)); assert(!rmdir(dir));
+    assert(!unlink(partial));
+    calls=0;fail=0;mismatch=1;
+    assert(!gu_nand_snapshot(&c,path) && calls==4682);
+    assert(!stat(path,&st) && st.st_size==17301504 && access(partial,F_OK));
+    assert(!unlink(path));calls=0;fail=1;
+    assert(gu_nand_snapshot(&c,path)<0 && access(path,F_OK) && !access(partial,F_OK));
+    assert(!unlink(partial));
+    assert(!rmdir(dir));
     puts("nand-backup: full two-pass read, private publication, no overwrite, mismatch and RPC failure PASS");
 }

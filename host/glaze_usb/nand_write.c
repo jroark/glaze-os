@@ -6,6 +6,7 @@
  * device still checks each block it erases against the plan's copy. */
 #include "client.h"
 #include <glaze/nand_repair.h>
+#include <glaze/install.h>
 #include <wolfssl/wolfcrypt/sha256.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,8 +58,15 @@ static int read_device(struct gu_client *c,uint8_t *out,bool keep_fs)
     }
     return 0;
 }
+static int install_status(struct gu_client *c,unsigned stage)
+{
+    if(!(c->caps&GU_CAP_INSTALL_STATUS))return 0;
+    uint8_t data[12]={0};gu_put32(data,stage);
+    return gu_call(c,GU_INSTALL_STATUS,data,sizeof(data));
+}
 static int compare(struct gu_client *c,const uint8_t *expected,const char *phase,bool keep_fs)
 {
+    if(install_status(c,!strcmp(phase,"preflight")?GZ_INSTALL_CHECK:GZ_INSTALL_VERIFY))return -1;
     uint8_t request[8];
     for(uint32_t page=0;page<32768;) {
         if(keep_fs && page==FS_FIRST*32)page=FS_END*32;
@@ -87,7 +95,7 @@ int gu_nand_apply(struct gu_client *c,const char *source_path,const char *target
     memcpy(masks,plan+72,128);
     if(allow_mismatch) {
         fputs("Source mismatch allowed: planning from the device's current NAND\n",stderr);
-        if(read_device(c,source,keep_fs))goto done;
+        if(install_status(c,GZ_INSTALL_CHECK) || read_device(c,source,keep_fs))goto done;
     }
     for(unsigned b=0;b<1024;b++) {
         if(!memcmp(source+b*GZ_NAND_REPAIR_BLOCK_BYTES,target+b*GZ_NAND_REPAIR_BLOCK_BYTES,GZ_NAND_REPAIR_BLOCK_BYTES))continue;

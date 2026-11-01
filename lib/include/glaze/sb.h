@@ -76,6 +76,7 @@ enum {
     SB_CLIPBOARD_COMMIT,
     SB_CLIPBOARD_READ,
     SB_CLIPBOARD_CLEAR,
+    SB_INSTALL_STATUS,      /* installer RAM session: w1 stage, w2 current, w4 total; w3 client pid */
 };
 
 enum {

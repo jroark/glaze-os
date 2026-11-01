@@ -19,6 +19,8 @@ void pc_checksums(uint8_t *p, unsigned n);
 int pc_valid(const uint8_t *p, unsigned n);
 int pc_connect(struct pc_link *p, struct usb_link *u);
 int pc_call(struct pc_link *p, unsigned op, const void *data, unsigned n);
+/* 1: exact byte match, 0: absent/different, -1: inspection failed. */
+int pc_file_matches(struct pc_link *p, const char *local, const char *remote);
 int pc_put(struct pc_link *p, const char *local, const char *remote);
 int pc_get(struct pc_link *p, const char *remote, const char *local);
 int pc_run(struct pc_link *p, const char *remote, const char *args);

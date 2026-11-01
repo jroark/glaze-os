@@ -25,7 +25,9 @@ out/host/glaze-usb ce-self-test
 out/host/glaze-usb boot
 ```
 
-Connect an awake BE-300 with its USB sync cable. `boot` defaults to the
+On the BE-300, set **Connections → PC Connect → Connection method: USB**
+before connecting. If the method is serial, USB may enumerate while the PC
+Connect handshake times out. Connect an awake BE-300 with its USB sync cable. `boot` defaults to the
 artifacts in `out/glazeboot`; an optional directory argument selects another
 build. It first uploads `UsbProbe.exe`, reads it back, launches it with a
 unique nonce, and downloads the resulting text to verify execution. Only
@@ -33,6 +35,10 @@ after that check succeeds does it upload GlazeBoot and the boot images.
 The tool stages files in `\Storage Card\GlazeUSB` when that volume has enough
 space, otherwise `\Nand Disk\GlazeUSB`. No card or preinstalled helper is
 required. CE uploads are read back before replacing a previous file.
+
+If internal NAND lacks space for staging, Windows CE allows deleting many
+built-in apps. Delete apps you no longer need through CE, keep PC Connect
+available, and retry. The installer does not remove CE apps automatically.
 
 To reclaim an old internal staging copy after moving to CF, boot Windows CE
 and run `out/host/glaze-usb ce-clean-nand` (`--dry-run` lists candidates).
