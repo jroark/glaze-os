@@ -150,8 +150,8 @@ PROG_LDLIBS_browser := -l:libwolfssl.so.1 $(OUT)/pic/libjerry.a
 PROG_STATIC_DEPS_browser := $(OUT)/lib/libjerry.a
 PROG_LDFLAGS_browser := --exclude-libs ALL
 PROG_CFLAGS_gmail := $(WOLFSSL_INC)
-PROG_DEPS_gmail := $(OUT)/pic/libwolfssl.a
-PROG_LDLIBS_gmail := $(OUT)/pic/libwolfssl.a
+PROG_DEPS_gmail := $(OUT)/shared/libwolfssl.so.1
+PROG_LDLIBS_gmail := -l:libwolfssl.so.1
 
 # ChatGPT uses the Browser's bounded HTTP/TLS transport, without its renderer.
 PROG_EXTRA_chatgpt := apps/browser/http.c apps/browser/conn.c apps/browser/tls.c apps/browser/url.c apps/appstore/inflate.c

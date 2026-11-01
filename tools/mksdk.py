@@ -11,7 +11,7 @@ import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-LIBS = ("libc.so.1", "libgfx.so.1", "libui.so.1", "libmedia.so.1", "ld-glaze.so.1")
+LIBS = ("libc.so.1", "libgfx.so.1", "libui.so.1", "libmedia.so.1", "libwolfssl.so.1", "ld-glaze.so.1")
 
 
 def copy(source, dest):
@@ -52,6 +52,7 @@ def main():
     ap.add_argument("--archive", type=Path)
     ap.add_argument("--archive-only", action="store_true", help="archive an already exported SDK")
     ap.add_argument("--revision")
+    ap.add_argument("--version", help="Glaze OS version (VERSION)")
     ap.add_argument("--cross", default="mipsel-linux-gnu-")
     args = ap.parse_args()
     dest = args.output.resolve()
@@ -76,6 +77,9 @@ def main():
             copy(path, stage / "sysroot/usr/include" / path.name)
         for name in LIBS:
             copy(args.build_dir / "shared" / name, stage / "sysroot/usr/lib" / name)
+        # wolfSSL, configured as the system's libwolfssl.so.1 (WOLFSSL_USER_SETTINGS).
+        copy(ROOT / "third_party/wolfssl/wolfssl", stage / "sysroot/usr/include/wolfssl")
+        copy(ROOT / "apps/browser/tls/user_settings.h", stage / "sysroot/usr/include/user_settings.h")
         for name in ("crt0.o", "start.o"):
             copy(args.build_dir / "pic" / name, stage / "sysroot/usr/lib" / name)
         copy(ROOT / "sdk/glaze-sdk.py", stage / "bin/glaze-sdk")
@@ -105,9 +109,12 @@ def main():
         for name in ("include", "libc", "gfx", "ui", "media", "ldso", "crt0_pic.S"):
             copy(ROOT / "lib" / name, stage / "src/lib" / name)
         copy(ROOT / "third_party/jitterentropy", stage / "src/third_party/jitterentropy")
+        copy(ROOT / "third_party/wolfssl", stage / "src/third_party/wolfssl")
+        copy(ROOT / "apps/browser/tls/user_settings.h", stage / "src/lib/wolfssl/user_settings.h")
+        copy(ROOT / "lib/wolfssl.exports.map", stage / "src/lib/wolfssl/exports.map")
         copy(ROOT / "sdk/libraries.mk", stage / "src/Makefile")
         compiler = subprocess.run([args.cross + "gcc", "--version"], text=True, capture_output=True, check=True)
-        manifest = {"format": 1, "revision": args.revision, "target": "mipsel-glaze-o32-softfloat",
+        manifest = {"format": 1, "revision": args.revision, "version": args.version, "target": "mipsel-glaze-o32-softfloat",
                     "compiler": compiler.stdout.splitlines()[0], "runtime_libraries": list(LIBS),
                     "runtime_match": "Use Glaze built from the same source revision; no stable SDK ABI is promised."}
         (stage / "sdk.json").write_text(json.dumps(manifest, indent=2) + "\n")

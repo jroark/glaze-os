@@ -88,6 +88,22 @@ Build output:
 Add C source files to `SOURCES` in the project's Makefile; subdirectories
 are supported. `CPPFLAGS`, `CFLAGS`, `LDFLAGS` and `LDLIBS` accept additions.
 For example, `LDLIBS += -l:libmedia.so.1` adds the integer media parsers.
+
+For TLS, link the system's wolfSSL (TLS 1.2/1.3 client and the PSK server
+used by network debugging), configured by the SDK's `user_settings.h`:
+
+```make
+CPPFLAGS += -DWOLFSSL_USER_SETTINGS
+LDLIBS += -l:libwolfssl.so.1
+```
+
+Include `<wolfssl/wolfcrypt/settings.h>` before other wolfSSL headers.
+`libwolfssl.so.1` exports only the functions in its `src/lib/wolfssl/exports.map`
+and imports two functions that every app using it must define:
+`int glaze_tls_seed(unsigned char *out, unsigned int n)`, which fills `out`
+with seed bytes and returns 0, and `time_t glaze_tls_time(time_t *t)`, the
+current UTC time for certificate dates. Mozilla's root certificates are in
+romfs at `ssl/roots.der`; map them with `gz_romfs_map("ssl/roots.der", &size)`.
 Use `CROSS=...` to select another GNU MIPS tool prefix. Header dependencies
 are generated automatically. Run `make clean` after changing compiler flags
 or SDK revisions; clean preserves the card and NAND copies because they
@@ -254,7 +270,9 @@ retested as part of the SDK work.
 
 Glaze code is GPLv3; see the included `LICENSE`. The SDK includes the
 corresponding source for its Glaze libraries, startup objects and loader
-under `src/`, plus the host client and Python tools' source. Rebuild those
+under `src/`, plus the host client and Python tools' source. wolfSSL
+(GPLv3) is in `src/third_party/wolfssl` with the configuration and export
+list `libwolfssl.so.1` is built from. Rebuild those
 target binaries independently with `make -C src -j4`; output is in
 `src/rebuilt/` and does not alter the packaged sysroot. The external GNU
 toolchain is not redistributed here. No NAND, firmware or game ROMs are

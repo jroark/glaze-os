@@ -146,8 +146,8 @@ SDK_DIR ?= $(OUT)/sdk/glaze-sdk
 SDK_ARCHIVE ?= $(OUT)/sdk/glaze-sdk.tar.gz
 .PHONY: sdk sdk-archive sdk-test
 ifeq ($(DYNAMIC),1)
-sdk: $(SHARED_LIBS) $(OUT)/shared/libmedia.so.1 $(OUT)/shared/ld-glaze.so.1 $(OUT)/pic/crt0.o $(OUT)/pic/start.o
-	$(PYTHON) tools/mksdk.py --build-dir $(OUT) --output $(SDK_DIR) --revision '$(BUILD_ID)' --cross '$(CROSS)'
+sdk: $(SHARED_LIBS) $(OUT)/shared/libmedia.so.1 $(OUT)/shared/libwolfssl.so.1 $(OUT)/shared/ld-glaze.so.1 $(OUT)/pic/crt0.o $(OUT)/pic/start.o
+	$(PYTHON) tools/mksdk.py --build-dir $(OUT) --output $(SDK_DIR) --revision '$(BUILD_ID)' --version '$(GLAZE_VERSION)' --cross '$(CROSS)'
 sdk-archive: sdk
 	$(PYTHON) tools/mksdk.py --output $(SDK_DIR) --archive $(SDK_ARCHIVE) --archive-only
 sdk-test: sdk
