@@ -1,5 +1,5 @@
-#include "../kernel/drivers.h"
-#include "../kernel/module.h"
+#include "../drivers.h"
+#include "../module.h"
 static bool start(void) { ne2000_init(); return ne2000_present(); }
 const struct net_driver glaze_driver = {
     .magic = NET_DRIVER_MAGIC, .abi = NET_DRIVER_ABI,

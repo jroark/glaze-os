@@ -1,5 +1,5 @@
-#include "../kernel/drivers.h"
-#include "../kernel/module.h"
+#include "../drivers.h"
+#include "../module.h"
 static bool start(void) { xi825_init(); return xi825_present(); }
 const struct net_driver glaze_driver = {
     .magic = NET_DRIVER_MAGIC, .abi = NET_DRIVER_ABI,

@@ -31,7 +31,7 @@ change converts the three optional network backends to modules.
 
 A normal `make` builds `out/drivers/{ne2000,xi825,wl54cf}.ko` and puts them in
 romfs. Their implementation files remain in `kernel/drivers/`; wrappers in
-`modules/` supply a versioned `glaze_driver` operation table. They are excluded
+`kernel/modules/` supply a versioned `glaze_driver` operation table. They are excluded
 from the linked kernel. Shipping the files in romfs does not instantiate their
 code, BSS or packet buffers; romfs cache pages are reclaimable. GlazeBoot RAM
 boots still reserve the whole ROM archive, as they do for unloaded apps.
