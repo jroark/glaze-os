@@ -1,8 +1,0 @@
-# Boot with FS_FROM=out/shots/t_tetris/glaze.bin; reopen persisted game paused.
-# Resume, rotate/drop with physical keys, then pause for final inspection.
-3000 drag 40 280 235 280 500
-4500 tap 90 192
-6500 key ok
-7500 key up
-8500 key ok
-10000 key esc

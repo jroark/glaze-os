@@ -74,8 +74,8 @@ BMP to PNG without resizing or altering pixels:
 | --- | --- |
 | `img/handwriting.png` | `out/site-handwriting/screenshot_20261029_212917.bmp`, Notes with the handwriting pad open, captured from the `tests/ui/t_handwriting_notes.txt` image with `BE300_AUTOSTOP_SEC=9` and `--speed 166` before letter entry; see `docs/os/HANDWRITING.md` |
 | `img/browser-web-apis.png` | `out/browser-web-offline/screenshot_20261029_182926.bmp`, the bundled `res:apis.html` example; see `docs/apps/BROWSER_WEB_APIS.md` |
-| `img/chat.png` | `/workspace/setup/chatgpt-oauth-guest/chat/screenshot_20261028_203008.bmp`, native Chat UI exchanging messages with a local Codex protocol fixture, not a live service conversation; see `docs/CHATGPT.md` |
-| `img/doom.png` | `/workspace/setup/doom-guest/screenshot_20261028_210329.bmp`, the Doom port running a user-supplied test WAD; see `docs/DOOM.md` |
+| `img/chat.png` | `/workspace/setup/chatgpt-oauth-guest/chat/screenshot_20261028_203008.bmp`, native Chat UI exchanging messages with a local Codex protocol fixture, not a live service conversation; see glaze-apps' `docs/CHATGPT.md` |
+| `img/doom.png` | `/workspace/setup/doom-guest/screenshot_20261028_210329.bmp`, the Doom port running a user-supplied test WAD; see glaze-apps' `docs/DOOM.md` |
 | `img/ce-nand.png` | `out/wince-nand-original/screenshot_20261029_191815.bmp`, original Calculator launched through Files after a RAM boot against the user's NAND, displaying 2 + 3 = 5; see `docs/apps/WINCE_NAND.md` |
 
 The capture paths above are local test artifacts, not checked-in inputs.

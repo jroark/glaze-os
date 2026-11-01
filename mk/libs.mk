@@ -149,21 +149,6 @@ PROG_DEPS_browser := $(OUT)/shared/libwolfssl.so.1 $(OUT)/pic/libjerry.a
 PROG_LDLIBS_browser := -l:libwolfssl.so.1 $(OUT)/pic/libjerry.a
 PROG_STATIC_DEPS_browser := $(OUT)/lib/libjerry.a
 PROG_LDFLAGS_browser := --exclude-libs ALL
-PROG_CFLAGS_gmail := $(WOLFSSL_INC)
-PROG_DEPS_gmail := $(OUT)/shared/libwolfssl.so.1
-PROG_LDLIBS_gmail := -l:libwolfssl.so.1
-
-# ChatGPT uses the Browser's bounded HTTP/TLS transport, without its renderer.
-PROG_EXTRA_chatgpt := apps/browser/http.c apps/browser/conn.c apps/browser/tls.c apps/browser/url.c apps/appstore/inflate.c
-PROG_CFLAGS_chatgpt := -Iapps/browser -Ithird_party/stb $(WOLFSSL_INC)
-PROG_DEPS_chatgpt := $(OUT)/shared/libwolfssl.so.1
-PROG_LDLIBS_chatgpt := -l:libwolfssl.so.1
-# Diagnostic fixtures only; a normal rebuild always removes the override.
-ifneq ($(CHATGPT_TEST_ORIGIN),)
-PROG_CFLAGS_chatgpt += -DCHATGPT_TEST_ORIGIN='"$(CHATGPT_TEST_ORIGIN)"'
-endif
-$(OUT)/dyn/packages/chatgpt/http_io.o: FORCE
-
 # InfoNES is portable C despite upstream's historical .cpp filenames.
 
 USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libwolfssl.a \

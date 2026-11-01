@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Synthesizes the system sounds (servers/audio/sound.c) as 22050 Hz mono
 16-bit WAVs: UI clicks and the alert tones of glaze/audio.h. With --aim, it
-makes the AIM package's buddy and message sounds instead (packages/aim/res),
+makes the AIM package's buddy and message sounds instead (glaze-apps' packages/aim/res),
 in the spirit of the classic ones rather than copies of them.
 
     tools/mksounds.py assets/sounds
-    tools/mksounds.py --aim packages/aim/res
-    tools/mksounds.py --gmail packages/gmail/res
+    tools/mksounds.py --aim ../glaze-apps/packages/aim/res
+    tools/mksounds.py --gmail ../glaze-apps/packages/gmail/res
 
 The output is deterministic and checked in; rerun it after changing a sound.
 """

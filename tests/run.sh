@@ -8,6 +8,9 @@
 # --battery-state battery).
 # FS_FROM=<nand image> boots with that image's file system (from 0x500000),
 # e.g. a previous run's out/shots/<name>/glaze.bin with apps installed.
+# Relative paths name files in the current directory if they exist there, else
+# in this checkout, so sibling repos (glaze-apps) can run their own scripts:
+#   CF=out/cf.img ../glaze-os/tests/run.sh tests/ui/t_minesweeper.txt 34
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 # Resolve the sibling emulator relative to the original checkout, including
@@ -15,7 +18,20 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 common=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)
 checkout=$(dirname "$common")
 be300=${BE300:-$(dirname "$checkout")/be300/build-host/be300}
-script=$1
+resolve() {
+    case $1 in
+        /*) echo "$1" ;;
+        *) if [ -e "$1" ]; then echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; else echo "$root/$1"; fi ;;
+    esac
+}
+script=$(resolve "$1")
+# The container build sees only this checkout: copy in a script from elsewhere.
+case $script in
+    "$root"/*) script=${script#"$root"/} ;;
+    *) mkdir -p "$root/out/input"; cp "$script" "$root/out/input/"; script=out/input/$(basename "$script") ;;
+esac
+[ -z "$CF" ] || CF=$(resolve "$CF")
+[ -z "$FS_FROM" ] || FS_FROM=$(resolve "$FS_FROM")
 secs=${2:-14}
 name=$(basename "$script" .txt)
 out=$root/out/shots
@@ -29,7 +45,6 @@ else
 fi
 cp "$root/out/glaze.bin" "$out/$name/glaze.bin"
 if [ -n "$FS_FROM" ]; then
-    case $FS_FROM in /*) ;; *) FS_FROM=$root/$FS_FROM ;; esac
     python3 -c 'import sys
 src = open(sys.argv[1], "rb").read()
 dst = bytearray(open(sys.argv[2], "rb").read())
@@ -43,7 +58,6 @@ if [ -n "$XI825" ]; then
     if [ -n "$CF$NET" ]; then echo "XI825 cannot be combined with CF or NET" >&2; exit 1; fi
     cf=--xi825
 elif [ -n "$CF" ]; then
-    case $CF in /*) ;; *) CF=$root/$CF ;; esac
     cp "$CF" cf.img
     cf="--cf cf.img"
 elif [ -n "$NET" ]; then

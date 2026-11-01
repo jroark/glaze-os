@@ -16,6 +16,16 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def package_infos():
+    """Package Info files here and in the built sibling app repositories."""
+    repos = [ROOT, Path(os.environ.get('APPS_DIR', ROOT.parent / 'glaze-apps')),
+             Path(os.environ.get('EMU_DIR', ROOT.parent / 'glaze-emulators'))]
+    for repo in repos[1:]:
+        if not (repo / 'packages').is_dir():
+            print(f'note: {repo} not found; its apps are left out of the installer', file=sys.stderr)
+    return [info for repo in repos for info in sorted((repo / 'packages').glob('*/Info'))]
+
+
 def validate_update(path, build_id):
     if path is None:
         raise ValueError('A signed matching OS update is required (--os-update).')
@@ -94,12 +104,13 @@ def stage_resources(out, native_dir, build_id, ext='', os_update=None):
     catalog.append({'id': 'builtin:wince', 'name': 'Windows CE compatibility', 'program': 'wince',
                     'kind': 'builtin', 'required': False, 'default': False})
     (resources / 'packages').mkdir()
-    for info in sorted((ROOT / 'packages').glob('*/Info')):
+    for info in package_infos():
         metadata = dict(line.split('=', 1) for line in info.read_text().splitlines() if '=' in line)
         program = metadata['id']
         if program in ('hello', 'maintenance'):
             continue
-        shutil.copy2(ROOT / 'out/pkg' / (program + '.gzp'), resources / 'packages')
+        # Each repository packs its packages into its own out/pkg.
+        shutil.copy2(info.parents[2] / 'out/pkg' / (program + '.gzp'), resources / 'packages')
         catalog.append({'id': 'package:' + program, 'name': metadata['name'], 'program': program,
                         'kind': 'package', 'required': False, 'default': False})
     catalog.append({'id': 'firmware:wl54cf', 'name': 'WL54-CF Wi-Fi firmware', 'program': 'wl54cf',

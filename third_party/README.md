@@ -5,7 +5,6 @@ Vendored projects (local changes are listed below):
 | Directory | Project | Version | License |
 | --- | --- | --- | --- |
 | `jitterentropy/` | [Jitterentropy](https://github.com/smuellerDD/jitterentropy-library) CPU timing-jitter seed collector | 3.6.3 | BSD-style or GPL-2.0-or-later; Glaze elects GPL; port and pin in `UPSTREAM.md` |
-| `doomgeneric/` | [DoomGeneric](https://github.com/ozkl/doomgeneric), original Doom software engine | `e257a09527062` | GPL-2.0-or-later, elected GPLv3 for the Glaze app; `COPYING` and `UPSTREAM.md`; no game data |
 | `littlefs/` | [littlefs](https://github.com/littlefs-project/littlefs) | v2.11 (`6cb4e86540ec`) | BSD-3-Clause, `littlefs/LICENSE.md` |
 | `stb/` | [stb_image.h](https://github.com/nothings/stb) image decoder (the browser's PNG, JPEG and GIF) | v2.30 (`2c980bb59875`) | public domain / MIT, end of `stb/stb_image.h` |
 | `dhara/` | [Dhara](https://github.com/dlbeer/dhara) NAND translation layer, plus its BCH ECC | `1b166e41b74b` | ISC-style, `dhara/LICENSE` |
