@@ -31,3 +31,9 @@ anything important from CE's volatile object store beforehand.
 
 These are development builds. Physical flashing and Windows USB driver setup
 still need validation; Windows GUI/runtime checks were performed under Wine.
+
+ALREADY RUNNING GLAZE?
+Connect USB and power, then use Update Glaze OS or Install apps. Updates use the
+standard signed OS bundled here. Existing apps and saved data are preserved.
+Keep power connected during the minutes-long OS installation. If boot verification
+is incomplete, reconnect and choose Check status before retrying.

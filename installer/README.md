@@ -72,6 +72,31 @@ deselecting it omits them. It is not added to the temporary RAM boot. Some large
 combinations exceed the fixed ROMFS slot: the chooser catches this before install
 and asks the user to deselect Windows CE compatibility or another optional app.
 
+## Maintaining an existing Glaze installation
+
+Connect the BE-300 while Glaze is running. The installer shows the running and
+bundled OS versions and offers **Update Glaze OS**, **Install apps**, and
+**Check status**. No network connection or local file selection is needed.
+
+The app chooser lists optional packages. New apps install on Flash; replacements
+retain their existing Flash/Card location and saved data. Equal or newer versions
+are skipped. Unchecked apps remain installed. If an app fails, completed installs
+remain in place and the installer lists the failures.
+
+OS updates use the bundled standard signed release, including that release's
+built-in apps and firmware. Fresh-install customization does not carry into this
+signed image. Updates preserve the filesystem, require an OTA-capable OS/SPL,
+enough free Flash space, and AC power or a valid battery reading of at least 50%.
+Older unsupported devices get an explanation; maintenance never reflashes them.
+Keep power connected while the SPL installs the update, which can take minutes.
+Success requires reconnecting and confirming the expected OS build and SPL result.
+If boot verification times out, use **Check status**; no automatic rearming occurs.
+
+A temporary Glaze Installer companion uses existing USB package/file support.
+It removes its bundle and uploads on normal completion. If interrupted, reconnect
+and check status to restart and clean up the companion. An interrupted transfer
+or an armed update may require finishing recovery before cleanup is possible.
+
 ## Build matching payloads
 
 Use the `mips-cross-dev` Docker image and the BE-300 CE toolchain:
@@ -81,6 +106,12 @@ python3 tools/fetch_wl54cf_firmware.py
 ./build.sh all glazeboot BUILD_ID=usb-installer-modal-v1
 make glazeboot-exe usb-probe-exe BE300_DEV=/path/to/be300-dev
 ```
+
+Produce a standard signed update with `make ota` (see `docs/OTA.md`).
+Pass its `.gzu` file with `--os-update` to either packaging command. Packaging
+checks its release-key signature, version/build, block checksums and exact
+kernel/ROMFS match against `out/glaze.bin`. Private signing keys are never bundled.
+OpenSSL 3 is required for this packaging verification (`OPENSSL` overrides it).
 
 The packaging build ID must match the compiled kernel. The NAND image, RAM image,
 CE loader, all `out/pkg/*.gzp` packages, and source must come from matching builds.
@@ -97,7 +128,7 @@ python3.11 -m venv out/installer-venv
 out/installer-venv/bin/python -m pip install -r installer/requirements.txt
 cmake -S installer -B out/installer-native -DCMAKE_BUILD_TYPE=Release
 cmake --build out/installer-native -j8
-out/installer-venv/bin/python installer/package.py --build-id usb-installer-modal-v1
+out/installer-venv/bin/python installer/package.py --build-id usb-installer-modal-v1 --os-update out/ota/os/glaze-VERSION.gzu
 ```
 
 `--native-dir` selects an alternative helper build directory. The generated DMG
@@ -113,7 +144,7 @@ cross compiler, NSIS, `7z`, and `msiextract`. On macOS:
 
 ```sh
 brew install mingw-w64 nsis p7zip msitools
-python3 installer/package_windows.py --build-id usb-installer-modal-v1
+python3 installer/package_windows.py --build-id usb-installer-modal-v1 --os-update out/ota/os/glaze-VERSION.gzu
 ```
 
 This downloads official CPython 3.11.9/Tk, libusb 1.0.30, and Zadig 2.9 with locked
@@ -133,6 +164,8 @@ Windows native helpers use system crypto APIs; no wolfSSL runtime is needed.
 python3 installer/collect_downloads.py
 python3 tests/installer.py
 python3 tests/installer_apps.py
+python3 tests/installer_maintenance.py
+python3 tests/maintenance_native.py
 python3 tests/physical_nand.py
 python3 tests/nand_transaction.py
 make -C host usb-pcconnect-test usb-ce-staging-test

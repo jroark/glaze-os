@@ -36,6 +36,7 @@ def download_dependencies(cache):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--os-update', type=Path, required=True)
     parser.add_argument('--build-id', required=True)
     args = parser.parse_args()
     cache = ROOT / 'out/installer-downloads'
@@ -74,7 +75,7 @@ def main():
     if product.exists():
         shutil.rmtree(product)
     product.mkdir()
-    resources = stage_resources(product, native, args.build_id, '.exe')
+    resources = stage_resources(product, native, args.build_id, '.exe', args.os_update)
     shutil.copy2(libusb / 'MinGW64/dll/libusb-1.0.dll', resources / 'bin')
     (resources / 'drivers').mkdir()
     shutil.copy2(cache / 'zadig-2.9.exe', resources / 'drivers')
