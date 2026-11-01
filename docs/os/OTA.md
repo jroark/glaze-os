@@ -129,7 +129,7 @@ another key, which is how the tests run.
 echo 1.1 > VERSION
 ./build.sh                                  # out/kernel.elf, out/romfs.img
 make ota OTA_NOTES="Faster Notes."          # natively: OpenSSL 3 and the key -> out/ota/os/
-python3 tools/publish_appstore.py --profile linux4be --os out/ota
+(cd ../glaze-web && python3 tools/publish_appstore.py --profile linux4be --os ../glaze-os/out/ota)
 ```
 
 `make ota` builds nothing. It signs the kernel and romfs that `./build.sh`

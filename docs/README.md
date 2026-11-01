@@ -40,10 +40,8 @@ Start with the [top-level README](../README.md) for building and running.
 - [Network development debugging](dev/NETWORK_DEBUG.md)
 - [Screen mirroring and remote control](dev/MIRRORING.md)
 
-## Moving to other repositories
+## Other repositories
 
 The console emulators and their guides are in [glaze-emulators](https://github.com/jroark/glaze-emulators),
-and Chat, Doom and SomaFM's in [glaze-apps](https://github.com/jroark/glaze-apps).
-These docs stay here until their code moves to glaze-web:
-[the website](WEBSITE.md) and
-[the App Store on AWS](APP_STORE_AWS.md).
+Chat, Doom and SomaFM's in [glaze-apps](https://github.com/jroark/glaze-apps), and the
+website and App Store publishing guides in [glaze-web](https://github.com/jroark/glaze-web).

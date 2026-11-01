@@ -3,7 +3,7 @@
 
 The input directory contains kernel.bin, romfs.img, GlazeBoot.exe,
 glaze.cfg and glaze.bin. Only the pinned Linux CF8385 firmware is allowed in
-the hardware archive, with its license. See docs/WEBSITE.md for the release build.
+the hardware archive, with its license. See glaze-web's docs/WEBSITE.md for the release build.
 """
 import argparse
 import hashlib
@@ -169,7 +169,7 @@ def package(build_dir, site_dir, revision, release_date, repository):
                            f'Commit: {revision}\n\n'
                            f'Release tooling and instructions: {tools_url}\n'
                            'Use tools/fetch_wl54cf_firmware.py, tools/package_glazeboot.py,\n'
-                           'firmware/ and docs/WEBSITE.md from the release tooling revision.\n'
+                           'firmware/ and glaze-web\'s docs/WEBSITE.md from the release tooling revision.\n'
                            'python3 tools/fetch_wl54cf_firmware.py\n'
                            './build.sh all INIT=bin/springboard INPUT_SCRIPT= WL54CF=0 -W tools/mkromfs.py\n'
                            './build.sh glazeboot INIT=bin/springboard INPUT_SCRIPT= WL54CF=1 GB_APPS=all\n'
@@ -223,7 +223,7 @@ def package(build_dir, site_dir, revision, release_date, repository):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, required=True)
-    parser.add_argument('--site-dir', type=Path, default=Path('site'))
+    parser.add_argument('--site-dir', type=Path, default=Path('../glaze-web/site'))
     parser.add_argument('--revision', required=True)
     parser.add_argument('--date', default=date.today().isoformat())
     args = parser.parse_args()

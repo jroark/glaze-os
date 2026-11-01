@@ -22,7 +22,7 @@ if __name__=='__main__':
     packages=output/'packages'; packages.mkdir(exist_ok=True)
     for directory in reversed(mkstore.package_dirs(root)):
         for path in directory.glob('*.gzp'): shutil.copy2(path,packages/path.name)
-    mkstore.build(root/'store/apps.json',packages,output)
+    mkstore.build(root/'tests/fixtures/store_apps.json',packages,output)
     original=(output/'catalog.txt').read_bytes()
     hello=packages/'hello.gzp'; data=bytearray(hello.read_bytes())
     count,=struct.unpack_from('<I',data,4)
@@ -31,7 +31,7 @@ if __name__=='__main__':
         if name.split(b'\0')[0]==b'Info':
             data[off:off+size]=bytes(data[off:off+size]).replace(b'version=1.0\n',b'version=1.1\n')
     hello.write_bytes(data)
-    mkstore.build(root/'store/apps.json',packages,output)
+    mkstore.build(root/'tests/fixtures/store_apps.json',packages,output)
     updated=(output/'catalog.txt').read_bytes()
     class Handler(SimpleHTTPRequestHandler):
         catalogs=0

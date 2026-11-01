@@ -4,7 +4,7 @@ A small microkernel OS for the Casio BE-300 (NEC VR4131 MIPS, 240x320 LCD) with
 a user interface in the style of early iPhone OS. It runs on the
 [be300 emulator](https://github.com/jroark/be300) and boots through the stock
 boot ROM from NAND. The project site is [glaze-os.com](https://glaze-os.com)
-(source in `site/`, see [Website](docs/WEBSITE.md)).
+(source in [glaze-web](https://github.com/jroark/glaze-web)).
 
 ## What's here
 
@@ -226,9 +226,9 @@ limits apply. See [Chat and OAuth](https://github.com/jroark/glaze-apps/blob/mai
 The native **App Store** offers Search and Updates in the early iPhone OS style.
 It installs free, curated packages over HTTPS and preserves saved data on update.
 The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire and Task Manager.
-Build it with `./build.sh store`; publish `out/store/` at `appstore.glaze-os.com`.
+The catalog is built and published from [glaze-web](https://github.com/jroark/glaze-web) (`make store`).
 See [App Store hosting and development](docs/apps/APP_STORE.md) for setup and tests,
-and [AWS deployment](docs/APP_STORE_AWS.md) for S3, CloudFront and release publishing.
+and glaze-web's [AWS deployment](https://github.com/jroark/glaze-web/blob/main/docs/APP_STORE_AWS.md) for S3, CloudFront and release publishing.
 
 **Task Manager** is an installable system monitor with CPU and memory history,
 a process list sorted by CPU usage, task details, pause/resume, and confirmed

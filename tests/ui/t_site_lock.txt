@@ -1,1 +1,0 @@
-# Website (tools/mksite.py): boot and stay on the lock screen.

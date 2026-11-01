@@ -82,7 +82,7 @@ working in that directory:
 | `lib/` | libgfx, libui, handwriting, dynamic linking |
 | `apps/browser/`, `apps/wince/` | Browser engine, network and JavaScript; Windows CE apps from NAND |
 | `wince/glazeboot/` | RAM boot from Windows CE |
-| `packages/`, `site/` | installable apps (AIM, Gmail, Chat, Doom, games); the website |
+| `packages/` | system packages (hello, taskmanager, maintenance) |
 
 Longer design notes are indexed in `docs/README.md`.
 

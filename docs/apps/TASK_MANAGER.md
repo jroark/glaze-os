@@ -55,9 +55,9 @@ The existing `gz_kill` permission policy is unchanged.
 
 ```sh
 ./build.sh
-./build.sh store
 make -C host taskmanager-test store-catalog-test
-python3 tests/store_publisher.py
+# in glaze-web:
+make test
 python3 tools/publish_appstore.py --dry-run
 ```
 
