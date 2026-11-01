@@ -8,7 +8,7 @@
 
 include packages/doom/build.mk
 
-PKG_DIRS := $(wildcard packages/*)
+PKG_DIRS := $(patsubst %/,%,$(wildcard packages/*/))
 PKG_NAMES := $(notdir $(PKG_DIRS))
 ifeq ($(DYNAMIC),1)
 $(foreach d,$(PKG_DIRS),$(eval $(call DYNAMIC_template,$(d))))

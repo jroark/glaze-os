@@ -1,6 +1,6 @@
 # ---- user programs ----------------------------------------------------------
 
-PROG_DIRS := $(wildcard apps/* servers/*)
+PROG_DIRS := $(patsubst %/,%,$(wildcard apps/*/ servers/*/))
 ifeq ($(NETDEBUG_TESTS),1)
 PROG_DIRS += tests/debug_guest
 PROG_CFLAGS_debug_guest := $(WOLFSSL_INC) -DDEBUG_RELOAD_ADDR='"$(or $(DEBUG_RELOAD_ADDR),10.0.0.254)"'

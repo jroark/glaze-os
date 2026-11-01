@@ -54,7 +54,7 @@ GB_TEST_PROGS := ktest ktest_pong ldtest ldtest_peer ldtest_ro ldtest_oom ldmem
 ifeq ($(GB_APPS),all)
 GB_DROP :=
 else
-GB_DROP := $(filter-out $(GB_APPS) $(GB_TEST_PROGS),$(notdir $(wildcard apps/*)))
+GB_DROP := $(filter-out $(GB_APPS) $(GB_TEST_PROGS),$(notdir $(patsubst %/,%,$(wildcard apps/*/))))
 endif
 GB_PROGS := $(filter-out $(GB_DROP),$(PROGS))
 GB_ASSETS := $(filter-out $(foreach a,$(GB_DROP),assets/gen/icon_$(a).gzi) \
