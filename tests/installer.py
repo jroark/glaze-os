@@ -27,6 +27,14 @@ class InstallerTest(unittest.TestCase):
         path.write_text(json.dumps(record))
         return path
 
+    def test_device_status_uses_only_installer_capability(self):
+        with patch.object(self.engine, 'run') as run:
+            self.engine.device_status(1)
+            run.assert_not_called()
+            self.engine.install_ui = True
+            self.engine.device_status(1)
+            run.assert_called_once_with('status', 1, 0, 0)
+
     def test_staging_space_failure_explains_ce_app_removal(self):
         from unittest.mock import Mock
         process = Mock()
@@ -86,10 +94,17 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse(any(e['event'] == 'backup-saved' for e in self.events))
 
     def test_skip_wince_check_omits_ce_execution_probe(self):
+        from app_selection import archive, entries
         (self.root / 'ram').mkdir()
+        (self.root / 'ram/romfs.img').write_bytes(archive({}))
         self.engine.verify_wince = False
-        with patch.object(self.engine, 'run') as run, patch.object(self.engine, 'wait_glaze'):
+        def check_marker(*args):
+            if args[0] == 'boot':
+                files = entries((Path(args[1]) / 'romfs.img').read_bytes(), b'GZRF')
+                self.assertEqual(files['installer/session'], b'GZINST1\n')
+        with patch.object(self.engine, 'run', side_effect=check_marker) as run, patch.object(self.engine, 'wait_glaze'):
             self.engine.ram_boot('ro')
+        self.assertNotIn('installer/session', entries((self.root / 'ram/romfs.img').read_bytes(), b'GZRF'))
         self.assertEqual(run.call_args.args[0], 'boot')
         self.assertEqual(run.call_args.args[-1], '--skip-ce-test')
 
@@ -251,15 +266,26 @@ class OfflinePipelineTest(unittest.TestCase):
             # Retry after a failed handoff can reuse this installer's RO RAM
             # session instead of requiring another CE boot or touching NAND.
             resumed = Installer(root / 'out/installer/resources', events.append, '1.2')
+            resumed.install_ui = True
             resumed.build = json.loads((root / 'out/installer/resources/manifest.json').read_text())['build_id']
             def resumed_run(*args):
                 if args[0] == 'probe':
                     return [{'event': 'device', 'runtime': 'Glaze', 'location': '1.2'},
-                            {'event': 'capabilities', 'value': 4096}]
+                            {'event': 'capabilities', 'value': 4096 | 8}]
                 return run(*args)
             with patch.object(resumed, 'run', side_effect=resumed_run), patch.object(resumed, 'ram_boot') as boot:
                 resumed.prepare(tmp, [])
                 boot.assert_not_called()
+            older = Installer(root / 'out/installer/resources', events.append, '1.2')
+            older.build = 'previous-ram-build'
+            def older_run(*args):
+                if args[0] == 'probe':
+                    return [{'event': 'device', 'runtime': 'Glaze', 'location': '1.2'},
+                            {'event': 'capabilities', 'value': 4096 | 8}]
+                return run(*args)
+            with patch.object(older, 'run', side_effect=older_run), patch.object(older, 'ram_boot') as boot:
+                older.prepare(tmp, [])
+                boot.assert_called_once_with('ro')
             self.assertEqual((folder / 'original-ce.raw').read_bytes(), factory)
             single_pass = Installer(root / 'out/installer/resources', events.append, '1.2')
             fast_calls = []

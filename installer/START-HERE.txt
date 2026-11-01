@@ -14,7 +14,9 @@ If NAND space is insufficient, use Windows CE to delete built-in apps you no
 longer need, keeping PC Connect available, then retry installation.
 Hello is not included; Windows CE compatibility starts unchecked. WL54-CF
 Wi-Fi firmware is an optional hardware choice.
-Detection, preparation, flashing and restart happen automatically. Keep USB
+Detection, preparation, flashing and restart happen automatically.
+During GlazeBoot, the BE-300 shows a temporary installation screen and stays
+awake. Glaze is fully installed only after the final NAND boot completes. Keep USB
 and power connected until the app finishes. Details are available if needed.
 
 Save Windows CE backup and Verify Windows CE are optional. They start enabled.

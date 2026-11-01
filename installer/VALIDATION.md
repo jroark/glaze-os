@@ -1,7 +1,7 @@
 # Validation — 2026-10-31
 
 Branch `codex/usb-gui-installer`, base `cc8c1c4`.
-Bundled firmware BUILD_ID: `cc8c1c4-installer-test`.
+Bundled firmware BUILD_ID: `usb-installer-modal-v1`.
 
 Produced:
 
@@ -14,7 +14,7 @@ Produced:
 Passed:
 
 - Matching NAND, RAM kernel/romfs, CE loaders and package builds.
-- Seventeen installer tests and seven app-selection tests. These cover executable
+- Eighteen installer tests and seven app-selection tests. These cover executable
   exclusion, required-app preservation, aligned ROMFS repacking, bundle layout,
   malformed archive rejection, actual image encoding and fresh restore plans.
 - Four physical NAND tests, five transaction tests, and native NAND ECC,
@@ -92,6 +92,23 @@ Catalog and optional firmware:
 - Selection tests cover firmware insertion/removal, defaults, required apps and
   ROMFS capacity. The default app set plus firmware fits; oversized choices are
   rejected before installation. Real firmware is not executed in emulator tests.
+
+Device-side installer modal:
+
+- A RAM-only marker activates a full-screen SpringBoard modal from startup.
+  Regular RAM boots and the final NAND boot retain normal UI/idle behavior.
+- Native UI tests cover marker gating, stage/progress bounds, recovery wording
+  and reset behavior; wait/write/error frames were rendered for visual QA.
+- A disposable emulator RAM boot stayed awake for 75 seconds with scripted
+  Power, Home, unlock drag and touch input. Its shutdown screenshot still showed
+  the installer modal, with no idle screen-off event or panic.
+- The final physical NAND candidate booted the normal UI in the emulator, with
+  no installer modal. An emulator USB integration test successfully updated the
+  device modal to Installing Glaze with 54% progress; the display retained it
+  after the helper disconnected.
+- USB wire and production NAND writer regression tests pass. Device status is
+  optional/capability-gated and throttled to avoid per-page compositor work.
+- No physical NAND programming was performed to test this feature.
 
 Incomplete:
 

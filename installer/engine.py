@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from app_selection import load_catalog, select, customize_logical, install_packages
+from app_selection import load_catalog, select, customize_logical, install_packages, entries, archive
 
 RAW_SIZE = 17301504
 
@@ -37,6 +37,8 @@ class Installer:
         self.helper = self.resources / 'bin' / ('glaze-installer-usb' + self.ext)
         self.build = None
         self.verify_wince = True
+        self.install_ui = False
+        self.restoring = False
 
     def verify(self):
         manifest = json.loads((self.resources / 'manifest.json').read_text())
@@ -66,6 +68,10 @@ class Installer:
                 match = re.search(r'runtime=Glaze build=(\S+)', line)
                 if match:
                     self.build = match[1]
+            if event.get('event') == 'device' and event.get('runtime') == 'CE':
+                self.install_ui = False
+            if event.get('event') == 'capabilities':
+                self.install_ui = bool(event['value'] & 32768)
             events.append(event)
             if event.get('event') == 'log':
                 progress = re.search(r'(.*?): (\d+)/(32768) pages', line)
@@ -77,6 +83,10 @@ class Installer:
                 raise RuntimeError('Not enough NAND space to start Glaze. In Windows CE, delete built-in apps you no longer need, keeping PC Connect available, then try again.')
             raise RuntimeError(f'{args[0]} failed. See the saved log; no automatic retry was attempted.')
         return events
+
+    def device_status(self, stage):
+        if self.install_ui:
+            self.run('status', stage, 0, 0)
 
     def probe(self):
         events = self.run('probe')
@@ -115,6 +125,9 @@ class Installer:
         with tempfile.TemporaryDirectory(prefix='glaze-ram-') as tmp:
             folder = Path(tmp) / 'boot'
             shutil.copytree(self.resources / 'ram', folder)
+            ram_files = entries((folder / 'romfs.img').read_bytes(), b'GZRF')
+            ram_files['installer/session'] = b'GZREST1\n' if self.restoring else b'GZINST1\n'
+            (folder / 'romfs.img').write_bytes(archive(ram_files))
             (folder / 'glaze.cfg').write_text(f'nand={mode}\nramfs_kb=2048\n')
             self.emit({'event': 'status', 'text': 'Starting Glaze…'})
             if self.verify_wince:
@@ -131,7 +144,7 @@ class Installer:
         ram_readonly = (device['runtime'] == 'Glaze' and
                         device.get('capabilities', 0) & 4096 and
                         not device.get('capabilities', 0) & 16384 and
-                        self.build == self.manifest['build_id'])
+                        device.get('capabilities', 0) & 8)
         if device['runtime'] != 'CE' and not ram_readonly:
             raise ValueError('New installation requires stock Windows CE or this installer’s read-only Glaze RAM session. Use Restore for a saved installation.')
         catalog = load_catalog(self.resources)
@@ -145,11 +158,13 @@ class Installer:
         if os.name != 'nt':
             folder.chmod(0o700)
         self.emit({'event': 'folder', 'path': str(folder)})
-        if not ram_readonly:
+        if not ram_readonly or self.build != self.manifest['build_id'] or not self.install_ui:
             self.ram_boot('ro')
         backup = folder / 'original-ce.raw'
+        self.device_status(1)
         self.emit({'event': 'status', 'text': 'Reading your device…'})
         self.run('backup' if verify_wince else 'snapshot', backup)
+        self.device_status(2)
         self.emit({'event': 'status', 'text': 'Preparing your apps…'})
         inv = self.n.inspect(backup)
         self.n.write_new(folder / 'inventory.json', json.dumps(inv).encode())
@@ -185,6 +200,16 @@ class Installer:
         return folder / 'installation.json'
 
     def install_device(self, destination, requested_apps=None, save_backup=True, verify_wince=True):
+        try:
+            return self._install_device(destination, requested_apps, save_backup, verify_wince)
+        except Exception:
+            try:
+                self.device_status(7)
+            except Exception:
+                pass
+            raise
+
+    def _install_device(self, destination, requested_apps=None, save_backup=True, verify_wince=True):
         # Source bytes are needed for bad-block inventory and transaction
         # binding. Without a backup these exist only in an OS temporary folder,
         # which is removed on both success and failure, including partial files.
@@ -201,6 +226,7 @@ class Installer:
                 self.apply(record)
 
     def apply(self, record_path, restore=False):
+        self.restoring = restore
         self.verify()
         record_path = Path(record_path).resolve()
         folder = record_path.parent
@@ -227,9 +253,11 @@ class Installer:
             self.n.write_new(plan, data)
             self.n.write_new(attempt / 'review.json', json.dumps(review, indent=2).encode())
         self.emit({'event': 'programming', 'text': ('Restoring Windows CE…' if restore else 'Installing Glaze…') + ' Keep power and USB connected.'})
+        self.device_status(3)
         self.run('apply', source, target, plan)
         self.emit({'event': 'verified', 'text': 'Whole-device programming verification passed.'})
         self.emit({'event': 'status', 'text': 'Restarting your BE-300…'})
+        self.device_status(6)
         self.run('cold-reboot')
         if restore:
             deadline = time.monotonic() + 90

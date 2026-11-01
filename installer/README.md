@@ -21,6 +21,13 @@ restart automatically after one replacement confirmation. The main window shows
 one status line and progress; diagnostic output and manual USB selection are
 hidden under **Show details**. No separate Detect or Prepare steps are needed.
 
+During the GlazeBoot/RAM stage, the BE-300 shows a full-screen installer status
+view stating that Glaze is temporary and installation is not finished. It shows
+reading, preparation, writing, verification and restart progress, blocks Home
+and touch interaction, and keeps the display awake. After the final NAND boot,
+the normal Glaze UI and display timeout return. On failure, follow the computer
+while the device shows Installation Paused.
+
 If NAND space is insufficient for staging GlazeBoot, use Windows CE to delete
 unwanted built-in apps, keeping PC Connect available, then retry installation.
 The installer reuses matching staged files and does not delete CE apps itself.
@@ -71,7 +78,7 @@ Use the `mips-cross-dev` Docker image and the BE-300 CE toolchain:
 
 ```sh
 python3 tools/fetch_wl54cf_firmware.py
-./build.sh all glazeboot BUILD_ID=cc8c1c4-installer-test
+./build.sh all glazeboot BUILD_ID=usb-installer-modal-v1
 make glazeboot-exe usb-probe-exe BE300_DEV=/path/to/be300-dev
 ```
 
@@ -90,7 +97,7 @@ python3.11 -m venv out/installer-venv
 out/installer-venv/bin/python -m pip install -r installer/requirements.txt
 cmake -S installer -B out/installer-native -DCMAKE_BUILD_TYPE=Release
 cmake --build out/installer-native -j8
-out/installer-venv/bin/python installer/package.py --build-id cc8c1c4-installer-test
+out/installer-venv/bin/python installer/package.py --build-id usb-installer-modal-v1
 ```
 
 `--native-dir` selects an alternative helper build directory. The generated DMG
@@ -106,7 +113,7 @@ cross compiler, NSIS, `7z`, and `msiextract`. On macOS:
 
 ```sh
 brew install mingw-w64 nsis p7zip msitools
-python3 installer/package_windows.py --build-id cc8c1c4-installer-test
+python3 installer/package_windows.py --build-id usb-installer-modal-v1
 ```
 
 This downloads official CPython 3.11.9/Tk, libusb 1.0.30, and Zadig 2.9 with locked
@@ -138,3 +145,9 @@ opens the GUI and app chooser briefly, then closes without device access.
 
 These are development builds. See `VALIDATION.md` for the exact checks and
 remaining hardware/OS validation. Packaging does not publish a release.
+
+The host adds an immutable `installer/session` marker only to each scratch RAM
+ROMFS. Ordinary RAM boots and the NAND image omit it. Device status uses the
+optional `GU_CAP_INSTALL_STATUS`/`GU_INSTALL_STATUS` protocol and SpringBoard IPC;
+status survives helper reconnections. Existing critical-battery protection is
+preserved. Restoring CE uses the same modal with recovery-specific wording.
