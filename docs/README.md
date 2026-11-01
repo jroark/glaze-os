@@ -42,8 +42,7 @@ Start with the [top-level README](../README.md) for building and running.
 
 ## Moving to other repositories
 
-These docs stay here until their code moves to glaze-apps, glaze-emulators or glaze-web:
-[Chat](CHATGPT.md), [Doom](DOOM.md), [SomaFM](SOMAFM.md), [NES](NES.md),
-[Game Boy](GAMEBOY.md), [Game Gear](GAMEGEAR.md), [Sega](SEGA.md),
-[TurboGrafx-16](TURBOGRAFX16.md), [the website](WEBSITE.md) and
+The console emulators and their guides are in [glaze-emulators](https://github.com/jroark/glaze-emulators).
+These docs stay here until their code moves to glaze-apps or glaze-web:
+[Chat](CHATGPT.md), [Doom](DOOM.md), [SomaFM](SOMAFM.md), [the website](WEBSITE.md) and
 [the App Store on AWS](APP_STORE_AWS.md).
