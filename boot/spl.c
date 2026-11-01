@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include "../kernel/drivers/nand_boot.h"
+#include "../kernel/resume.h"
 
 /* Kernel layout — overridden by -DKERNEL_* on the SPL command line. */
 #ifndef KERNEL_LOAD_VA
@@ -24,6 +25,13 @@
 #ifndef KERNEL_NAND_OFFSET
 #define KERNEL_NAND_OFFSET  0x14000u
 #endif
+/* The kernel's text and read-only data, and their gz_resume_sum. */
+#ifndef KERNEL_TEXT_LEN
+#define KERNEL_TEXT_LEN     0x1000u
+#endif
+#ifndef KERNEL_TEXT_SUM
+#define KERNEL_TEXT_SUM     0u
+#endif
 
 #define NAND_PAGE_DATA      512u
 
@@ -32,6 +40,9 @@
 #ifndef SPL_REG32
 #define SPL_REG32(a) (*(volatile uint32_t *)(a))
 #define SPL_REG8(a)  (*(volatile uint8_t *)(a))
+#endif
+#ifndef SPL_REG16
+#define SPL_REG16(a) (*(volatile uint16_t *)(a))
 #endif
 #define XFER_CMD     SPL_REG32(0xAA00A414u)
 #define XFER_ADDR8   SPL_REG8(0xAA00A420u)
@@ -447,8 +458,102 @@ static void __attribute__((noreturn)) ramboot(void)
 }
 #endif
 
+/*
+ * A HIBERNATE wake (docs/POWER.md "Power off", kernel/resume.h) restarts
+ * the CPU at the reset vector, and the boot ROM loads this SPL as after a
+ * power-on. Before anything else, and before the LCD is lit, see whether
+ * the kernel is still in RAM waiting to resume:
+ *   - no reset cause in PMUINT (a power-switch or alarm wake sets none,
+ *     VR4131 UM 12.2.1; Power+Reset, a battery pull or the HALTimer do),
+ *   - the record's magic.
+ * Then Power held resumes it, as does the alarm it set; any other wake
+ * hibernates again, as Windows CE's NK does (nk.exe 0x80077820-0x80077944).
+ * To resume, the low RAM the boot ROM overwrote comes back from the
+ * kernel's copies (kernel/resume.h), and the kernel's text and read-only
+ * data must then sum as they did at build. Otherwise the record is cleared
+ * and this is an ordinary boot.
+ */
+#define PMU_INT16       SPL_REG16(0xAF0000C0u)
+#define PMU_CNT16       SPL_REG16(0xAF0000C2u)
+#define RTC_ETIME16(o)  SPL_REG16(0xAF000100u + (o))
+#define KEYS_LATCH16    SPL_REG16(0xAA00A042u)
+#define KEYS_WORD16     SPL_REG16(0xAA00A044u)
+#define PMU_RESETS      0x0138u     /* RSTSW, RTCRST, TIMOUTRST, BATTINH */
+#ifndef SPL_RESUME_RECORD
+#define SPL_RESUME_RECORD ((struct gz_resume *)(0xA0000000u | GZ_RESUME_PA))
+#define SPL_KERNEL_TEXT ((const volatile uint32_t *)(KERNEL_LOAD_VA | 0x20000000u))
+#define SPL_SAVED_PAGE(pa) ((volatile uint32_t *)(0xA0000000u | (pa)))
+#define SPL_HIBERNATE() __asm__ volatile(".word 0x42000023\n\tnop\n\tnop\n\tnop\n\tnop" ::: "memory")
+#define SPL_RESUME(r) ((void (*)(struct gz_resume *))((r)->entry | 0x20000000u))(r)
+#endif
+
+static uint64_t spl_etime(void)
+{
+    uint16_t h, m, l, m2;
+
+    do {
+        h = RTC_ETIME16(4);
+        m = RTC_ETIME16(2);
+        l = RTC_ETIME16(0);
+        m2 = RTC_ETIME16(2);
+    } while (m != m2);
+    return ((uint64_t)h << 32) | ((uint32_t)m << 16) | l;
+}
+
+/* Why a hibernation wasn't resumed, for the log once serial is up. */
+static const char *spl_resume_failed;
+static uint32_t spl_resume_value;
+
+static void spl_resume(void)
+{
+    struct gz_resume *r = SPL_RESUME_RECORD;
+    uint16_t pmuint = PMU_INT16;
+
+    if (r->magic != GZ_RESUME_MAGIC)
+        return;
+    if (pmuint & PMU_RESETS) {
+        spl_resume_failed = "a reset, PMUINT 0x";
+        spl_resume_value = pmuint;
+        r->magic = 0;
+        return;
+    }
+    r->pmuint = pmuint;
+    uint64_t alarm = (uint64_t)r->alarm_hi << 32 | r->alarm_lo;
+    uint32_t wake = 1;          /* GZ_WAKE_POWER */
+    (void)KEYS_LATCH16;
+    if (KEYS_WORD16 & 0x8000u)
+        wake = 1;
+    else if (alarm && spl_etime() >= alarm)
+        wake = 2;               /* GZ_WAKE_ALARM */
+    else {
+        r->rests++;
+        PMU_INT16 = 0xFB3Bu;    /* PMUINT_CLEAR_ALL, as the kernel left it */
+        SPL_HIBERNATE();
+        /* It didn't take: be awake rather than stuck. */
+    }
+    /* What the boot ROM overwrote, back from the kernel's copies. */
+    for (uint32_t i = 0; i < r->nsaved && i < GZ_RESUME_SAVES; i++) {
+        const volatile uint32_t *from = SPL_SAVED_PAGE(r->saved[i].copy);
+        volatile uint32_t *to = SPL_SAVED_PAGE(r->saved[i].pa);
+        for (uint32_t w = 0; w < 1024; w++)
+            to[w] = from[w];
+    }
+    uint32_t sum = gz_resume_sum(SPL_KERNEL_TEXT, KERNEL_TEXT_LEN);
+    if (sum != KERNEL_TEXT_SUM) {
+        spl_resume_failed = "kernel text changed, sum 0x";
+        spl_resume_value = sum;
+        r->magic = 0;
+        return;
+    }
+    r->wake = wake;
+    PMU_CNT16 = PMU_CNT16 | 4u; /* HALTIMERRST within its 4 s (UM 12.2.2) */
+    r->magic = 0;
+    SPL_RESUME(r);
+}
+
 uint32_t spl_main(void)
 {
+    spl_resume();               /* returns unless a hibernation resumes */
     CHECKPOINT(1);
     uart_init();            /* before the gates: serial stays off in the SPL */
     nand_init();
@@ -466,6 +571,12 @@ uint32_t spl_main(void)
     splash_scanning = false;
     CHECKPOINT(5);
     uart_puts("\nGlaze SPL\n");
+    if (spl_resume_failed) {
+        uart_puts("SPL: not resuming the hibernation: ");
+        uart_puts(spl_resume_failed);
+        uart_puthex32(spl_resume_value);
+        uart_puts("\n");
+    }
     uart_puts("kernel load = 0x");
     uart_puthex32(KERNEL_LOAD_VA);
     uart_puts(", entry = 0x");

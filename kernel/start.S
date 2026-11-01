@@ -23,14 +23,42 @@ _start:
 	 * over both 16 KiB caches (VR4131 UM ch. 23 CACHE ops 0x01 and 0x00,
 	 * both ways, 16-byte steps), before anything is stored through KSEG0.
 	 */
-	.set	push
-	.set	mips3
 	la	$t0, 1f
 	lui	$t1, 0x2000
 	or	$t0, $t0, $t1		/* the KSEG1 alias */
 	jr	$t0
 	nop
-1:	mfc0	$t2, $15		/* PRId */
+1:	jal	cpu_cache_setup		/* stays in KSEG1: jal keeps the top bits */
+	nop
+	la	$t0, 6f			/* back to KSEG0 */
+	jr	$t0
+	nop
+6:
+	la	$sp, kstack_top
+	move	$gp, $zero
+
+	/* Zero .bss (not present in the flat image). */
+	la	$t0, __bss_start
+	la	$t1, __bss_end
+1:	beq	$t0, $t1, 2f
+	nop
+	sw	$zero, 0($t0)
+	b	1b
+	addiu	$t0, $t0, 4
+
+2:	jal	kmain
+	move	$a0, $s0
+3:	b	3b
+	nop
+
+/* The PRId 0x0C80-0x0C82 workaround above, from KSEG1 (uses t0-t4, t9).
+ * power_resume.S runs it again after a HIBERNATE, whose reset undoes it. */
+	.globl	cpu_cache_setup
+cpu_cache_setup:
+	.set	push
+	.set	mips3
+	move	$t9, $ra
+	mfc0	$t2, $15		/* PRId */
 	nop
 	andi	$t2, $t2, 0xFFFF
 	sltiu	$t3, $t2, 0x0C80
@@ -55,26 +83,9 @@ _start:
 	nop
 	jal	cache_flush_all
 	nop
-5:	la	$t0, 6f			/* back to KSEG0 */
-	jr	$t0
+5:	jr	$t9
 	nop
-6:	.set	pop
-	la	$sp, kstack_top
-	move	$gp, $zero
-
-	/* Zero .bss (not present in the flat image). */
-	la	$t0, __bss_start
-	la	$t1, __bss_end
-1:	beq	$t0, $t1, 2f
-	nop
-	sw	$zero, 0($t0)
-	b	1b
-	addiu	$t0, $t0, 4
-
-2:	jal	kmain
-	move	$a0, $s0
-3:	b	3b
-	nop
+	.set	pop
 
 /* Write back and invalidate both caches by index (uses t0, t1; called
  * through KSEG1 so it is not itself cached). */

@@ -1,0 +1,15 @@
+# Settings > Battery > Sleep: Plugged In (the emulator's default power)
+# sleeps by Hibernate. Hold Power: Goodbye, then HIBERNATE. The SPL sleeps
+# through every wake until the script's next event, then resumes the kernel
+# ("power: resumed by the SPL"); unlocking shows the Sleep page again with
+# Plugged In set to Hibernate.
+3000 drag 40 280 235 280 500
+4500 tap 150 285
+6500 drag 120 280 120 60 400
+8500 tap 120 298
+10500 tap 120 177
+12500 tap 120 179
+14500 tap 120 103
+16500 key power 2000
+28000 key power
+30000 drag 40 280 235 280 500

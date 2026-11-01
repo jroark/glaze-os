@@ -8,6 +8,15 @@
 #define GLAZE_BUILD "dev"
 #endif
 
+/* main.c: the companion clock gates Glaze relies on, at boot and after a
+ * HIBERNATE. */
+void companion_gates_on(void);
+
+/* power.c: SYS_POWER_SLEEP (docs/POWER.md "Power off"). */
+int power_sleep(int mode, uint32_t alarm_s);
+bool power_trap(void *tf);              /* trap(): the wake interrupt, while asleep */
+void power_boot(void);                  /* kmain: drop a stale resume record */
+
 /* irq.c: VR4131 ICU / GIU / VRC4173 cascade. */
 void irq_init(void);
 void irq_dispatch_ip2(void);
@@ -16,6 +25,7 @@ void irq_dispatch_ip2(void);
 void usb_init(void);
 void usb_poll(void);
 void usb_stop(void);
+void usb_resume(void);      /* after a HIBERNATE */
 bool usb_tx_idle(void);
 void usb_log_putc(char c);
 void usb_panic_poll(void);
@@ -36,6 +46,8 @@ int sys_rtc_set(struct addrspace *as, uint32_t uin);
 /* cmcu.c: Casio's power-management microcontroller. */
 void cmcu_init(void);
 void cmcu_tick(void);
+bool cmcu_stop(void);       /* the watchdog off for a sleep: true if it answered */
+void cmcu_start(void);
 
 /* input.c: touch panel and buttons. */
 void input_init(void);
@@ -50,6 +62,8 @@ void splash_tick(void);
 void splash_end(void);
 int display_set(int brightness, int contrast);
 int display_power(int on);
+void display_sleep(void);   /* panel and backlight off (drivers/power.c) */
+void display_wake(void);    /* panel on, backlight still off */
 void input_push(uint16_t type, uint16_t code, int x, int y);
 void stowaway_init(void);
 void stowaway_poll(void);
@@ -58,6 +72,9 @@ void input_irq(uint16_t kj_status);
 void input_poll(void);
 int input_bind(int port);
 void input_touch_restart(void);
+void input_suspend(void);
+void input_resume(bool cold);
+int input_script_next_ms(void);       /* INPUT_SCRIPT builds: -1 when done */
 void input_notify(uint32_t bits);     /* to the compositor's input port */
 
 /* battery.c: battery, adapter and charger (docs/POWER.md). */
@@ -65,6 +82,8 @@ void battery_init(void);
 void battery_tick(void);
 int battery_status(struct addrspace *as, uint32_t uout, uint32_t size);
 void battery_idle(uint32_t us);       /* a STANDBY ended after us */
+void battery_suspend(void);
+void battery_resume(void);
 int input_read(struct addrspace *as, uint32_t uevents, uint32_t max);
 
 /* flash.c: raw NAND for the file server. */
@@ -93,6 +112,7 @@ void cf_init(void);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);
+void pcmcia_resume(void);   /* after a HIBERNATE: everything inserted afresh */
 /* The CIS's LAN_NODE_ID (CISTPL_FUNCE): a network card's station address. */
 bool pcmcia_node_id(uint8_t mac[6]);
 int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
@@ -163,9 +183,12 @@ int sys_audio_stop(struct proc *p, uint32_t flush);
 int sys_audio_status(struct proc *p, uint32_t uout);
 int sys_audio_mix(struct proc *p, uint32_t ubuf, uint32_t len);
 int sys_audio_gain(struct proc *p, uint32_t gain);
+void audio_suspend(void);           /* DMA stopped for a sleep */
+void audio_resume(bool cold);       /* cold: after a HIBERNATE */
 void buzzer_init(void);
 void buzzer_beeps(unsigned n);
 void buzzer_poll(void);
+void buzzer_stop(void);
 bool buzzer_active(void);
 int sys_buzzer_tone(struct proc *p, uint32_t hz, uint32_t ms, uint32_t pulse);
 

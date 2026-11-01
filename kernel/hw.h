@@ -30,7 +30,10 @@
 #define ICU_GIUINTH         REG16(0x0F0000A2u)
 #define ICU_MSYSINT2        REG16(0x0F0000A6u)
 #define ICU_MGIUINTH        REG16(0x0F0000A8u)
+#define SYSINT1_BATT        (1u << 0)   /* BATINTR (UM 11.2.1) */
+#define SYSINT1_POWER       (1u << 1)   /* POWERINTR: the power switch */
 #define SYSINT1_RTCL1       (1u << 2)
+#define SYSINT1_ETIME       (1u << 3)   /* ETIMEINTR: ETIME reached ECMP */
 #define SYSINT1_GIU         (1u << 8)
 
 /* VR4131 PMU (doc: PMU). */
@@ -38,7 +41,19 @@
 #define PMU_INT             REG16(PMU_BASE + 0x00)
 #define PMU_CNT             REG16(PMU_BASE + 0x02)
 #define PMU_CNT2            REG16(PMU_BASE + 0x06)
+/* PMUINTREG (UM 12.2.1), write 1 to clear. A HIBERNATE woken by the power
+ * switch sets none of these, so a reset with none set is such a wake. */
+#define PMUINT_POWERSWINTR  (1u << 0)   /* the power switch while running */
 #define PMUINT_BATTINTR     (1u << 1)   /* battery low while running (UM 12.2.1) */
+#define PMUINT_RSTSW        (1u << 3)   /* reset switch or SOFTRST */
+#define PMUINT_RTCRST       (1u << 4)   /* power-on: the RTC was reset */
+#define PMUINT_TIMOUTRST    (1u << 5)   /* HALTimer */
+#define PMUINT_BATTINH      (1u << 8)   /* battery too low to power on */
+#define PMUINT_RTCINTR      (1u << 9)   /* woken by the RTC alarm */
+#define PMUINT_RESETS       (PMUINT_RSTSW | PMUINT_RTCRST | PMUINT_TIMOUTRST | PMUINT_BATTINH)
+/* What Windows CE writes before HIBERNATE (nk.exe 0x80079560): every bit
+ * but the read-only DCDST (bit 10) and the two memo bits (6, 7). */
+#define PMUINT_CLEAR_ALL    0xFB3Bu
 #define PMUCNT_HALTIMERRST  (1u << 2)
 #define PMUCNT2_SOFTRST     (1u << 4)
 
@@ -47,6 +62,11 @@
 #define RTC_ETIME_L         REG16(RTC_BASE + 0x00)
 #define RTC_ETIME_M         REG16(RTC_BASE + 0x02)
 #define RTC_ETIME_H         REG16(RTC_BASE + 0x04)
+#define RTC_ECMP_L          REG16(RTC_BASE + 0x08)  /* ETIME compare (UM 13.2.2) */
+#define RTC_ECMP_M          REG16(RTC_BASE + 0x0A)
+#define RTC_ECMP_H          REG16(RTC_BASE + 0x0C)
+#define RTC_INT             REG16(RTC_BASE + 0x3E)  /* RTCINTREG, write 1 to clear */
+#define RTCINT_ETIME        (1u << 0)
 #define RTC_HZ              32768u
 
 /* VR4131 GIU (doc: GPIO). */
@@ -86,6 +106,8 @@
 /* ScCmcu, the companion's interface to Casio's power-management
  * microcontroller (hardware.txt:189, "ScCmcu Base on companion"). */
 #define CMCU_BASE           0x0A007800u
+#define CMCU_CMD0           REG32(CMCU_BASE + 0x00)
+#define CMCU_ARG0           REG32(CMCU_BASE + 0x04)
 #define CMCU_CMD            REG32(CMCU_BASE + 0x08)
 #define CMCU_ARG            REG32(CMCU_BASE + 0x0C)
 #define CMCU_CONFIG         REG32(CMCU_BASE + 0x10)
@@ -291,6 +313,8 @@
 /* Buttons (doc: Buttons). A dummy halfword read at +2 precedes the live
  * bytes, matching the stock driver. */
 #define KEYS_LATCH          REG16(0x0A00A042u)
+#define KEYS_WORD           REG16(0x0A00A044u)   /* SET1 | SET2 << 8 */
+#define KEYS_POWER_BIT      0x8000u             /* in either word (nk.exe 0x80077344) */
 #define KEYS_SET1           REG8(0x0A00A044u)
 #define KEYS_SET2           REG8(0x0A00A045u)
 #define KEY1_OK             0x04u

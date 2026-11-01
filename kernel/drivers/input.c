@@ -270,26 +270,61 @@ void input_irq(uint16_t kj_status)
         input_poll();
 }
 
-void input_init(void)
+static void keys_sync(void)
 {
     (void)KEYS_LATCH;
     keys1 = KEYS_SET1;
     keys2 = KEYS_SET2;
+}
 
-    /* Windows CE's settings from the idle dump (hw_dump_vrc4173.txt
-     * 0x0A000300): a 0x5DC interval (30 us units, ~22 Hz) and stable count
-     * 0xC8, and interrupt mask 0xDD. A ~10 ms interval lost data on the
-     * first touch on a real BE-300. */
+/* Windows CE's settings from the idle dump (hw_dump_vrc4173.txt
+ * 0x0A000300): a 0x5DC interval (30 us units, ~22 Hz) and stable count
+ * 0xC8, and interrupt mask 0xDD. A ~10 ms interval lost data on the first
+ * touch on a real BE-300. */
+static void piu_start(void)
+{
     PIU_ADC_ENABLE = 3;     /* before the sequencer starts (hw.h) */
     PIU_SIVL = 0x05DC;
     PIU_STBL = 0x00C8;
     PIU_INT = (PIUINT_PENCHG | PIUINT_DATALOST | PIUINT_PAGE0 | PIUINT_PAGE1 | PIUINT_OTHER) << 8;
     PIU_CNT = PIU_SCAN;
     KJ_GIRQ0_EN(9) |= KJ_SRC_ENABLE;
+}
+
+void input_init(void)
+{
+    keys_sync();
+    piu_start();
     stowaway_init();
 #ifdef GLAZE_INPUT_SCRIPT
     input_script_load();
 #endif
+}
+
+/* For a sleep (drivers/power.c): a stroke in progress ends, and the touch
+ * source stays off until the wake. */
+void input_suspend(void)
+{
+    KJ_GIRQ0_EN(9) &= ~KJ_SRC_ENABLE;
+    if (pen_down)
+        touch_release();
+    stroke_reset();
+}
+
+/* The keys as they are now, without edges: the press that woke the device
+ * makes no event, though its release does. After a HIBERNATE the PIU is
+ * set up again; otherwise what it latched meanwhile is dropped. */
+void input_resume(bool cold)
+{
+    keys_sync();
+    if (cold) {
+        piu_start();
+        return;
+    }
+    PIU_INT = (uint16_t)((PIU_INT & 0xFF00u) | PIUINT_DATALOST | PIUINT_PAGE0 |
+                         PIUINT_PAGE1 | PIUINT_PENCHG | PIUINT_OTHER);
+    PIU_CNT = PIU_SCAN;
+    KJ_GIRQ0_EN(9) |= KJ_SRC_ENABLE;
 }
 
 /* Restart the touch scan after kernel/drivers/battery.c used the PIU. */
@@ -334,7 +369,10 @@ int input_read(struct addrspace *as, uint32_t uevents, uint32_t max)
  *   <ms> down|move|up <x> <y>
  *   <ms> tap <x> <y>
  *   <ms> drag <x0> <y0> <x1> <y1> <duration_ms>
- *   <ms> key ok|esc|up|down|left|right|home|power
+ *   <ms> key ok|esc|up|down|left|right|home|power [held_ms]
+ *
+ * Events must come in time order; a key's release (60 ms by default)
+ * counts as an event too.
  */
 struct script_ev {
     uint32_t t;
@@ -417,11 +455,18 @@ void input_script_load(void)
             for (p += 5; p < end && *p != '\n' && *p != '\r'; p++, t += 40)
                 script_add((uint32_t)t, GZ_EV_TEXT, (uint8_t)*p, 0, 0);
         } else if (word_is(p, "key")) {
+            /* key <name> [held ms], 60 ms by default. */
             p += 4;
             for (unsigned k = 0; k < ARRAY_SIZE(keys); k++) {
                 if (word_is(p, keys[k].name)) {
+                    int held = 60;
+                    const char *q = p + strlen(keys[k].name);
+                    while (*q == ' ')
+                        q++;
+                    if (*q >= '0' && *q <= '9')
+                        parse_int(q, &held);
                     script_add((uint32_t)t, GZ_EV_KEY_DOWN, keys[k].code, 0, 0);
-                    script_add((uint32_t)t + 60, GZ_EV_KEY_UP, keys[k].code, 0, 0);
+                    script_add((uint32_t)(t + held), GZ_EV_KEY_UP, keys[k].code, 0, 0);
                 }
             }
         }
@@ -429,6 +474,16 @@ void input_script_load(void)
             ;
     }
     kprintf("input: replaying %d scripted events\n", script_n);
+}
+
+/* Milliseconds until the next scripted event, or -1: drivers/power.c
+ * wakes for it, since the script's clock can't run while asleep. */
+int input_script_next_ms(void)
+{
+    if (script_pos >= script_n)
+        return -1;
+    uint32_t now = (uint32_t)(time_us() / 1000u);
+    return script[script_pos].t > now ? (int)(script[script_pos].t - now) : 0;
 }
 
 void input_script_poll(void)

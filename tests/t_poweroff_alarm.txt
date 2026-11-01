@@ -1,0 +1,15 @@
+# An alarm wake (docs/POWER.md "Power off"): start Clock's one-minute timer
+# as tests/t_notify.txt does, go Home and hold Power. The device suspends
+# until the timer's notification is due, then wakes to the lock screen with
+# it ("power: awake (alarm)"); no scripted event follows the hold, so only
+# the alarm can wake it. Boot it for about 90 s.
+3000 drag 40 280 235 280 500
+4500 tap 150 48
+6500 tap 200 303
+7500 tap 148 197
+8000 tap 148 197
+8500 tap 148 197
+9000 tap 148 197
+10000 tap 120 252
+11500 key home
+13500 key power 2000

@@ -71,6 +71,16 @@ static struct sb_display display_controls;
 static struct sb_idle idle;
 static struct sb_power power;
 static bool idle_clamped;          /* screen timeout shortened: battery critical */
+static struct sb_hold power_hold;  /* the Power button: press locks, hold powers off */
+static bool power_press;           /* this event released a Power press */
+static struct power_sleep sleep_cfg;
+/* Powering off: the Goodbye screen is up until `at`, then the CPU sleeps. */
+static struct {
+    bool pending;
+    int mode;                   /* GZ_SLEEP_* */
+    uint32_t at;
+    bool app_paused;            /* the front app got DEACTIVATE for it */
+} goodbye;
 static unsigned debug_activity;
 static uint32_t debug_until;
 static int debug_app_pid;
@@ -158,6 +168,7 @@ static struct {
 } clients[MAX_CLIENTS];
 
 static void load_settings(void);
+static bool power_refresh(void);
 static struct sb_clipboard clipboard;
 
 /* ---- helpers ------------------------------------------------------------ */
@@ -955,7 +966,8 @@ static void lock_device(void)
     render_lock();
 }
 
-static void screen_sleep(void)
+/* Dark and locked: compositor output stops, and the front app's touch ends. */
+static void screen_lock_dark(void)
 {
     sb_idle_sleep(&idle);       /* block every compositor output before locking */
     if (front() && idle.touch_down) {
@@ -971,6 +983,11 @@ static void screen_sleep(void)
     memset(pin, 0, sizeof(pin));
     view.pin.pressed = -1;
     last_home_ms = 0;
+}
+
+static void screen_sleep(void)
+{
+    screen_lock_dark();
     gfx_fill(&fb, gfx_r(0, 0, SCREEN_W, SCREEN_H), 0);
     gz_display_power(false);
     puts("springboard: screen off");
@@ -983,6 +1000,109 @@ static void screen_wake(void)
     shimmer_next = now_ms() + 60;
     gz_display_power(true);
     puts("springboard: screen on");
+}
+
+/* ---- power off (docs/POWER.md "Power off") ------------------------------ */
+
+#define GOODBYE_MS  1000u       /* long enough to read, and for the app to save */
+
+/* The sleep for this power source, by Settings → Battery → Sleep. */
+static int sleep_mode(void)
+{
+    return sb_power_on_battery(&power.st) ? sleep_cfg.battery_mode : sleep_cfg.ac_mode;
+}
+
+static void sleep_apply(void)
+{
+    bool battery = sb_power_on_battery(&power.st);
+    int mode = sleep_mode();
+    uint32_t min = battery ? sleep_cfg.battery_min : sleep_cfg.ac_min;
+    sb_idle_set_sleep(&idle, mode != POWER_SLEEP_NEVER, min * 60000u);
+}
+
+/* As Windows CE's PowerOn.dll says "Bye...": white on black, centred. */
+static void draw_goodbye(void)
+{
+    const gfx_font *f = ui_font(FONT_B20);
+
+    gfx_fill(&fb, gfx_r(0, 0, SCREEN_W, SCREEN_H), 0);
+    gfx_text_center(&fb, 0, (SCREEN_H - f->line_height) / 2, SCREEN_W, f, "Goodbye", 0xFFFFFF, 255);
+}
+
+/* The front app saves and suspends as for Home (DEACTIVATE is the moment
+ * apps save), but stays in front under the lock, as with the screen off. */
+static bool front_pause(void)
+{
+    struct sb_running *s = front();
+
+    if (!s || s->pid <= 0 || !gz_proc_alive(s->pid))
+        return false;
+    s->shared->background = 1;
+    s->last_active_ms = now_ms();
+    struct gz_input_event e = { .type = GZ_EV_APP_DEACTIVATE, .time_ms = s->last_active_ms };
+    send_slot_event(s, &e);
+    gz_proc_set_bg(s->pid, GZ_PROC_BG);
+    return true;
+}
+
+static void front_resume(void)
+{
+    struct sb_running *s = front();
+
+    if (!s || s->pid <= 0 || !gz_proc_alive(s->pid))
+        return;
+    s->shared->background = 0;
+    s->last_active_ms = now_ms();
+    gz_proc_set_bg(s->pid, GZ_PROC_FG);     /* also thaws it */
+    struct gz_input_event e = { .type = GZ_EV_APP_ACTIVATE, .time_ms = s->last_active_ms };
+    send_slot_event(s, &e);
+}
+
+static void power_off(int mode, const char *why)
+{
+    struct audio_state player;
+    bool lit = !idle.dark;
+
+    if (goodbye.pending)
+        return;
+    printf("springboard: power off, %s (%s)\n", why, power_sleep_mode_name(mode));
+    if (lit)
+        screen_lock_dark();
+    audio_sound_stop();         /* lock_device's click */
+    if (audio_get_state(&player) == 0 && player.state == AUDIO_PLAYING)
+        audio_pause();
+    if (lit)
+        draw_goodbye();
+    goodbye.app_paused = front_pause();
+    goodbye.mode = mode;
+    goodbye.at = now_ms() + (lit || goodbye.app_paused ? GOODBYE_MS : 0);
+    goodbye.pending = true;
+}
+
+/* Asleep until Power or the next notification's time, then the lock screen. */
+static void power_off_now(void)
+{
+    goodbye.pending = false;
+    gfx_fill(&fb, gfx_r(0, 0, SCREEN_W, SCREEN_H), 0);
+    gz_display_power(false);
+    int due = notify_next_ms(now_secs());
+    uint32_t alarm = due < 0 ? 0 : MAX(1u, ((uint32_t)due + 999u) / 1000u);
+    int rv = gz_power_sleep(goodbye.mode, alarm);
+    if (rv < 0) {
+        printf("springboard: cannot power off (%d); the screen stays off\n", rv);
+        return;
+    }
+    printf("springboard: awake by %s from %s\n", GZ_WAKE_REASON(rv) == GZ_WAKE_ALARM ? "the alarm" : "Power",
+           power_sleep_mode_name(GZ_WAKE_MODE(rv)));
+    sb_hold_reset(&power_hold);
+    idle.dark = false;
+    idle.last_activity = now_ms();
+    if (goodbye.app_paused)
+        front_resume();
+    goodbye.app_paused = false;
+    power_refresh();
+    sleep_apply();
+    screen_wake();
 }
 
 static void begin_unlock(void)
@@ -1454,6 +1574,11 @@ static void home_touch(const struct gz_input_event *e)
 
 static void handle_key(const struct gz_input_event *e)
 {
+    if (e->type == GZ_EV_KEY_UP && e->code == GZ_KEY_POWER) {
+        if (power_press && (state == ST_HOME || state == ST_APP))
+            lock_device();
+        return;
+    }
     if (e->type != GZ_EV_KEY_DOWN) {
         if (state == ST_APP)
             send_event(e);
@@ -1467,9 +1592,7 @@ static void handle_key(const struct gz_input_event *e)
         return;
     }
     switch (e->code) {
-    case GZ_KEY_POWER:
-        if (state == ST_HOME || state == ST_APP)
-            lock_device();
+    case GZ_KEY_POWER:         /* a press locks on release; held, it powers off */
         break;
     case GZ_KEY_HOME: {
         uint32_t t = now_ms();
@@ -1574,6 +1697,10 @@ static void handle_input(void)
                 else if (state == ST_HOME) render_home();
                 continue;
             }
+            if (e->type == GZ_EV_KEY_DOWN || e->type == GZ_EV_KEY_UP)
+                power_press = sb_hold_input(&power_hold, e, now_ms()) == SB_HOLD_PRESS;
+            if (goodbye.pending)
+                continue;       /* nothing but the Power hold until asleep */
             enum sb_idle_input action = sb_idle_input(&idle, e, now_ms());
             if (action == SB_IDLE_WAKE)
                 screen_wake();
@@ -2069,20 +2196,13 @@ static void power_note(const char *title, const char *body)
     show_note(&n);
 }
 
-/* Critical for SB_POWER_CRITICAL_MS: the front app is sent to the
- * background, which makes it save, and the screen goes off. No power-off
- * control is known (the CMCU protocol is its watchdog), so the battery's
- * own cut-off still ends it if the adapter doesn't come. */
+/* Critical for SB_POWER_CRITICAL_MS: the device powers off as when Power
+ * is held (the front app saves first), with the note waiting on the lock
+ * screen. The battery's own cut-off ends it if the adapter doesn't come. */
 static void power_safe_sleep(void)
 {
     puts("springboard: battery critical, sleeping");
-    if (front() && (state == ST_APP || state == ST_ZOOM_IN || state == ST_LAUNCH_WAIT)) {
-        app_background();
-        state = ST_HOME;
-    }
-    audio_sound_stop();
-    if (!idle.dark)
-        screen_sleep();
+    power_off(GZ_SLEEP_SUSPEND, "battery critical");
     power_note("Battery Critically Low", "Connect the power adapter. Your apps were saved.");
 }
 
@@ -2129,6 +2249,7 @@ int main(void)
     sb_calibration_load(&calibration);
     sb_display_load(&display_controls);
     sb_idle_load(&idle, now_ms());
+    sleep_cfg = power_sleep_get();
     apps_scan(false);                   /* before notify_load: it keys on bundles */
     apps_changed();
     notify_load();
@@ -2142,6 +2263,7 @@ int main(void)
     gz_child_notify(sb_port);           /* GZ_NOTIFY_CHILD when an app exits */
     gz_input_bind(sb_port);
     power_refresh();                    /* GZ_NOTIFY_POWER from here on */
+    sleep_apply();
 
     update_clock(true);
     update_card_status();
@@ -2192,6 +2314,12 @@ int main(void)
         int idle_wait = sb_idle_wait(&idle, t);
         if (idle_wait >= 0)
             timeout = MIN(timeout, idle_wait);
+        int sleep_wait = goodbye.pending ? MAX((int)(goodbye.at - t), 0) : sb_idle_sleep_wait(&idle, t);
+        if (sleep_wait >= 0)
+            timeout = MIN(timeout, sleep_wait);
+        int hold_wait = sb_hold_wait(&power_hold, t);
+        if (hold_wait >= 0)
+            timeout = MIN(timeout, hold_wait);
         if (power.critical_since && !power.slept)
             timeout = MIN(timeout, MAX((int)(power.critical_since + SB_POWER_CRITICAL_MS - t), 0));
 
@@ -2205,10 +2333,14 @@ int main(void)
                 sb_idle_load(&idle, now_ms());
                 idle_clamped = false;   /* power_check shortens it again */
             }
-            if (m.w[0] & GZ_NOTIFY_POWER)
+            if (m.w[0] & GZ_NOTIFY_POWER) {
                 power_changed = power_refresh();
+                sleep_apply();          /* the adapter may have come or gone */
+            }
             if (m.w[0] & SB_NOTIFY_POWER) {
                 view.battery_pct = power_percent_get();
+                sleep_cfg = power_sleep_get();
+                sleep_apply();
                 power_changed = true;
             }
             if (m.w[0] & SB_NOTIFY_TIME)
@@ -2227,6 +2359,17 @@ int main(void)
         if (debug_app_pid && !gz_proc_alive(debug_app_pid)) debug_app_pid = 0;
         view.debugger = debug_activity | (debug_app_pid ? GU_DEBUG_RUN : 0);
         power_check();
+        if (goodbye.pending) {
+            if ((int32_t)(t - goodbye.at) >= 0) {
+                power_off_now();
+                t = now_ms();       /* the clock moved on while asleep */
+            }
+        } else if (sb_hold_due(&power_hold, t)) {
+            int mode = sleep_mode();
+            power_off(mode == POWER_SLEEP_NEVER ? GZ_SLEEP_SUSPEND : mode, "Power held");
+        } else if (sb_idle_sleep_wait(&idle, t) == 0) {
+            power_off(sleep_mode(), "idle");
+        }
         if (sb_idle_wait(&idle, t) == 0)
             screen_sleep();
         if (calibration.owner && calibration.preview && (int32_t)(t - calibration.until) >= 0)

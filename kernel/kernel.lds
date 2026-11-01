@@ -15,6 +15,10 @@ SECTIONS {
         *(.rodata)
         *(.rodata.*)
     }
+    /* The text and read-only data end: the SPL checks them before it
+     * resumes a HIBERNATE (kernel/resume.h). */
+    . = ALIGN(4);
+    __ro_end = .;
     .data : {
         *(.data)
         *(.data.*)

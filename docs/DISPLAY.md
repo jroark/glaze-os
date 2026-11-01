@@ -78,6 +78,10 @@ numbers stay unchanged. The preference `sb.display` stores a versioned pair
 of native levels. Invalid or missing records use the defaults.
 `SYS_DISPLAY_POWER(on)` is also privileged and accepts only 0 or 1. It
 changes backlight power without suspending the CPU or disabling touch.
+Powering the device off (`SYS_POWER_SLEEP`, [POWER.md](POWER.md)) turns the
+panel off too: `display_sleep()` follows Windows CE's OEMPowerOff (nk.exe
+0x80079BB4), the reverse of `lcd_start()`, and `display_wake()` starts the
+panel again with the backlight still off, for SpringBoard to paint first.
 
 ## Hardware evidence
 
@@ -120,7 +124,8 @@ BE-300 Windows CE 3.0 NAND image, using `be300/tools/extract_nk_lzss.py` and
 
 The driver preserves unrelated contrast-register bits and skips unchanged
 levels. The early kernel leaves the LCD and backlight enabled. Timeout
-only powers down the backlight PWM; LCD panel timing and CPU power stay on.
+only powers down the backlight PWM; LCD panel timing and CPU power stay on
+until the device powers off.
 Repeated power requests are idempotent, so they cannot overwrite the saved
 configuration with the disabled register values.
 

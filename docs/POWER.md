@@ -1,9 +1,11 @@
-# Battery, charging and idle power
+# Battery, charging, idle power and power off
 
 Glaze reads the battery, the AC adapter and the charger as Windows CE's
 battery driver does. It shows them in the status bar and on Settings →
 Battery, warns as the battery runs down, and puts the CPU in VR4131
-STANDBY whenever no thread is runnable.
+STANDBY whenever no thread is runnable. Holding Power, or leaving the
+screen off, powers the device off as Windows CE does: Goodbye, then
+SUSPEND or HIBERNATE until Power or an alarm (see [Power off](#power-off)).
 
 ## Hardware, from Windows CE
 
@@ -136,11 +138,10 @@ the card icon moves left.
 - A note from Settings at a level of 20 % and again at 10 %, once per
   discharge. It shows as a banner, or on the lock screen while locked.
 - While critical, the screen timeout is at most 15 s.
-- After 30 s critical, SpringBoard sends the front app to the background,
-  which makes it save, stops sounds, turns the screen off and posts
-  "Battery Critically Low".
-- No power-off control is known, so this is a safe sleep. The battery's own
-  cut-off (about 3.40 V, per the manual) ends it if the adapter never comes.
+- After 30 s critical, SpringBoard powers off by Suspend, as when Power is
+  held (the front app saves first), with "Battery Critically Low" waiting
+  on the lock screen. The battery's own cut-off (about 3.40 V, per the
+  manual) ends it if the adapter never comes.
 - BATTINTR counts as critical only together with CE's 25 % band, because its
   source isn't known.
 
@@ -150,6 +151,145 @@ the card icon moves left.
 - the latest and averaged readings
 - calibration source and range
 - CPU idle
+
+## Power off
+
+### Windows CE
+
+Found by disassembling the stock modules (be300-modules; nk.exe is based
+at 0x80060000):
+
+- **OEMPowerOff** (nk.exe 0x800792AC-0x80079598) ends in HIBERNATE. Before
+  it, CE:
+  1. saves the registers, CP0, TLB and interrupt masks to PA 0x2000-0x22E4;
+  2. writes a "RAM is valid" pattern at PA 0x2700;
+  3. masks and acknowledges the companion sources (0x30 to 0x0A000010-4C);
+  4. writes back the D-cache;
+  5. turns the LCD off (0x80079BB4: 0xC48 = 0x10F, the backlight 0x980/0x984
+     and its gate 0x1128 off, 0xC48 = 0x101, then 0, 0xC30 = 1, gate 0x110C
+     off);
+  6. zeroes the companion gates 0x1100-0x1130 and CMUCLKMSK;
+  7. writes 0xFB3B to PMUINT.
+
+  The wake is a cold reset: ROM, SPL, then NK's reset code checks the
+  pattern and resumes, or hibernates again unless Power is held (the button
+  word 0x0A00A042 | A044, bit 0x8000), the RTC alarm or GPIO1 woke it
+  (0x80077820-0x80077944). A power-switch wake sets no PMUINT bit (UM
+  12.2.1). SUSPEND appears only in CE's idle loop.
+- **Goodbye**: PowerOn.dll's POWEROFF_WINDOW, a full-screen black popup
+  with "Bye..." in white, the system font at 1.25× and bold, up while the
+  registry and alarms flush.
+- **The CMCU watchdog** is stopped before sleeping and started after
+  (cedmbltin.dll CDM_PowerDown 0x019F1430, CDM_PowerUp 0x019F1454): stop is
+  ARG0 0x7804 = 0x35, CMD0 0x7800 = 0x5C until STATUS & 7 reads 0.
+  Without it a real BE-300 would reset 150 s into a sleep.
+
+### Glaze
+
+`SYS_POWER_SLEEP(mode, alarm_s)` (`gz_power_sleep`, privileged; GZ_SLEEP_*
+and GZ_WAKE_* in `glaze/abi.h`) is `kernel/drivers/power.c`:
+
+1. It stops what can't run through a sleep:
+   - the audio DMA (`audio_suspend`, restarted where it was after);
+   - the piezo;
+   - a battery sample in progress;
+   - the touch source;
+   - the panel, by CE's sequence (`display_sleep`);
+   - the CMCU watchdog (`cmcu_stop`).
+2. It sleeps:
+   - **Suspend.** VR4131 SUSPEND, with only the power switch's interrupt
+     (SYSINT1 POWERINTR), GIRQ0's button source and the ETIME compare
+     unmasked. A wake by another button suspends again. Interrupts are
+     turned on in the same asm block as SUSPEND, and `power_trap` returns
+     past it, so an interrupt in between can't leave SUSPEND waiting with
+     interrupts off.
+   - **Hibernate.** VR4131 HIBERNATE through the SPL (below). A RAM boot
+     from Windows CE suspends instead, since CE's own SPL would start CE.
+     If an interrupt was pending, HIBERNATE does nothing, and Glaze
+     suspends.
+3. It carries the monotonic clock across on the RTC's ETIME
+   (`timer_suspend`/`timer_resume`), since Count stops, resets, or wraps
+   after about 413 s.
+4. It starts everything again: after a Hibernate, the companion gates,
+   `irq_init`, the CMCU, USB (the host's session is lost), the PIU, the
+   audio block and the PCMCIA socket (whatever is in it is inserted afresh,
+   and the file server remounts the card).
+5. It returns GZ_WAKE_POWER or GZ_WAKE_ALARM, and the mode used.
+
+**Hibernate and the SPL** (`kernel/resume.h`, `kernel/power_resume.S`,
+`boot/spl.c`):
+- `power_save` records the callee-saved registers, Status and EntryHi in a
+  resume record at PA 0xE000.
+- The boot ROM overwrites RAM on its way to the SPL. In the emulator,
+  running the stock ROM, it changed PA 0x0000-0x0FFF, 0x10000-0x18FFF and
+  0x20000-0x20FFF (the vectors and the kernel's own text: CE's kernel sits
+  above that, Glaze's at 0x80010000), and the first word of the page at
+  each power of two from 0x40000 (RAM sizing).
+- So the kernel copies the first 48 pages and every probed page below its
+  end to spare pages listed in the record. `mm.c` keeps the probed pages
+  above the kernel, the SPL's image (0x00F00000) and its stack (below
+  0x00FF0000) out of use on NAND boots.
+- The SPL, first thing:
+  - boots afresh after a real reset (PMUINT RSTSW, RTCRST, TIMOUTRST or
+    BATTINH);
+  - hibernates again unless Power is held or the alarm in the record is
+    due;
+  - otherwise copies the saved pages back and checks that the kernel's
+    text and read-only data sum to `KERNEL_TEXT_SUM`
+    (`tools/elf_consts.py`, up to `__ro_end`);
+  - then sets HALTIMERRST and jumps to `power_resume_entry`, which redoes
+    `start.S`'s VR4131 cache workaround (`cpu_cache_setup`), restores
+    Status and returns from `power_save`. The kernel flushes the TLB.
+- The SPL logs why it didn't resume, once serial is up.
+- `HIBERNATE_VERIFY=1` (rebuild `kernel/drivers/power.o` after changing
+  it) sums every page in use before and after and logs any that changed.
+  It reported none in the emulator.
+
+**SpringBoard** (`servers/springboard/main.c`, `idle.c`):
+- A Power press locks on release. Holding it `SB_POWER_HOLD_MS` (1.5 s)
+  powers off.
+- Powering off:
+  1. Locks the screen.
+  2. Pauses the player.
+  3. Shows "Goodbye" (white `FONT_B20` on black) for a second.
+  4. Gives the front app DEACTIVATE, so it saves and suspends itself; it
+     stays in front under the lock.
+  5. Calls `gz_power_sleep` with the next notification's time as the alarm.
+- At the wake it gives the app ACTIVATE and shows the lock screen (the
+  passcode still applies). A note that woke it fires there.
+- With the screen timeout on, it also powers off by itself once the screen
+  has been off for the Sleep setting's delay.
+
+**Settings → Battery → Sleep** writes the `power.sleep` preference
+(`struct power_sleep`, `glaze/power.h`) and notifies SpringBoard with
+`SB_NOTIFY_POWER`:
+- On Battery and Plugged In each have a mode (Suspend, Hibernate or Never)
+  and a delay after the screen goes off (at once, 1, 5, 15, 30 or 60 min).
+- The defaults are Suspend at once on battery, and Suspend after 15 min
+  plugged in.
+- Holding Power uses the source's mode, or Suspend when it is Never.
+
+### Emulator and gaps
+
+- be300 runs SUSPEND as WAIT, and F12 wakes it through GIRQ0. Its
+  HIBERNATE cold-resets at once with RAM kept, so the SPL's
+  hibernate-again loop models the wait (each pass is a ROM load of the
+  SPL).
+- Its ETIME compare interrupt is delivered only while RTCL1 is stopped,
+  which Glaze never starts.
+- Its PMUINTREG bits don't follow the UM (RTCRST at bit 0, RSTSW at 2), and
+  its CMCU STATUS always reads 0.
+- Scripted input (`INPUT_SCRIPT`) can't run while asleep, so a sleep in such
+  a build also wakes for the script's next event, as a Power press.
+  `<ms> key power <held_ms>` holds a key.
+- Not checked on hardware yet:
+  - whether real SUSPEND/HIBERNATE wakes on POWERINTR as expected;
+  - whether the CMCU stop answers;
+  - which RAM the real ROM touches (run a `HIBERNATE_VERIFY=1` NAND image);
+  - the current drawn in each mode.
+
+  CE zeroes every companion gate before HIBERNATE; Glaze leaves them as
+  they are (the gate bus-stall hazard), which may cost power.
 
 ## Emulator and tests
 
@@ -164,6 +304,14 @@ and the EEPROM (`src/hw/eeprom.c`). It takes these options:
 | `--eeprom-cal B0,B1` | calibration bytes; without it the EEPROM is erased, so the defaults are used |
 
 `tests/run.sh` passes `BE300_ARGS` through to the emulator.
+
+- `tests/run.sh tests/t_poweroff.txt 40` types a note, holds Power, wakes
+  and finds it again. `tests/t_hibernate.txt` (40 s) selects Hibernate in
+  Settings and resumes through the SPL. `tests/t_poweroff_alarm.txt` (90 s)
+  wakes on Clock's timer.
+- `make -C host idle-test` covers the hold and the auto-sleep deadline, and
+  `boot-init-test` covers the SPL's resume decisions and the clock across a
+  sleep.
 
 - `make -C host battery-test` runs the arithmetic and the driver on fake
   registers.
