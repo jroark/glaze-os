@@ -65,9 +65,9 @@ chatgpt-test: ../out/host/chatgpt-protocol ../out/host/chatgpt-client
 USB_PKG_CONFIG ?= $(if $(wildcard /opt/homebrew/bin/pkg-config),/opt/homebrew/bin/pkg-config,pkg-config)
 USB_FLAGS := $(shell $(USB_PKG_CONFIG) --cflags --libs libusb-1.0 2>/dev/null)
 USB_CC ?= $(CC)
-USB_SOURCES := $(wildcard glaze_usb/*.c)
+USB_SOURCES := $(wildcard ../tools/glaze-usb/*.c)
 USB_TLS := -I../third_party/wolfssl -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS
-../out/host/glaze-usb: $(USB_SOURCES) $(wildcard glaze_usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h ../lib/include/glaze/debug_net.h ../lib/include/glaze/usb_net.h $(O)/libwolfssl.a
+../out/host/glaze-usb: $(USB_SOURCES) $(wildcard ../tools/glaze-usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h ../lib/include/glaze/debug_net.h ../lib/include/glaze/usb_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(USB_TLS) $(USB_SOURCES) $(O)/libwolfssl.a $(USB_FLAGS) -o $@
 glaze-usb: ../out/host/glaze-usb
@@ -84,14 +84,14 @@ usb-driver-test: ../tests/usb_driver.c ../kernel/drivers/usb.c
 .PHONY: usb-wire-test usb-driver-test
 .PHONY: usb-net-test
 .PHONY: mirror-test
-../out/host/mirror-fixture: ../tests/mirror_fixture.c glaze_usb/mirror.c glaze_usb/rfb.c ../servers/usb/mirror.c glaze_usb/rfb.h ../servers/usb/mirror.h ../lib/include/glaze/mirror.h
+../out/host/mirror-fixture: ../tests/mirror_fixture.c ../tools/glaze-usb/mirror.c ../tools/glaze-usb/rfb.c ../servers/usb/mirror.c ../tools/glaze-usb/rfb.h ../servers/usb/mirror.h ../lib/include/glaze/mirror.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) -fsanitize=address,undefined $(filter %.c,$^) -o $@
 mirror-test: ../out/host/mirror-fixture
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/mirror_frame.c ../servers/usb/mirror.c -o ../out/host/mirror-frame
 	../out/host/mirror-frame
 	python3 ../tests/mirror.py
-usb-net-test: ../tests/usb_ethernet.c ../servers/usb/ethernet.c glaze_usb/ethernet.c glaze_usb/ethernet_packet.c ../lib/include/glaze/usb_net.h ../servers/usb/ethernet.h glaze_usb/ethernet_packet.h
+usb-net-test: ../tests/usb_ethernet.c ../servers/usb/ethernet.c ../tools/glaze-usb/ethernet.c ../tools/glaze-usb/ethernet_packet.c ../lib/include/glaze/usb_net.h ../servers/usb/ethernet.h ../tools/glaze-usb/ethernet_packet.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) -fsanitize=address,undefined $(filter %.c,$^) -o ../out/host/usb-net-test
 	../out/host/usb-net-test
@@ -100,9 +100,9 @@ usb-reload-test: ../tests/usb_reload.c ../kernel/usb_reload.c ../out/glazeboot/g
 	$(CC) $(CFLAGS) -I../out/glazeboot/gen -fsanitize=address,undefined ../tests/usb_reload.c -o ../out/host/usb-reload-test
 	../out/host/usb-reload-test
 .PHONY: usb-reload-test
-usb-pcconnect-test: ../tests/usb_pcconnect.c glaze_usb/pcconnect.c glaze_usb/pcconnect.h
+usb-pcconnect-test: ../tests/usb_pcconnect.c ../tools/glaze-usb/pcconnect.c ../tools/glaze-usb/pcconnect.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_pcconnect.c glaze_usb/pcconnect.c $(USB_FLAGS) -o ../out/host/usb-pcconnect-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_pcconnect.c ../tools/glaze-usb/pcconnect.c $(USB_FLAGS) -o ../out/host/usb-pcconnect-test
 	../out/host/usb-pcconnect-test
 .PHONY: usb-pcconnect-test
 usb-input-test:
@@ -111,12 +111,12 @@ usb-input-test:
 	../out/host/usb-input-test
 usb-script-test:
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_script.c glaze_usb/script.c glaze_usb/screen.c $(USB_FLAGS) -o ../out/host/usb-script-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_script.c ../tools/glaze-usb/script.c ../tools/glaze-usb/screen.c $(USB_FLAGS) -o ../out/host/usb-script-test
 	../out/host/usb-script-test ../tests/*.txt
 .PHONY: usb-input-test usb-script-test
 usb-cleanup-test:
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_cleanup.c glaze_usb/cleanup.c $(USB_FLAGS) -o ../out/host/usb-cleanup-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_cleanup.c ../tools/glaze-usb/cleanup.c $(USB_FLAGS) -o ../out/host/usb-cleanup-test
 	../out/host/usb-cleanup-test
 .PHONY: usb-cleanup-test
 
@@ -666,7 +666,7 @@ doom-test: ../out/host/doom-test
 .PHONY: debug-net-test
 debug-net-test: ../out/host/debug-net-fixture ../out/host/glaze-usb
 	python3 ../tests/debug_network.py
-../out/host/debug-net-client: ../tests/debug_net_client.c glaze_usb/network.c glaze_usb/network.h ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
+../out/host/debug-net-client: ../tests/debug_net_client.c ../tools/glaze-usb/network.c ../tools/glaze-usb/network.h ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(USB_TLS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(filter %.c,$^) $(O)/libwolfssl.a -o $@
 debug-net-test: ../out/host/debug-net-client
@@ -730,7 +730,7 @@ ftl-factory-test: ../tests/ftl_factory_bad.c $(FS)
 	../out/host/ftl-factory-test
 .PHONY: ftl-factory-test
 
-nand-backup-test: ../tests/nand_backup.c glaze_usb/nand.c
+nand-backup-test: ../tests/nand_backup.c ../tools/glaze-usb/nand.c
 	@mkdir -p ../out/host
 	$(USB_CC) $(CFLAGS) $(USB_FLAGS) -fsanitize=address,undefined $^ -o ../out/host/nand-backup-test
 	../out/host/nand-backup-test
@@ -760,19 +760,19 @@ nand-program-test: ../tests/nand_program.c ../kernel/drivers/nand.c $(BE300_SOUR
 cf-recovery-tools: ../out/host/mkcf-recovery
 .PHONY: cf-recovery-tools
 
-cf-read-test: ../tests/cf_read.c glaze_usb/cf.c
+cf-read-test: ../tests/cf_read.c ../tools/glaze-usb/cf.c
 	@mkdir -p ../out/host
 	$(USB_CC) $(CFLAGS) $(USB_FLAGS) -fsanitize=address,undefined $^ -o ../out/host/cf-read-test
 	../out/host/cf-read-test
 .PHONY: cf-read-test
 
-nand-writer-test: ../tests/nand_writer.c glaze_usb/nand_write.c ../kernel/nand_repair.c $(O)/libwolfssl.a
+nand-writer-test: ../tests/nand_writer.c ../tools/glaze-usb/nand_write.c ../kernel/nand_repair.c $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(USB_CC) $(CFLAGS) $(USB_FLAGS) $(USB_TLS) -fsanitize=address,undefined ../tests/nand_writer.c glaze_usb/nand_write.c $(O)/libwolfssl.a -o ../out/host/nand-writer-test
+	$(USB_CC) $(CFLAGS) $(USB_FLAGS) $(USB_TLS) -fsanitize=address,undefined ../tests/nand_writer.c ../tools/glaze-usb/nand_write.c $(O)/libwolfssl.a -o ../out/host/nand-writer-test
 	../out/host/nand-writer-test
 .PHONY: nand-writer-test
 
-usb-ce-staging-test: ../tests/usb_ce_staging.c glaze_usb/client.c glaze_usb/pcconnect.h
+usb-ce-staging-test: ../tests/usb_ce_staging.c ../tools/glaze-usb/client.c ../tools/glaze-usb/pcconnect.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_ce_staging.c $(USB_FLAGS) -o ../out/host/usb-ce-staging-test
 	../out/host/usb-ce-staging-test

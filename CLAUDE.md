@@ -90,7 +90,7 @@ while the host helper runs; changing transport restarts the network service.
 
 Screen mirroring (`docs/MIRRORING.md`) adds a localhost-only VNC bridge to
 `glaze-usb mirror`. Device snapshots/deltas are in `servers/usb/mirror.c`;
-the host bridge/RFB engine are `host/glaze_usb/mirror.c` and `rfb.c`. Input is
+the host bridge/RFB engine are `tools/glaze-usb/mirror.c` and `rfb.c`. Input is
 capability-gated and shares timed input's disconnect release state. Use
 `make -C host mirror-test usb-input-test usb-driver-test`; the network guest
 fixture also checks complete mirror CRCs and live input. No capture buffer

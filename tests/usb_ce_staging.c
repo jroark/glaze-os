@@ -1,5 +1,5 @@
 /* Run the production CE staging planner against filesystem/space fixtures. */
-#include "../host/glaze_usb/client.c"
+#include "../tools/glaze-usb/client.c"
 #include <assert.h>
 static uint64_t available;
 static unsigned matching, checks, mkdirs, volume_checks;

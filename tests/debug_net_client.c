@@ -1,5 +1,5 @@
 /* Exercise TLS record fragmentation/coalescing using the production host I/O. */
-#include "../host/glaze_usb/network.h"
+#include "../tools/glaze-usb/network.h"
 #include <glaze/usb_wire.h>
 #include <stdio.h>
 #include <string.h>

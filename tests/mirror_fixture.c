@@ -1,6 +1,6 @@
 /* Production VNC bridge and device delta engine with deterministic pixels.
  * Only the physical/TLS RPC and kernel framebuffer/input boundary are faked. */
-#include "../host/glaze_usb/client.h"
+#include "../tools/glaze-usb/client.h"
 #include "../servers/usb/mirror.h"
 #include <glaze/usb.h>
 #include <glaze/mirror.h>

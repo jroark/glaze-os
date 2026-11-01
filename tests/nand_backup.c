@@ -1,5 +1,5 @@
 /* Real backup client against a deterministic physical-page RPC peer. */
-#include "../host/glaze_usb/client.h"
+#include "../tools/glaze-usb/client.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>

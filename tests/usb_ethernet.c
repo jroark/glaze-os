@@ -1,8 +1,8 @@
 /* Real host pump + production device parser on fragmented USB byte streams.
  * Network fds are datagram pairs: exercise TAP and Darwin's utun packet ABI
  * without needing root, a kernel extension or changes to the host routes. */
-#include "../host/glaze_usb/client.h"
-#include "../host/glaze_usb/ethernet_packet.h"
+#include "../tools/glaze-usb/client.h"
+#include "../tools/glaze-usb/ethernet_packet.h"
 #include "../servers/usb/ethernet.h"
 #include <glaze/usb.h>
 #include <glaze/usb_net.h>

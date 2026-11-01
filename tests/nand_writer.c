@@ -1,7 +1,7 @@
 /* Host transaction -> wire peer -> production kernel repair state machine.
  * Faults operate only on a disposable RAM NAND. Low-level controller I/O is
  * tested independently by nand_program.c against the emulator's model. */
-#include "../host/glaze_usb/client.h"
+#include "../tools/glaze-usb/client.h"
 #include "../kernel/kernel.h"
 #include "../kernel/proc.h"
 #include <glaze/bootinfo.h>

@@ -55,14 +55,14 @@ def main():
     rc.write_text('1 24 "' + str(ROOT / 'installer/windows.manifest') + '"\n')
     resource = native / 'manifest.o'
     run(windres, '-i', rc, '-o', resource)
-    includes = ['installer/compat', 'host/glaze_usb', 'lib/include', 'servers/fs',
+    includes = ['installer/compat', 'tools/glaze-usb', 'lib/include', 'servers/fs',
                 'third_party/littlefs', 'third_party/dhara']
     flags = ['-std=gnu11', '-O2', '-Wall', '-Wextra', '-Wno-unused-parameter', '-static',
              '-pthread', '-include', str(ROOT / 'installer/compat.h'), '-I' + str(libusb / 'include')]
     flags += ['-I' + str(ROOT / name) for name in includes]
     def compile(name, sources, libraries=()):
         run(cc, *flags, *[ROOT / p for p in sources], resource, *libraries, '-o', native / name)
-    usb = 'host/glaze_usb/'
+    usb = 'tools/glaze-usb/'
     compile('glaze-installer-usb.exe', ['installer/helper.c'] + [usb + n + '.c' for n in
             ('transport', 'client', 'pcconnect', 'nand', 'nand_write')],
             [libusb / 'MinGW64/static/libusb-1.0.dll.a', '-lbcrypt'])

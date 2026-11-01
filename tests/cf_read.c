@@ -1,5 +1,5 @@
 /* Read-only CF snapshot client: no device and no write RPC. */
-#include "../host/glaze_usb/client.h"
+#include "../tools/glaze-usb/client.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>

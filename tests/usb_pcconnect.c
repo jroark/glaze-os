@@ -1,4 +1,4 @@
-#include "../host/glaze_usb/pcconnect.h"
+#include "../tools/glaze-usb/pcconnect.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

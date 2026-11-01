@@ -84,7 +84,7 @@ def main():
         copy(ROOT / "sdk/templates", stage / "share/templates")
         for name in ("mkromfs.py", "mkcfimg.sh", "mkgzi.py"):
             copy(ROOT / "tools" / name, stage / "tools" / name)
-        copy(ROOT / "host/glaze_usb", stage / "host/glaze_usb")
+        copy(ROOT / "tools/glaze-usb", stage / "host/glaze_usb")
         copy(ROOT / "sdk/host.mk", stage / "host/Makefile")
         for name in ("usb_wire.h", "usb_boot.h", "abi.h", "types.h"):
             copy(ROOT / "lib/include/glaze" / name, stage / "host/include/glaze" / name)

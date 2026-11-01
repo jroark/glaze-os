@@ -1,5 +1,5 @@
-#include "../host/glaze_usb/client.h"
-#include "../host/glaze_usb/script.h"
+#include "../tools/glaze-usb/client.h"
+#include "../tools/glaze-usb/script.h"
 #include <assert.h>
 #include <glaze/abi.h>
 #include <stdlib.h>
