@@ -9,6 +9,7 @@
 #include <glaze/pkg.h>
 #include <glaze/prefs.h>
 #include <glaze/sb.h>
+#include <glaze/install.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,25 @@ static uint32_t copy_until, report_next;
 static unsigned reported = ~0u;
 static bool reloading;
 static uint32_t script_state;
+
+static bool installer_session, installer_dirty;
+static uint32_t installer_stage, installer_current, installer_total, installer_sent_stage=~0u, installer_sent_percent=~0u;
+static uint32_t installer_blocks;
+static void installer_report(uint32_t stage,uint32_t current,uint32_t total)
+{
+    if(!installer_session || stage>=GZ_INSTALL_STAGE_COUNT || current>total)return;
+    installer_stage=stage;installer_current=current;installer_total=total;
+    uint32_t percent=total?(uint64_t)current*100/total:0;
+    if(!installer_dirty && stage==installer_sent_stage && percent==installer_sent_percent)return;
+    installer_dirty=true;
+    int port=gz_port_lookup(SB_PORT_NAME);if(port<0)return;
+    struct gz_msg m={{0}},r;
+    m.w[0]=SB_CLIENT_OPEN;m.w[3]=(uint32_t)gz_getpid();
+    if(gz_send(port,&m,&r) || (int)r.w[0]<0)return;
+    m.w[0]=SB_INSTALL_STATUS;m.w[1]=stage;m.w[2]=current;m.w[4]=total;
+    if(gz_send(port,&m,&r) || (int)r.w[0]<0)return;
+    installer_sent_stage=stage;installer_sent_percent=percent;installer_dirty=false;
+}
 
 static int debugger_state(unsigned *flags, unsigned *pid)
 {
@@ -144,10 +164,15 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
                              GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ);
         if (!gz_nand_repair(GZ_NAND_REPAIR_AVAILABLE,NULL,0))
             gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_NAND_REPAIR);
+        if (installer_session) gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_INSTALL_STATUS);
         gu_put32(payload + 8, si.free_pages * 4096);
         memcpy(payload + 12, si.build, sizeof(si.build));
         payload[43] = 0; *out = 44; session = true; return 0;
     }
+    case GU_INSTALL_STATUS:
+        if(network || !installer_session) return GZ_EPERM;
+        if(n!=12 || gu_get32(b)>=GZ_INSTALL_STAGE_COUNT || gu_get32(b+4)>gu_get32(b+8)) return GZ_EINVAL;
+        installer_report(gu_get32(b),gu_get32(b+4),gu_get32(b+8));return 0;
     case GU_NET_ENABLE: {
         if (n!=4 || gu_get32(b)>1) return GZ_EINVAL;
         if (gu_get32(b)) {
@@ -227,7 +252,18 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
     case GU_NAND_REPAIR:
         if (network || n<4) return GZ_EPERM;
         if (upload>=0 || reloading || screen || mirror_active()) return GZ_EBUSY;
-        return gz_nand_repair(gu_get32(b),b+4,n-4);
+        {
+            uint32_t op=gu_get32(b);
+            int r=gz_nand_repair(op,b+4,n-4);
+            if(!r && op==GZ_NAND_REPAIR_BEGIN && n==260) {
+                installer_blocks=0;
+                for(unsigned j=132;j<260;j++)for(unsigned bit=0;bit<8;bit++)installer_blocks+=(b[j]>>bit)&1;
+                installer_report(GZ_INSTALL_WRITE,0,installer_blocks);
+            } else if(!r && op==GZ_NAND_REPAIR_COMMIT) {
+                installer_report(GZ_INSTALL_WRITE,installer_current+1,installer_blocks);
+            } else if(r<0) installer_report(GZ_INSTALL_ERROR,0,0);
+            return r;
+        }
     case GU_CF_FORMAT: {
         if (network || n!=12 || gu_get32(b+8)!=0x36314643u) return GZ_EINVAL; /* CF16 */
         if (upload>=0 || reloading || screen || mirror_active()) return GZ_EBUSY;
@@ -285,6 +321,9 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
             if (r) return r;
         }
         *out = count*528;
+        uint32_t stage=installer_stage;
+        if(stage!=GZ_INSTALL_CHECK && stage!=GZ_INSTALL_VERIFY)stage=GZ_INSTALL_READ;
+        installer_report(stage,page+count,32768);
         return 0;
     }
     case GU_GET: {
@@ -393,8 +432,12 @@ int main(void)
     uint32_t transport=0; gz_usb_ctl(GZ_USB_DEBUG_TRANSPORT,&transport,4);
     gz_usb_ctl(GZ_USB_NET_CLOSE,NULL,0); /* clean up a crashed predecessor */
     debug_net_restore();
+    uint32_t marker_size=0;
+    const void *marker=gz_romfs_map(GZ_INSTALL_MARKER,&marker_size);
+    installer_session=gz_boot_mode()==GZ_BOOT_MODE_CE && marker && marker_size==GZ_INSTALL_MAGIC_SIZE && (!memcmp(marker,GZ_INSTALL_MAGIC,marker_size) || !memcmp(marker,GZ_RESTORE_MAGIC,marker_size));
     printf("usb: development service ready\n");
     for (;;) {
+        if(installer_dirty)installer_report(installer_stage,installer_current,installer_total);
         int state = gz_usb_ctl(GZ_USB_STATE, NULL, 0);
         if (state < 0) return 1;
         usb_ethernet_poll((uint32_t)state);

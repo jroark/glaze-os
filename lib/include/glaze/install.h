@@ -1,0 +1,13 @@
+/* Installer-only RAM session: the marker is never part of the NAND image. */
+#ifndef GLAZE_INSTALL_H
+#define GLAZE_INSTALL_H
+#define GZ_INSTALL_MARKER "installer/session"
+#define GZ_INSTALL_MAGIC "GZINST1\n"
+#define GZ_RESTORE_MAGIC "GZREST1\n"
+#define GZ_INSTALL_MAGIC_SIZE 8u
+enum {
+    GZ_INSTALL_WAIT, GZ_INSTALL_READ, GZ_INSTALL_PREPARE,
+    GZ_INSTALL_CHECK, GZ_INSTALL_WRITE, GZ_INSTALL_VERIFY,
+    GZ_INSTALL_RESTART, GZ_INSTALL_ERROR, GZ_INSTALL_STAGE_COUNT
+};
+#endif

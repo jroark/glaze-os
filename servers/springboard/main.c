@@ -9,6 +9,7 @@
 #include "display.h"
 #include "hardicon.h"
 #include "idle.h"
+#include "installer.h"
 #include "clipboard.h"
 #include "power.h"
 
@@ -174,6 +175,8 @@ static struct {
 static void load_settings(void);
 static bool power_refresh(void);
 static struct sb_clipboard clipboard;
+static struct sb_installer installer;
+static uint32_t installer_draw_next;
 
 /* ---- helpers ------------------------------------------------------------ */
 
@@ -185,7 +188,7 @@ static uint32_t now_ms(void)
 static void flush(gfx_rect r)
 {
     /* Keep the modal visible while clocks, notifications and apps update. */
-    if (card_dialog.open || idle.dark)
+    if (card_dialog.open || idle.dark || installer.active)
         return;
     gfx_blit(&fb, r.x, r.y, &bb, r);
 }
@@ -367,10 +370,11 @@ static void present_app_rect(gfx_rect r)
     struct sb_running *s = front();
     gfx_rect c;
 
-    if (card_dialog.open || idle.dark)
+    if (card_dialog.open || idle.dark || installer.active)
         return;
     if (!s || !gfx_rect_intersect(r, gfx_r(0, 0, SB_APP_W, app_height()), &c))
         return;
+    if (installer.active) return;
     gfx_blit(&fb, c.x, c.y + app_top(), &s->surf, c);
     if (c.y + app_top() < SB_STATUS_H + BANNER_H)
         overlay_banner();
@@ -445,6 +449,7 @@ static void card_size(char *out, size_t cap, const char *label, uint32_t bytes)
 
 static void render_card_dialog(void)
 {
+    if (installer.active) return;
     gfx_blit(&bb, 0, 0, &snap, gfx_r(0, 0, SCREEN_W, SCREEN_H));
     card_dialog.button = sb_draw_card_details(&bb, &card_dialog.details, card_dialog.pressed);
     /* This is the only compositor write allowed while the dialog is open. */
@@ -1799,6 +1804,10 @@ static void handle_input(void)
     while ((n = gz_input_read(evs, 16)) > 0) {
         for (int i = 0; i < n; i++) {
             struct gz_input_event *e = &evs[i];
+            if (installer.active) {
+                if (sb_idle_input(&idle, e, now_ms()) == SB_IDLE_WAKE) screen_wake();
+                continue;
+            }
             if (e->type == GZ_EV_TOUCH_CANCEL) {
                 int unused;
                 sb_hardicon_input(&icon_touch, e, 0, 0, &unused);
@@ -2034,6 +2043,14 @@ static void handle_msg(int token, struct gz_msg *m)
 
     memset(&r, 0, sizeof(r));
     switch (m->w[0]) {
+    case SB_INSTALL_STATUS:
+        r.w[0] = (uint32_t)GZ_EPERM;
+        if (client_req((int)m->w[3], false, NULL) &&
+            !sb_installer_update(&installer, m->w[1], m->w[2], m->w[4])) {
+            if (!idle.dark) sb_installer_draw(&fb, &installer, now_ms());
+            r.w[0] = 0;
+        }
+        break;
     case SB_CLIPBOARD_BEGIN:
     case SB_CLIPBOARD_WRITE:
     case SB_CLIPBOARD_COMMIT:
@@ -2364,6 +2381,9 @@ int main(void)
     init_surfaces();
     sb_draw_init();
     load_settings();
+    uint32_t marker_size = 0;
+    const void *marker = gz_romfs_map(GZ_INSTALL_MARKER, &marker_size);
+    sb_installer_init(&installer, gz_boot_mode() == GZ_BOOT_MODE_CE, marker, marker_size);
     sb_calibration_load(&calibration);
     hardicon_load(&hard_icons);
     sb_display_load(&display_controls);
@@ -2388,6 +2408,11 @@ int main(void)
     update_card_status();
     state = ST_LOCK;
     render_lock();
+    if (installer.active) {
+        puts("springboard: installer session, screen awake");
+        sb_installer_draw(&fb, &installer, now_ms());
+        gz_display_power(true);
+    }
     timesync_start(sb_port);
     hwdump_start();
     idle.last_activity = now_ms();
@@ -2397,7 +2422,7 @@ int main(void)
     for (;;) {
         uint32_t t = now_ms();
         int timeout = ms_to_next_minute();
-        if (debug_activity) timeout = MIN(timeout, 250);
+        if (debug_activity || installer.active) timeout = MIN(timeout, 250);
 
         if (anim.active) {
             int wait = (int)(next_frame - t);
@@ -2430,10 +2455,11 @@ int main(void)
             timeout = MIN(timeout, (int)(banner_until - t) < 0 ? 0 : (int)(banner_until - t));
         if (calibration.owner && calibration.preview)
             timeout = MIN(timeout, MAX((int32_t)(calibration.until - t), 0));
-        int idle_wait = sb_idle_wait(&idle, t);
+        int idle_wait = installer.active ? -1 : sb_idle_wait(&idle, t);
         if (idle_wait >= 0)
             timeout = MIN(timeout, idle_wait);
-        int sleep_wait = goodbye.pending ? MAX((int)(goodbye.at - t), 0) : sb_idle_sleep_wait(&idle, t);
+        int sleep_wait = goodbye.pending ? MAX((int)(goodbye.at - t), 0)
+                       : installer.active ? -1 : sb_idle_sleep_wait(&idle, t);
         if (sleep_wait >= 0)
             timeout = MIN(timeout, sleep_wait);
         int hold_wait = sb_hold_wait(&power_hold, t);
@@ -2480,6 +2506,10 @@ int main(void)
         if (debug_app_pid && !gz_proc_alive(debug_app_pid)) debug_app_pid = 0;
         view.debugger = debug_activity | (debug_app_pid ? GU_DEBUG_RUN : 0);
         power_check();
+        if (installer.active && !idle.dark && (int32_t)(t - installer_draw_next) >= 0) {
+            sb_installer_draw(&fb, &installer, t);
+            installer_draw_next = t + 450;
+        }
         if (goodbye.pending) {
             if ((int32_t)(t - goodbye.at) >= 0) {
                 power_off_now();
@@ -2488,10 +2518,10 @@ int main(void)
         } else if (sb_hold_due(&power_hold, t)) {
             int mode = sleep_mode();
             power_off(mode == POWER_SLEEP_NEVER ? GZ_SLEEP_SUSPEND : mode, "Power held");
-        } else if (sb_idle_sleep_wait(&idle, t) == 0) {
+        } else if (!installer.active && sb_idle_sleep_wait(&idle, t) == 0) {
             power_off(sleep_mode(), "idle");
         }
-        if (sb_idle_wait(&idle, t) == 0)
+        if (!installer.active && sb_idle_wait(&idle, t) == 0)
             screen_sleep();
         if (calibration.owner && calibration.preview && (int32_t)(t - calibration.until) >= 0)
             calibration_cancel();

@@ -6,6 +6,7 @@
  * device still checks each block it erases against the plan's copy. */
 #include "client.h"
 #include <glaze/nand_repair.h>
+#include <glaze/install.h>
 #include <wolfssl/wolfcrypt/sha256.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,8 +38,15 @@ static int rpc(struct gu_client *c,uint32_t op,const void *data,uint32_t n)
     gu_put32(b,op);if(n)memcpy(b+4,data,n);
     return gu_call(c,GU_NAND_REPAIR,b,n+4);
 }
+static int install_status(struct gu_client *c,unsigned stage)
+{
+    if(!(c->caps&GU_CAP_INSTALL_STATUS))return 0;
+    uint8_t data[12]={0};gu_put32(data,stage);
+    return gu_call(c,GU_INSTALL_STATUS,data,sizeof(data));
+}
 static int compare(struct gu_client *c,const uint8_t *expected,const char *phase,bool keep_fs)
 {
+    if(install_status(c,!strcmp(phase,"preflight")?GZ_INSTALL_CHECK:GZ_INSTALL_VERIFY))return -1;
     uint8_t request[8];
     for(uint32_t page=0;page<32768;) {
         if(keep_fs && page==FS_FIRST*32)page=FS_END*32;

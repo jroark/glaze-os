@@ -755,6 +755,18 @@ nand-writer-test: ../tests/nand_writer.c glaze_usb/nand_write.c ../kernel/nand_r
 	../out/host/nand-writer-test
 .PHONY: nand-writer-test
 
+usb-ce-staging-test: ../tests/usb_ce_staging.c glaze_usb/client.c glaze_usb/pcconnect.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_ce_staging.c $(USB_FLAGS) -o ../out/host/usb-ce-staging-test
+	../out/host/usb-ce-staging-test
+.PHONY: usb-ce-staging-test
+
+installer-ui-test: ../tests/installer_ui.c ../servers/springboard/installer.c ../servers/springboard/installer.h hostres.c $(GFX)
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -o ../out/host/installer-ui-test ../tests/installer_ui.c ../servers/springboard/installer.c hostres.c $(GFX)
+	../out/host/installer-ui-test
+.PHONY: installer-ui-test
+
 # Portable falling-block rules and versioned save-state validation.
 tetris-test: ../tests/tetris.c ../packages/tetris/game.c ../packages/tetris/game.h
 	@mkdir -p ../out/host

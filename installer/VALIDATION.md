@@ -1,0 +1,124 @@
+# Validation — 2026-10-31
+
+Branch `codex/usb-gui-installer`, base `cc8c1c4`.
+Bundled firmware BUILD_ID: `usb-installer-modal-v1`.
+
+Produced:
+
+- A standalone Windows x64 setup EXE (about 23 MiB), including Python/Tk, libusb,
+  Zadig, firmware and all optional packages.
+- An Apple Silicon macOS DMG (about 18 MiB), including the app, Applications
+  shortcut and offline instructions.
+- Files and checksums collected under `out/installer/downloads`.
+
+Passed:
+
+- Matching NAND, RAM kernel/romfs, CE loaders and package builds.
+- Eighteen installer tests and seven app-selection tests. These cover executable
+  exclusion, required-app preservation, aligned ROMFS repacking, bundle layout,
+  malformed archive rejection, actual image encoding and fresh restore plans.
+- Four physical NAND tests, five transaction tests, and native NAND ECC,
+  boot-map, raw-policy, backup, programming and transaction-writer suites.
+- Apple Silicon packaged bundle self-check: firmware/catalog integrity,
+  production ECC encoding and startup of all three native helpers without USB.
+- Apple Silicon GUI and app-chooser initialization, clean shutdown and strict
+  deep ad-hoc signature verification.
+- Both the all-apps candidate and a required-only candidate booted through the
+  emulator ROM to SpringBoard without CF, preserving quarantined NAND blocks.
+- Windows setup installed silently into an isolated Wine 11.21 prefix. The
+  installed private Python 3.11.9 runtime passed the bundle self-check, and
+  the installed GUI/app chooser initialized and closed successfully.
+- The installed Windows runtime prepared a full physical NAND image selecting
+  optional apps, using the real Windows encoder/filesystem helpers and a synthetic
+  CE backup with bad blocks. USB operations were simulated; no hardware was used.
+
+USB reconnect fix:
+
+- Reproduced the physical macOS failure: the host retained CE revision 0000
+  and configuration 0 after GlazeBoot; setting configuration returned
+  `LIBUSB_ERROR_OTHER`.
+- Resetting the unclaimed USB device recovered the connection. A live HELLO
+  returned the expected Glaze build and read-only NAND backup capabilities.
+- The installer now mirrors the existing CLI: reset after three seconds of
+  failed reconnects, then retry every five seconds within a 90-second deadline.
+  Regression tests cover stale state, reset failure, timeout, and capability
+  mismatch. Preparation can continue from the same matching read-only RAM boot.
+- This diagnostic reset/probe did not erase or program physical NAND.
+
+CE staging reuse fix:
+
+- Production PC Connect tests verify exact file matches, missing and changed
+  files, shorter/longer remote files, multi-chunk reads, EOF boundaries, and
+  read/close failures. Comparison makes no CE filesystem mutations.
+- Production staging planner tests cover matching large artifacts on a nearly
+  full volume, allocating only changed files, missing local inputs, and stopping
+  on failed inspection. Previous staged files are preserved.
+- On the physical BE-300, all five existing artifacts matched and were reused,
+  including the 4,669,440-byte ROMFS. The fresh nonce execution check passed,
+  GlazeBoot launched without reuploading boot files, and the automatic USB reset
+  reconnected to the expected read-only Glaze RAM build. No raw NAND was programmed.
+- Reused boot files still go through the fresh nonce-based execution check.
+  Changed files keep the existing temporary upload/read-back/atomic publication
+  path; no unchecked executable is launched.
+
+Simplified automatic flow:
+
+- One Install action now chains preparation and application automatically, with
+  device detection, friendly status/progress and diagnostic output hidden by
+  default. Backup destinations are automatic, with an optional folder chooser.
+- Backup retention and extra CE verification are independent options. Tests
+  confirm that skipped-backup source files are removed after success and failure,
+  selected backups persist, and the automatic flow executes prepare then apply.
+- Native capture tests cover a single-pass snapshot as well as the existing
+  two-pass backup and failure cleanup. Production boot tests prove the optional
+  CE probe can be omitted while invalid Glaze boot images still fail validation.
+- The installed Windows runtime under Wine also exercised the automatic
+  skip-both path using real Windows encoder/filesystem helpers and synthetic
+  NAND data; its transient CE source was removed afterward.
+- Required physical inventory, source binding and NAND writer checks remain on.
+  This flow was tested with synthetic data; no hardware programming was performed.
+
+Catalog and optional firmware:
+
+- Hello is absent from the catalog and package payloads; the Windows upgrade
+  also removes its obsolete bundled payload. Windows CE compatibility
+  and WL54-CF firmware start unchecked. The 16 remaining optional packages remain
+  available offline.
+- The hardware firmware pair and full Marvell notice match the repository's
+  pinned Linux sizes/hashes; provenance accompanies the files in both packages.
+- The installed Windows bundle under Wine prepared a physical image with
+  optional firmware selected using synthetic NAND source data; no firmware
+  execution or USB access was involved.
+- Selection tests cover firmware insertion/removal, defaults, required apps and
+  ROMFS capacity. The default app set plus firmware fits; oversized choices are
+  rejected before installation. Real firmware is not executed in emulator tests.
+
+Device-side installer modal:
+
+- A RAM-only marker activates a full-screen SpringBoard modal from startup.
+  Regular RAM boots and the final NAND boot retain normal UI/idle behavior.
+- Native UI tests cover marker gating, stage/progress bounds, recovery wording
+  and reset behavior; wait/write/error frames were rendered for visual QA.
+- A disposable emulator RAM boot stayed awake for 75 seconds with scripted
+  Power, Home, unlock drag and touch input. Its shutdown screenshot still showed
+  the installer modal, with no idle screen-off event or panic.
+- The final physical NAND candidate booted the normal UI in the emulator, with
+  no installer modal. An emulator USB integration test successfully updated the
+  device modal to Installing Glaze with 54% progress; the display retained it
+  after the helper disconnected.
+- USB wire and production NAND writer regression tests pass. Device status is
+  optional/capability-gated and throttled to avoid per-page compositor work.
+- No physical NAND programming was performed to test this feature.
+
+Incomplete:
+
+- Wine checks do not validate a physical Windows machine or USB driver binding.
+  WinUSB setup and actual install/restore/interruption recovery need hardware
+  validation. No physical NAND erase or programming was performed.
+- A CF-free USB/emulator attempt with a stock CE restore image stalled before
+  USB enumeration. The emulator reported a framebuffer write with LCD gates
+  off; the CLI never ran. This is not a passing end-to-end USB test.
+- Intel macOS packaging still requires an Intel Python/Tk environment. The
+  Apple Silicon bundle uses Homebrew Sequoia binaries; macOS 13 compatibility
+  and clean-machine Gatekeeper behavior have not been established.
+- Public signing, notarization and publication were not performed.

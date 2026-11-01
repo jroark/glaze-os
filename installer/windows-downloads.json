@@ -1,0 +1,26 @@
+{
+  "python-3.11.9-embed-amd64.zip": {
+    "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip",
+    "sha256": "009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b"
+  },
+  "tcltk.msi": {
+    "url": "https://www.python.org/ftp/python/3.11.9/amd64/tcltk.msi",
+    "sha256": "c8845743fb77abec0f01faa823bf3300e2113ef344758fc36360fee3dd71a8a8"
+  },
+  "zadig-2.9.exe": {
+    "url": "https://github.com/pbatard/libwdi/releases/download/v1.5.1/zadig-2.9.exe",
+    "sha256": "4ecaa95df3da3621486a043aef8b3050b8bafe7c901402871e816229ef82039b"
+  },
+  "libusb-1.0.30.7z": {
+    "url": "https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.7z",
+    "sha256": "7fb1dfec805b97983763d7d0ae244320da12add1003d4249c96cc4d586398c79"
+  },
+  "libusb-1.0.30.tar.bz2": {
+    "url": "https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2",
+    "sha256": "fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf"
+  },
+  "libwdi-v1.5.1.zip": {
+    "url": "https://github.com/pbatard/libwdi/archive/refs/tags/v1.5.1.zip",
+    "sha256": "746547aaf927cae44c75512d763941805928427f4ba4df3dbb40c3f7f561821e"
+  }
+}
