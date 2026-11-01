@@ -9,13 +9,8 @@ ota:
 	    --version '$(GLAZE_VERSION)' --build '$(BUILD_ID)' --notes '$(OTA_NOTES)' --out $(OUT)/ota
 .PHONY: ota
 
-# Portable static store: run ./build.sh store, then publish out/store over HTTPS.
-# Most apps come from built sibling glaze-apps and glaze-emulators checkouts.
-APPS_DIR ?= ../glaze-apps
-EMU_DIR ?= ../glaze-emulators
-store: packages
-	$(PYTHON) tools/mkstore.py --packages $(OUT)/pkg --packages $(APPS_DIR)/out/pkg --packages $(EMU_DIR)/out/pkg --output $(OUT)/store
-.PHONY: store
+# The App Store catalog is built and published from glaze-web (`make store` there),
+# with tools/mkstore.py.
 
 $(OUT)/include/js_bootstrap.h: apps/browser/js_dom.js apps/browser/js_web.js tools/mkjsbootstrap.py
 	python3 tools/mkjsbootstrap.py $< $@

@@ -2,7 +2,7 @@
 
 The built-in App Store has Search and Updates tabs. Search lists every app
 before a query is entered and matches names, developers, summaries and descriptions.
-Apps are free and curated in `store/apps.json`; there are no accounts or payments.
+Apps are free and curated in glaze-web's `store/apps.json`; there are no accounts or payments.
 The catalog includes Fifteen, Sketch, Minesweeper, Solitaire, Task Manager, AIM, Gmail,
 SomaFM, Chat, Doom, and the NES, Game Boy, Master System, Genesis, Game Gear and
 TurboGrafx-16 emulators. The emulators include only original demo cartridges;
@@ -14,7 +14,7 @@ newer than the running OS and the device can install one: a physical NAND
 image with an OTA-capable SPL. The OS update is downloaded to
 `/Library/Updates`, verified by the kernel, and installed by the SPL after a
 reset. See [OTA updates](../os/OTA.md), including `make ota` and
-`publish_appstore.py --os`.
+glaze-web's `tools/publish_appstore.py --os`.
 
 In the web emulator, use network bridge helper version `20261021a` or later
 (printed when it starts). Older helpers can stall icon and package downloads
@@ -28,11 +28,11 @@ legacy issuer that Glaze does not trust.
 ## Build and publish
 
 ```
-./build.sh
-./build.sh store
+./build.sh                      # here, and in glaze-apps and glaze-emulators
+make store                      # in glaze-web: out/store from all three repos' packages
 ```
 
-The OS image is `out/glaze.bin`. Publish the complete `out/store/` directory
+The OS image is `out/glaze.bin`. Publish glaze-web's complete `out/store/` directory
 to a static HTTPS host configured for `appstore.glaze-os.com`. No application
 server, database or JavaScript is needed. The default native client requests
 `https://appstore.glaze-os.com/catalog.txt`.
@@ -52,14 +52,14 @@ those headers separately elsewhere. Upload assets first and replace the
 catalog last. Retain older assets for clients with cached catalogs.
 
 The AWS backend uses private S3 storage and CloudFront. See
-[App Store on AWS](../APP_STORE_AWS.md) for infrastructure, initial setup and the
-release publisher. Credentials stay in your AWS CLI profile.
+glaze-web's [App Store on AWS](https://github.com/jroark/glaze-web/blob/main/docs/APP_STORE_AWS.md) for infrastructure,
+initial setup and the release publisher. Credentials stay in your AWS CLI profile.
 
 ## Add or release an app
 
-1. Add `packages/<id>/main.c`, `Info`, and a 44x44 `icon.gzi`.
-2. Add its developer, summary and description to `store/apps.json`.
-3. Build and run `./build.sh store`.
+1. Add `packages/<id>/main.c`, `Info`, and a 44x44 `icon.gzi` (most apps live in glaze-apps).
+2. Add its developer, summary and description to glaze-web's `store/apps.json`.
+3. Build the packages, then run `make store` in glaze-web.
 4. Test installation and a data-preserving update before publishing.
 
 The generator derives ID, name and version from the package, checks the MIPS

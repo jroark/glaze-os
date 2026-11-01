@@ -12,9 +12,9 @@ class Generator(unittest.TestCase):
     def test_generation_and_immutability(self):
         with tempfile.TemporaryDirectory() as d:
             out=Path(d)/'store'
-            mkstore.build(ROOT/'store/apps.json',PKGS,out)
+            mkstore.build(ROOT/'tests/fixtures/store_apps.json',PKGS,out)
             text=(out/'catalog.txt').read_bytes()
-            expected={app['id'] for app in json.loads((ROOT/'store/apps.json').read_text())}
+            expected={app['id'] for app in json.loads((ROOT/'tests/fixtures/store_apps.json').read_text())}
             self.assertEqual(text.count(b'[app]'),len(expected))
             self.assertEqual({line.split(b'=',1)[1].decode() for line in text.splitlines() if line.startswith(b'id=')},expected)
             for ident in ('minesweeper','solitaire','somafm'):
@@ -22,13 +22,13 @@ class Generator(unittest.TestCase):
                 data,info,icon=mkstore.package(mkstore.find_package(PKGS,ident))
                 self.assertEqual((out/f'apps/{ident}/{info["version"]}/app.gzp').read_bytes(),data)
                 self.assertEqual((out/f'apps/{ident}/{info["version"]}/icon.gzi').read_bytes(),icon)
-            mkstore.build(ROOT/'store/apps.json',PKGS,out)
+            mkstore.build(ROOT/'tests/fixtures/store_apps.json',PKGS,out)
             self.assertEqual(text,(out/'catalog.txt').read_bytes())
             asset=next(out.rglob('app.gzp')); asset.write_bytes(b'bad')
-            with self.assertRaisesRegex(ValueError,'immutable'): mkstore.build(ROOT/'store/apps.json',PKGS,out)
+            with self.assertRaisesRegex(ValueError,'immutable'): mkstore.build(ROOT/'tests/fixtures/store_apps.json',PKGS,out)
             self.assertEqual(text,(out/'catalog.txt').read_bytes())
     def test_bad_metadata(self):
-        original=json.loads((ROOT/'store/apps.json').read_text())
+        original=json.loads((ROOT/'tests/fixtures/store_apps.json').read_text())
         for key,value in [('id','../hello'),('description','bad\nline')]:
             with tempfile.TemporaryDirectory() as d:
                 apps=json.loads(json.dumps(original))
@@ -37,7 +37,7 @@ class Generator(unittest.TestCase):
                 with self.assertRaises(ValueError): mkstore.build(path,PKGS,Path(d)/'out')
     def test_duplicate(self):
         with tempfile.TemporaryDirectory() as d:
-            apps=json.loads((ROOT/'store/apps.json').read_text()); apps.append(apps[0])
+            apps=json.loads((ROOT/'tests/fixtures/store_apps.json').read_text()); apps.append(apps[0])
             path=Path(d)/'apps.json'; path.write_text(json.dumps(apps))
             with self.assertRaisesRegex(ValueError,'duplicate'): mkstore.build(path,PKGS,Path(d)/'out')
 if __name__=='__main__': unittest.main()
