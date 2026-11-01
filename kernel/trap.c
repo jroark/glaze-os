@@ -47,6 +47,8 @@ void trap(struct trapframe *tf)
     bool from_user = (tf->status & ST_KSU_USER) != 0;
 
     if (exc == EXC_INT) {
+        if (power_trap(tf))
+            return;         /* the wake from a SUSPEND (drivers/power.c) */
         uint32_t pending = tf->cause & tf->status & 0xFF00;
         if (standby_since)
             sched_standby_wake();

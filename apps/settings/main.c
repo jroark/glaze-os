@@ -19,7 +19,8 @@
 #include <string.h>
 
 enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
-            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD, V_BATTERY };
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD, V_BATTERY,
+            V_SLEEP, V_SLEEP_MODE };
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -39,6 +40,8 @@ enum {
     R_REBOOT_CE, R_REBOOT_CONFIRM, R_DEBUG, R_DEBUG_TOGGLE, R_DEBUG_IMPORT,
     R_INPUT_METHOD, R_INPUT_KEYS, R_INPUT_WRITE,
     R_BATTERY, R_BATTERY_PCT,
+    R_SLEEP, R_SLEEP_MODE0, R_SLEEP_MODE1, R_SLEEP_DOWN0, R_SLEEP_UP0, R_SLEEP_DOWN1, R_SLEEP_UP1,
+    R_SLEEP_PICK0, R_SLEEP_PICK_LAST = R_SLEEP_PICK0 + 2,
 };
 
 struct hit {
@@ -480,6 +483,14 @@ static void draw_datetime(gfx_surface *s)
 /* ---- Battery (docs/POWER.md) -------------------------------------------- */
 
 static bool battery_pct;
+static struct power_sleep s_sleep = POWER_SLEEP_DEFAULTS;
+static int sleep_for;                   /* V_SLEEP_MODE: 0 on battery, 1 plugged in */
+static const char *sleep_msg;
+
+static bool sb_on_battery(const struct gz_power_status *st)
+{
+    return (st->flags & (GZ_POWER_VALID | GZ_POWER_AC)) == GZ_POWER_VALID;
+}
 
 static const char *battery_summary(char *buf, size_t cap)
 {
@@ -526,7 +537,9 @@ static void draw_battery(gfx_surface *s)
     cell(s, 1, "Status", state, false, 0);
     cell(s, 3, "Level", level, false, 0);
     section_gap();
-    switch_cell(s, 0, "Percentage", battery_pct, R_BATTERY_PCT);
+    switch_cell(s, 1, "Percentage", battery_pct, R_BATTERY_PCT);
+    cell(s, 3, "Sleep", power_sleep_mode_name(sb_on_battery(&st) ? s_sleep.battery_mode : s_sleep.ac_mode),
+         true, R_SLEEP);
     section_gap();
 
     /* The A/D counts Windows CE's driver reads, against the calibration it
@@ -535,12 +548,108 @@ static void draw_battery(gfx_surface *s)
         snprintf(reading, sizeof(reading), "%u (avg %u)", st.adc_last, st.adc_avg);
     else
         strlcpy(reading, "None yet", sizeof(reading));
-    snprintf(range, sizeof(range), "%u-%u", st.cal_min, st.cal_max);
+    snprintf(range, sizeof(range), "%s %u-%u", st.flags & GZ_POWER_CAL_EEPROM ? "EEPROM" : "Default",
+             st.cal_min, st.cal_max);
     snprintf(idle, sizeof(idle), "%u%%", si.uptime_ms ? (uint32_t)((uint64_t)st.idle_ms * 100 / si.uptime_ms) : 0);
     cell(s, 1, "Reading", reading, false, 0);
-    cell(s, 2, "Calibration", st.flags & GZ_POWER_CAL_EEPROM ? "EEPROM" : "Default", false, 0);
-    cell(s, 2, "Range", range, false, 0);
+    cell(s, 2, "Calibration", range, false, 0);
     cell(s, 3, "CPU Idle", idle, false, 0);
+}
+
+/* ---- Sleep (glaze/power.h, docs/POWER.md "Power off") ------------------- */
+
+static const char *const sleep_sources[] = { "On Battery", "Plugged In" };
+static const uint8_t sleep_modes[] = { GZ_SLEEP_SUSPEND, GZ_SLEEP_HIBERNATE, POWER_SLEEP_NEVER };
+
+static uint8_t *sleep_mode_of(int source)
+{
+    return source ? &s_sleep.ac_mode : &s_sleep.battery_mode;
+}
+
+static uint16_t *sleep_min_of(int source)
+{
+    return source ? &s_sleep.ac_min : &s_sleep.battery_min;
+}
+
+static int sleep_choice(int source)
+{
+    for (int i = 0; i < POWER_SLEEP_CHOICES; i++)
+        if (power_sleep_minutes(i) >= *sleep_min_of(source))
+            return i;
+    return POWER_SLEEP_CHOICES - 1;
+}
+
+static void sleep_save(void)
+{
+    int p = gz_port_lookup(SB_PORT_NAME);
+    sleep_msg = power_sleep_put(&s_sleep) < 0 ? "Could not save. Try again." : NULL;
+    if (p > 0)
+        gz_notify(p, SB_NOTIFY_POWER);
+}
+
+static void draw_sleep(gfx_surface *s)
+{
+    const gfx_font *hf = ui_font(FONT_B13), *nf = ui_font(FONT_R12);
+    char after[16];
+
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Sleep", "Battery", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 8;
+    for (int src = 0; src < 2; src++) {
+        gfx_text(s, CELL_X + 10, section_y, hf, sleep_sources[src], 0x4C566C, 255);
+        section_y += hf->line_height + 4;
+        int min = power_sleep_minutes(sleep_choice(src));
+        if (!min)
+            strlcpy(after, "At once", sizeof(after));
+        else if (min == 60)
+            strlcpy(after, "1 hour", sizeof(after));
+        else
+            snprintf(after, sizeof(after), "%d min", min);
+        cell(s, 1, "Sleep", power_sleep_mode_name(*sleep_mode_of(src)), true, R_SLEEP_MODE0 + src);
+        stepper_cell(s, 3, "After", after, R_SLEEP_DOWN0 + 2 * src, R_SLEEP_UP0 + 2 * src);
+        section_y += 10;
+    }
+    const char *notes[] = {
+        "After: once the screen is off.",
+        "Hold Power to sleep; press it to wake.",
+        gz_boot_mode() == GZ_BOOT_MODE_CE ? "From Windows CE, Hibernate suspends." : NULL,
+        sleep_msg,
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(notes); i++) {
+        if (!notes[i])
+            continue;
+        gfx_text_center(s, 0, section_y, UI_W, nf, notes[i], UI_TEXT_DETAIL, 255);
+        section_y += nf->line_height + 1;
+    }
+}
+
+static void draw_sleep_mode(gfx_surface *s)
+{
+    const gfx_font *lf = ui_font(FONT_B13);
+
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, sleep_sources[sleep_for], "Sleep", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    for (int i = 0; i < 3; i++) {
+        gfx_rect r = gfx_r(CELL_X, section_y, CELL_W, UI_ROW_H);
+        bool on = *sleep_mode_of(sleep_for) == sleep_modes[i], sel = pressed == R_SLEEP_PICK0 + i;
+        uint32_t ink = sel ? 0xFFFFFF : on ? UI_TEXT_DETAIL : UI_TEXT;
+        ui_draw_group_cell(s, r, i == 0 ? 1 : i == 2 ? 3 : 2, sel);
+        gfx_text(s, r.x + 10, r.y + (r.h - lf->line_height) / 2, lf, power_sleep_mode_name(sleep_modes[i]), ink, 255);
+        if (on)
+            gfx_text(s, r.x + r.w - 22, r.y + (r.h - lf->line_height) / 2, lf, GFX_CH_CHECK, ink, 255);
+        add_hit(r, R_SLEEP_PICK0 + i);
+        section_y += UI_ROW_H;
+    }
+    section_y += 8;
+    const gfx_font *nf = ui_font(FONT_R12);
+    gfx_text_center(s, 0, section_y, UI_W, nf, "Hibernate uses the least power", UI_TEXT_DETAIL, 255);
+    gfx_text_center(s, 0, section_y + nf->line_height + 1, UI_W, nf, "and takes a moment longer to wake.",
+                    UI_TEXT_DETAIL, 255);
 }
 
 static void draw_about(gfx_surface *s)
@@ -991,6 +1100,8 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_DATETIME: draw_datetime(s); break;
     case V_ABOUT: draw_about(s); break;
     case V_BATTERY: draw_battery(s); break;
+    case V_SLEEP: draw_sleep(s); break;
+    case V_SLEEP_MODE: draw_sleep_mode(s); break;
     case V_NETWORK: draw_network(s); break;
     case V_DEBUG: draw_debug(s); break;
     case V_INPUT_METHOD: draw_input_method(s); break;
@@ -1436,6 +1547,12 @@ static void activate(int id)
         go(V_TIMEOUT, true);
         return;
     }
+    if (view == V_SLEEP_MODE && id >= R_SLEEP_PICK0 && id <= R_SLEEP_PICK_LAST) {
+        *sleep_mode_of(sleep_for) = sleep_modes[id - R_SLEEP_PICK0];
+        sleep_save();
+        go(V_SLEEP, false);
+        return;
+    }
     if (view == V_TIMEOUT && id >= R_TIMEOUT0 && id <= R_TIMEOUT_LAST) {
         int32_t seconds = timeout_seconds[id - R_TIMEOUT0];
         if (pref_put(DISPLAY_TIMEOUT_PREF, &seconds, sizeof(seconds)) < 0) {
@@ -1486,7 +1603,8 @@ static void activate(int id)
     }
     if (id == R_BACK || id == R_PIN_CANCEL) {
         go(view == V_PREVIEW ? V_WALLPAPER : view == V_PIN ? V_PASSCODE : view == V_TONE ? V_SOUNDS
-           : view == V_ZONE ? V_DATETIME : (view == V_WALLPAPER || view == V_TIMEOUT) ? V_DISPLAY : V_ROOT, false);
+           : view == V_ZONE ? V_DATETIME : (view == V_WALLPAPER || view == V_TIMEOUT) ? V_DISPLAY
+           : view == V_SLEEP ? V_BATTERY : view == V_SLEEP_MODE ? V_SLEEP : V_ROOT, false);
         return;
     }
     switch (id) {
@@ -1541,8 +1659,31 @@ static void activate(int id)
     case R_SOUNDS: go(V_SOUNDS, true); return;
     case R_BATTERY:
         battery_pct = power_percent_get();
+        s_sleep = power_sleep_get();
         go(V_BATTERY, true);
         return;
+    case R_SLEEP:
+        s_sleep = power_sleep_get();
+        sleep_msg = NULL;
+        go(V_SLEEP, true);
+        return;
+    case R_SLEEP_MODE0:
+    case R_SLEEP_MODE1:
+        sleep_for = id - R_SLEEP_MODE0;
+        go(V_SLEEP_MODE, true);
+        return;
+    case R_SLEEP_DOWN0:
+    case R_SLEEP_UP0:
+    case R_SLEEP_DOWN1:
+    case R_SLEEP_UP1: {
+        int src = (id - R_SLEEP_DOWN0) / 2, up = (id - R_SLEEP_DOWN0) % 2;
+        int i = sleep_choice(src) + (up ? 1 : -1);
+        if (i < 0 || i >= POWER_SLEEP_CHOICES)
+            break;
+        *sleep_min_of(src) = (uint16_t)power_sleep_minutes(i);
+        sleep_save();
+        break;
+    }
     case R_BATTERY_PCT: {
         int p = gz_port_lookup(SB_PORT_NAME);
         if (power_percent_put(!battery_pct) == 0)

@@ -40,15 +40,11 @@ void usb_stop(void)
     W(0x1308, 0);
     active = false;
 }
-void usb_init(void)
+static void hw_init(void)
 {
     /* The companion bit remains masked; timer polling also works while
      * developing exception/IRQ handling. */
     KJ_GIRQ0_EN(7) &= ~KJ_SRC_ENABLE;
-    void *page = page_alloc();
-    if (!page) return;
-    mm_sync_code(page, PAGE_SIZE);
-    dma = (uint8_t *)KSEG1(PHYS(page));
     W(0x1114, 1);
     for (volatile unsigned i = 0; i < 200000; i++) ;
     W(0x1300, 1); W(0x130c, 0x10); W(0x132c, 0); W(0x1488, 0);
@@ -68,6 +64,17 @@ void usb_init(void)
     W(0x14c0, 0x22); W(0x1308, 1); W(0x132c, 0x1f); W(0x1444, 0);
     active = true;
 }
+
+void usb_init(void)
+{
+    KJ_GIRQ0_EN(7) &= ~KJ_SRC_ENABLE;
+    void *page = page_alloc();
+    if (!page) return;
+    mm_sync_code(page, PAGE_SIZE);
+    dma = (uint8_t *)KSEG1(PHYS(page));
+    hw_init();
+}
+
 static void clear_session(void)
 {
     usbnet_stop();
@@ -78,6 +85,15 @@ static void clear_session(void)
     configured = false; lines = 0; generation++;
     W(0x130c, 0x10); W(0x1328, 3); W(0x148c, 0x3f);
 }
+/* After a HIBERNATE (drivers/power.c): the controller lost its setup, and
+ * the host its session. */
+void usb_resume(void)
+{
+    if (!dma) return;
+    clear_session();
+    hw_init();
+}
+
 void usb_poll(void)
 {
     if (!active) return;

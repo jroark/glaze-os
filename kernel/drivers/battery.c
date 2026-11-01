@@ -266,6 +266,31 @@ void battery_tick(void)
     }
 }
 
+/* A sample in progress gives the PIU back to the touch scan, as sample_end
+ * would; GPIO8 stays low as CE leaves it. */
+void battery_suspend(void)
+{
+    if (settling) {
+        settling = false;
+        input_touch_restart();
+    }
+}
+
+/* A rested battery reads higher than one in use, so the readings from before
+ * the sleep would hold the average down: start the average and CE's count
+ * of 10 % readings afresh, the first sample half a second in. */
+void battery_resume(void)
+{
+    for (unsigned i = 0; i < BATTERY_SAMPLES; i++)
+        samples[i] = 0;
+    next_sample = low_readings = 0;
+    lines = pending_lines = GIU_PIODL & (GPIO_ON_BATTERY | GPIO_CHARGING);
+    pending_ticks = 0;
+    next_due = ticks + TICK_HZ / 2;
+    update_status();
+    input_notify(GZ_NOTIFY_POWER);
+}
+
 void battery_idle(uint32_t us)
 {
     idle_us += us;

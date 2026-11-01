@@ -124,8 +124,16 @@ int usb_script_compile(const char *text, uint8_t *out, unsigned *n, unsigned *li
             }
             if (!code)
                 return -1;
+            /* key <name> [held_ms], 60 ms by default, as kernel/drivers/input.c. */
+            long held = 60;
+            const char *q = space(p);
+            if (*q >= '0' && *q <= '9') {
+                p = q;
+                if (number(&p, &held) || held < 1 || held > 60000)
+                    return -1;
+            }
             ADD(t, GZ_EV_KEY_DOWN, code, 0, 0);
-            ADD(t + 60, GZ_EV_KEY_UP, code, 0, 0);
+            ADD(t + held, GZ_EV_KEY_UP, code, 0, 0);
         } else {
             long a[5];
             unsigned argc = IS("drag") ? 5 : 2;

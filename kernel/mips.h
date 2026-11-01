@@ -103,6 +103,19 @@ static inline void vr41xx_standby(void)
                          "nop\n\tnop\n\tnop\n\tnop\n\t"
                          ".set pop" ::: "memory");
 }
+
+/* VR4131 HIBERNATE (UM 12.1.4(4)): the SDRAM self-refreshes, MPOWER goes
+ * inactive and only the RTC runs. The power switch, the RTC alarm, DCD# or
+ * a GPIO interrupt restarts the CPU from the reset vector, with the caches,
+ * TLB and most peripheral registers undefined. It does nothing while an
+ * interrupt is pending (UM 12.1.2(2)). */
+static inline void vr41xx_hibernate(void)
+{
+    __asm__ __volatile__(".set push\n\t.set noreorder\n\t"
+                         ".word 0x42000023\n\t"    /* hibernate: function 0x23 */
+                         "nop\n\tnop\n\tnop\n\tnop\n\t"
+                         ".set pop" ::: "memory");
+}
 #endif
 
 #endif

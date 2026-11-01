@@ -13,6 +13,15 @@
  * for 0, so the read is only replayed. TIMEOUT is a watchdog reload in
  * seconds (0x96 = 150): a real BE-300 resets 140-150 s after Windows CE
  * stops unless something keeps writing it, and with this it keeps running.
+ *
+ * Before it sleeps, Windows CE stops the watchdog, and it starts it again
+ * on waking (cedmbltin.dll CDM_PowerDown 0x019F1430 and CDM_PowerUp
+ * 0x019F1454, with StopWDT 0x019F1A6C and the start loop 0x019F1990):
+ *
+ *   stop:   ARG0 (0x7804) = 0x35, CMD0 (0x7800) = 0x5C until STATUS & 7 == 0
+ *   start:  TIMEOUT = seconds, then ARG = 0x53, CMD = 0x3A until STATUS & 7 == 3
+ *
+ * CE tries a stop up to 1000 times. The emulator's STATUS always reads 0.
  */
 
 #include "../kernel.h"
@@ -30,6 +39,31 @@ void cmcu_init(void)
 {
     (void)CMCU_CONFIG;
     CMCU_CONFIG = 0x10000u;
+}
+
+#define CMCU_TRIES      1000u
+
+bool cmcu_stop(void)
+{
+    for (uint32_t n = 0; n < CMCU_TRIES; n++) {
+        CMCU_ARG0 = 0x35u;
+        CMCU_CMD0 = 0x5Cu;
+        if ((CMCU_STATUS & 7u) == 0)
+            return true;
+    }
+    return false;
+}
+
+void cmcu_start(void)
+{
+    CMCU_TIMEOUT = RELOAD_SECONDS;
+    for (uint32_t n = 0; n < CMCU_TRIES; n++) {
+        CMCU_ARG = 0x53u;
+        CMCU_CMD = 0x3Au;
+        if ((CMCU_STATUS & 7u) == 3)
+            break;
+    }
+    ticks = 0;
 }
 
 void cmcu_tick(void)

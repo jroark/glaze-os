@@ -63,6 +63,16 @@ The idle thread runs VR4131 STANDBY (`IDLE_STANDBY=0` disables it). Use
 `make -C host battery-test settings-test` and be300's `--battery`,
 `--battery-state`, `--battery-drain` through `BE300_ARGS`.
 
+Power off (`docs/POWER.md` "Power off") follows Windows CE's OEMPowerOff:
+holding Power (or the Settings → Battery → Sleep delay after the screen goes
+off) shows Goodbye, then `SYS_POWER_SLEEP` (`kernel/drivers/power.c`)
+suspends or hibernates until Power or the next notification's RTC alarm.
+Hibernate resumes through the SPL (`kernel/resume.h`): the boot ROM
+overwrites low RAM and probes powers of two, so the kernel saves those pages
+and `mm.c` reserves the SPL's; keep this in mind when moving anything in low
+RAM. Use `make -C host idle-test boot-init-test`, `tests/t_poweroff.txt`,
+`t_hibernate.txt`, `t_poweroff_alarm.txt` and `HIBERNATE_VERIFY=1`.
+
 Network development transport is in `servers/usb/network.c`, sharing the
 USB dispatcher's capabilities and lifecycle. `glaze-usb --host HOST --key FILE`
 uses TLS 1.2 ECDHE-PSK; it is off by default. See `docs/NETWORK_DEBUG.md`.

@@ -33,6 +33,7 @@ struct gz_bootinfo;
 extern const struct gz_bootinfo *ram_boot;
 
 void mm_init(void);                 /* reserves a RAM boot's romfs and RAM disk */
+bool mm_page_used(uint32_t frame);  /* allocated or reserved */
 void *page_alloc_colour(uint32_t va);
 void *page_alloc_colour_raw(uint32_t va);    /* not zeroed */
 void mm_sync_code(void *kva, uint32_t len);
@@ -248,6 +249,9 @@ void ipc_timeout(struct thread *t);
 
 /* timer.c */
 void timer_init(void);
+uint64_t timer_etime(void);     /* the RTC's 48-bit 32.768 kHz count */
+uint64_t timer_suspend(void);   /* before a sleep: the ETIME now */
+void timer_resume(void);        /* after: the clock moved on by the ETIME slept */
 void timer_irq(void);
 uint64_t time_us(void);
 

@@ -31,6 +31,10 @@ BOOT_BEEP ?=
 # The idle thread's VR4131 STANDBY (docs/POWER.md); IDLE_STANDBY=0 spins
 # instead, for bisecting on hardware. Rebuild kernel/sched.o after changing it.
 IDLE_STANDBY ?= 1
+# HIBERNATE_VERIFY=1: checksum every page in use across a HIBERNATE and log
+# any the boot ROM or SPL overwrote on the way back (docs/POWER.md). Rebuild
+# kernel/drivers/power.o after changing it.
+HIBERNATE_VERIFY ?=
 
 # GCC's VR41xx errata workarounds, off by default as in Linux's VR41xx
 # builds: VR_FIX="-mfix-vr4130 -mfix-vr4120" pads mflo/mfhi and keeps GCC
@@ -470,7 +474,8 @@ KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -Ikernel -MMD \
     $(if $(NAND_BOOT_PROBE),-DGLAZE_NAND_BOOT_PROBE) \
     $(if $(HWDUMP),-DGLAZE_HWDUMP) \
     $(if $(BOOT_BEEP),-DGLAZE_BOOT_BEEP) \
-    $(if $(filter 0,$(IDLE_STANDBY)),-DGLAZE_NO_STANDBY)
+    $(if $(filter 0,$(IDLE_STANDBY)),-DGLAZE_NO_STANDBY) \
+    $(if $(HIBERNATE_VERIFY),-DGLAZE_HIBERNATE_VERIFY)
 
 $(OUT)/kernel/%.o: kernel/%.c
 	@mkdir -p $(dir $@)
@@ -486,7 +491,7 @@ $(OUT)/kernel/%.o: lib/libc/%.c
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
 # These bake in INIT/BUILD_ID/INPUT_SCRIPT; rebuild them every time.
-$(OUT)/kernel/main.o $(OUT)/kernel/syscall.o $(OUT)/kernel/drivers/input.o $(OUT)/romfs.img: FORCE
+$(OUT)/kernel/main.o $(OUT)/kernel/syscall.o $(OUT)/kernel/drivers/input.o $(OUT)/kernel/drivers/power.o $(OUT)/romfs.img: FORCE
 
 $(OUT)/kernel/reboot.checked: $(OUT)/kernel/reboot_entry.o
 	@if $(CROSS)objdump -r -j .text.reboot $< | grep -q 'R_MIPS_'; then \
@@ -511,11 +516,11 @@ $(OUT)/boot/spl.flags: FORCE
 
 $(OUT)/boot/spl.o: $(OUT)/boot/spl.flags
 
-$(OUT)/boot/%.o: boot/%.S $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
+$(OUT)/boot/%.o: boot/%.S $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h kernel/resume.h
 	@mkdir -p $(dir $@)
 	$(CC) $(SPL_CFLAGS) $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
 
-$(OUT)/boot/%.o: boot/%.c $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
+$(OUT)/boot/%.o: boot/%.c $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h kernel/resume.h
 	@mkdir -p $(dir $@)
 	$(CC) $(SPL_CFLAGS) $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
 
@@ -712,11 +717,11 @@ usb-probe-exe: $(GB_DIR)/UsbProbe.exe
 RB_DIR := $(OUT)/ramboot
 RAMBOOT_FS ?=
 
-$(RB_DIR)/%.o: boot/%.S $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
+$(RB_DIR)/%.o: boot/%.S $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h kernel/resume.h
 	@mkdir -p $(dir $@)
 	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
 
-$(RB_DIR)/%.o: boot/%.c $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
+$(RB_DIR)/%.o: boot/%.c $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h kernel/resume.h
 	@mkdir -p $(dir $@)
 	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
 

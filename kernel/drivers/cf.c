@@ -566,6 +566,23 @@ void cf_init(void)
     booted = true;
 }
 
+/* After a HIBERNATE (drivers/power.c), which cut the socket's power: what
+ * was in it is gone, as if pulled, and whatever is in it now is inserted
+ * afresh. The file server remounts on the new generation. */
+void pcmcia_resume(void)
+{
+    if (net_present())
+        net_removed();
+    if (info.present) {
+        info.present = false;
+        info.generation++;
+        removals++;
+    }
+    socket_full = false;
+    socket_bus_init();
+    probe();
+}
+
 void pcmcia_poll(void)
 {
     if (booted && card_inserted() != socket_full)
