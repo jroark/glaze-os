@@ -1,5 +1,5 @@
 /* Battery level arithmetic, shared by the kernel driver
- * (kernel/drivers/battery.c) and its host test (tests/battery_driver.c).
+ * (kernel/drivers/battery.c) and its host test (tests/native/battery_driver.c).
  *
  * It follows Windows CE's battery driver, compiled into gwes.exe
  * (be300-modules 03_gwes.exe.bin, VA = file offset + 0x10000):
@@ -8,7 +8,7 @@
  *   bands         0xB06A0-0xB06FC, and the unused min - 3 * span / 5
  *                 edge (3.4 V, the manual's cut-off) at 0xB0CC0-0xB0D04
  *   critical      0xB0778-0xB07EC, two 10 % readings since the adapter
- * See docs/POWER.md. */
+ * See docs/hardware/POWER.md. */
 #ifndef GLAZE_BATTERY_H
 #define GLAZE_BATTERY_H
 #include <glaze/types.h>

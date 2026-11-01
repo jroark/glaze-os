@@ -4,7 +4,7 @@
  * A NAND or CF-recovery boot starts from the masked ROM's state, while a
  * GlazeBoot RAM boot inherits Windows CE's. Comparing the same register
  * windows in both, at kernel entry and after driver setup, lists what CE
- * initializes and Glaze does not (docs/NAND_BOOT_AUDIT.md, tools/hwdump_diff.py).
+ * initializes and Glaze does not (docs/hardware/NAND_BOOT_AUDIT.md, tools/hwdump_diff.py).
  *
  * The windows follow what BEDiag already read safely on a running BE-300
  * (be300 docs/hardware/hw_dump_vr4131.txt, hw_dump_vrc4173.txt). Registers

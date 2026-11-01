@@ -24,19 +24,19 @@ int main(void)
 
     sb_draw_home(&s, &v);
     sb_draw_lock(&s, &v, 0);
-    host_write_bmp("lock.bmp", &s);
+    host_write_bmp("../out/host/lock.bmp", &s);
 
     v.knob_x = 60;
     sb_draw_lock(&s, &v, 0);
-    host_write_bmp("lock_drag.bmp", &s);
+    host_write_bmp("../out/host/lock_drag.bmp", &s);
 
     v.knob_x = 0;
     sb_draw_home(&s, &v);
     sb_draw_lock(&s, &v, 40);
-    host_write_bmp("unlock_anim.bmp", &s);
+    host_write_bmp("../out/host/unlock_anim.bmp", &s);
 
     sb_draw_home(&s, &v);
-    host_write_bmp("home.bmp", &s);
+    host_write_bmp("../out/host/home.bmp", &s);
     static const struct { unsigned flags; const char *name; } debug_views[] = {
         { GU_DEBUG_CONNECTED, "../out/host/usb-connected.bmp" },
         { GU_DEBUG_CONNECTED | GU_DEBUG_COPY, "../out/host/usb-copying.bmp" },
@@ -53,18 +53,18 @@ int main(void)
     v.pressed = 2;
     v.wallpaper = 1;
     sb_draw_home(&s, &v);
-    host_write_bmp("home_dusk_pressed.bmp", &s);
+    host_write_bmp("../out/host/home_dusk_pressed.bmp", &s);
 
     static uint16_t badges[SB_MAX_APPS] = { [0] = 1, [2] = 12, [5] = 120 };
     v.badges = badges;
     v.pressed = -1;
     v.wallpaper = 0;
     sb_draw_home(&s, &v);
-    host_write_bmp("home_badges.bmp", &s);
+    host_write_bmp("../out/host/home_badges.bmp", &s);
 
     struct sb_note b = { .app = 2, .title = "Timer Done", .body = "Clock" };
     sb_draw_banner(&s, &b);
-    host_write_bmp("home_banner.bmp", &s);
+    host_write_bmp("../out/host/home_banner.bmp", &s);
 
     static const struct sb_note notes[] = {
         { .app = 2, .title = "Timer Done", .body = "Clock" },
@@ -74,28 +74,28 @@ int main(void)
     v.num_lock_notes = 2;
     sb_draw_wallpaper(&s, &v, gfx_r(0, 0, 240, 320));
     sb_draw_lock(&s, &v, 0);
-    host_write_bmp("lock_notes.bmp", &s);
+    host_write_bmp("../out/host/lock_notes.bmp", &s);
 
     v.num_lock_notes = 0;
     v.pin = (struct ui_passcode){ .title = "Enter Passcode", .cancel = "Cancel", .digits = 2, .pressed = '5' };
     sb_draw_passcode(&s, &v);
-    host_write_bmp("passcode.bmp", &s);
+    host_write_bmp("../out/host/passcode.bmp", &s);
 
     v.pin.digits = 0;
     v.pin.pressed = -1;
     v.pin.msg = "Wrong Passcode";
     sb_draw_passcode(&s, &v);
-    host_write_bmp("passcode_wrong.bmp", &s);
+    host_write_bmp("../out/host/passcode_wrong.bmp", &s);
 
     v.card_mounted = true;
     sb_draw_home(&s, &v);
-    host_write_bmp("home_card.bmp", &s);
+    host_write_bmp("../out/host/home_card.bmp", &s);
     sb_draw_status(&s, &v, SB_STATUS_GRAY, false);
-    host_write_bmp("home_card_gray.bmp", &s);
+    host_write_bmp("../out/host/home_card_gray.bmp", &s);
     sb_draw_status(&s, &v, SB_STATUS_BLACK, false);
-    host_write_bmp("home_card_black.bmp", &s);
+    host_write_bmp("../out/host/home_card_black.bmp", &s);
     sb_draw_lock(&s, &v, 0);
-    host_write_bmp("lock_card.bmp", &s);
+    host_write_bmp("../out/host/lock_card.bmp", &s);
 
     struct sb_card_details card = {
         .title = "Storage Card",
@@ -104,7 +104,7 @@ int main(void)
         .num_lines = 5,
     };
     sb_draw_card_details(&s, &card, false);
-    host_write_bmp("card_storage.bmp", &s);
+    host_write_bmp("../out/host/card_storage.bmp", &s);
     card = (struct sb_card_details){
         .title = "Network Card",
         .lines = { "NE2000 Ethernet", "Connected (DHCP)", "MAC: 10:20:30:00:00:10",
@@ -113,7 +113,7 @@ int main(void)
     };
     sb_draw_home(&s, &v);
     sb_draw_card_details(&s, &card, false);
-    host_write_bmp("card_network.bmp", &s);
+    host_write_bmp("../out/host/card_network.bmp", &s);
     v.card_mounted = false;
 
     v.switcher_open = true;
@@ -123,11 +123,11 @@ int main(void)
     v.switcher_apps[2] = 4;
     v.switcher_apps[3] = 0;
     sb_draw_home(&s, &v);
-    host_write_bmp("home_switcher.bmp", &s);
+    host_write_bmp("../out/host/home_switcher.bmp", &s);
 
     v.switcher_edit = true;
     v.jiggle_phase = 1;
     sb_draw_home(&s, &v);
-    host_write_bmp("home_switcher_jiggle.bmp", &s);
+    host_write_bmp("../out/host/home_switcher_jiggle.bmp", &s);
     return 0;
 }

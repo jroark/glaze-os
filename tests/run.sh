@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build Glaze with a scripted input file, boot it, and save the final screen.
-# usage: tests/run.sh tests/t_x.txt [seconds]
+# usage: tests/run.sh tests/ui/t_x.txt [seconds]
 # CF=<image> boots with a copy of that CompactFlash image (tools/mkcfimg.sh);
 # NET=1 (or ne2000) inserts Ethernet; NET=wl54cf or xi825 selects Wi-Fi
 # (XI825=1 too). NO_BUILD=1 reuses the existing image; BE300 overrides the

@@ -4,7 +4,7 @@
     .set noreorder
     .set mips2
 
-/* A long low piezo beep (1 kHz, BLG channel 09A0, docs/BUZZER.md), timed
+/* A long low piezo beep (1 kHz, BLG channel 09A0, docs/hardware/BUZZER.md), timed
  * by CP0 Count at about 10 MHz. A power-on boot has its LCD off, so this is
  * the only sign that the ROM reached the stub; the kernel's BOOT_BEEP=1
  * checkpoints use short high beeps. */

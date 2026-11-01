@@ -2,7 +2,7 @@
 #define SB_POWER_H
 #include <glaze/abi.h>
 
-/* Low-battery warnings and the critical safe sleep (docs/POWER.md), apart
+/* Low-battery warnings and the critical safe sleep (docs/hardware/POWER.md), apart
  * from SpringBoard's drawing so the rules test natively. */
 #define SB_POWER_CRITICAL_MS    30000u  /* critical this long: safe sleep */
 #define SB_POWER_CRITICAL_IDLE  15000u  /* screen timeout while critical */

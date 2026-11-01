@@ -28,7 +28,7 @@ boot ROM from NAND. The project site is [glaze-os.com](https://glaze-os.com)
 Optional network drivers are separate loadable modules. With no network card,
 Glaze loads none of them and does not start the network service; insertion and
 removal update both automatically. The service catalog also controls startup
-order, hardware dependencies and restarts. See [Drivers and services](docs/DRIVERS_SERVICES.md).
+order, hardware dependencies and restarts. See [Drivers and services](docs/os/DRIVERS_SERVICES.md).
 
 All artwork is original. The device has no internal radios. Optional CF
 network cards (NE2000, XI-825 and WL54-CF) appear in Settings; the XI-825
@@ -44,13 +44,13 @@ The cross toolchain comes from the be300 `mips-cross-dev` Docker image:
 ./build.sh OUT=out/static DYNAMIC=0 # optional fully static build
 ```
 
-The build also compiles `host/mkfsimg` with the host's C compiler (`HOSTCC`,
+The build also compiles `out/buildtools/mkfsimg` with the host's C compiler (`HOSTCC`,
 default `cc`) to build the factory file system from `userdata/`.
 
 Apps and SpringBoard share `libc.so.1`, `libgfx.so.1` and `libui.so.1` by
 default; the audio server and Videos also share `libmedia.so.1`. Native C plugins can use `dlopen`, `dlsym`, `dlclose` and `dlerror`,
 loading from romfs or the writable filesystem. The file and network servers
-remain static. See [Dynamic libraries](docs/DYNAMIC_LIBRARIES.md) for the ABI,
+remain static. See [Dynamic libraries](docs/os/DYNAMIC_LIBRARIES.md) for the ABI,
 plugin build instructions, unloading rules, tests and measured savings.
 
 To regenerate assets (macOS, needs Swift). The sample photos go to
@@ -62,7 +62,7 @@ swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures
 
 ## Running
 
-For USB development on a stock BE-300, see [USB loading and debugging](docs/USB.md).
+For USB development on a stock BE-300, see [USB loading and debugging](docs/hardware/USB.md).
 The native `glaze-usb` tool uploads and launches through Windows CE, boots
 Glaze in RAM, then supports files, app launching, console logs, PNG screenshots,
 emulator-style input scripts, kernel reload and reboot targets for Glaze/CE.
@@ -76,9 +76,9 @@ be300 --nand out/glaze.bin --rtc-host-time
 The emulator writes NAND back to the image, so work on a copy if you want a
 clean file system each run. Add `--ne2000` to insert the emulated PCMCIA Ethernet
 card (see Networking). `--wl54cf` selects the AmbiCom wireless CF model
-with Glaze firmware built using `WL54CF=1`; see [WL54-CF](docs/WL54CF.md).
+with Glaze firmware built using `WL54CF=1`; see [WL54-CF](docs/hardware/WL54CF.md).
 
-For unattended UI tests, build with `INPUT_SCRIPT=tests/calc.txt`. The kernel
+For unattended UI tests, build with `INPUT_SCRIPT=tests/ui/calc.txt`. The kernel
 then replays the timed touch and key events in that file (see
 `kernel/drivers/input.c`).
 
@@ -87,7 +87,7 @@ path, `tests/touch.sh` drives the emulator window with xdotool on an X display
 (Linux, needs Xvfb, xdotool and ImageMagick):
 
 ```sh
-Xvfb :99 & DISPLAY=:99 tests/touch.sh tests/touch_unlock.act
+Xvfb :99 & DISPLAY=:99 tests/touch.sh tests/ui/touch_unlock.act
 ```
 
 Settings > Touch Calibration aligns the stylus with five targets, then gives
@@ -99,13 +99,13 @@ Settings > Display adjusts the physical backlight and LCD contrast, with
 live sliders, saved levels and Restore Defaults. It also contains Wallpaper
 and Screen Timeout (30 seconds to 10 minutes or Never; default 1 minute).
 Timeout locks and turns off the backlight; any input wakes to the lock screen.
-See [Display controls](docs/DISPLAY.md)
+See [Display controls](docs/hardware/DISPLAY.md)
 for hardware details and validation.
 
 Run `make -C host touch-calibration-test settings-test ui-events-test` for
 native calibration and UI checks. For emulator coverage, run
-`tests/run.sh tests/t_touch_calibration.txt 18`, then
-`FS_FROM=out/shots/t_touch_calibration/glaze.bin tests/run.sh tests/t_touch_calibration_reboot.txt 12`.
+`tests/run.sh tests/ui/t_touch_calibration.txt 18`, then
+`FS_FROM=out/shots/t_touch_calibration/glaze.bin tests/run.sh tests/ui/t_touch_calibration_reboot.txt 12`.
 The first run saves a deliberately offset calibration; the second loads it
 at boot and restores the factory defaults.
 
@@ -139,7 +139,7 @@ Romfs holds only the OS. Everything else lives in the file system:
 | `/Applications` | Installed apps, one `<id>.app` folder each (also `/Card/Applications`) |
 
 A new NAND image already holds a formatted volume with the contents of
-`userdata/`, built by `host/mkfsimg` with the same flash code the server
+`userdata/`, built by `out/host/mkfsimg` with the same flash code the server
 runs, so the first boot just mounts it. Erasing the volume, or booting on
 blank flash, leaves only the empty standard folders (`servers/fs/folders.h`).
 
@@ -160,11 +160,11 @@ the [Dhara](https://github.com/dlbeer/dhara) flash translation layer
 Factory bad-block marks are not read yet, since they live in the spare area.
 Real hardware needs that before trusting the region.
 
-`host/fstest` runs the same code against a RAM model of the flash with bit
+`out/host/fstest` runs the same code against a RAM model of the flash with bit
 flips, failing blocks and power cuts (about five minutes):
 
 ```sh
-make -C host fstest && host/fstest 1
+make -C host fstest && out/host/fstest 1
 ```
 
 Files (`apps/files`) browses the volume. It opens text files and pictures,
@@ -175,7 +175,7 @@ and files.
 
 To develop your own apps, build the standalone SDK with `./build.sh sdk-archive`.
 It includes headers, libraries, a project generator, app/package build rules,
-an example and USB development tools. See the [app SDK guide](docs/SDK.md).
+an example and USB development tools. See the [app SDK guide](docs/dev/SDK.md).
 
 Apps beyond the built-in ones come as packages: a `.gzp` file holding the
 app's `Info` (id, name, version), its executable and its resources
@@ -209,7 +209,7 @@ from a local BeShell NAND image and run through the WinCE compatibility runtime.
 An opt-in Clock package supports its initial time-display view.
 RegEdit is also available as an opt-in package for editing its own private registry.
 An opt-in PalmTweak package supports its General and Power Off pages with private settings.
-See [Original BE-300 applications](docs/WINCE.md) for importing, supported
+See [Original BE-300 applications](docs/apps/WINCE.md) for importing, supported
 functions and tests.
 
 ## Chat
@@ -225,18 +225,18 @@ The native **App Store** offers Search and Updates in the early iPhone OS style.
 It installs free, curated packages over HTTPS and preserves saved data on update.
 The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire and Task Manager.
 Build it with `./build.sh store`; publish `out/store/` at `appstore.glaze-os.com`.
-See [App Store hosting and development](docs/APP_STORE.md) for setup and tests,
+See [App Store hosting and development](docs/apps/APP_STORE.md) for setup and tests,
 and [AWS deployment](docs/APP_STORE_AWS.md) for S3, CloudFront and release publishing.
 
 **Task Manager** is an installable system monitor with CPU and memory history,
 a process list sorted by CPU usage, task details, pause/resume, and confirmed
 termination of managed apps. CPU and process monitoring need the current kernel;
-older OS builds still show memory and uptime. See [Task Manager](docs/TASK_MANAGER.md).
+older OS builds still show memory and uptime. See [Task Manager](docs/apps/TASK_MANAGER.md).
 
 ## Networking
 
 Wi-Fi network selection and WEP/WPA Personal support for XI-825 and WL54-CF
-are described in [Wi-Fi security](docs/WIFI.md), including the per-card
+are described in [Wi-Fi security](docs/hardware/WIFI.md), including the per-card
 capability matrix and emulator validation commands.
 
 With an NE2000 PCMCIA card (`--ne2000` on the emulator), Glaze gets an
@@ -255,7 +255,7 @@ Apps use `lib/include/glaze/net.h`: `net_resolve`, `net_socket`,
   emulator's open virtual network. The selected network reconnects on later
   boots; Disconnect disables reconnection until you select a network again.
   Physical Wi-Fi networks, WEP/WPA, and ad-hoc mode are outside this version.
-  See [XI-825 Wi-Fi](docs/WIFI.md) for controls, driver details, and tests.
+  See [XI-825 Wi-Fi](docs/hardware/WIFI.md) for controls, driver details, and tests.
 - **Settings > Network** shows the card, the address, router and DNS server,
   and pings the router.
 - **Browser** (`apps/browser`) loads web pages over HTTP/1.1 and renders
@@ -312,7 +312,7 @@ converts other rates to the nearest one.
       -ar 22050 -ac 1 -c:a adpcm_ima_wav out.avi
   ```
 
-`host/mediatest` decodes files with the same code natively, and
+`out/host/mediatest` decodes files with the same code natively, and
 `tests/mediatest.py` compares it with ffmpeg.
 
 ### Stowaway keyboard
@@ -361,19 +361,19 @@ Doom is available as the installable `out/pkg/doom.gzp` package, with physical
 buttons, sound effects and saves. Supply your own IWAD; no game data is included.
 See [Doom for Glaze](docs/DOOM.md).
 
-Paired [network debugging](docs/NETWORK_DEBUG.md) supports the USB debugger
+Paired [network debugging](docs/dev/NETWORK_DEBUG.md) supports the USB debugger
 commands over TLS, including screenshots, input scripts and RAM reloads.
 Enable it in Settings → Debugging after importing a private pairing key.
 
-The sync cable can also carry a [USB network interface](docs/USB_NETWORK.md)
+The sync cable can also carry a [USB network interface](docs/hardware/USB_NETWORK.md)
 through the `glaze-usb usb-net` host helper (macOS utun or Linux TAP), including
 paired debugging on the same cable and normal socket access for Glaze apps.
 
-[Screen mirroring](docs/MIRRORING.md) exposes Glaze's display and live stylus/
+[Screen mirroring](docs/dev/MIRRORING.md) exposes Glaze's display and live stylus/
 keyboard input to a local VNC viewer on your computer with `glaze-usb mirror`,
 over USB or paired TLS. macOS can use its built-in Screen Sharing viewer.
 
-[Handwriting input](docs/HANDWRITING.md) is available alongside the on-screen
+[Handwriting input](docs/os/HANDWRITING.md) is available alongside the on-screen
 keyboard. Tap Write, print a letter or digit, and choose a candidate; Settings
 → Input Method selects the default and includes a practice pad. Recognition
 runs offline on the device.

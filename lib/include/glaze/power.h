@@ -1,6 +1,6 @@
 /* Battery display and sleep settings, shared by Settings and SpringBoard.
  * The status itself is the kernel's: gz_power_status() (glaze/abi.h,
- * docs/POWER.md). */
+ * docs/hardware/POWER.md). */
 #ifndef GLAZE_POWER_H
 #define GLAZE_POWER_H
 #include <glaze/abi.h>
@@ -22,7 +22,7 @@ static inline int power_percent_put(bool on)
 }
 
 /*
- * Sleep (docs/POWER.md "Power off"): on battery and plugged in, whether the
+ * Sleep (docs/hardware/POWER.md "Power off"): on battery and plugged in, whether the
  * device powers off by itself once the screen has gone dark, how deeply
  * (GZ_SLEEP_SUSPEND or GZ_SLEEP_HIBERNATE, POWER_SLEEP_NEVER for never) and
  * after how many more minutes. Holding Power uses the same mode, or Suspend

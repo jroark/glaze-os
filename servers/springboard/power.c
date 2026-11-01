@@ -23,7 +23,7 @@ bool sb_power_critical(const struct sb_power *p)
     const struct gz_power_status *st = &p->st;
 
     /* PMU BATTINTR only counts with the A/D agreeing: its source on the
-     * BE-300 isn't known (docs/POWER.md). */
+     * BE-300 isn't known (docs/hardware/POWER.md). */
     return sb_power_on_battery(st) && ((st->flags & GZ_POWER_CRITICAL) ||
         ((st->flags & GZ_POWER_BATTINT) && (st->flags & GZ_POWER_LOW)));
 }

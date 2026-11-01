@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Boot a disposable image with the real SomaFM package preinstalled.
 
-Build first: ./build.sh INPUT_SCRIPT=tests/t_somafm.txt
+Build first: ./build.sh INPUT_SCRIPT=tests/ui/t_somafm.txt
 Then: python3 tests/run_somafm.py --seconds 660
 Use --no-net for the Ethernet error screen. Artifacts stay under out/.
 """
@@ -30,9 +30,9 @@ def prepare(root, preinstall=True, install_from_files=False):
         assert target.resolve().is_relative_to(bundle.resolve())
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(archive[off:off+size])
-    subprocess.run(['make', 'OUT=out/native', 'out/native/host/mkfsimg'], cwd=root, check=True, capture_output=True)
+    subprocess.run(['make', 'OUT=out/native', 'out/native/buildtools/mkfsimg'], cwd=root, check=True, capture_output=True)
     blocks = re.search(r'#define GZ_FLASH_BLOCKS\s+(\d+)', (root/'lib/include/glaze/abi.h').read_text()).group(1)
-    subprocess.run([str(root/'out/native/host/mkfsimg'), str(work/'userdata'), blocks, str(work/'fs.img')], check=True)
+    subprocess.run([str(root/'out/native/buildtools/mkfsimg'), str(work/'userdata'), blocks, str(work/'fs.img')], check=True)
     nand = bytearray((root/'out/glaze.bin').read_bytes())
     fs = (work/'fs.img').read_bytes()
     assert len(fs) == len(nand)-0x500000

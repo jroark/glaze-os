@@ -1,4 +1,4 @@
-/* Marvell CF8385 host driver. Protocol references: docs/WL54CF.md.
+/* Marvell CF8385 host driver. Protocol references: docs/hardware/WL54CF.md.
  * All integers on the wire are explicitly little endian; no unaligned loads.
  * Firmware commands run synchronously during boot. Runtime IRQs move frames.
  */
@@ -390,7 +390,7 @@ bool wl54cf_init(void)
     kprintf("wl54cf: revision %x, firmware state %x\n", rev, state);
     /* Linux libertas refuses revisions below B1 (0x12) with its own
      * firmware; a real WL54-CF is B0 (0x10), and the firmware here comes
-     * from the card's own Windows CE driver (docs/WL54CF.md), so B0 is
+     * from the card's own Windows CE driver (docs/hardware/WL54CF.md), so B0 is
      * tried as well. */
     if (rev < 0x10 || rev == 0xff) {
         kputs("wl54cf: unsupported chip revision; I/O registers:");

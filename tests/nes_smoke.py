@@ -29,7 +29,7 @@ def main():
             subprocess.run(command, cwd=ROOT, stdout=buildlog,
                            stderr=subprocess.STDOUT, check=True)
         try:
-            run(['make', '-j4', 'INPUT_SCRIPT=tests/t_nes.txt'])
+            run(['make', '-j4', 'INPUT_SCRIPT=tests/ui/t_nes.txt'])
             shutil.copyfile(ROOT / 'out/pkg-res/nes/demo.nes', work / 'test.nes')
             run(['sh', 'tools/mkcfimg.sh', str(work / 'cf.img'), '16', '16',
                  'out/pkg/nes.gzp', str(work / 'test.nes')])

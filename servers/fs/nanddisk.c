@@ -15,7 +15,7 @@
  * block whose changed pages were all still erased is only programmed;
  * otherwise it is erased and every non-blank page programmed again.
  *
- * Not handled yet (docs/GLAZEBOOT.md): writes keep neither Windows CE's
+ * Not handled yet (docs/dev/GLAZEBOOT.md): writes keep neither Windows CE's
  * block tags nor its ECC, which suits the emulator's NAND; on a device,
  * writes stay off (the loader's nand=ro) until they do.
  */

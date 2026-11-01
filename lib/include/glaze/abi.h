@@ -94,7 +94,7 @@ enum {
     SYS_POWER_STATUS,      /* read-only: struct gz_power_status, its size */
     SYS_POWER_SLEEP,       /* privileged: GZ_SLEEP_* mode, alarm seconds (0 = none) */
     SYS_OTA_STATUS,        /* read-only: struct gz_ota_status, its size (glaze/ota.h) */
-    SYS_OTA_STAGE,         /* PROC_FLASH: GZ_OTA_OP_*, three arguments (docs/OTA.md) */
+    SYS_OTA_STAGE,         /* PROC_FLASH: GZ_OTA_OP_*, three arguments (docs/os/OTA.md) */
     SYS_COUNT
 };
 
@@ -204,7 +204,7 @@ struct gz_datetime {
     uint8_t weekday;        /* 0 = Sunday */
 };
 
-/* SYS_POWER_STATUS (glaze/battery.h, docs/POWER.md): battery, adapter and
+/* SYS_POWER_STATUS (glaze/battery.h, docs/hardware/POWER.md): battery, adapter and
  * charger as Windows CE's battery driver reads them. Pass sizeof(struct
  * gz_power_status); other sizes return GZ_EINVAL. */
 #define GZ_POWER_VERSION        1u
@@ -230,7 +230,7 @@ struct gz_power_status {
     uint32_t standby_count;     /* STANDBY entries since boot */
 };
 
-/* SYS_POWER_SLEEP (docs/POWER.md "Power off"): the LCD goes off and the CPU
+/* SYS_POWER_SLEEP (docs/hardware/POWER.md "Power off"): the LCD goes off and the CPU
  * sleeps until the Power button, or the alarm a1 seconds from now. It
  * returns GZ_WAKE_* | the mode used << 8: a RAM boot from Windows CE
  * suspends when asked to hibernate. */

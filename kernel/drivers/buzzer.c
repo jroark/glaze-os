@@ -2,7 +2,7 @@
  * 018F119C: period=1411200/Hz-1. 018F11F8: duty=period*(100-pulse)/100-1.
  * 018F1604..1678: shared CMM gate, stop +20, OR config 0202, period +24,
  * duty +28, start +20. 018F2190: halfword zero stops the channel.
- * See docs/BUZZER.md. Never program the backlight's +0/+8/+C channel. */
+ * See docs/hardware/BUZZER.md. Never program the backlight's +0/+8/+C channel. */
 #include "../kernel.h"
 #include "../hw.h"
 #include "../mips.h"

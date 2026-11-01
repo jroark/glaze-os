@@ -1,5 +1,5 @@
 /*
- * The SPL's OTA apply engine (ota_apply.h, docs/OTA.md).
+ * The SPL's OTA apply engine (ota_apply.h, docs/os/OTA.md).
  *
  * The kernel verified the update image (signature, digest, layout), wrote a
  * CRC-32 of every target block into the journal, froze the file system and

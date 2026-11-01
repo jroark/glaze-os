@@ -1,5 +1,5 @@
 /*
- * Hibernate context (docs/POWER.md "Power off"). power_save() records the
+ * Hibernate context (docs/hardware/POWER.md "Power off"). power_save() records the
  * callee-saved registers like setjmp and returns 0; once the SPL finds the
  * resume record valid after a HIBERNATE wake, it jumps to
  * power_resume_entry through KSEG1 with a0 = the record, and power_save()

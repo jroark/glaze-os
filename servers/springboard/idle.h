@@ -14,7 +14,7 @@ void sb_idle_load(struct sb_idle *s, uint32_t now);
 int sb_idle_wait(const struct sb_idle *s, uint32_t now); /* -1: no deadline */
 void sb_idle_sleep(struct sb_idle *s);
 enum sb_idle_input sb_idle_input(struct sb_idle *s, const struct gz_input_event *e, uint32_t now);
-/* Power off once the screen has been dark for after_ms (docs/POWER.md). */
+/* Power off once the screen has been dark for after_ms (docs/hardware/POWER.md). */
 void sb_idle_set_sleep(struct sb_idle *s, bool on, uint32_t after_ms);
 int sb_idle_sleep_wait(const struct sb_idle *s, uint32_t now); /* -1: never */
 

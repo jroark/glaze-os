@@ -107,7 +107,7 @@ python3 tools/fetch_wl54cf_firmware.py
 make glazeboot-exe usb-probe-exe BE300_DEV=/path/to/be300-dev
 ```
 
-Produce a standard signed update with `make ota` (see `docs/OTA.md`).
+Produce a standard signed update with `make ota` (see `docs/os/OTA.md`).
 Pass its `.gzu` file with `--os-update` to either packaging command. Packaging
 checks its release-key signature, version/build, block checksums and exact
 kernel/ROMFS match against `out/glaze.bin`. Private signing keys are never bundled.

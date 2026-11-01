@@ -3,7 +3,7 @@
 # which bypasses the touch panel and its interrupts). Runs the emulator's SDL
 # window on an X display (start one with `Xvfb :99 &`) and moves the pointer
 # with xdotool.
-# usage: DISPLAY=:99 tests/touch.sh tests/touch_unlock.act
+# usage: DISPLAY=:99 tests/touch.sh tests/ui/touch_unlock.act
 #
 # Action file lines (window coordinates):
 #   sleep <s> | tap <x> <y> | drag <x0> <y0> <x1> <y1> [steps] [step_s]

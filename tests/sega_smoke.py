@@ -24,7 +24,7 @@ def main():
     with (base/'build.log').open('w') as buildlog:
         def run(cmd):subprocess.run(cmd,cwd=ROOT,stdout=buildlog,stderr=subprocess.STDOUT,check=True)
         try:
-            run(['make','-j4','INPUT_SCRIPT=tests/t_sega.txt'])
+            run(['make','-j4','INPUT_SCRIPT=tests/ui/t_sega.txt'])
             clean=base/'scripted.bin';shutil.copyfile(ROOT/'out/glaze.bin',clean)
             for system in systems:
                 ext={'mastersystem':'sms','genesis':'gen','gamegear':'gg','turbografx16':'pce'}[system]

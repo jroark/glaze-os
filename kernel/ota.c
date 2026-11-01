@@ -1,5 +1,5 @@
 /*
- * Over-the-air OS updates (docs/OTA.md, glaze/ota.h): SYS_OTA_STATUS for
+ * Over-the-air OS updates (docs/os/OTA.md, glaze/ota.h): SYS_OTA_STATUS for
  * anyone, and SYS_OTA_STAGE for the file server, which streams a staged
  * update file in to be verified (ota_stage.c), then arms the journal. The
  * SPL applies it after the reset (boot/ota_apply.c); this kernel never

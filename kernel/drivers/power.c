@@ -1,5 +1,5 @@
 /*
- * Power off: SYS_POWER_SLEEP (docs/POWER.md "Power off"), as Windows CE
+ * Power off: SYS_POWER_SLEEP (docs/hardware/POWER.md "Power off"), as Windows CE
  * powers off a BE-300 (nk.exe 0x800792AC-0x80079598, PowerOn.dll's "Bye..."
  * being SpringBoard's Goodbye screen).
  *

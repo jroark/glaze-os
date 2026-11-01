@@ -22,7 +22,7 @@ DATA_BLOCK = 32 * 512
 RAW_SIZE = PAGES * RAW_PAGE
 FS_FIRST, FS_BLOCKS, RESERVE = 320, 684, 1004
 HELPER = Path(os.environ.get('GLAZE_NAND_HELPER', ROOT / 'out/host/nand-inventory'))
-MKFS = Path(os.environ.get('GLAZE_MKFS_HELPER', ROOT / 'host/mkfsimg'))
+MKFS = Path(os.environ.get('GLAZE_MKFS_HELPER', ROOT / 'out/host/mkfsimg'))
 
 
 def sha(data):

@@ -1012,7 +1012,7 @@ static void screen_wake(void)
     puts("springboard: screen on");
 }
 
-/* ---- power off (docs/POWER.md "Power off") ------------------------------ */
+/* ---- power off (docs/hardware/POWER.md "Power off") ------------------------------ */
 
 #define GOODBYE_MS  1000u       /* long enough to read, and for the app to save */
 
@@ -1690,7 +1690,7 @@ static bool banner_touch_event(const struct gz_input_event *e)
     return true;
 }
 
-/* ---- hard icons (docs/HARD_ICONS.md) ------------------------------------ */
+/* ---- hard icons (docs/os/HARD_ICONS.md) ------------------------------------ */
 
 static int app_by_path(const char *path)
 {
@@ -2299,7 +2299,7 @@ static void init_surfaces(void)
 }
 
 /* Settings may change while an app runs; re-read them on the way home. */
-/* ---- battery (power.c, docs/POWER.md) ---------------------------------- */
+/* ---- battery (power.c, docs/hardware/POWER.md) ---------------------------------- */
 
 /* True when what the status bar shows changed. */
 static bool power_refresh(void)

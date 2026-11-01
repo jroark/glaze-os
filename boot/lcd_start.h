@@ -1,6 +1,6 @@
 /*
  * LCD panel start, traced from the stock BE-300 Windows CE SPL (0x80F038DC,
- * 0x80F034A0) and OAL (0x80078F38); see docs/DISPLAY.md. Shared by the SPL,
+ * 0x80F034A0) and OAL (0x80078F38); see docs/hardware/DISPLAY.md. Shared by the SPL,
  * which lights the panel for the boot splash just as Casio's SPL does for its
  * own, and kernel/drivers/display.c. The includer defines the DISP_* register
  * names of kernel/hw.h and display_delay_us(us).

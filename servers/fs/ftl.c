@@ -29,7 +29,7 @@
  *
  * Built with FTL_READONLY (and littlefs with LFS_READONLY), this is the SPL's
  * reader for an OTA update staged in the file system (boot/ota_apply.c,
- * docs/OTA.md): it never programs or erases, never formats, and refuses to
+ * docs/os/OTA.md): it never programs or erases, never formats, and refuses to
  * mount what the file server would have had to repair first.
  */
 

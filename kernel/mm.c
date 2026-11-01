@@ -62,7 +62,7 @@ void mm_init(void)
     /* A HIBERNATE wakes through the boot ROM, which loads the SPL at
      * 0x00F00000 again, and the SPL runs on a stack below 0x00FF0000
      * (boot/spl.lds, spl_start.S): neither may hold a page the kernel
-     * resumes with (docs/POWER.md "Power off"). A RAM boot never
+     * resumes with (docs/hardware/POWER.md "Power off"). A RAM boot never
      * hibernates, and GlazeBoot's layout owns its RAM. */
     if (!ram_boot) {
         mm_reserve(SPL_RESERVE_PA, SPL_RESERVE_LEN);

@@ -3,7 +3,7 @@
  *
  * Loaded into SDRAM at 0x80F00000 by the boot ROM's record walker after
  * parsing the partition-1 B000FF container. Applies an armed OTA journal
- * (boot/ota_apply.c, docs/OTA.md), then reads the kernel slot's header
+ * (boot/ota_apply.c, docs/os/OTA.md), then reads the kernel slot's header
  * (struct gz_kernel_header, glaze/ota.h) at GZ_KERNEL_NAND_OFFSET, loads the
  * flat image after it, checks its CRC and jumps to the kernel entry. The
  * SPL isn't built against a particular kernel: OTA replaces the kernel and
@@ -19,7 +19,7 @@
 #define NAND_PAGE_DATA      512u
 
 /* Register overrides allow the production loader to run against a strict
- * host MMIO model (tests/spl_io.c). */
+ * host MMIO model (tests/native/spl_io.c). */
 #ifndef SPL_REG32
 #define SPL_REG32(a) (*(volatile uint32_t *)(a))
 #define SPL_REG8(a)  (*(volatile uint8_t *)(a))
@@ -50,7 +50,7 @@
 #endif
 
 /*
- * Piezo beeps (BLG channel 09A0, docs/BUZZER.md), the only signal a NAND
+ * Piezo beeps (BLG channel 09A0, docs/hardware/BUZZER.md), the only signal a NAND
  * boot has before the kernel: the LCD is off and the SIU is gated. Gate
  * 1128 is the only gate touched, and the recovery stub beeps the same way
  * from the ROM at power-on. Timed by CP0 Count, near 10 MHz as in
@@ -122,7 +122,7 @@ static uint32_t uart_dead;
 
 /* After a power-on the companion SIU's clock gate is off, and any access to
  * a gated companion unit stalls the bus for good, which no poll bound can
- * catch (docs/NAND_BOOT_AUDIT.md, "Power-on findings"). Which of the gates
+ * catch (docs/hardware/NAND_BOOT_AUDIT.md, "Power-on findings"). Which of the gates
  * Windows CE leaves on clocks the SIU is still open, so the SPL stays silent
  * unless all of them are on; the kernel turns them on itself. */
 static void uart_init(void)
@@ -166,7 +166,7 @@ static void uart_puthex32(uint32_t v)
 
 /*
  * Gates on before the NAND DMA word and the first page read. The ROM's NAND
- * path turns on only 111C, 1120, 1134 and 1104 (docs/NAND_ROM_HANDOFF.md).
+ * path turns on only 111C, 1120, 1134 and 1104 (docs/hardware/NAND_ROM_HANDOFF.md).
  * Casio's own SPL, started from the same handoff, turns on 1128, 1100 and
  * 110C (its LCD splash) before it writes 0x1CC0 and streams pages from
  * B000 (traced from the device's CE backup in the emulator). That they are
@@ -586,7 +586,7 @@ static void __attribute__((noreturn)) ramboot(const struct gz_kernel_header *kh)
 #endif
 
 /*
- * A HIBERNATE wake (docs/POWER.md "Power off", kernel/resume.h) restarts
+ * A HIBERNATE wake (docs/hardware/POWER.md "Power off", kernel/resume.h) restarts
  * the CPU at the reset vector, and the boot ROM loads this SPL as after a
  * power-on. Before anything else, and before the LCD is lit, see whether
  * the kernel is still in RAM waiting to resume:

@@ -5,7 +5,7 @@
 // usage: swift tools/mkassets.swift <out-dir> <font-dir> <photo-dir>
 //
 // The sample photos are user files, not OS assets: they go to <photo-dir>
-// (userdata/Pictures), which host/mkfsimg builds into the factory volume.
+// (userdata/Pictures), which out/host/mkfsimg builds into the factory volume.
 //
 // All artwork here is original, drawn in the style of early iPhone OS.
 

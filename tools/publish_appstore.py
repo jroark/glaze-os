@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Publish verified App Store assets first and atomically replace the catalog last.
 Requires AWS CLI v2; infrastructure is defined in infra/appstore/stack.json.
-With --os, also an OS update (tools/mkota.py, docs/OTA.md): os/glaze-V.gzu,
+With --os, also an OS update (tools/mkota.py, docs/os/OTA.md): os/glaze-V.gzu,
 then os/catalog.txt.
 """
 import argparse

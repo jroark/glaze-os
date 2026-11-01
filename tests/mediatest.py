@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compares host/mediatest's decoding with ffmpeg's.
+"""Compares out/host/mediatest's decoding with ffmpeg's.
 
     tests/mediatest.py [files...]     (default: userdata/Music/*, userdata/Movies/*)
 
@@ -11,7 +11,7 @@ import glob, os, subprocess, sys, tempfile
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOOL = os.path.join(ROOT, 'host', 'mediatest')
+TOOL = os.path.join(ROOT, 'out', 'host', 'mediatest')
 
 
 def ffmpeg_pcm(path, extra=()):

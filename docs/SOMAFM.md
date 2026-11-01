@@ -75,7 +75,7 @@ make -C host radio-test
 make -C host radio-worker-test
 make -C host somafm-ui-test
 make -C host store-http-test
-./build.sh INPUT_SCRIPT=tests/t_somafm.txt
+./build.sh INPUT_SCRIPT=tests/ui/t_somafm.txt
 python3 tests/run_somafm.py --seconds 50 --expect-playing
 ```
 
@@ -85,7 +85,7 @@ rejection, favorites persistence, input handling, and older-service UI.
 They write UI previews under `out/host/somafm-*.bmp`.
 
 To exercise package installation through Files, build with
-`INPUT_SCRIPT=tests/t_somafm_install.txt` and run
+`INPUT_SCRIPT=tests/ui/t_somafm_install.txt` and run
 `python3 tests/run_somafm.py --seconds 50 --install-from-files --expect-playing`.
 This starts without SomaFM installed, opens its package in Documents, installs
 it on flash, launches it, and verifies live playback after Home and return.
@@ -101,7 +101,7 @@ python3 tests/run_somafm.py --seconds 60 --guest
 ```
 
 For the background soak test, build with
-`INPUT_SCRIPT=tests/t_somafm_soak.txt`, then run
+`INPUT_SCRIPT=tests/ui/t_somafm_soak.txt`, then run
 `python3 tests/run_somafm.py --seconds 660 --expect-playing`. The script opens
 Calculator while SomaFM plays, then returns to SomaFM after ten minutes.
 `BE300` can override the emulator executable. Logs, screenshots, and disposable

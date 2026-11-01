@@ -156,7 +156,7 @@ static inline int gz_sysinfo(struct gz_sysinfo *si) { return GZ_SC1(SYS_SYSINFO,
 static inline int gz_boot_mode(void) { return GZ_SC0(SYS_BOOT_MODE); }
 static inline int gz_power_status(struct gz_power_status *st) { return GZ_SC2(SYS_POWER_STATUS, st, sizeof(*st)); }
 static inline int gz_power_sleep(int mode, uint32_t alarm_s) { return GZ_SC2(SYS_POWER_SLEEP, mode, alarm_s); }
-/* OTA updates (glaze/ota.h, docs/OTA.md); staging is the file server's. */
+/* OTA updates (glaze/ota.h, docs/os/OTA.md); staging is the file server's. */
 #include <glaze/ota.h>
 static inline int gz_ota_status(struct gz_ota_status *st) { return GZ_SC2(SYS_OTA_STATUS, st, sizeof(*st)); }
 static inline int gz_ota_stage(uint32_t op, const void *a1, uint32_t a2, uint32_t a3)

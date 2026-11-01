@@ -15,4 +15,4 @@ uploads, installs and launches the package. Unlock the device first.
 keep `res/icon.gzi` as a 44x44 GZI image. Add C sources to `SOURCES` in
 Makefile. `app.h` contains the title shown inside the app. Keep saved data
 under `res_bundle()/data`: updates preserve it, uninstallation removes it.
-See the SDK's `docs/SDK.md` for API details and platform limits.
+See the SDK's `docs/dev/SDK.md` for API details and platform limits.

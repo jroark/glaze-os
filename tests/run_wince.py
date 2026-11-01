@@ -132,7 +132,7 @@ def main():
     (root / "out").mkdir(exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=f"{app_id}-", dir=root / "out"))
     print(work, flush=True)
-    script = args.input or Path("tests/t_wince_package.txt" if package else f"tests/t_wince_{args.app}.txt")
+    script = args.input or Path("tests/ui/t_wince_package.txt" if package else f"tests/t_wince_{args.app}.txt")
     if not args.no_build:
         with (work / "build.log").open("w") as log:
             subprocess.run(["./build.sh", f"INPUT_SCRIPT={script}"], stdout=log, stderr=subprocess.STDOUT, check=True)
@@ -152,9 +152,9 @@ def main():
             raise ValueError("unsafe test package path")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-    subprocess.run(["make", "OUT=out/wince-native", "out/wince-native/host/mkfsimg"], check=True)
+    subprocess.run(["make", "OUT=out/wince-native", "out/wince-native/buildtools/mkfsimg"], check=True)
     blocks = re.search(r"#define GZ_FLASH_BLOCKS\s+(\d+)", (root / "lib/include/glaze/abi.h").read_text()).group(1)
-    subprocess.run([str(root / "out/wince-native/host/mkfsimg"), str(work / "userdata"), blocks, str(work / "fs.img")], check=True)
+    subprocess.run([str(root / "out/wince-native/buildtools/mkfsimg"), str(work / "userdata"), blocks, str(work / "fs.img")], check=True)
     fs = args.reuse_fs.read_bytes()[0x500000:] if args.reuse_fs else (work / "fs.img").read_bytes()
     if len(fs) != len(nand) - 0x500000:
         raise ValueError("test filesystem does not match flash geometry")

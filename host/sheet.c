@@ -75,6 +75,6 @@ int main(void)
     gfx_round_rect(&s, gfx_r(250, 330, 100, 40), 10, 0xE94560, 255);
     gfx_circle(&s, 400, 350, 18, 0x2A86C9, 255);
     gfx_line_aa(&s, 430 * 16, 340 * 16, 470 * 16, 380 * 16, 32, 0x000000, 255);
-    host_write_bmp("sheet.bmp", &s);
+    host_write_bmp("../out/host/sheet.bmp", &s);
     return 0;
 }

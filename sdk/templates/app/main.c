@@ -1,4 +1,4 @@
-/* A touch counter with per-bundle state. See docs/SDK.md in the SDK. */
+/* A touch counter with per-bundle state. See docs/dev/SDK.md in the SDK. */
 #include "app.h"
 #include <glaze/fs.h>
 #include <glaze/sys.h>

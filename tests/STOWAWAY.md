@@ -7,7 +7,7 @@ without `--ne2000`; require `ktest: ALL PASS` and no `ktest: FAIL`.
 For an offline Browser fixture:
 
 ```sh
-./build.sh INPUT_SCRIPT=tests/t_browser.txt \
+./build.sh INPUT_SCRIPT=tests/ui/t_browser.txt \
   'WEB_FILES=assets/web/start.html tests/web/stowaway.html'
 cp out/glaze.bin /tmp/glaze-stowaway.bin
 be300 --nand /tmp/glaze-stowaway.bin --rtc-host-time --stowaway-keyboard

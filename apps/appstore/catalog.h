@@ -17,7 +17,7 @@ struct store_catalog {
     int count;
     struct store_app apps[STORE_MAX_APPS];
 };
-/* The OS update record (GZOS1, os/catalog.txt; docs/OTA.md). */
+/* The OS update record (GZOS1, os/catalog.txt; docs/os/OTA.md). */
 #define STORE_OS_CATALOG_MAX 4096
 #define STORE_OS_MAX (5u * 1024 * 1024 + 1024)
 struct store_os {

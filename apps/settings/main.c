@@ -388,7 +388,7 @@ static void draw_root(gfx_surface *s)
     cell(s, 2, "Debugging", NULL, true, R_DEBUG);
     cell(s, 2, "Input Method", NULL, true, R_INPUT_METHOD);
     cell(s, 2, "About", NULL, true, R_ABOUT);
-    /* Last, so the rows above keep their places (tests/t_*.txt tap them). */
+    /* Last, so the rows above keep their places (tests/ui/t_*.txt tap them). */
     char level[16];
     cell(s, 2, "Battery", cell_visible(s) ? battery_summary(level, sizeof(level)) : NULL, true, R_BATTERY);
     cell(s, 3, "Icon Buttons", NULL, true, R_ICONS);
@@ -512,7 +512,7 @@ static void draw_datetime(gfx_surface *s)
     }
 }
 
-/* ---- Battery (docs/POWER.md) -------------------------------------------- */
+/* ---- Battery (docs/hardware/POWER.md) -------------------------------------------- */
 
 static bool battery_pct;
 static struct power_sleep s_sleep = POWER_SLEEP_DEFAULTS;
@@ -588,7 +588,7 @@ static void draw_battery(gfx_surface *s)
     cell(s, 3, "CPU Idle", idle, false, 0);
 }
 
-/* ---- Sleep (glaze/power.h, docs/POWER.md "Power off") ------------------- */
+/* ---- Sleep (glaze/power.h, docs/hardware/POWER.md "Power off") ------------------- */
 
 static const char *const sleep_sources[] = { "On Battery", "Plugged In" };
 static const uint8_t sleep_modes[] = { GZ_SLEEP_SUSPEND, GZ_SLEEP_HIBERNATE, POWER_SLEEP_NEVER };

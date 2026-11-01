@@ -1,6 +1,6 @@
 /*
  * GlazeBoot's hand-over plan, shared by the trampoline (tramp.c), the host
- * test (tests/glazeboot_plan.c), the ramboot SPL (boot/spl.c) and, through
+ * test (tests/native/glazeboot_plan.c), the ramboot SPL (boot/spl.c) and, through
  * the generated glazeboot_abi.h (mkabi.c), the Windows CE loader
  * (GlazeBoot.c).
  *
