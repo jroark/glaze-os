@@ -136,8 +136,54 @@ class SiteRelease(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'missing; build it'):
             publisher.check_site(self.site)
 
+    def installers(self):
+        downloads = self.site / 'downloads'
+        downloads.mkdir(exist_ok=True)
+        artifacts = []
+        for platform, suffix in [('windows-x64', '.exe'), ('macos-arm64', '.dmg')]:
+            name = 'installer-' + platform + suffix
+            data = platform.encode()
+            digest = hashlib.sha256(data).hexdigest()
+            (downloads / name).write_bytes(data)
+            (downloads / (name + '.sha256')).write_text(f'{digest}  {name}\n')
+            artifacts.append(dict(platform=platform, filename=name, size_bytes=len(data), sha256=digest))
+        (downloads / 'installers.json').write_text(json.dumps({'artifacts': artifacts}))
+        return artifacts
+
+    def test_installer_integrity_before_publish(self):
+        artifacts = self.installers()
+        publisher.check_site(self.site)
+        for artifact in artifacts:
+            path = self.site / 'downloads' / artifact['filename']
+            original = path.read_bytes()
+            path.write_bytes(b'tampered')
+            with self.assertRaisesRegex(SystemExit, 'installer does not match'):
+                publisher.check_site(self.site)
+            path.unlink()
+            with self.assertRaisesRegex(SystemExit, 'missing; build the offline'):
+                publisher.check_site(self.site)
+            path.write_bytes(original)
+            checksum = path.with_name(path.name + '.sha256')
+            original_checksum = checksum.read_bytes()
+            checksum.write_text('wrong')
+            with self.assertRaisesRegex(SystemExit, 'installer checksum'):
+                publisher.check_site(self.site)
+            checksum.write_bytes(original_checksum)
+
+    def test_installer_metadata_rejects_missing_platform_and_paths(self):
+        artifacts = self.installers()
+        metadata = self.site / 'downloads/installers.json'
+        metadata.write_text(json.dumps({'artifacts': artifacts[:1]}))
+        with self.assertRaisesRegex(SystemExit, 'both supported'):
+            publisher.check_site(self.site)
+        artifacts[0]['filename'] = '../escape.exe'
+        metadata.write_text(json.dumps({'artifacts': artifacts}))
+        with self.assertRaisesRegex(SystemExit, 'basename'):
+            publisher.check_site(self.site)
+
     def test_old_releases_are_preserved_and_html_is_last(self):
         self.package()
+        self.installers()
         calls = []
         with patch.object(publisher, 'aws', side_effect=lambda *a, **kw: calls.append(a)):
             publisher.sync('profile', self.site, 'bucket', True)
