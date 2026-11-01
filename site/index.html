@@ -30,7 +30,7 @@
         <h1>A new operating system for an old Casio PDA</h1>
         <p class="lede">Glaze is a microkernel OS written from scratch for the Casio Cassiopeia BE-300, with a touch interface in the style of the first iPhone. It runs on real hardware from CompactFlash through GlazeBoot, and in the BE-300 emulator.</p>
         <div class="actions">
-          <a class="button button-primary" href="#download">Download GlazeBoot</a>
+          <a class="button button-primary" href="#download">Download Glaze</a>
           <a class="button button-plain" href="https://linux4be.com/?image=glaze&amp;boot=1&amp;card=none&amp;keyboard=0">Run it in your browser</a>
         </div>
         <p class="hint">GlazeBoot starts Glaze from a CF card without flashing the device. Or try it on linux4be.com: tap or press a key to enable emulator sound.</p>
@@ -64,7 +64,7 @@
 
     <section aria-labelledby="latest">
       <h2 id="latest">New in Glaze</h2>
-      <p class="section-note">Updated <time datetime="2026-10-29">October 29, 2026</time>. These features are in <a href="https://github.com/jroark/glaze-os">current source</a>. The <a href="#download">October 25 download</a> predates this update; build current source for the newer features. The hosted emulator may also run an older image.</p>
+      <p class="section-note">Updated <time datetime="2026-10-29">October 29, 2026</time>. These features are in <a href="https://github.com/jroark/glaze-os">current source</a>. The <a href="#download">offline USB installers</a> include these features. The older CompactFlash ZIP predates this update. The hosted emulator may also run an older image.</p>
       <dl class="group">
         <div class="row"><dt>Handwriting input</dt><dd>Tap <strong>Write</strong> on the keyboard to print one letter or digit at a time, then tap a candidate to insert it. Recognition runs entirely on the device, with a shape guide and Settings practice pad. Switch back to keys whenever you like. <a href="https://github.com/jroark/glaze-os/blob/main/docs/HANDWRITING.md">Handwriting guide.</a></dd></div>
         <div class="row"><dt>Browser Web APIs</dt><dd>JerryScript JavaScript, frames and iframes now have asynchronous <code>fetch</code> for GET/POST, URL and UTF-8 tools, origin-scoped local/session storage, more DOM and event APIs, animation callbacks and ES modules. Designed for small web apps within the BE-300's memory; many modern sites still require unsupported APIs. <a href="https://github.com/jroark/glaze-os/blob/main/docs/BROWSER_WEB_APIS.md">Supported Web APIs and limits.</a></dd></div>
@@ -116,8 +116,22 @@
     </section>
 
     <section class="download-section" aria-labelledby="download">
-      <h2 id="download">Download GlazeBoot and Glaze</h2>
-      <p class="release-notice"><strong>This is the October 25 release.</strong> Newer features described above, including handwriting, Chat, Doom, USB networking, mirroring, the SDK, expanded Web APIs and direct NAND app launching, require a build from <a href="#build">current source</a>. This ZIP has not been rebuilt for the October 29 update.</p>
+      <h2 id="download">Download Glaze</h2>
+      <div class="download-card">
+        <p class="release-label">November 1, 2026 · build <code>e9490e6</code> · development release</p>
+        <h3>Offline USB installers</h3>
+        <p>Install Glaze on your BE-300 over USB, with no CompactFlash card or separate Python, firmware or runtime downloads. Choose apps before installing. Includes offline maintenance to update Glaze and manage apps on an existing installation.</p>
+        <div class="actions">
+          <a class="button button-primary" href="downloads/Glaze-Installer-2026-11-01-e9490e6-windows-x64.exe" download>Download for Windows x64</a>
+          <a class="button button-primary" href="downloads/Glaze-Installer-2026-11-01-e9490e6-macos-arm64.dmg" download>Download for macOS · Apple Silicon</a>
+        </div>
+        <p class="download-detail">24.9 MiB · <a href="downloads/Glaze-Installer-2026-11-01-e9490e6-windows-x64.exe.sha256">Windows SHA-256</a><br>20.9 MiB · <a href="downloads/Glaze-Installer-2026-11-01-e9490e6-macos-arm64.dmg.sha256">macOS SHA-256</a></p>
+        <p>In Windows CE, set <strong>Connections → PC Connect → Connection method: USB</strong>. Connect USB and external power, open the installer, then choose <strong>Install Glaze</strong>. Installation replaces Windows CE; saving a backup and extra CE verification are enabled by default. Windows includes guided USB driver setup.</p>
+        <p class="download-detail">Development builds: macOS is ad-hoc signed and not notarized; Intel Macs are not supported. macOS 13 compatibility, clean-machine Gatekeeper behavior, physical Windows USB driver setup, and end-to-end physical installation, restore and maintenance remain unvalidated. Windows bundle checks use Wine.</p>
+        <p class="download-detail"><a href="https://github.com/jroark/glaze-os/blob/e9490e6/installer/README.md">Installer instructions</a> · <a href="https://github.com/jroark/glaze-os/tree/e9490e6">Source for this build</a> · <a href="downloads/installers.json">Release details</a>. No original Windows CE apps or game data are bundled. Optional WL54-CF firmware includes its license and provenance.</p>
+      </div>
+      <h3>CompactFlash / emulator ZIP</h3>
+      <p class="release-notice"><strong>The ZIP below is the October 25 release.</strong> Newer features described above, including handwriting, Chat, Doom, USB networking, mirroring, the SDK, expanded Web APIs and direct NAND app launching, require a build from <a href="#build">current source</a>. This ZIP has not been rebuilt for the October 29 update.</p>
       <div class="download-card">
         <p class="release-label">October 25, 2026 · build <code>e4500c1</code></p>
         <h3>Ready for your CompactFlash card</h3>

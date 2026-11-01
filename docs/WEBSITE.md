@@ -125,6 +125,37 @@ Certificate validation and the CloudFront deployment take several minutes.
 
 ## Publish
 
+### November 1 offline installers
+
+The primary downloads are Windows x64 and Apple Silicon macOS offline USB
+installers built from `e9490e6` (OS version 1.0). They include the matching signed
+OS update and maintenance companion. `downloads/installers.json` records source,
+platforms, sizes and SHA-256 hashes; each binary has its own `.sha256` file.
+Versioned EXE/DMG files are generated and ignored by Git. Keep the October 25
+ZIP and `latest.json` intact as the older CompactFlash/emulator release.
+
+Build and package using `installer/README.md` with `BUILD_ID=e9490e6` and the
+matching `out/ota/os/glaze-1.0.gzu`. Stage the resulting binaries under the exact
+versioned names in `installers.json`, and regenerate metadata/checksums from
+those bytes. Never reuse the October 31 artifacts for this release. Packaging
+verifies the existing release-key signature and matching NAND contents.
+The signing key stays outside the repository and installers.
+
+Validation on November 1: 18 installer tests (one skipped), seven app-selection
+tests (one skipped), 14 maintenance orchestration tests, six native companion
+tests, four physical-NAND fixture tests, five transaction tests, USB PC Connect
+and CE staging tests, and seven website release tests passed. The packaged
+macOS bundle passed its resource/helper check and strict deep signature check.
+Both macOS GUI smoke modes passed. The Windows setup installed into an isolated
+Wine prefix; its private Python runtime passed the resource/helper check and
+both GUI smoke modes. Logs are in `out/site-*.log`.
+These remain development builds; platform/hardware limitations are disclosed
+on the download card. Browser visual preview was unavailable in this session.
+
+The publisher checks both installer binaries, sizes, hashes and checksum files
+before making AWS calls, retains old download URLs, and verifies public installer
+bytes, MIME types, checksum files and metadata after deployment.
+
 ### October 25 hardware update and downloads
 
 The page covers GlazeBoot, physical-device boot/storage/network/audio results,

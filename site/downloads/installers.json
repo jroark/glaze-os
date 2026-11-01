@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-01",
+  "build_id": "e9490e6",
+  "source_revision": "e9490e64100a67f111cd3a04d354c8000c7260cf",
+  "os_version": "1.0",
+  "status": "development",
+  "artifacts": [
+    {
+      "platform": "windows-x64",
+      "filename": "Glaze-Installer-2026-11-01-e9490e6-windows-x64.exe",
+      "size_bytes": 26067043,
+      "sha256": "b5204eed6a4f7db47e018645a23edf42f76dc53327afb38940b7450cb67fd963"
+    },
+    {
+      "platform": "macos-arm64",
+      "filename": "Glaze-Installer-2026-11-01-e9490e6-macos-arm64.dmg",
+      "size_bytes": 21867774,
+      "sha256": "7bd2bd9a69dfad080fbd75fe135f2a5056e51ae820e751ffe0a19904431e876a"
+    }
+  ]
+}

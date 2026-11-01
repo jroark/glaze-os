@@ -53,6 +53,32 @@ def check_site(directory):
         if not checksum.is_file() or checksum.read_text() != f"{release['sha256']}  {release['filename']}\n":
             raise SystemExit('download checksum file does not match downloads/latest.json')
 
+    for artifact in installer_info(directory):
+        path = directory / 'downloads' / artifact['filename']
+        if not path.is_file():
+            raise SystemExit(f'{path} is missing; build the offline installers before publishing')
+        data = path.read_bytes()
+        if len(data) != artifact['size_bytes'] or hashlib.sha256(data).hexdigest() != artifact['sha256']:
+            raise SystemExit('installer does not match downloads/installers.json')
+        checksum = path.with_name(path.name + '.sha256')
+        if not checksum.is_file() or checksum.read_text() != f"{artifact['sha256']}  {path.name}\n":
+            raise SystemExit('installer checksum does not match downloads/installers.json')
+
+
+def installer_info(directory):
+    path = directory / 'downloads/installers.json'
+    if not path.exists():
+        return []
+    artifacts = json.loads(path.read_text())['artifacts']
+    if {a['platform'] for a in artifacts} != {'windows-x64', 'macos-arm64'} or len(artifacts) != 2:
+        raise SystemExit('installer metadata must contain both supported platforms')
+    for artifact in artifacts:
+        name = artifact['filename']
+        suffix = '.exe' if artifact['platform'] == 'windows-x64' else '.dmg'
+        if Path(name).name != name or not name.endswith(suffix):
+            raise SystemExit('installer filename must be a platform-appropriate basename')
+    return artifacts
+
 
 def release_info(directory):
     path = directory / 'downloads/latest.json'
@@ -132,6 +158,18 @@ def verify(site_url, bucket, directory):
                'published SHA-256 checksum matches')
         status, _, body = fetch(site_url + '/downloads/latest.json')
         expect(status == 200 and body == (directory / 'downloads/latest.json').read_bytes(), 'release metadata matches')
+    for artifact in installer_info(directory):
+        name = artifact['filename']
+        status, headers, body = fetch(site_url + '/downloads/' + name)
+        expect(status == 200 and len(body) == artifact['size_bytes'] and
+               hashlib.sha256(body).hexdigest() == artifact['sha256'], name + ' matches release checksum')
+        expected_types = ('application/octet-stream', 'application/x-msdownload', 'application/x-msdos-program') if name.endswith('.exe') else ('application/x-apple-diskimage', 'application/octet-stream', 'application/x-apple-diskimage-compressed')
+        expect(headers.get('Content-Type', '').split(';')[0] in expected_types, name + ' has a download MIME type')
+        status, _, body = fetch(site_url + '/downloads/' + name + '.sha256')
+        expect(status == 200 and body == (directory / 'downloads' / (name + '.sha256')).read_bytes(), name + ' published checksum matches')
+    if installer_info(directory):
+        status, _, body = fetch(site_url + '/downloads/installers.json')
+        expect(status == 200 and body == (directory / 'downloads/installers.json').read_bytes(), 'installer metadata matches')
     if failures:
         raise SystemExit(f'{len(failures)} check(s) failed; if DNS or the invalidation is still propagating, '
                          'rerun with --verify-only')
