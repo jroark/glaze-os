@@ -59,6 +59,11 @@ void ui_set_background_running(bool on)
     ui.shared->keep_running = on;
 }
 
+void ui_claim_hard_icons(unsigned mask)
+{
+    ui.shared->hard_icons = mask & 0x7Fu;
+}
+
 /* Suspends the whole process (every thread) until SpringBoard brings it
  * back, then drops what it was sent meanwhile up to the ACTIVATE. The
  * kernel refuses if it is already back in front; the wait covers that. */

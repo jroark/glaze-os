@@ -104,6 +104,15 @@ offsets stay unchanged. Do not extend this structure without considering SDK
 clients. Use `make -C host handwriting-test ui-events-test settings-test` and
 `make sdk-test`; `tests/t_handwriting_notes.txt` checks Notes with scripted input.
 
+Hard icons (`docs/HARD_ICONS.md`) are the seven printed touch buttons below
+the LCD (panel rows 320..359). Their zones and Windows CE's assignments come
+from touch.dll and COShell's registry. SpringBoard captures strokes that start
+there (`servers/springboard/hardicon.c`) and runs the `sb.icons` assignment
+(`glaze/hardicon.h`, Settings → Icon Buttons). It never fires while locked.
+`ui_claim_hard_icons` lets a front app receive `GZ_KEY_ICON1..7` instead,
+through the appended `sb_shared.hard_icons`. Use `make -C host hardicon-test
+settings-test` and `tests/t_hardicon.txt`.
+
 The text clipboard (`docs/CLIPBOARD.md`) is volatile SpringBoard state in
 `servers/springboard/clipboard.c`, with chunked, atomic IPC through the existing
 request area. `lib/ui/edit.c` owns one focused selection per process; apps opt

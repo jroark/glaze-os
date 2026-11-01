@@ -7,12 +7,14 @@
 #include "sb_internal.h"
 #include "calibration.h"
 #include "display.h"
+#include "hardicon.h"
 #include "idle.h"
 #include "clipboard.h"
 #include "power.h"
 
 #include <glaze/audio.h>
 #include <glaze/fs.h>
+#include <glaze/pkg.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
 #include <glaze/notify.h>
@@ -67,6 +69,8 @@ static struct sb_view view;
 static enum state state;
 static int sb_port;
 static struct sb_calibration calibration;
+static struct hardicon_config hard_icons;   /* Settings → Icon Buttons */
+static struct sb_hardicon icon_touch;       /* a stroke on the icon strip */
 static struct sb_display display_controls;
 static struct sb_idle idle;
 static struct sb_power power;
@@ -916,6 +920,7 @@ static void launch(int index)
 
     s->shared->head = s->shared->tail = 0;
     s->shared->background = 0;
+    s->shared->hard_icons = 0;
     s->ready = false;
     s->fullscreen = false;
     s->surf.h = SB_APP_H;
@@ -1680,6 +1685,112 @@ static bool banner_touch_event(const struct gz_input_event *e)
     return true;
 }
 
+/* ---- hard icons (docs/HARD_ICONS.md) ------------------------------------ */
+
+static int app_by_path(const char *path)
+{
+    for (int i = 0; i < sb_num_apps; i++)
+        if (sb_apps[i].present && !strcmp(sb_apps[i].path, path))
+            return i;
+    return -1;
+}
+
+static void hardicon_open(int app)
+{
+    if (app < 0)
+        return;
+    if (state == ST_HOME) {
+        alert.open = false;
+        view.jiggle = false;
+        launch(app);
+    } else if (state == ST_APP && front_app() != app) {
+        launch_after_home = app;
+        begin_zoom_out();
+    }
+}
+
+static void hardicon_key(uint16_t code)
+{
+    if (state != ST_APP)
+        return;
+    struct gz_input_event e = { .type = GZ_EV_KEY_DOWN, .code = code, .time_ms = now_ms() };
+    send_event(&e);
+    e.type = GZ_EV_KEY_UP;
+    send_event(&e);
+}
+
+static void hardicon_fire(int n)
+{
+    const struct hardicon_action *a = &hard_icons.icon[n];
+
+    printf("springboard: icon %d -> %d %s\n", n + 1, a->kind, a->target);
+    if (state == ST_APP && hard_icons.apps && front() && (front()->shared->hard_icons & (1u << n))) {
+        audio_sound(AUDIO_SND_TAP);
+        hardicon_key((uint16_t)(GZ_KEY_ICON1 + n));
+        return;
+    }
+    if (a->kind == HARDICON_NONE)
+        return;
+    audio_sound(AUDIO_SND_TAP);
+    switch (a->kind) {
+    case HARDICON_HOME: {
+        struct gz_input_event e = { .type = GZ_EV_KEY_DOWN, .code = GZ_KEY_HOME, .time_ms = now_ms() };
+        handle_key(&e);
+        break;
+    }
+    case HARDICON_SWITCHER:
+        if (state == ST_APP) {
+            begin_zoom_out();
+            open_switcher_after_zoom = true;
+        } else if (state == ST_HOME) {
+            if (view.switcher_open)
+                close_switcher();
+            else
+                open_switcher();
+            render_home();
+        }
+        break;
+    case HARDICON_LOCK:
+        if (state == ST_HOME || state == ST_APP)
+            lock_device();
+        break;
+    case HARDICON_SLEEP: {
+        int mode = sleep_mode();
+        power_off(mode == POWER_SLEEP_NEVER ? GZ_SLEEP_SUSPEND : mode, "icon");
+        break;
+    }
+    case HARDICON_SCREEN_OFF:
+        screen_sleep();
+        break;
+    case HARDICON_APP:
+        hardicon_open(app_by_path(a->target));
+        break;
+    case HARDICON_PACKAGE: {
+        char bundle[PKG_BUNDLE_MAX];
+        if (pkg_find(a->target, bundle) == 0)
+            hardicon_open(app_by_path(bundle));
+        break;
+    }
+    case HARDICON_KEY:
+        hardicon_key(a->key);
+        break;
+    default:
+        break;
+    }
+}
+
+/* A stroke that began on the strip goes no further; while locked it does
+ * nothing, so an icon can't open an app past the passcode. */
+static bool hardicon_event(const struct gz_input_event *e, const struct touch_point *p)
+{
+    int fire;
+    if (!sb_hardicon_input(&icon_touch, e, p->x, p->y, &fire))
+        return false;
+    if (fire >= 0 && state != ST_LOCK && state != ST_PASSCODE && state != ST_UNLOCK)
+        hardicon_fire(fire);
+    return true;
+}
+
 static void handle_input(void)
 {
     struct gz_input_event evs[16];
@@ -1689,6 +1800,8 @@ static void handle_input(void)
         for (int i = 0; i < n; i++) {
             struct gz_input_event *e = &evs[i];
             if (e->type == GZ_EV_TOUCH_CANCEL) {
+                int unused;
+                sb_hardicon_input(&icon_touch, e, 0, 0, &unused);
                 if (state == ST_APP) send_event(e);
                 idle.touch_down = idle.swallow_touch = false;
                 touching = dragging_knob = swiping = banner_touch = card_icon_touch = false;
@@ -1708,6 +1821,8 @@ static void handle_input(void)
                 continue;
             if (calibration.owner && calibration.preview && (int32_t)(now_ms() - calibration.until) >= 0)
                 calibration_cancel();
+            struct touch_point mapped;
+            sb_calibration_point(&calibration, e, &mapped);
             if (sb_calibration_input(&calibration, e)) {
                 /* Sampling must bypass status-bar, banner and other system
                  * hit tests, even when the old calibration is very wrong. */
@@ -1719,6 +1834,9 @@ static void handle_input(void)
                 send_event(e);      /* keep test touches on the test page */
                 continue;
             }
+            if ((e->type == GZ_EV_TOUCH_DOWN || e->type == GZ_EV_TOUCH_MOVE || e->type == GZ_EV_TOUCH_UP) &&
+                hardicon_event(e, &mapped))
+                continue;
             if (card_details_event(e))
                 continue;
             if (e->type == GZ_EV_KEY_DOWN || e->type == GZ_EV_KEY_UP) {
@@ -2247,6 +2365,7 @@ int main(void)
     sb_draw_init();
     load_settings();
     sb_calibration_load(&calibration);
+    hardicon_load(&hard_icons);
     sb_display_load(&display_controls);
     sb_idle_load(&idle, now_ms());
     sleep_cfg = power_sleep_get();
@@ -2343,6 +2462,8 @@ int main(void)
                 sleep_apply();
                 power_changed = true;
             }
+            if (m.w[0] & SB_NOTIFY_ICONS)
+                hardicon_load(&hard_icons);
             if (m.w[0] & SB_NOTIFY_TIME)
                 timesync_wake();
             if (m.w[0] & (SB_NOTIFY_TIME | SB_NOTIFY_CLOCK))

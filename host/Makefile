@@ -276,11 +276,11 @@ gfx-test: ../tests/gfx.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
 	../out/host/gfx-test
 .PHONY: gfx-test
 
-settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main.c ../lib/libc/touch.c
+settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main.c ../lib/libc/touch.c ../lib/libc/hardicon.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/settings_sys.h \
 	    -o ../out/host/settings-test ../tests/settings.c hostres.c $(GFX) \
-	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/wifi.c ../lib/ui/input.c $(KEYBOARD)
+	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/hardicon.c ../lib/libc/wifi.c ../lib/ui/input.c $(KEYBOARD)
 	../out/host/settings-test
 .PHONY: settings-test
 
@@ -299,6 +299,12 @@ entropy-test:
 	    -o ../out/host/entropy-clock-test ../tests/entropy_clock.c ../lib/libc/entropy_jent.c
 	../out/host/entropy-clock-test
 .PHONY: entropy-test
+
+hardicon-test: ../tests/hardicon.c ../lib/libc/hardicon.c ../servers/springboard/hardicon.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/hardicon-test $^
+	../out/host/hardicon-test
+.PHONY: hardicon-test
 
 touch-calibration-test: ../tests/touch_calibration.c ../lib/libc/touch.c ../servers/springboard/calibration.c
 	@mkdir -p ../out/host

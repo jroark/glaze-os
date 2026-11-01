@@ -4,26 +4,16 @@
  */
 
 #include "sb_internal.h"
+#include <glaze/builtin_apps.h>
 #include <glaze/usb_wire.h>
 
 #include <glaze/res.h>
 #include <stdio.h>
 #include <string.h>
 
-static const struct sb_app_info builtin_apps[] = {
-    { .label = "Calendar", .icon = "icon_calendar.gzi", .path = "bin/calendar", .status_style = SB_STATUS_GRAY },
-    { .label = "Photos", .icon = "icon_photos.gzi", .path = "bin/photos", .status_style = SB_STATUS_BLACK },
-    { .label = "Clock", .icon = "icon_clock.gzi", .path = "bin/clock", .status_style = SB_STATUS_BLACK },
-    { .label = "Calculator", .icon = "icon_calculator.gzi", .path = "bin/calculator", .status_style = SB_STATUS_BLACK },
-    { .label = "Files", .icon = "icon_files.gzi", .path = "bin/files", .status_style = SB_STATUS_GRAY },
-    { .label = "Notes", .icon = "icon_notes.gzi", .path = "bin/notes", .status_style = SB_STATUS_GRAY, .dock = true },
-    { .label = "Settings", .icon = "icon_settings.gzi", .path = "bin/settings", .status_style = SB_STATUS_GRAY,
-      .dock = true },
-    { .label = "Browser", .icon = "icon_web.gzi", .path = "bin/browser", .status_style = SB_STATUS_GRAY },
-    { .label = "Music", .icon = "icon_music.gzi", .path = "bin/music", .status_style = SB_STATUS_BLACK },
-    { .label = "Videos", .icon = "icon_video.gzi", .path = "bin/video", .status_style = SB_STATUS_BLACK },
-    { .label = "App Store", .icon = "icon_appstore.gzi", .path = "bin/appstore", .status_style = SB_STATUS_GRAY },
-};
+#define BUILTIN_APP(l, i, p, style, d) { .label = l, .icon = i, .path = p, .status_style = style, .dock = d },
+static const struct sb_app_info builtin_apps[] = { GZ_BUILTIN_APPS(BUILTIN_APP) };
+#undef BUILTIN_APP
 struct sb_app_info sb_apps[SB_MAX_APPS];
 int sb_num_apps;
 
