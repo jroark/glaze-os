@@ -144,8 +144,32 @@ class SDKTests(unittest.TestCase):
         result = subprocess.run(["make", "-C", str(self.sdk / "src"), "-j4", "OUT=rebuilt", f"CROSS={ARGS.cross}"],
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.assertEqual(result.returncode, 0, result.stdout)
-        for name in ("libc.so.1", "libgfx.so.1", "libui.so.1", "libmedia.so.1", "ld-glaze.so.1", "crt0.o", "start.o"):
+        for name in ("libc.so.1", "libgfx.so.1", "libui.so.1", "libmedia.so.1", "libwolfssl.so.1",
+                     "ld-glaze.so.1", "crt0.o", "start.o"):
             self.assertTrue((self.sdk / "src/rebuilt" / name).is_file(), name)
+
+    def test_manifest_records_os_version(self):
+        import json
+        manifest = json.loads((self.sdk / "sdk.json").read_text())
+        self.assertRegex(manifest.get("version") or "", r"^[0-9]+(\.[0-9]+)*$")
+        self.assertIn("libwolfssl.so.1", manifest["runtime_libraries"])
+
+    def test_tls_app_links_system_wolfssl(self):
+        app = self.root / "tls-app"
+        self.cli("new", app, "--id", "sdk-tls", "--name", "SDK TLS")
+        (app / "tls.c").write_text(
+            "#include <wolfssl/wolfcrypt/settings.h>\n"
+            "#include <wolfssl/ssl.h>\n"
+            "/* The two platform callbacks every libwolfssl.so.1 client provides. */\n"
+            "int glaze_tls_seed(unsigned char *out, unsigned int n) { while (n--) *out++ = 0; return 0; }\n"
+            "time_t glaze_tls_time(time_t *t) { if (t) *t = 0; return 0; }\n"
+            "__attribute__((constructor)) static void tls_probe(void) { wolfSSL_Init(); }\n")
+        result = subprocess.run(["make", "-C", str(app), f"GLAZE_SDK={self.sdk}", f"CROSS={ARGS.cross}",
+                                 "SOURCES=main.c tls.c", "CPPFLAGS=-DWOLFSSL_USER_SETTINGS",
+                                 "LDLIBS=-l:libwolfssl.so.1", "check"],
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn(b"libwolfssl.so.1", (app / "build/app").read_bytes())
 
 
 if __name__ == "__main__":
