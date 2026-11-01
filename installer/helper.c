@@ -46,7 +46,7 @@ int main(int argc,char **argv) {
         }
         else if(!strcmp(argv[2],"snapshot") && argc==4) r=gu_nand_snapshot(&c,argv[3]);
         else if(!strcmp(argv[2],"backup") && argc==4) r=gu_nand_backup(&c,argv[3]);
-        else if(!strcmp(argv[2],"apply") && argc==6) r=gu_nand_apply(&c,argv[3],argv[4],argv[5],false);
+        else if(!strcmp(argv[2],"apply") && argc==6) r=gu_nand_apply(&c,argv[3],argv[4],argv[5],false,false);
         else if(!strcmp(argv[2],"cold-reboot") && argc==3 && (c.caps&GU_CAP_REBOOT_CE)) r=gu_call(&c,GU_REBOOT_CE,NULL,0);
     }
     usb_close(&l);

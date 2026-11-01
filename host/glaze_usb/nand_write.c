@@ -38,6 +38,26 @@ static int rpc(struct gu_client *c,uint32_t op,const void *data,uint32_t n)
     gu_put32(b,op);if(n)memcpy(b+4,data,n);
     return gu_call(c,GU_NAND_REPAIR,b,n+4);
 }
+/* With allow_mismatch the device's actual contents replace the plan's
+ * source: changed blocks and the "before" CRCs the device checks come from
+ * this read, so the device-side guard still holds. */
+static int read_device(struct gu_client *c,uint8_t *out,bool keep_fs)
+{
+    uint8_t request[8];
+    for(uint32_t page=0;page<32768;) {
+        if(keep_fs && page==FS_FIRST*32)page=FS_END*32;
+        unsigned end=keep_fs && page<FS_FIRST*32 ? FS_FIRST*32 : 32768;
+        unsigned n=end-page;if(n>7)n=7;
+        gu_put32(request,page);gu_put32(request+4,n);
+        if(gu_call(c,GU_NAND_READ,request,sizeof(request))!=(int)(n*528)) {
+            fprintf(stderr,"NAND read failed at page %u; stopped\n",page);return -1;
+        }
+        memcpy(out+page*528,c->frame+GU_HEADER,n*528);
+        page+=n;
+        if(page/2048!=(page-n)/2048)fprintf(stderr,"NAND snapshot: %u/32768 pages\n",page);
+    }
+    return 0;
+}
 static int install_status(struct gu_client *c,unsigned stage)
 {
     if(!(c->caps&GU_CAP_INSTALL_STATUS))return 0;
@@ -62,7 +82,7 @@ static int compare(struct gu_client *c,const uint8_t *expected,const char *phase
     }
     return 0;
 }
-int gu_nand_apply(struct gu_client *c,const char *source_path,const char *target_path,const char *plan_path,bool keep_fs)
+int gu_nand_apply(struct gu_client *c,const char *source_path,const char *target_path,const char *plan_path,bool keep_fs,bool allow_mismatch)
 {
     if(!(c->caps&GU_CAP_NAND_REPAIR)) {
         fputs("Requires an explicit nand=repair RAM boot; ordinary read-only boots cannot program NAND.\n",stderr);return -1;
@@ -73,6 +93,10 @@ int gu_nand_apply(struct gu_client *c,const char *source_path,const char *target
     if(!source || !target || !plan || memcmp(plan,"GZNDTX1\0",8) ||
        ~gu_crc(~0u,plan,200)!=gu_get32(plan+200) || hash(source,RAW_BYTES,plan+8) || hash(target,RAW_BYTES,plan+40)) goto done;
     memcpy(masks,plan+72,128);
+    if(allow_mismatch) {
+        fputs("Source mismatch allowed: planning from the device's current NAND\n",stderr);
+        if(install_status(c,GZ_INSTALL_CHECK) || read_device(c,source,keep_fs))goto done;
+    }
     for(unsigned b=0;b<1024;b++) {
         if(!memcmp(source+b*GZ_NAND_REPAIR_BLOCK_BYTES,target+b*GZ_NAND_REPAIR_BLOCK_BYTES,GZ_NAND_REPAIR_BLOCK_BYTES))continue;
         if((masks[b/8]>>(b%8))&1){fputs("Plan changes a quarantined block; refused\n",stderr);goto done;}
@@ -80,7 +104,7 @@ int gu_nand_apply(struct gu_client *c,const char *source_path,const char *target
         masks[128+b/8]|=1u<<(b%8);changed++;
     }
     if(!changed){fputs("Source and target are identical; checking NAND without programming\n",stderr);result=compare(c,target,"verification",keep_fs);goto done;}
-    if(compare(c,source,"preflight",keep_fs))goto done;
+    if(!allow_mismatch && compare(c,source,"preflight",keep_fs))goto done;
     if(rpc(c,GZ_NAND_REPAIR_BEGIN,masks,sizeof(masks)))goto done;
     for(unsigned index=0;index<1024;index++) {
         unsigned block=1023-index;

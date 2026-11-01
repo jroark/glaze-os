@@ -107,7 +107,7 @@ class Publisher(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp) / 'release'
             shutil.copytree(self.directory, directory)
-            text = self.catalog.decode().replace('package=apps/hello/1.0/app.gzp', 'package=../credentials')
+            text = self.catalog.decode().replace('package=' + self.records[0]['package'], 'package=../credentials')
             (directory / 'catalog.txt').write_text(text)
             with self.assertRaisesRegex(ValueError, 'immutable versioned path'):
                 publisher.artifacts(directory)
