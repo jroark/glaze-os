@@ -160,7 +160,7 @@ file, uploads `os/glaze-V.gzu` as an immutable asset, and replaces
   the new romfs. Then it stops the emulator at random points during the
   install and checks that each restart finishes it.
 - `make -C host boot-init-test` covers the SPL's hibernate checks with the
-  new record fields. `host/fstest` covers `ftl.c`, whose read-only build
+  new record fields. `out/host/fstest` covers `ftl.c`, whose read-only build
   shares its code.
 
 ## Limits and next steps

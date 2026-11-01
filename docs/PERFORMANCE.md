@@ -102,7 +102,7 @@ Run the regression checks with:
 
 ```sh
 make -C host gfx-text-test gfx-test settings-test ftl-verify-test
-make -C host fstest && host/fstest 1
+make -C host fstest && out/host/fstest 1
 ```
 
 `gfx-text-test` compares pixels for 62,706 cases using every bundled font,

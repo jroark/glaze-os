@@ -23,7 +23,7 @@ reference image):
                          size, CRC, version), then the flat kernel binary
   NAND[0x40000..)      partition 4 = romfs (tools/mkromfs.py), paged in by the
                          kernel (kernel/romfs.c); not loaded by the SPL
-  NAND[0x500000..)     partition 3 = the file server's region (host/mkfsimg)
+  NAND[0x500000..)     partition 3 = the file server's region (out/host/mkfsimg)
   NAND[0x10000000-1]   padded with 0xFF to 16 MiB
 
 The boot ROM walks partition 1 (the SPL); the SPL then reads partition 2's
@@ -189,7 +189,7 @@ def main() -> int:
     ap.add_argument("--spl", required=True, help="Path to spl.elf (stage-1 SPL ELF)")
     ap.add_argument("--romfs", help="romfs archive (tools/mkromfs.py) to place at NAND offset 0x{:X}, "
                     "where the kernel pages it in".format(ROMFS_OFFSET))
-    ap.add_argument("--fs-image", help="Optional file-system region image (host/mkfsimg) to place at NAND offset 0x{:X}".format(FS_OFFSET))
+    ap.add_argument("--fs-image", help="Optional file-system region image (out/host/mkfsimg) to place at NAND offset 0x{:X}".format(FS_OFFSET))
     ap.add_argument("--out", required=True, help="Output NAND image path")
     ap.add_argument("--version", default="0", help="OS version for the kernel header (VERSION)")
     ap.add_argument("--build", default="dev", help="build identifier for the kernel header")

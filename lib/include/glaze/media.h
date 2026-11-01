@@ -1,6 +1,6 @@
 /*
  * libmedia: integer-only audio and container code shared by the audio
- * server, the Video app and the host test (host/mediatest). MP3 decoding is
+ * server, the Video app and the host test (out/host/mediatest). MP3 decoding is
  * the vendored Helix decoder (third_party/helix-mp3, pub/mp3dec.h); JPEG
  * frames go through stb_image in the app.
  *

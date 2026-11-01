@@ -34,6 +34,10 @@ MEDIA := $(wildcard ../lib/media/*.c ../third_party/helix-mp3/*.c ../third_party
 MEDIA_CFLAGS := $(CFLAGS) -Wno-unused-but-set-variable -I../third_party/helix-mp3/pub -I../third_party/stb \
     -fsanitize=address,undefined -fno-sanitize=shift
 
+# Every binary, object and render goes under out/host, never into the source tree.
+O := ../out/host
+$(shell mkdir -p $(O))
+
 all: sheet preview fstest fattest mkfsimg browse mediatest
 
 clipboard-test: ../tests/clipboard.c ../tests/clipboard_sys.h ../lib/ui/clipboard.c ../lib/ui/edit.c ../servers/springboard/clipboard.c
@@ -48,10 +52,10 @@ CHATGPT_AUTH := $(addprefix ../packages/chatgpt/,json.c tokens.c oauth.c respons
 ../out/host/chatgpt-protocol: ../tests/chatgpt.c $(CHATGPT_SOURCES) ../packages/chatgpt/json.c ../packages/chatgpt/tokens.c $(wildcard ../packages/chatgpt/*.h)
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -I../packages/chatgpt -I../apps/browser -fsanitize=address,undefined $(filter %.c,$^) -o $@
-../out/host/chatgpt-client: chatgpt.c $(CHATGPT_SOURCES) $(CHATGPT_AUTH) ../apps/browser/http.c ../apps/browser/conn.c ../apps/browser/tls.c ../apps/appstore/inflate.c libwolfssl.a $(wildcard ../packages/chatgpt/*.h)
+../out/host/chatgpt-client: chatgpt.c $(CHATGPT_SOURCES) $(CHATGPT_AUTH) ../apps/browser/http.c ../apps/browser/conn.c ../apps/browser/tls.c ../apps/appstore/inflate.c $(O)/libwolfssl.a $(wildcard ../packages/chatgpt/*.h)
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -I../packages/chatgpt -I../apps/browser -I../third_party/stb -I../third_party/wolfssl \
-	    -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS -fsanitize=address,undefined $(filter %.c,$^) libwolfssl.a -o $@
+	    -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS -fsanitize=address,undefined $(filter %.c,$^) $(O)/libwolfssl.a -o $@
 .PHONY: chatgpt-test
 chatgpt-test: ../out/host/chatgpt-protocol ../out/host/chatgpt-client
 	../out/host/chatgpt-protocol
@@ -63,9 +67,9 @@ USB_FLAGS := $(shell $(USB_PKG_CONFIG) --cflags --libs libusb-1.0 2>/dev/null)
 USB_CC ?= $(CC)
 USB_SOURCES := $(wildcard glaze_usb/*.c)
 USB_TLS := -I../third_party/wolfssl -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS
-../out/host/glaze-usb: $(USB_SOURCES) $(wildcard glaze_usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h ../lib/include/glaze/debug_net.h ../lib/include/glaze/usb_net.h libwolfssl.a
+../out/host/glaze-usb: $(USB_SOURCES) $(wildcard glaze_usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h ../lib/include/glaze/debug_net.h ../lib/include/glaze/usb_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(USB_TLS) $(USB_SOURCES) libwolfssl.a $(USB_FLAGS) -o $@
+	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(USB_TLS) $(USB_SOURCES) $(O)/libwolfssl.a $(USB_FLAGS) -o $@
 glaze-usb: ../out/host/glaze-usb
 .PHONY: glaze-usb
 
@@ -117,77 +121,90 @@ usb-cleanup-test:
 .PHONY: usb-cleanup-test
 
 # Real native CLI, with USB calls forwarded into the emulator by a test peer.
-glaze-usb-emulator: $(USB_SOURCES) ../tests/usb_libusb_stub.c ../lib/include/glaze/debug_net.h libwolfssl.a
+glaze-usb-emulator: $(USB_SOURCES) ../tests/usb_libusb_stub.c ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(USB_TLS) $(USB_SOURCES) ../tests/usb_libusb_stub.c libwolfssl.a -o ../out/host/glaze-usb-emulator
+	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(USB_TLS) $(USB_SOURCES) ../tests/usb_libusb_stub.c $(O)/libwolfssl.a -o ../out/host/glaze-usb-emulator
 .PHONY: glaze-usb-emulator
 
-sheet: sheet.c hostres.c $(GFX)
+.PHONY: sheet
+sheet: $(O)/sheet
+$(O)/sheet: sheet.c hostres.c $(GFX)
 	$(CC) $(CFLAGS) -o $@ $^
 
-preview: preview.c hostres.c $(GFX) $(SB)
+.PHONY: preview
+preview: $(O)/preview
+$(O)/preview: preview.c hostres.c $(GFX) $(SB)
 	$(CC) $(CFLAGS) -o $@ $^
 
-shots: preview
-	./preview
-	for f in lock lock_drag unlock_anim home home_dusk_pressed home_badges home_banner lock_notes; do sips -s format png $$f.bmp --out $$f.png >/dev/null; done
+# preview and sheet write their BMPs into $(O); they run from host/ for their asset paths.
+shots: $(O)/preview
+	$(O)/preview
+	for f in lock lock_drag unlock_anim home home_dusk_pressed home_badges home_banner lock_notes; do sips -s format png $(O)/$$f.bmp --out $(O)/$$f.png >/dev/null; done
 
-fstest: fstest.c $(FS)
+.PHONY: fstest
+fstest: $(O)/fstest
+$(O)/fstest: fstest.c $(FS)
 	$(CC) $(FS_CFLAGS) -o $@ $^
 
-fattest: fattest.c $(FAT) ../servers/fs/card.h
+.PHONY: fattest
+fattest: $(O)/fattest
+$(O)/fattest: fattest.c $(FAT) ../servers/fs/card.h
 	$(CC) $(FAT_CFLAGS) -o $@ fattest.c $(FAT)
 
 # fattest on fresh FAT12, FAT16 and FAT32 images, each checked with fsck.fat
 # afterwards (needs dosfstools and mtools). The FAT16 run also uses a 10 MiB
 # FAT16 volume (mkfs.fat's FAT16 needs 9) as /NAND, in Windows CE's NAND
 # layout (nanddisk.c).
-fat-test: fattest
+fat-test: $(O)/fattest
 	set -e; for f in "12 4" "16 16" "32 64"; do set -- $$f; \
-	    ../tools/mkcfimg.sh fat$$1.img $$2 $$1 ../userdata/Documents >/dev/null; \
-	    nand=; [ $$1 = 16 ] && { ../tools/mkcfimg.sh nand16.img 10 16 ../userdata/Documents >/dev/null; nand=nand16.img; }; \
-	    ./fattest fat$$1.img $$nand >fat$$1.log || { grep FAIL fat$$1.log; exit 1; }; \
-	    fsck.fat -n fat$$1.img >/dev/null; [ -z "$$nand" ] || fsck.fat -n $$nand >/dev/null; \
+	    ../tools/mkcfimg.sh $(O)/fat$$1.img $$2 $$1 ../userdata/Documents >/dev/null; \
+	    nand=; [ $$1 = 16 ] && { ../tools/mkcfimg.sh $(O)/nand16.img 10 16 ../userdata/Documents >/dev/null; nand=$(O)/nand16.img; }; \
+	    $(O)/fattest $(O)/fat$$1.img $$nand >$(O)/fat$$1.log || { grep FAIL $(O)/fat$$1.log; exit 1; }; \
+	    fsck.fat -n $(O)/fat$$1.img >/dev/null; [ -z "$$nand" ] || fsck.fat -n $$nand >/dev/null; \
 	    echo "FAT$$1: fattest and fsck.fat pass$${nand:+ (with /NAND)}"; \
-	    rm -f fat$$1.img fat$$1.log $$nand; done
+	    rm -f $(O)/fat$$1.img $(O)/fat$$1.log $$nand; done
 .PHONY: fat-test
 
 # The top-level Makefile builds its own copy into out/host for the image.
-mkfsimg: mkfsimg.c $(FS)
+.PHONY: mkfsimg
+mkfsimg: $(O)/mkfsimg
+$(O)/mkfsimg: mkfsimg.c $(FS)
 	$(CC) $(FS_CFLAGS) -o $@ $^
 
 # wolfSSL is built once, without sanitizers (its constant-time code trips UBSan's shift checks).
-WOLFSSL_OBJS := $(patsubst ../third_party/wolfssl/%.c,wolfssl.o/%.o,$(WOLFSSL))
-wolfssl.o/%.o: ../third_party/wolfssl/%.c ../apps/browser/tls/user_settings.h
+WOLFSSL_OBJS := $(patsubst ../third_party/wolfssl/%.c,$(O)/wolfssl.o/%.o,$(WOLFSSL))
+$(O)/wolfssl.o/%.o: ../third_party/wolfssl/%.c ../apps/browser/tls/user_settings.h
 	@mkdir -p $(dir $@)
 	$(CC) $(WOLFSSL_CFLAGS) -c -o $@ $<
-libwolfssl.a: $(WOLFSSL_OBJS)
+$(O)/libwolfssl.a: $(WOLFSSL_OBJS)
 	rm -f $@
 	ar rcs $@ $^
 
-WEB_OBJS := $(patsubst ../apps/browser/%.c,browser.o/%.o,$(WEB))
-browser.o/%.o: ../apps/browser/%.c
+WEB_OBJS := $(patsubst ../apps/browser/%.c,$(O)/browser.o/%.o,$(WEB))
+$(O)/browser.o/%.o: ../apps/browser/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(WEB_CFLAGS) -MMD -MP -c -o $@ $<
-browser.o/script.o: ../out/include/js_bootstrap.h
+$(O)/browser.o/script.o: ../out/include/js_bootstrap.h
 -include $(WEB_OBJS:.o=.d)
 
-browse: browse.c hostres.c $(GFX) $(WEB_OBJS) $(wildcard ../apps/browser/*.h ../apps/browser/js_platform/*) libwolfssl.a libjerry.a ../out/include/js_bootstrap.h
-	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB_OBJS) libwolfssl.a libjerry.a -lm
+.PHONY: browse
+browse: $(O)/browse
+$(O)/browse: browse.c hostres.c $(GFX) $(WEB_OBJS) $(wildcard ../apps/browser/*.h ../apps/browser/js_platform/*) $(O)/libwolfssl.a $(O)/libjerry.a ../out/include/js_bootstrap.h
+	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a -lm
 
-mediatest: mediatest.c $(MEDIA)
+.PHONY: mediatest
+mediatest: $(O)/mediatest
+$(O)/mediatest: mediatest.c $(MEDIA)
 	$(CC) $(MEDIA_CFLAGS) -o $@ $^ -lm
 
 clean:
-	rm -rf wolfssl.o browser.o
-	rm -f jerry.o libjerry.a
-	rm -f sheet preview fstest fattest mkfsimg browse libwolfssl.a mediatest stowaway-test elf-test *.bmp *.png
+	rm -rf $(O)
 
 # Byte decoder and shared text editing, with ASan/UBSan.
 # The NAND ECC decoder ported from Windows CE's nanddisk.dll (RAM boot /NAND).
 nand-ecc-test: ../tests/nand_ecc.c ../kernel/drivers/nand_ecc.c ../kernel/drivers/nand_ecc.h
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $(filter %.c,$^)
-	./$@
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ $(filter %.c,$^)
+	$(O)/$@
 .PHONY: nand-ecc-test
 
 audio-driver-test: ../tests/audio_driver.c ../kernel/drivers/audio.c ../kernel/hw.h
@@ -215,13 +232,13 @@ audio-volume-test: ../tests/audio_volume.c ../tests/audio_volume_sys.h ../server
 .PHONY: audio-volume-test
 
 stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c $(EDIT)
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $^
-	./$@
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ $^
+	$(O)/$@
 .PHONY: stowaway-test
 
 elf-test: ../tests/elf.c ../lib/include/glaze/elf.h
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ ../tests/elf.c
-	./$@
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ ../tests/elf.c
+	$(O)/$@
 .PHONY: elf-test
 
 store-catalog-test: ../tests/store_catalog.c ../apps/appstore/catalog.c
@@ -237,11 +254,11 @@ store-package-test: ../tests/store_packages.c ../lib/libc/pkg.c
 	../out/host/store-package-test
 .PHONY: store-package-test
 
-store-http-test: libwolfssl.a
+store-http-test: $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(CC) $(WEB_CFLAGS) -o ../out/host/store-http-test ../tests/store_http.c \
 	    ../apps/browser/http.c ../apps/browser/conn.c ../apps/browser/tls.c ../apps/browser/url.c \
-	    ../apps/appstore/inflate.c libwolfssl.a
+	    ../apps/appstore/inflate.c $(O)/libwolfssl.a
 	python3 ../tests/store_transport.py
 .PHONY: store-http-test
 
@@ -251,13 +268,13 @@ radio-test: ../tests/radio_protocol.c ../servers/audio/radio_protocol.c ../serve
 	../out/host/radio-test ../userdata/Music/Demo.mp3
 .PHONY: radio-test
 
-radio-worker-test: libwolfssl.a
+radio-worker-test: $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(CC) $(MEDIA_CFLAGS) -I../apps/browser -I../third_party/wolfssl -I../apps/browser/tls \
 	    -DWOLFSSL_USER_SETTINGS -include ../tests/radio_host.h -o ../out/host/radio-worker-test \
 	    ../tests/radio_worker.c ../servers/audio/radio.c ../servers/audio/radio_protocol.c ../servers/audio/radio_mp3.c \
 	    ../apps/browser/conn.c ../apps/browser/tls.c ../apps/browser/url.c \
-	    $(wildcard ../third_party/helix-mp3/*.c ../third_party/helix-mp3/real/*.c) libwolfssl.a -lpthread
+	    $(wildcard ../third_party/helix-mp3/*.c ../third_party/helix-mp3/real/*.c) $(O)/libwolfssl.a -lpthread
 	python3 ../tests/radio_transport.py
 .PHONY: radio-worker-test
 
@@ -354,12 +371,12 @@ aim-test: ../tests/aim.c ../packages/aim/oscar.c ../packages/aim/md5.c ../packag
 	../out/host/aim-test
 .PHONY: aim-test
 
-gmail-test: ../tests/gmail.c ../tests/settings_sys.h ../packages/gmail/main.c ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c ../packages/gmail/mail.h ../packages/gmail/gmail.h libwolfssl.a
+gmail-test: ../tests/gmail.c ../tests/settings_sys.h ../packages/gmail/main.c ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c ../packages/gmail/mail.h ../packages/gmail/gmail.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(CC) $(WEB_CFLAGS) -include ../tests/settings_sys.h -o ../out/host/gmail-test ../tests/gmail.c \
 	    ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c \
 	    hostres.c $(GFX) ../lib/ui/widgets.c ../lib/ui/list.c $(KEYBOARD) \
-	    ../lib/ui/text.c ../lib/ui/input.c ../lib/ui/transition.c ../lib/libc/tz.c libwolfssl.a
+	    ../lib/ui/text.c ../lib/ui/input.c ../lib/ui/transition.c ../lib/libc/tz.c $(O)/libwolfssl.a
 	../out/host/gmail-test
 .PHONY: gmail-test
 
@@ -547,9 +564,9 @@ pce-hardware-test:
 .PHONY: gamegear-hardware-test pce-hardware-test
 
 # Keep the engine private to Browser. Native tests use the same feature profile.
-jerry.o: ../third_party/jerryscript/jerryscript.c ../third_party/jerryscript/jerryscript.h ../apps/browser/js_config.h
+$(O)/jerry.o: ../third_party/jerryscript/jerryscript.c ../third_party/jerryscript/jerryscript.h ../apps/browser/js_config.h
 	$(CC) -std=c99 -O2 -g -I../third_party/jerryscript -include ../apps/browser/js_config.h -c -o $@ $<
-libjerry.a: jerry.o
+$(O)/libjerry.a: $(O)/jerry.o
 	ar rcs $@ $^
 ../out/include/js_bootstrap.h: ../apps/browser/js_dom.js ../apps/browser/js_web.js ../tools/mkjsbootstrap.py
 	python3 ../tools/mkjsbootstrap.py $< $@
@@ -557,16 +574,16 @@ libjerry.a: jerry.o
 ../out/host/browser-platform.o: browse.c
 	@mkdir -p ../out/host
 	$(CC) $(WEB_CFLAGS) -Dmain=browser_preview_main -c -o $@ $<
-browser-test: $(WEB_OBJS) libwolfssl.a libjerry.a ../out/host/browser-platform.o
+browser-test: $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a ../out/host/browser-platform.o
 	$(CC) $(WEB_CFLAGS) -o ../out/host/browser-test ../tests/browser_script.c \
-	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) libwolfssl.a libjerry.a -lm
+	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a -lm
 	python3 ../tests/browser_transport.py ../out/host/browser-test
 .PHONY: browser-test
 
 # Opt-in live Google Search workflow; build only, never run as part of CI.
-browser-google: $(WEB_OBJS) libwolfssl.a libjerry.a ../out/host/browser-platform.o
+browser-google: $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a ../out/host/browser-platform.o
 	$(CC) $(WEB_CFLAGS) -o ../out/host/browser-google ../tests/browser_google.c \
-	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) libwolfssl.a libjerry.a -lm
+	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a -lm
 .PHONY: browser-google
 
 .PHONY: net-driver-test
@@ -604,12 +621,12 @@ wifi-mkfs:
 	@mkdir -p ../out/host
 	$(CC) $(FS_CFLAGS) -o ../out/host/wifi-mkfs ../host/mkfsimg.c $(FS)
 
-store-worker-test: libwolfssl.a
+store-worker-test: $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(CC) $(WEB_CFLAGS) -I../apps/browser -include ../tests/radio_host.h -o ../out/host/store-worker-test \
 	    ../tests/store_worker.c ../apps/appstore/worker.c ../apps/appstore/schedule.c \
 	    ../apps/appstore/catalog.c ../lib/libc/pkg.c ../lib/gfx/gfx.c ../lib/gfx/blit.c \
-	    libwolfssl.a -lpthread
+	    $(O)/libwolfssl.a -lpthread
 	../out/host/store-worker-test
 .PHONY: store-worker-test
 
@@ -643,15 +660,15 @@ doom-test: ../out/host/doom-test
 	../out/host/doom-test
 	$(if $(DOOM_WAD),ASAN_OPTIONS=detect_leaks=0 ../out/host/doom-test "$(DOOM_WAD)",@echo "Optional full engine test: make doom-test DOOM_WAD=/absolute/path/doom1.wad")
 
-../out/host/debug-net-fixture: ../tests/debug_net_native.c ../servers/usb/network.c ../servers/usb/network.h ../lib/include/glaze/debug_net.h libwolfssl.a
+../out/host/debug-net-fixture: ../tests/debug_net_native.c ../servers/usb/network.c ../servers/usb/network.h ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) $(USB_TLS) -fsanitize=address,undefined $(filter %.c,$^) libwolfssl.a -o $@
+	$(CC) $(CFLAGS) $(USB_TLS) -fsanitize=address,undefined $(filter %.c,$^) $(O)/libwolfssl.a -o $@
 .PHONY: debug-net-test
 debug-net-test: ../out/host/debug-net-fixture ../out/host/glaze-usb
 	python3 ../tests/debug_network.py
-../out/host/debug-net-client: ../tests/debug_net_client.c glaze_usb/network.c glaze_usb/network.h ../lib/include/glaze/debug_net.h libwolfssl.a
+../out/host/debug-net-client: ../tests/debug_net_client.c glaze_usb/network.c glaze_usb/network.h ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) $(USB_TLS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(filter %.c,$^) libwolfssl.a -o $@
+	$(CC) $(CFLAGS) $(USB_TLS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(filter %.c,$^) $(O)/libwolfssl.a -o $@
 debug-net-test: ../out/host/debug-net-client
 
 wince-nand-test: ../tests/wince_assets_native.c ../tests/wince_nand_assets.py ../apps/wince/assets.c ../apps/wince/assets.h ../apps/wince/pe.c
@@ -749,9 +766,9 @@ cf-read-test: ../tests/cf_read.c glaze_usb/cf.c
 	../out/host/cf-read-test
 .PHONY: cf-read-test
 
-nand-writer-test: ../tests/nand_writer.c glaze_usb/nand_write.c ../kernel/nand_repair.c libwolfssl.a
+nand-writer-test: ../tests/nand_writer.c glaze_usb/nand_write.c ../kernel/nand_repair.c $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(USB_CC) $(CFLAGS) $(USB_FLAGS) $(USB_TLS) -fsanitize=address,undefined ../tests/nand_writer.c glaze_usb/nand_write.c libwolfssl.a -o ../out/host/nand-writer-test
+	$(USB_CC) $(CFLAGS) $(USB_FLAGS) $(USB_TLS) -fsanitize=address,undefined ../tests/nand_writer.c glaze_usb/nand_write.c $(O)/libwolfssl.a -o ../out/host/nand-writer-test
 	../out/host/nand-writer-test
 .PHONY: nand-writer-test
 

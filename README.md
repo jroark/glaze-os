@@ -44,7 +44,7 @@ The cross toolchain comes from the be300 `mips-cross-dev` Docker image:
 ./build.sh OUT=out/static DYNAMIC=0 # optional fully static build
 ```
 
-The build also compiles `host/mkfsimg` with the host's C compiler (`HOSTCC`,
+The build also compiles `out/buildtools/mkfsimg` with the host's C compiler (`HOSTCC`,
 default `cc`) to build the factory file system from `userdata/`.
 
 Apps and SpringBoard share `libc.so.1`, `libgfx.so.1` and `libui.so.1` by
@@ -139,7 +139,7 @@ Romfs holds only the OS. Everything else lives in the file system:
 | `/Applications` | Installed apps, one `<id>.app` folder each (also `/Card/Applications`) |
 
 A new NAND image already holds a formatted volume with the contents of
-`userdata/`, built by `host/mkfsimg` with the same flash code the server
+`userdata/`, built by `out/host/mkfsimg` with the same flash code the server
 runs, so the first boot just mounts it. Erasing the volume, or booting on
 blank flash, leaves only the empty standard folders (`servers/fs/folders.h`).
 
@@ -160,11 +160,11 @@ the [Dhara](https://github.com/dlbeer/dhara) flash translation layer
 Factory bad-block marks are not read yet, since they live in the spare area.
 Real hardware needs that before trusting the region.
 
-`host/fstest` runs the same code against a RAM model of the flash with bit
+`out/host/fstest` runs the same code against a RAM model of the flash with bit
 flips, failing blocks and power cuts (about five minutes):
 
 ```sh
-make -C host fstest && host/fstest 1
+make -C host fstest && out/host/fstest 1
 ```
 
 Files (`apps/files`) browses the volume. It opens text files and pictures,
@@ -312,7 +312,7 @@ converts other rates to the nearest one.
       -ar 22050 -ac 1 -c:a adpcm_ima_wav out.avi
   ```
 
-`host/mediatest` decodes files with the same code natively, and
+`out/host/mediatest` decodes files with the same code natively, and
 `tests/mediatest.py` compares it with ffmpeg.
 
 ### Stowaway keyboard

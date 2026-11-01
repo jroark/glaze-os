@@ -3,7 +3,7 @@
 
 Makes throwaway Ed25519 keys, a stand-in kernel ELF and romfs for an old
 (1.0) and a new (1.1) OS, signs update files with tools/mkota.py, builds a
-684-block physical file system holding the new one with host/mkfsimg, and
+684-block physical file system holding the new one with out/host/mkfsimg, and
 runs the C harness on them. Nothing here touches the release key.
 
 usage: ota_test.py MKFSIMG OTA_TEST

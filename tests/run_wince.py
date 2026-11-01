@@ -152,9 +152,9 @@ def main():
             raise ValueError("unsafe test package path")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-    subprocess.run(["make", "OUT=out/wince-native", "out/wince-native/host/mkfsimg"], check=True)
+    subprocess.run(["make", "OUT=out/wince-native", "out/wince-native/buildtools/mkfsimg"], check=True)
     blocks = re.search(r"#define GZ_FLASH_BLOCKS\s+(\d+)", (root / "lib/include/glaze/abi.h").read_text()).group(1)
-    subprocess.run([str(root / "out/wince-native/host/mkfsimg"), str(work / "userdata"), blocks, str(work / "fs.img")], check=True)
+    subprocess.run([str(root / "out/wince-native/buildtools/mkfsimg"), str(work / "userdata"), blocks, str(work / "fs.img")], check=True)
     fs = args.reuse_fs.read_bytes()[0x500000:] if args.reuse_fs else (work / "fs.img").read_bytes()
     if len(fs) != len(nand) - 0x500000:
         raise ValueError("test filesystem does not match flash geometry")

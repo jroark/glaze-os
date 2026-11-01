@@ -42,7 +42,7 @@ the audio server sequences patterns in `servers/audio/buzzer.c`. Preserve
 shared BLG config `0984` and gate `1128` across display power changes.
 Use `buzzer-driver-test audio-driver-test audio-volume-test display-test`.
 
-Romfs is for the OS and built-in apps only. User files, settings and app data belong in the file system: `userdata/` is the factory volume, which `host/mkfsimg` (built with `HOSTCC`, default `cc`) formats into `out/fs.img` and `tools/mk_nand.py --fs-image` places at 0x500000. Don't name files in `userdata/` with spaces, since make lists them.
+Romfs is for the OS and built-in apps only. User files, settings and app data belong in the file system: `userdata/` is the factory volume, which `mkfsimg` (`out/buildtools/mkfsimg`, built with `HOSTCC`, default `cc`; `make -C host mkfsimg` builds a native copy in `out/host`) formats into `out/fs.img` and `tools/mk_nand.py --fs-image` places at 0x500000. Don't name files in `userdata/` with spaces, since make lists them.
 
 ROM binaries must not be committed, including original demos and uploaded test games.
 Generate demo cartridges only under ignored `out/pkg-res/`; keep external ROMs outside
@@ -135,7 +135,7 @@ never updated over the air. `VERSION` is the OS version; bump it per
 release. `make ota` signs `out/ota/os/` natively with
 `~/.config/glaze/ota-ed25519.pem` (never commit it); `OTA_PUBKEY=` builds
 an image trusting a test key. Use `make -C host ota-test boot-init-test`,
-`host/fstest` after `ftl.c` changes, and `tests/run_ota.py` (emulator, power
+`out/host/fstest` after `ftl.c` changes, and `tests/run_ota.py` (emulator, power
 cuts).
 
 ## Running and testing
@@ -159,7 +159,7 @@ be300 --nand out/glaze.bin --rtc-host-time --cf out/cf.img    # with a CompactFl
 - **Real touch path**: `tests/touch.sh tests/touch_unlock.act` drives the emulator window with xdotool on an X display (`Xvfb :99 &`, then `DISPLAY=:99`). Action coordinates are window/screen pixels; app surfaces start 16 px lower, under the status bar.
 - **Audio**: boot with `--audio` to hear it and `--log-mmio` for the emulator's `[AIU] start`/`stop` lines. Its host output is resampled and drops samples under load, so check exactness against the guest DMA buffers rather than a capture. `make -C host mediatest` then `tests/mediatest.py` decodes `userdata/Music` and `userdata/Movies` with libmedia and Helix natively and compares with ffmpeg (ADPCM is bit-exact, MP3 about 89 dB).
 - **CompactFlash**: `tools/mkcfimg.sh` uses `mkfs.fat` when installed and otherwise mtools' `mformat` (FAT16/32 only). `make -C host fat-test` runs `servers/fs/card.c` and FatFs (with ASan/UBSan) on fresh FAT12/16/32 images, including card swaps and a full volume, then checks each with `fsck.fat -n`. The emulator writes a CF image back only on orderly shutdown.
-- **Flash stack**: `host/fstest [seed [wear|flips|bad|cuts|format]]` runs `servers/fs/ftl.c` plus littlefs and Dhara on a RAM NAND model with bit flips, failing blocks and power cuts. A full run takes several minutes; pass a phase name to run one.
+- **Flash stack**: `out/host/fstest [seed [wear|flips|bad|cuts|format]]` runs `servers/fs/ftl.c` plus littlefs and Dhara on a RAM NAND model with bit flips, failing blocks and power cuts. A full run takes several minutes; pass a phase name to run one.
 
 ## Toolchain constraints
 
@@ -224,7 +224,7 @@ and shared text editor.
 **File system** (`servers/fs`, `glaze/fs.h`, client in `lib/libc/fs.c`):
 - littlefs runs on the Dhara NAND translation layer, both vendored unmodified in `third_party/` and built into `libfsstack.a`. Don't edit them; put changes in `servers/fs/ftl.c`.
 - ECC is in-band: the spare area is synthesized by the emulator and absent from image files. Each page gets a 4-bit BCH code stored in the unused tail (bytes 480–511) of the checkpoint page Dhara writes after every 3 data pages.
-- The rest of `ftl.c`'s design is documented in its header comment and depends on Dhara's journal layout (`log2_ppc == 2` for 512-byte pages): the ECC cache, the bad-block table in the region's first two blocks, read-back verification, and torn-checkpoint handling. Re-run `host/fstest` after any change to `ftl.c`.
+- The rest of `ftl.c`'s design is documented in its header comment and depends on Dhara's journal layout (`log2_ppc == 2` for 512-byte pages): the ECC cache, the bad-block table in the region's first two blocks, read-back verification, and torn-checkpoint handling. Re-run `out/host/fstest` after any change to `ftl.c`.
 - littlefs's block count is fixed from the geometry, not from `dhara_map_capacity`, which changes between mounts.
 - Clients get a session with an 8 KiB shared buffer; paths and data travel in it.
 - Packages (`glaze/pkg.h`, `lib/libc/pkg.c`): a `.gzp` is the romfs container with the magic `GZPK` (entries `Info`, the executable, `res/...`). `pkg_install` unpacks into `<id>.app.tmp` and renames it, replacing an install with the same id on either volume; `pkg_list` removes interrupted `.tmp` installs. An app's bundle path (at most 47 characters) is its identity for badges and notes; its data lives in `<bundle>/data`. `fs_remove_all` deletes a tree.
@@ -246,10 +246,10 @@ and shared text editor.
 - Flash reads (about 70 KB/s sequentially, slower as seek-and-read) cost more than decoding. Videos therefore reads the AVI front to back through a read-ahead window and skips late frames; keep media at the bitrates of the samples in `userdata/Music` and `userdata/Movies`.
 
 **Browser** (`apps/browser`, "Browser" on the home screen):
-- The engine (`web.h`: `html.c`, `css.c`, `style.c`, `layout.c`, `paint.c`, `image.c`, `forms.c`, `page.c`) uses only libc and libgfx, so `make -C host browse` builds it natively (with ASan/UBSan): `host/browse <url | file.html> [out.bmp]` renders a page to a 240 px wide BMP, and `BROWSE_DUMP=1` prints the styled tree. `tests/web/basic.html` exercises it.
+- The engine (`web.h`: `html.c`, `css.c`, `style.c`, `layout.c`, `paint.c`, `image.c`, `forms.c`, `page.c`) uses only libc and libgfx, so `make -C host browse` builds it natively (with ASan/UBSan): `out/host/browse <url | file.html> [out.bmp]` renders a page to a 240 px wide BMP, and `BROWSE_DUMP=1` prints the styled tree. `tests/web/basic.html` exercises it.
 - Engine text is Latin-1 plus libgfx's extra glyphs (`charset.c` maps everything else); the fonts cover 0xA0-0xFF. CSS px are laid out at 3/4 device px, so the screen is 320 CSS px wide. Layout is integer-only; wide tables are linearized; floats and positioning are ignored.
 - Network: `conn.c` (BSD sockets, TLS through wolfSSL's I/O callbacks), `http.c` (HTTP/1.1, chunked, gzip via stb's zlib), `loader.c` (queue, redirects, cookies, cache), `load.c` (document, then CSS, then images). `plat.h` is what differs between `main.c` (device) and `host/browse.c`.
-- https: `tls.c` runs vendored wolfSSL (`third_party/wolfssl`, GPLv3; TLS 1.2/1.3 client, configured by `apps/browser/tls/user_settings.h`, a private PIC archive of `bin/browser` like `libhelix.a`). Certificates are checked against Mozilla's roots (`assets/ssl/roots.der`, romfs `ssl/`, regenerated by `tools/mkroots.py`), by host name, and by date with a day of slack because the RTC is local time; a wrong RTC date fails every site. The context loads on the first https fetch; sessions are resumed per host. With no hardware RNG, the DRBG is seeded from `/Browser/seed` (rewritten each run) plus scheduler timing jitter. `WOLFSSL_USE_ALIGN` must stay: wolfSSL otherwise stores words to unaligned addresses, which fault on MIPS. `host/browse` builds wolfSSL natively; `BROWSE_ROOTS=ca.der` trusts a test CA (an `openssl s_server -WWW` makes a local https server).
+- https: `tls.c` runs vendored wolfSSL (`third_party/wolfssl`, GPLv3; TLS 1.2/1.3 client, configured by `apps/browser/tls/user_settings.h`, a private PIC archive of `bin/browser` like `libhelix.a`). Certificates are checked against Mozilla's roots (`assets/ssl/roots.der`, romfs `ssl/`, regenerated by `tools/mkroots.py`), by host name, and by date with a day of slack because the RTC is local time; a wrong RTC date fails every site. The context loads on the first https fetch; sessions are resumed per host. With no hardware RNG, the DRBG is seeded from `/Browser/seed` (rewritten each run) plus scheduler timing jitter. `WOLFSSL_USE_ALIGN` must stay: wolfSSL otherwise stores words to unaligned addresses, which fault on MIPS. `out/host/browse` builds wolfSSL natively; `BROWSE_ROOTS=ca.der` trusts a test CA (an `openssl s_server -WWW` makes a local https server).
 - `res:` URLs are the bundled pages in `assets/web` (romfs `web/`); the start page is `res:start.html`. State persists in `/Browser/state` and `/Browser/bookmarks`.
 - JavaScript and frame support, runtime bounds and native/device tests are documented in `docs/BROWSER.md` and `docs/BROWSER_WEB_APIS.md`. Bounded fetch
 and module graphs share the asynchronous loader; `script_web.inc` and

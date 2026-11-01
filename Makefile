@@ -9,7 +9,7 @@ LD      := $(CROSS)ld
 AR      := $(CROSS)ar
 OBJCOPY := $(CROSS)objcopy
 PYTHON  ?= python3
-# Native compiler for build tools (host/mkfsimg).
+# Native compiler for build tools ($(OUT)/buildtools/mkfsimg; out/host is host/Makefile's).
 HOSTCC  ?= cc
 
 OUT     ?= out
@@ -633,7 +633,7 @@ FS_BLOCKS := $(shell sed -n 's/^\#define GZ_FLASH_BLOCKS *\([0-9]*\).*/\1/p' lib
 USERDATA_FILES := $(shell find userdata -type f ! -name '.*')
 MKFSIMG_SRCS := host/mkfsimg.c servers/fs/ftl.c $(FSSTACK_SRCS)
 
-$(OUT)/host/mkfsimg: $(MKFSIMG_SRCS) servers/fs/ftl.h servers/fs/folders.h
+$(OUT)/buildtools/mkfsimg: $(MKFSIMG_SRCS) servers/fs/ftl.h servers/fs/folders.h
 	@mkdir -p $(dir $@)
 	$(HOSTCC) -std=gnu11 -O2 -Wall -Iservers/fs $(FS_INC) -o $@ $(MKFSIMG_SRCS)
 
@@ -641,8 +641,8 @@ $(OUT)/wifi-entropy:
 	@mkdir -p $(dir $@)
 	$(PYTHON) -c 'import os; open("$@", "wb").write(os.urandom(32))'
 
-$(OUT)/fs.img: $(OUT)/wifi-entropy $(OUT)/host/mkfsimg $(USERDATA_FILES) lib/include/glaze/abi.h
-	$(OUT)/host/mkfsimg userdata $(FS_BLOCKS) $@ /Library/Preferences/net.entropy=$(OUT)/wifi-entropy $(FS_EXTRA)
+$(OUT)/fs.img: $(OUT)/wifi-entropy $(OUT)/buildtools/mkfsimg $(USERDATA_FILES) lib/include/glaze/abi.h
+	$(OUT)/buildtools/mkfsimg userdata $(FS_BLOCKS) $@ /Library/Preferences/net.entropy=$(OUT)/wifi-entropy $(FS_EXTRA)
 
 # ---- NAND image -------------------------------------------------------------
 

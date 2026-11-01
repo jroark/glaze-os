@@ -191,7 +191,7 @@ mkdir -p out/public-release
 cp out/glazeboot/GlazeBoot.exe out/glazeboot/kernel.bin out/glazeboot/romfs.img out/glazeboot/glaze.cfg out/public-release/
 make -C host mkfsimg
 # A public emulator image must not distribute a shared WPA entropy seed.
-host/mkfsimg userdata 704 out/public-release/fs.img
+out/host/mkfsimg userdata 704 out/public-release/fs.img
 python3 tools/mk_nand.py --kernel out/kernel.elf --spl out/spl.elf \
   --romfs out/romfs.img --fs-image out/public-release/fs.img --out out/public-release/glaze.bin
 python3 tools/package_glazeboot.py --build-dir out/public-release \

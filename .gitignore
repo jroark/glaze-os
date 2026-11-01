@@ -1,8 +1,5 @@
 out/
 .DS_Store
-host/stowaway-test
-host/elf-test
-host/nand-ecc-test
 
 __pycache__/
 
@@ -25,11 +22,6 @@ __pycache__/
 # Not a ROM: the OTA release public key (docs/OTA.md); the private key never enters the tree.
 !/config/ota_pubkey.bin
 *.[wW][aA][dD]
-
-# Browser native objects and private JavaScript archive.
-host/browser.o/
-host/jerry.o
-host/libjerry.a
 
 /firmware/wl54cf/
 
