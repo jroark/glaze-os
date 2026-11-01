@@ -10,10 +10,11 @@ ota:
 .PHONY: ota
 
 # Portable static store: run ./build.sh store, then publish out/store over HTTPS.
-# The emulator packages come from a built sibling glaze-emulators checkout.
+# Most apps come from built sibling glaze-apps and glaze-emulators checkouts.
+APPS_DIR ?= ../glaze-apps
 EMU_DIR ?= ../glaze-emulators
 store: packages
-	$(PYTHON) tools/mkstore.py --packages $(OUT)/pkg --packages $(EMU_DIR)/out/pkg --output $(OUT)/store
+	$(PYTHON) tools/mkstore.py --packages $(OUT)/pkg --packages $(APPS_DIR)/out/pkg --packages $(EMU_DIR)/out/pkg --output $(OUT)/store
 .PHONY: store
 
 $(OUT)/include/js_bootstrap.h: apps/browser/js_dom.js apps/browser/js_web.js tools/mkjsbootstrap.py

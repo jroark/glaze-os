@@ -47,20 +47,6 @@ clipboard-test: ../tests/native/clipboard.c ../tests/native/clipboard_sys.h ../l
 	../out/host/clipboard-test
 .PHONY: clipboard-test
 
-CHATGPT_SOURCES := ../packages/chatgpt/protocol.c ../apps/browser/url.c
-CHATGPT_AUTH := $(addprefix ../packages/chatgpt/,json.c tokens.c oauth.c responses.c http_io.c)
-../out/host/chatgpt-protocol: ../tests/native/chatgpt.c $(CHATGPT_SOURCES) ../packages/chatgpt/json.c ../packages/chatgpt/tokens.c $(wildcard ../packages/chatgpt/*.h)
-	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -I../packages/chatgpt -I../apps/browser -fsanitize=address,undefined $(filter %.c,$^) -o $@
-../out/host/chatgpt-client: chatgpt.c $(CHATGPT_SOURCES) $(CHATGPT_AUTH) ../apps/browser/http.c ../apps/browser/conn.c ../apps/browser/tls.c ../apps/appstore/inflate.c $(O)/libwolfssl.a $(wildcard ../packages/chatgpt/*.h)
-	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -I../packages/chatgpt -I../apps/browser -I../third_party/stb -I../third_party/wolfssl \
-	    -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS -fsanitize=address,undefined $(filter %.c,$^) $(O)/libwolfssl.a -o $@
-.PHONY: chatgpt-test
-chatgpt-test: ../out/host/chatgpt-protocol ../out/host/chatgpt-client
-	../out/host/chatgpt-protocol
-	python3 ../tests/chatgpt_oauth.py --client ../out/host/chatgpt-client
-
 # Native USB development CLI. Prefer the Apple Silicon Homebrew installation.
 USB_PKG_CONFIG ?= $(if $(wildcard /opt/homebrew/bin/pkg-config),/opt/homebrew/bin/pkg-config,pkg-config)
 USB_FLAGS := $(shell $(USB_PKG_CONFIG) --cflags --libs libusb-1.0 2>/dev/null)
@@ -278,14 +264,6 @@ radio-worker-test: $(O)/libwolfssl.a
 	python3 ../tests/radio_transport.py
 .PHONY: radio-worker-test
 
-somafm-ui-test: ../tests/native/somafm_ui.c ../tests/native/somafm_sys.h ../packages/somafm/main.c ../packages/somafm/stations.h
-	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -include ../tests/native/somafm_sys.h \
-	    -o ../out/host/somafm-ui-test ../tests/native/somafm_ui.c hostres.c $(GFX) \
-	    ../lib/ui/widgets.c ../lib/ui/list.c ../lib/ui/text.c
-	../out/host/somafm-ui-test
-.PHONY: somafm-ui-test
-
 # Scalar pixel oracles for clipping, alpha, dithering and three-slice sampling.
 gfx-test: ../tests/native/gfx.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
 	@mkdir -p ../out/host
@@ -363,22 +341,6 @@ handwriting-test: ../tests/native/handwriting.c $(KEYBOARD) ../lib/ui/input.c
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/ui_events_sys.h -o ../out/host/handwriting-test $^ ../lib/ui/widgets.c hostres.c $(GFX)
 	../out/host/handwriting-test
 .PHONY: handwriting-test
-
-aim-test: ../tests/native/aim.c ../packages/aim/oscar.c ../packages/aim/md5.c ../packages/aim/text.c ../packages/aim/oscar.h
-	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/aim-test ../tests/native/aim.c \
-	    ../packages/aim/oscar.c ../packages/aim/md5.c ../packages/aim/text.c
-	../out/host/aim-test
-.PHONY: aim-test
-
-gmail-test: ../tests/native/gmail.c ../tests/native/settings_sys.h ../packages/gmail/main.c ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c ../packages/gmail/mail.h ../packages/gmail/gmail.h $(O)/libwolfssl.a
-	@mkdir -p ../out/host
-	$(CC) $(WEB_CFLAGS) -include ../tests/native/settings_sys.h -o ../out/host/gmail-test ../tests/native/gmail.c \
-	    ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c \
-	    hostres.c $(GFX) ../lib/ui/widgets.c ../lib/ui/list.c $(KEYBOARD) \
-	    ../lib/ui/text.c ../lib/ui/input.c ../lib/ui/transition.c ../lib/libc/tz.c $(O)/libwolfssl.a
-	../out/host/gmail-test
-.PHONY: gmail-test
 
 gfx-bench: ../tests/native/gfx_bench.c ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c
 	@mkdir -p ../out/host
@@ -537,24 +499,6 @@ service-test: ../tests/native/service.c ../kernel/service.c
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/service-test ../tests/native/service.c
 	../out/host/service-test
 
-# Doom's real engine and Glaze I/O/audio/video glue; no WAD in the repository.
-DOOM_VENDOR := $(wildcard ../third_party/doomgeneric/*.c)
-DOOM_GLUE := $(addprefix ../packages/doom/,files.c input.c keys.c sound.c system.c video.c wad.c)
-DOOM_NATIVE_FLAGS := $(CFLAGS) -I../third_party/doomgeneric -fno-strict-aliasing -fwrapv -Wno-unused-function -Wno-unused-variable -Wno-sign-compare -Wno-type-limits -Wno-missing-field-initializers -Wno-implicit-fallthrough -Wno-unused-but-set-parameter -Wno-enum-conversion -Wno-format-truncation -Wno-pointer-to-int-cast -Wno-absolute-value -fsanitize=address,undefined -fno-sanitize=shift,signed-integer-overflow
-DOOM_NATIVE_OBJS := $(patsubst ../%.c,../out/host/doom/%.o,$(DOOM_VENDOR) $(DOOM_GLUE))
-../out/host/doom/%.o: ../%.c $(wildcard ../packages/doom/*.h ../third_party/doomgeneric/*.h)
-	@mkdir -p $(dir $@)
-	$(CC) $(DOOM_NATIVE_FLAGS) -include ../packages/doom/compat.h -c $< -o $@
-../out/host/doom/host.o: doom.c
-	@mkdir -p $(dir $@)
-	$(CC) $(DOOM_NATIVE_FLAGS) -c $< -o $@
-../out/host/doom-test: $(DOOM_NATIVE_OBJS) ../out/host/doom/host.o
-	$(CC) $(DOOM_NATIVE_FLAGS) $^ -o $@
-.PHONY: doom-test
-doom-test: ../out/host/doom-test
-	../out/host/doom-test
-	$(if $(DOOM_WAD),ASAN_OPTIONS=detect_leaks=0 ../out/host/doom-test "$(DOOM_WAD)",@echo "Optional full engine test: make doom-test DOOM_WAD=/absolute/path/doom1.wad")
-
 ../out/host/debug-net-fixture: ../tests/native/debug_net_native.c ../servers/usb/network.c ../servers/usb/network.h ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(USB_TLS) -fsanitize=address,undefined $(filter %.c,$^) $(O)/libwolfssl.a -o $@
@@ -679,9 +623,3 @@ installer-ui-test: ../tests/native/installer_ui.c ../servers/springboard/install
 	../out/host/installer-ui-test
 .PHONY: installer-ui-test
 
-# Portable falling-block rules and versioned save-state validation.
-tetris-test: ../tests/native/tetris.c ../packages/tetris/game.c ../packages/tetris/game.h
-	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined $(filter %.c,$^) -o ../out/host/tetris-test
-	UBSAN_OPTIONS=halt_on_error=1 ../out/host/tetris-test
-.PHONY: tetris-test

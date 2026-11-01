@@ -15,9 +15,9 @@ out/shots/<name>.png). Capture these, then run this script:
     tests/run.sh tests/ui/t_calendar.txt 13
     tests/run.sh tests/ui/t_world.txt 12
     NET=1 tests/run.sh tests/ui/t_appstore.txt 30
-    tools/mkcfimg.sh out/cf.img 16 16 out/pkg/hello.gzp out/pkg/minesweeper.gzp out/pkg/solitaire.gzp
-    CF=out/cf.img tests/run.sh tests/ui/t_minesweeper.txt 34
-    CF=out/cf.img tests/run.sh tests/ui/t_solitaire.txt 40
+    tools/mkcfimg.sh out/cf.img 16 16 out/pkg/hello.gzp ../glaze-apps/out/pkg/minesweeper.gzp ../glaze-apps/out/pkg/solitaire.gzp
+    CF=out/cf.img tests/run.sh ../glaze-apps/tests/ui/t_minesweeper.txt 34
+    CF=out/cf.img tests/run.sh ../glaze-apps/tests/ui/t_solitaire.txt 40
     tools/mksite.py out/shots ../be300/src/ui/assets/be300_frame.png
 
 The hero's lock screen is split into layers so the page can slide its knob:

@@ -195,8 +195,10 @@ it with `SYS_SPAWN_IMAGE`, which only accepts programs that use the dynamic
 linker in romfs. They use the system fonts and libraries, and find their own
 resources in their folder through the usual `res_image`.
 
-`packages/hello` is a small example, and `packages/minesweeper` and
-`packages/solitaire` are games. `make` builds every directory under
+`packages/hello` is a small example; `packages/taskmanager` and
+`packages/maintenance` are system tools. The other installable apps (AIM, Gmail,
+Chat, Doom, SomaFM and the games) are in [glaze-apps](https://github.com/jroark/glaze-apps), built against
+this repository's SDK. `make` builds every directory under
 `packages/` into `out/pkg/<name>.gzp`. They are not on the factory volume:
 `tools/mkcfimg.sh out/cf.img 16 16 out/pkg/*.gzp` puts them on a card image
 to install from Files. A package needs `Info`, `main.c` and a 44x44
@@ -217,7 +219,7 @@ functions and tests.
 The installable **Chat** app supports ChatGPT account sign-in for direct
 Codex chat through device-code authorization or a one-time Codex CLI login
 import. It needs no chat relay or API key; account eligibility and Codex
-limits apply. See [Chat and OAuth](docs/CHATGPT.md).
+limits apply. See [Chat and OAuth](https://github.com/jroark/glaze-apps/blob/main/docs/CHATGPT.md) in glaze-apps.
 
 ## App Store
 
@@ -275,7 +277,7 @@ reports "No Card" and calls fail with `GZ_ENETDOWN`.
 The installable **SomaFM** app streams 51 internet-radio stations, with
 favorites, current-track metadata, and playback that continues after Home.
 It requires the updated audio service and an Ethernet card.
-See [SomaFM radio](docs/SOMAFM.md) for installation and verification.
+See [SomaFM radio](https://github.com/jroark/glaze-apps/blob/main/docs/SOMAFM.md) in glaze-apps for installation and verification.
 
 The BE-300's speaker is fed by a ping-pong DMA block in the companion chip,
 not the VRC4173's AIU; its registers come from WinCE's `wavedev.dll`, as
@@ -345,9 +347,9 @@ NES, Game Boy and Game Boy Color, Master System, Genesis, Game Gear and
 TurboGrafx-16 / PC Engine are installable packages, built against this
 repository's SDK in [glaze-emulators](https://github.com/jroark/glaze-emulators).
 
-Doom is available as the installable `out/pkg/doom.gzp` package, with physical
-buttons, sound effects and saves. Supply your own IWAD; no game data is included.
-See [Doom for Glaze](docs/DOOM.md).
+Doom is an installable package in glaze-apps, with physical buttons, sound
+effects and saves. Supply your own IWAD; no game data is included.
+See [Doom for Glaze](https://github.com/jroark/glaze-apps/blob/main/docs/DOOM.md).
 
 Paired [network debugging](docs/dev/NETWORK_DEBUG.md) supports the USB debugger
 commands over TLS, including screenshots, input scripts and RAM reloads.

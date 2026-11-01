@@ -62,10 +62,11 @@ def immutable(path, data):
     path.write_bytes(data)
 
 def package_dirs(root):
-    """out/pkg here, then the sibling app repositories' builds (EMU_DIR)."""
+    """out/pkg here, then the sibling app repositories' builds (APPS_DIR, EMU_DIR)."""
     root = Path(root)
+    apps = Path(os.environ.get('APPS_DIR', root.parent / 'glaze-apps'))
     emulators = Path(os.environ.get('EMU_DIR', root.parent / 'glaze-emulators'))
-    return [root / 'out/pkg', emulators / 'out/pkg']
+    return [root / 'out/pkg', apps / 'out/pkg', emulators / 'out/pkg']
 
 def find_package(packages, ident):
     for directory in ([packages] if isinstance(packages, Path) else packages):

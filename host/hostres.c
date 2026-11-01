@@ -54,7 +54,9 @@ const void *res_map(const char *name, uint32_t *size)
     char path[256];
     size_t n;
 
-    snprintf(path, sizeof(path), "../assets/gen/%s", name);
+    /* GLAZE_ASSETS lets tests run from outside host/ (glaze-apps). */
+    const char *dir = getenv("GLAZE_ASSETS");
+    snprintf(path, sizeof(path), "%s/%s", dir ? dir : "../assets/gen", name);
     FILE *f = fopen(path, "rb");
     if (!f)
         return NULL;
