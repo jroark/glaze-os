@@ -157,6 +157,16 @@ DTR's control status stage completed, then discard the session at the next
 state transition. Cable presence now represents the configured host connection,
 and debug input waits for configured+DTR before accepting HELLO.
 
+## Over-the-air updates
+
+Once a device runs the physical layout with an OTA-capable SPL, it updates
+its kernel and romfs itself ([OTA updates](OTA.md)): the SPL rewrites
+logical blocks 5-319 from an image staged in the file system and keeps the
+manifest, the SPL and the file system as they are. Installing that first SPL
+takes the USB update below. After an OTA, use a fresh snapshot as the
+`--installed-image` of a later USB update, since the boot blocks no longer
+match the image USB installed.
+
 ## Isolated raw install and restore transactions
 
 `kernel/nand_repair.c` accepts only `PROC_USB` in a RAM boot explicitly marked

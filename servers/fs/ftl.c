@@ -26,6 +26,11 @@
  * two; a real mismatch reports the block bad to
  * Dhara, which relocates its data and calls mark_bad. Marks live in the
  * bad-block table rather than in the spare area.
+ *
+ * Built with FTL_READONLY (and littlefs with LFS_READONLY), this is the SPL's
+ * reader for an OTA update staged in the file system (boot/ota_apply.c,
+ * docs/OTA.md): it never programs or erases, never formats, and refuses to
+ * mount what the file server would have had to repair first.
  */
 
 #include <string.h>
@@ -72,7 +77,9 @@ static struct bbt bbt;
 #define CACHE_N     8
 
 static struct { uint32_t page; uint8_t slot[ECC_SLOT]; } ecc_cache[CACHE_N];
+#ifndef FTL_READONLY
 static unsigned cache_next;
+#endif
 
 /* Checkpoint pages read lately, corrected; page UINT32_MAX = empty. A sector
  * lookup (dhara_map_find) reads the metadata of one checkpoint per radix
@@ -90,12 +97,14 @@ static uint32_t cp_clock;
 static struct { dhara_sector_t sector; dhara_page_t page; uint32_t gen; } sec_cache[SEC_N];
 static uint32_t sec_gen = 1;
 
+#ifndef FTL_READONLY
 static void make_slot(const uint8_t *data, size_t len, uint8_t *slot)
 {
     bch_generate(bch, data, len, slot);
     memset(slot + bch->ecc_bytes, 0xFF, ECC_SLOT - bch->ecc_bytes);
     slot[ECC_SLOT - 1] = ECC_VALID;
 }
+#endif
 
 /* Whether a slot holds a code. The marker is voted on so a flipped bit can't
  * make a code look absent. */
@@ -149,6 +158,7 @@ static bool all_ff(const uint8_t *p, size_t n)
     return true;
 }
 
+#ifndef FTL_READONLY
 static void cache_put(uint32_t page, const uint8_t *slot)
 {
     for (unsigned i = 0; i < CACHE_N; i++) {
@@ -162,6 +172,8 @@ static void cache_put(uint32_t page, const uint8_t *slot)
     cache_next = (cache_next + 1) % CACHE_N;
 }
 
+#endif
+
 static bool cache_get(uint32_t page, uint8_t *slot)
 {
     for (unsigned i = 0; i < CACHE_N; i++) {
@@ -173,6 +185,7 @@ static bool cache_get(uint32_t page, uint8_t *slot)
     return false;
 }
 
+#ifndef FTL_READONLY
 static void cache_drop_block(uint32_t block)
 {
     for (unsigned i = 0; i < CACHE_N; i++) {
@@ -192,6 +205,8 @@ static void cp_drop(uint32_t page)
             cp_cache[i].page = UINT32_MAX;
     }
 }
+
+#endif
 
 static void caches_reset(void)
 {
@@ -218,6 +233,8 @@ static int raw_read(dhara_page_t p, uint8_t *buf)
  * good: an occasional read flip is ECC's job, not a sign of a failing block. */
 #define VERIFY_SLACK    2
 #define ERASED_SLACK    4
+
+#ifndef FTL_READONLY
 
 static bool diff_bits_within(const uint8_t *a, const uint8_t *b, size_t n, unsigned limit)
 {
@@ -256,6 +273,8 @@ static int raw_erase_verify(uint32_t phys_block)
     }
     return 0;
 }
+
+#endif
 
 /* Whether a page reads as erased. Allows a few flipped bits: a search for
  * the end of the journal that took a flip for data would settle on an older
@@ -329,6 +348,23 @@ int dhara_nand_is_bad(const struct dhara_nand *n, dhara_block_t b)
     return (bbt.bad[pb / 8] >> (pb % 8)) & 1;
 }
 
+#ifdef FTL_READONLY
+/* Dhara calls these only to write. */
+void dhara_nand_mark_bad(const struct dhara_nand *n, dhara_block_t b) { (void)n; (void)b; }
+
+int dhara_nand_erase(const struct dhara_nand *n, dhara_block_t b, dhara_error_t *err)
+{
+    dhara_set_error(err, DHARA_E_BAD_BLOCK);
+    return -1;
+}
+
+int dhara_nand_prog(const struct dhara_nand *n, dhara_page_t p, const uint8_t *data,
+                    dhara_error_t *err)
+{
+    dhara_set_error(err, DHARA_E_BAD_BLOCK);
+    return -1;
+}
+#else
 static bool bbt_save(void);
 
 void dhara_nand_mark_bad(const struct dhara_nand *n, dhara_block_t b)
@@ -388,6 +424,7 @@ int dhara_nand_prog(const struct dhara_nand *n, dhara_page_t p, const uint8_t *d
     }
     return 0;
 }
+#endif
 
 int dhara_nand_is_free(const struct dhara_nand *n, dhara_page_t p)
 {
@@ -422,11 +459,16 @@ fail:
 int dhara_nand_copy(const struct dhara_nand *n, dhara_page_t src, dhara_page_t dst,
                     dhara_error_t *err)
 {
+#ifdef FTL_READONLY
+    dhara_set_error(err, DHARA_E_BAD_BLOCK);
+    return -1;
+#else
     uint8_t buf[PAGE];
 
     if (dhara_nand_read(n, src, 0, PAGE, buf, err))
         return -1;
     return dhara_nand_prog(n, dst, buf, err);
+#endif
 }
 
 /* Legacy host models and data-only images have no external bad map. */
@@ -434,6 +476,7 @@ __attribute__((weak)) int flash_raw_is_bad(uint32_t block) { (void)block; return
 
 /* ---- bad-block table storage ---------------------------------------------- */
 
+#ifndef FTL_READONLY
 static bool bbt_save(void)
 {
     uint8_t buf[PAGE];
@@ -452,6 +495,8 @@ static bool bbt_save(void)
     }
     return true;
 }
+
+#endif
 
 static bool bbt_load_copy(uint32_t block, struct bbt *out)
 {
@@ -492,7 +537,11 @@ static bool bbt_load(void)
         changed |= (bbt.bad[i] | factory[i]) != bbt.bad[i];
         bbt.bad[i] |= factory[i];
     }
+#ifdef FTL_READONLY
+    (void)changed;              /* the file server saves it on its next mount */
+#else
     if (changed && !bbt_save()) return false;
+#endif
     stats.bad_blocks = 0;
     for (uint32_t i = 0; i < bbt.blocks; i++)
         stats.bad_blocks += (bbt.bad[i / 8] >> (i % 8)) & 1;
@@ -536,6 +585,7 @@ static int bd_read(const struct lfs_config *c, lfs_block_t block, lfs_off_t off,
     return 0;
 }
 
+#ifndef FTL_READONLY
 static int bd_prog(const struct lfs_config *c, lfs_block_t block, lfs_off_t off,
                    const void *buffer, lfs_size_t size)
 {
@@ -568,15 +618,18 @@ static int bd_sync(const struct lfs_config *c)
 
     return dhara_map_sync(&map, &err) ? lfs_err(err) : 0;
 }
+#endif
 
 static uint8_t lfs_read_buf[PAGE], lfs_prog_buf[PAGE];
 static uint8_t lfs_lookahead[256];
 
 static struct lfs_config cfg = {
     .read = bd_read,
+#ifndef FTL_READONLY
     .prog = bd_prog,
     .erase = bd_erase,
     .sync = bd_sync,
+#endif
     .read_size = PAGE,
     .prog_size = PAGE,
     .block_size = LFS_BLOCK,
@@ -606,6 +659,9 @@ int ftl_mount(lfs_t *lfs, uint32_t blocks)
 
     dhara_map_init(&map, &nand, map_buf, GC_RATIO);
     if (dhara_map_resume(&map, &err)) {
+#ifdef FTL_READONLY
+        return LFS_ERR_CORRUPT;
+#endif
         ftl_log("fs: no flash journal, starting a new one");
         dhara_map_clear(&map);
         fresh = true;
@@ -624,14 +680,19 @@ int ftl_mount(lfs_t *lfs, uint32_t blocks)
      * mountable filesystem is left for ftl_format so nothing is wiped
      * behind the user's back. */
     int rv = lfs_mount(lfs, &cfg);
+#ifdef FTL_READONLY
+    (void)fresh;
+#else
     if (rv && fresh) {
         ftl_log("fs: formatting new flash");
         rv = ftl_format(lfs);
         return rv ? rv : 1;
     }
+#endif
     return rv;
 }
 
+#ifndef FTL_READONLY
 int ftl_format(lfs_t *lfs)
 {
     /* Drop every mapped sector so the old contents stop taking space. */
@@ -641,6 +702,7 @@ int ftl_format(lfs_t *lfs)
 
     return rv ? rv : lfs_mount(lfs, &cfg);
 }
+#endif
 
 void ftl_get_stats(struct ftl_stats *st)
 {

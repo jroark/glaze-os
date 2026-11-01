@@ -7,6 +7,13 @@ The catalog includes Hello, Fifteen, Sketch, Minesweeper, Solitaire, Task Manage
 and the NES, Game Boy, Master System, Genesis, Game Gear and TurboGrafx-16 emulators. The
 emulators include only original demo cartridges; players supply their own ROMs.
 
+Updates also offers Glaze OS updates when the host has an `os/catalog.txt`
+newer than the running OS and the device can install one: a physical NAND
+image with an OTA-capable SPL. The OS update is downloaded to
+`/Library/Updates`, verified by the kernel, and installed by the SPL after a
+reset. See [OTA updates](OTA.md), including `make ota` and
+`publish_appstore.py --os`.
+
 In the web emulator, use network bridge helper version `20261021a` or later
 (printed when it starts). Older helpers can stall icon and package downloads
 or corrupt TLS connections under retransmission. Replace and restart the

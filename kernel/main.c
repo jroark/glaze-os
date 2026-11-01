@@ -108,11 +108,12 @@ void kmain(const struct gz_bootinfo *bi)
     TRACE(6, GZ_TRACE_MAGENTA);
     if (bi)
         console_ram_boot();
-    kprintf("\nGlaze %s booting (PRId 0x%x, Config 0x%x, PMUINT 0x%x)\n",
-            GLAZE_BUILD, read_c0_prid(), read_c0_config(), PMU_INT);
+    kprintf("\nGlaze %s (%s) booting (PRId 0x%x, Config 0x%x, PMUINT 0x%x)\n",
+            GLAZE_VERSION, GLAZE_BUILD, read_c0_prid(), read_c0_config(), PMU_INT);
     BEEP(3);
     take_bootinfo(bi);
     power_boot();               /* a cold boot: no hibernation to resume */
+    ota_boot();                 /* what the SPL did with an OTA journal */
     if (ram_boot)
         kprintf("boot: from RAM: romfs %u KiB at 0x%x, RAM disk %u KiB at 0x%x, NAND %s\n",
                 ram_boot->romfs_size / 1024, ram_boot->romfs_pa, ram_boot->ramfs_blocks * 16,

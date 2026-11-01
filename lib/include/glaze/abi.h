@@ -93,6 +93,8 @@ enum {
     SYS_HWDUMP,            /* privileged, HWDUMP=1 builds: op, buffer (0 = size), length */
     SYS_POWER_STATUS,      /* read-only: struct gz_power_status, its size */
     SYS_POWER_SLEEP,       /* privileged: GZ_SLEEP_* mode, alarm seconds (0 = none) */
+    SYS_OTA_STATUS,        /* read-only: struct gz_ota_status, its size (glaze/ota.h) */
+    SYS_OTA_STAGE,         /* PROC_FLASH: GZ_OTA_OP_*, three arguments (docs/OTA.md) */
     SYS_COUNT
 };
 

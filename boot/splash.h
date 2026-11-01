@@ -51,6 +51,34 @@ static inline void splash_draw(volatile uint16_t *fb)
     splash_bar(fb, 0, SPLASH_BAR_W, SPLASH_TRACK);
 }
 
+/* An OTA update (boot/ota_apply.c) gets a second bar under the first, in
+ * blue, and turns it red if it fails part-way. */
+#define SPLASH_OTA_Y    (SPLASH_BAR_Y + 12)
+#define SPLASH_OTA      0x2C7Fu     /* blue */
+#define SPLASH_FAILED   0xF800u     /* red */
+
+static inline void splash_ota_bar(volatile uint16_t *fb, unsigned from, unsigned to,
+    uint16_t colour)
+{
+    for (unsigned y = 0; y < SPLASH_BAR_H; y++)
+        for (unsigned x = from; x < to; x++)
+            fb[(SPLASH_OTA_Y + y) * SPLASH_PITCH + SPLASH_BAR_X + x] = colour;
+}
+
+static inline void splash_ota(volatile uint16_t *fb, unsigned permille)
+{
+    if (permille > 1000)
+        permille = 1000;
+    unsigned fill = SPLASH_BAR_W * permille / 1000;
+    splash_ota_bar(fb, 0, fill, SPLASH_OTA);
+    splash_ota_bar(fb, fill, SPLASH_BAR_W, SPLASH_TRACK);
+}
+
+static inline void splash_ota_failed(volatile uint16_t *fb)
+{
+    splash_ota_bar(fb, 0, SPLASH_BAR_W, SPLASH_FAILED);
+}
+
 /* Fill the bar to permille/1000; it only ever grows. */
 static inline void splash_progress(volatile uint16_t *fb, unsigned permille)
 {

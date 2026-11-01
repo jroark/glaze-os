@@ -16,6 +16,13 @@ int sys_reboot_ce(struct proc *p)
     machine_reboot_ce();
 }
 
+/* The same reset from a NAND boot: the ROM finds no Windows CE to resume
+ * and loads the SPL, which applies an armed OTA journal (kernel/ota.c). */
+void machine_reboot(void)
+{
+    machine_reboot_ce();
+}
+
 #ifndef REBOOT_TEST
 extern const uint8_t reboot_entry[], reboot_entry_end[];
 

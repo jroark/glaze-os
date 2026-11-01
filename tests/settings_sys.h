@@ -8,6 +8,8 @@ void gz_sleep_ms(uint32_t ms);
 int gz_rtc_get(struct gz_datetime *dt);
 int gz_rtc_set(const struct gz_datetime *dt);
 int gz_sysinfo(struct gz_sysinfo *si);
+#include <glaze/ota.h>
+int gz_ota_status(struct gz_ota_status *st);
 int gz_boot_mode(void);
 int gz_power_status(struct gz_power_status *st);
 int gz_port_lookup(const char *name);

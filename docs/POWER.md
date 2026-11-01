@@ -235,8 +235,9 @@ and GZ_WAKE_* in `glaze/abi.h`) is `kernel/drivers/power.c`:
   - hibernates again unless Power is held or the alarm in the record is
     due;
   - otherwise copies the saved pages back and checks that the kernel's
-    text and read-only data sum to `KERNEL_TEXT_SUM`
-    (`tools/elf_consts.py`, up to `__ro_end`);
+    text and read-only data (`__text_start` to `__ro_end`) sum to the
+    record's `text_sum`, which the kernel computes just before it
+    hibernates. The SPL isn't built against a kernel (docs/OTA.md);
   - then sets HALTIMERRST and jumps to `power_resume_entry`, which redoes
     `start.S`'s VR4131 cache workaround (`cpu_cache_setup`), restores
     Status and returns from `power_save`. The kernel flushes the TLB.

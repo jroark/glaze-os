@@ -23,6 +23,8 @@ int nand_boot_scan(struct nand_boot_map *m, nand_boot_raw_fn read, void *ctx,
 {
     m->corrected = 0;
     m->protected = false;
+    m->journal = NAND_BOOT_NONE;
+    m->journals = 0;
     for (unsigned i = 0; i < 128; i++) m->quarantine[i] = 0;
     for (unsigned i = 0; i < NAND_BOOT_BLOCKS; i++) {
         m->block[i] = NAND_BOOT_NONE;
@@ -31,7 +33,7 @@ int nand_boot_scan(struct nand_boot_map *m, nand_boot_raw_fn read, void *ctx,
     for (unsigned phys = 0; phys < 1024; phys++) {
         uint16_t ids[5];
         bool protected[5];
-        unsigned n = 0, erased = 0;
+        unsigned n = 0, erased = 0, journal = 0;
         bool failed = false, good = false;
         for (unsigned p = 0; p < 5; p++) {
             if (checked(m, read, ctx, phys * 32 + p, allow_no_ecc)) { failed = true; continue; }
@@ -44,6 +46,8 @@ int nand_boot_scan(struct nand_boot_map *m, nand_boot_raw_fn read, void *ctx,
                 protected[n] = false;
                 for (unsigned b = 520; b < 528; b++) protected[n] |= m->raw[b] != 0xFF;
                 n++;
+            } else if (tag[0] == 'G' && tag[1] == 'Z' && tag[2] == 'O' && tag[3] == 'J') {
+                journal++;      /* GZ_OTA_JOURNAL_TAG (glaze/ota.h) */
             } else if (tag[0] == 0xAA && tag[1] == 0x55 && tag[2] == 0xFF) {
                 bool parity = false;
                 for (unsigned b = 520; b < 528; b++) parity |= m->raw[b] != 0xFF;
@@ -63,6 +67,11 @@ int nand_boot_scan(struct nand_boot_map *m, nand_boot_raw_fn read, void *ctx,
             m->block[ids[a]] = (uint16_t)phys;
             m->protected_block[ids[a]] = protected_votes >= 3;
             break;
+        }
+        if (journal >= 3 && !n) {
+            if (m->journal == NAND_BOOT_NONE) m->journal = (uint16_t)phys;
+            m->journals++;
+            continue;
         }
         if (failed || !(good || erased >= 3)) m->quarantine[phys/8] |= 1u << (phys%8);
     }

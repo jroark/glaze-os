@@ -39,7 +39,18 @@ enum {
     FS_SET_END,             /* w2 = handle; truncate/extend at current position */
     FS_NAND_READ,           /* read-only CE logical NAND: w2 byte offset, w3 bytes <= FS_IO_MAX */
     FS_CARD_FORMAT,         /* CF-only FAT16 superfloppy: w2 generation, w3 sector count */
+    FS_OS_UPDATE,           /* OTA (docs/OTA.md): w2 = FS_OTA_*; BEGIN takes buf: path */
 };
+
+/* FS_OS_UPDATE steps. BEGIN checks a staged update file's header with the
+ * kernel and returns the file's size; each STEP streams up to FS_OTA_STEP
+ * more bytes of it to the kernel to verify and returns the bytes done (the
+ * size once it is verified); ARM writes the journal and resets, returning
+ * only on failure. Until ARM or CANCEL, the file can't be changed, and only
+ * the session that began may continue. Rejections are GZ_OTA_ERR codes
+ * (glaze/ota.h). */
+enum { FS_OTA_BEGIN, FS_OTA_STEP, FS_OTA_ARM, FS_OTA_CANCEL };
+#define FS_OTA_STEP_BYTES   (64u * 1024u)
 
 #define FS_O_READ       0x1
 #define FS_O_WRITE      0x2
@@ -101,6 +112,11 @@ int fs_statfs(struct fs_info *info);
 int fs_statvfs(const char *path, struct fs_info *info);
 int fs_format(void);
 int fs_card_format(uint32_t generation, uint32_t sectors);
+/* OTA updates (FS_OS_UPDATE): an update file staged on the flash volume. */
+int fs_ota_begin(const char *path);         /* its size, or an error */
+int fs_ota_step(void);                      /* bytes verified so far, or an error */
+int fs_ota_arm(void);                       /* resets on success */
+int fs_ota_cancel(void);
 
 /* Whole-file helpers: bytes read (up to max) or written, or an error. */
 int fs_read_file(const char *path, void *buf, uint32_t max);

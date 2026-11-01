@@ -654,6 +654,28 @@ wince-nand-test: ../tests/wince_assets_native.c ../tests/wince_nand_assets.py ..
 	python3 ../tests/wince_nand_assets.py
 .PHONY: wince-nand-test
 
+# OTA updates (docs/OTA.md): the kernel's verification and journal and the
+# SPL's apply engine over the read-only flash stack, on a NAND model with
+# power cuts, a failing block and a damaged staged file (tests/ota_test.py).
+OTA_TP := ../third_party/puff/puff.c ../third_party/littlefs/lfs.c ../third_party/littlefs/lfs_util.c \
+    ../third_party/dhara/dhara/map.c ../third_party/dhara/dhara/journal.c ../third_party/dhara/dhara/error.c \
+    ../third_party/dhara/ecc/bch.c ../third_party/dhara/ecc/gf13.c \
+    $(addprefix ../third_party/wolfssl/wolfcrypt/src/,ed25519.c ge_low_mem.c fe_low_mem.c sha512.c sha256.c)
+OTA_DEFS := -I../third_party/littlefs -I../third_party/dhara -I../third_party/puff -I../third_party/wolfssl -I../kernel/crypto \
+    -I../kernel -DWOLFSSL_USER_SETTINGS -DFTL_READONLY -DLFS_READONLY -DLFS_NO_MALLOC -DLFS_NO_DEBUG \
+    -DLFS_NO_WARN -DLFS_NO_ERROR -DLFS_NO_ASSERT
+OTA_TP_OBJS := $(patsubst ../third_party/%.c,../out/host/ota.o/%.o,$(OTA_TP))
+$(OTA_TP_OBJS): ../out/host/ota.o/%.o: ../third_party/%.c
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O2 -g -w $(OTA_DEFS) -c -o $@ $<
+../out/host/ota-test: ../tests/ota.c ../boot/ota_apply.c ../boot/ota_apply.h ../kernel/ota_stage.c ../kernel/ota_stage.h \
+    ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c ../servers/fs/ftl.c ../lib/include/glaze/ota.h $(OTA_TP_OBJS)
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined $(OTA_DEFS) -o $@ ../tests/ota.c ../boot/ota_apply.c \
+	    ../kernel/ota_stage.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c ../servers/fs/ftl.c $(OTA_TP_OBJS)
+ota-test: ../out/host/ota-test mkfsimg
+	python3 ../tests/ota_test.py ./mkfsimg ../out/host/ota-test
+.PHONY: ota-test
+
 # Production early boot I/O with fake registers and failure injection.
 boot-init-test: ../tests/spl_io.c ../boot/spl.c ../kernel/drivers/nand.c ../tests/timer_boot.c ../kernel/timer.c ../tests/irq_boot.c ../kernel/drivers/irq.c ../tests/rtc_boot.c ../kernel/drivers/rtc.c
 	@mkdir -p ../out/host

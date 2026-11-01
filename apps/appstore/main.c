@@ -1,4 +1,7 @@
-/* Native curated App Store, with the two tabs Search and Updates. */
+/* Native curated App Store, with the two tabs Search and Updates. Updates
+ * also offers Glaze OS updates (docs/OTA.md): downloaded to the flash,
+ * verified by the kernel through the file server, then installed by the SPL
+ * after a reset. */
 #include "catalog.h"
 #include "worker.h"
 #include <glaze/fs.h>
@@ -28,6 +31,14 @@ static unsigned generation;
 static int kind, fetch_index, received;
 static char target_root[8];
 static uint32_t last_poll, last_draw;
+/* The OS update on offer, and this device's OTA state. */
+static struct store_os os;
+static struct gz_ota_status ota;
+static bool os_known, os_update, os_pending, os_confirm, os_verifying;
+static uint32_t os_done;
+static gfx_rect os_ok, os_cancel;
+static char ota_note[96];
+#define KIND_OS 4               /* `kind` for an OS download */
 static int view_bottom(void)
 {
     return editing ? UI_H - ui_keyboard_height() : UI_H - UI_TAB_H - 22;
@@ -38,6 +49,7 @@ static int list_height(void)
 }
 static void redraw(void);
 static void start_install(int i, const char *root);
+static void os_install(const char *path);
 static void rebuild(void)
 {
     nrows = 0;
@@ -50,12 +62,18 @@ static void rebuild(void)
 static void update_badge(void)
 {
     static int last_badge = -1;
-    int updates = 0;
+    int updates = os_update;
     for (int i = 0; i < catalog.count; i++) updates += local[i].update;
     if (last_badge != updates) {
         ui_set_badge(updates);
         last_badge = updates;
     }
+}
+static void os_check(void)
+{
+    os_update = os_known && (ota.flags & GZ_OTA_S_SUPPORTED) && ota.spl_version >= os.spl_min &&
+                store_version_cmp(os.version, ota.version) > 0;
+    update_badge();
 }
 static void installed(void)
 {
@@ -165,6 +183,12 @@ static void schedule(void)
         begin_fetch(1, -1);
         return;
     }
+    if (os_pending) {
+        os_pending = false;
+        struct store_job job = {.kind = STORE_OS_CATALOG, .index = -1};
+        submit(&job);
+        return;
+    }
     if (scan_pending) {
         struct store_catalog *snapshot = malloc(sizeof(*snapshot));
         if (snapshot) {
@@ -251,7 +275,7 @@ static bool step_worker(void)
     struct store_result r;
     int bytes;
     bool got = store_worker_poll(&r, &bytes);
-    bool changed = fetch && kind == 3 && bytes != received && gz_time_ms() - last_draw >= 150;
+    bool changed = fetch && kind >= 3 && bytes != received && gz_time_ms() - last_draw >= 150;
     received = bytes;
     if (!got) return changed;
     worker_busy = fetch = false;
@@ -264,9 +288,26 @@ static bool step_worker(void)
         if (r.catalog) accept_catalog(r.catalog);
         if (r.kind == STORE_REFRESH) {
             online = r.catalog != NULL;
-            strlcpy(message, online ? "Browse something new." :
+            os_pending = online;
+            strlcpy(message, online ? (*ota_note ? ota_note : "Browse something new.") :
                     (*r.message ? r.message : "Cannot load the store. Please Retry."), sizeof(message));
+            if (online)
+                *ota_note = 0;
         }
+        changed = true;
+    } else if (r.kind == STORE_OS_CATALOG) {
+        /* A store without an OS catalog just offers no OS update. */
+        if (r.os) {
+            os = *r.os;
+            os_known = true;
+        }
+        os_check();
+        changed = true;
+    } else if (r.kind == STORE_OS_DOWNLOAD) {
+        if (r.error || !*r.package)
+            strlcpy(message, *r.message ? r.message : "Download interrupted. Please Retry.", sizeof(message));
+        else
+            os_install(r.package);
         changed = true;
     } else if (r.kind == STORE_ICON || r.kind == STORE_ICON_CACHE) {
         if (r.data && r.index >= 0 && r.index < catalog.count) {
@@ -317,6 +358,74 @@ static void start_install(int i, const char *root)
     snprintf(message, sizeof(message), "Downloading %s...", catalog.apps[i].name);
     if (!begin_fetch(3, i))
         all_updates = false;
+}
+/* ---- OS updates ---------------------------------------------------------------- */
+
+static const char *os_error(int rv)
+{
+    switch (GZ_OTA_ERRNO(rv)) {
+    case 0:
+        return fs_strerror(rv);
+    case GZ_OTA_E_SIGNATURE:
+        return "This update isn't signed by Glaze.";
+    case GZ_OTA_E_DIGEST:
+    case GZ_OTA_E_FORMAT:
+        return "The update is damaged. Please Retry.";
+    case GZ_OTA_E_VERSION:
+        return "This version is already installed.";
+    case GZ_OTA_E_SPL:
+        return "This device can't install updates itself.";
+    default:
+        return "Cannot prepare the update. Please Retry.";
+    }
+}
+/* Before asking: the SPL writes the flash for minutes after the reset. */
+static bool os_ready(void)
+{
+    struct gz_power_status p;
+    if (gz_power_status(&p) == 0 && !(p.flags & GZ_POWER_AC) &&
+        !((p.flags & GZ_POWER_VALID) && p.percent >= 50)) {
+        strlcpy(message, "Connect the power adapter to update.", sizeof(message));
+        return false;
+    }
+    return true;
+}
+static void os_download(void)
+{
+    stop_fetch();
+    struct store_job job = {.kind = STORE_OS_DOWNLOAD, .index = -1, .os = os};
+    submit(&job);
+    kind = KIND_OS;
+    fetch_index = -1;
+    fetch = true;
+    received = 0;
+    snprintf(message, sizeof(message), "Downloading Glaze OS %s...", os.version);
+}
+/* The kernel checks the image as the file server streams it through, a
+ * step at a time; events still drain between steps, so Home suspends this
+ * as usual. Arming resets the device, and the SPL installs it. */
+static void os_install(const char *path)
+{
+    struct gz_input_event e;
+    os_verifying = true;
+    os_done = 0;
+    redraw();
+    int size = fs_ota_begin(path), rv = size < 0 ? size : 0;
+    while (rv >= 0 && rv < size) {
+        rv = fs_ota_step();
+        if (rv >= 0)
+            os_done = (uint32_t)rv;
+        while (ui_next_event(&e, 0))
+            ;
+        redraw();
+    }
+    if (rv >= 0) {
+        printf("appstore: Glaze OS %s verified; resetting to install\n", os.version);
+        rv = fs_ota_arm();
+    }
+    os_verifying = false;
+    strlcpy(message, os_error(rv), sizeof(message));
+    fs_remove(path);
 }
 static void wrapped(gfx_surface *s, const char *text, int y, int width, const gfx_font *f, uint32_t color)
 {
@@ -381,10 +490,13 @@ static void draw(gfx_surface *s)
                                               : "Retry",
                                      true, false, false, 0);
         if (tab) {
+            char title[40];
+            snprintf(title, sizeof(title), "Glaze OS %s", os.version);
             gfx_fill(s, gfx_r(0, 30, 240, 33), 0xE9EDF3);
-            gfx_text(s, 10, 41, ui_font(FONT_B11), "Available updates", 0x54657E, 255);
+            gfx_text_fit(s, 10, 41, 138, ui_font(FONT_B11), os_update ? title : "Available updates", 0x54657E,
+                         255);
             all_button = gfx_r(153, 35, 79, 23);
-            ui_draw_button(s, all_button, "Update All", false);
+            ui_draw_button(s, all_button, os_update ? "Install" : "Update All", false);
         } else {
             gfx_vgradient(s, gfx_r(0, 30, 240, 33), 0xCFD6DF, 0xAFBBCB, 255);
             gfx_round_rect(s, gfx_r(7, 35, 226, 23), 11, 0x8C9AAF, 255);
@@ -399,7 +511,11 @@ static void draw(gfx_surface *s)
         }
         gfx_set_clip(s, list.area);
         ui_list_draw(s, &list, draw_row, NULL);
-        if (!nrows) {
+        if (!nrows && tab && os_update) {
+            gfx_text_center(s, 4, LIST_Y + 35, 232, ui_font(FONT_B14), "A Glaze update is ready", 0x60718A, 255);
+            wrapped(s, *os.notes ? os.notes : "Tap Install to update Glaze.", LIST_Y + 57, 216,
+                    ui_font(FONT_R11), 0x718097);
+        } else if (!nrows) {
             gfx_text_center(s, 4, LIST_Y + 35, 232, ui_font(FONT_B14),
                             tab      ? "All up to date"
                             : *query ? "No results"
@@ -420,17 +536,22 @@ static void draw(gfx_surface *s)
         gfx_text_fit(s, 7, UI_H - UI_TAB_H - 16, 226, ui_font(FONT_R10), message, 0x4C5F79, 255);
         ui_draw_tabbar(s, tabs, 2, tab);
     }
-    if (fetch && kind == 3) {
+    if ((fetch && kind >= 3) || os_verifying) {
+        bool is_os = os_verifying || kind == KIND_OS;
+        char name[32];
+        snprintf(name, sizeof(name), "Glaze OS %s", os.version);
         gfx_fill_alpha(s, gfx_r(0, 0, UI_W, UI_H), 0x0E213A, 165);
         gfx_round_rect_vgradient(s, gfx_r(18, 88, 204, 131), 10, 0x6C819F, 0x263F64, 255);
-        gfx_text_center(s, 25, 101, 190, ui_font(FONT_B14), installing ? "Installing" : "Downloading",
+        gfx_text_center(s, 25, 101, 190, ui_font(FONT_B14),
+                        os_verifying ? "Verifying" : installing ? "Installing" : "Downloading", 0xFFFFFF, 255);
+        gfx_text_center(s, 25, 123, 190, ui_font(FONT_R12), is_os ? name : catalog.apps[fetch_index].name,
                         0xFFFFFF, 255);
-        gfx_text_center(s, 25, 123, 190, ui_font(FONT_R12), catalog.apps[fetch_index].name, 0xFFFFFF, 255);
         gfx_round_rect(s, gfx_r(34, 148, 172, 10), 5, 0x20334E, 255);
-        int w = (int)((uint64_t)received * 168 / catalog.apps[fetch_index].size);
+        uint32_t total = is_os ? os.size : catalog.apps[fetch_index].size;
+        int w = (int)((uint64_t)(os_verifying ? os_done : (uint32_t)received) * 168 / MAX(total, 1u));
         if (w > 0)
             gfx_round_rect_vgradient(s, gfx_r(36, 150, MIN(w, 168), 6), 3, 0x9BDCFC, 0x2D8CF0, 255);
-        if (installing)
+        if (installing || os_verifying)
             gfx_text_center(s, 25, 180, 190, ui_font(FONT_R12), "Please wait...", 0xFFFFFF, 255);
         else
             ui_draw_button(s, gfx_r(66, 174, 108, 29), "Cancel", false);
@@ -444,6 +565,12 @@ static void draw(gfx_surface *s)
         ui_draw_button(s, flash_button, "Install on Flash", false);
         ui_draw_button(s, card_button, "Install on Card", false);
         gfx_text_center(s, 20, 202, 200, ui_font(FONT_R12), "Cancel", 0xFFFFFF, 255);
+    }
+    if (os_confirm) {
+        char title[40];
+        snprintf(title, sizeof(title), "Install Glaze OS %s?", os.version);
+        ui_draw_alert(s, title, "Glaze restarts to install it.\nKeep the adapter connected.", "Cancel", "Install",
+                      &os_cancel, &os_ok, -1);
     }
 }
 static void redraw(void)
@@ -491,6 +618,10 @@ int main(void)
     ui_list_init(&list, gfx_r(0, LIST_Y, UI_W, list_height()), ROW_H);
     rebuild();
     strlcpy(message, "Connecting to the App Store...", sizeof(message));
+    if (gz_ota_status(&ota) == 0 && ota.last_result == GZ_OTA_APPLIED)
+        snprintf(ota_note, sizeof(ota_note), "Glaze OS %.15s is installed.", ota.last_version);
+    else if (ota.last_result == GZ_OTA_REJECTED)
+        snprintf(ota_note, sizeof(ota_note), "Glaze OS %.15s could not be installed.", ota.last_version);
     redraw();
     worker_ok = store_worker_start();
     if (worker_ok) {
@@ -514,7 +645,16 @@ int main(void)
                 redraw();
                 continue;
             }
-            if (fetch && kind == 3) {
+            if (os_confirm) {
+                if (e.type == GZ_EV_TOUCH_UP) {
+                    os_confirm = false;
+                    if (gfx_rect_contains(os_ok, e.x, e.y) && os_ready())
+                        os_download();
+                    redraw();
+                }
+                continue;
+            }
+            if (fetch && kind >= 3) {
                 if (e.type == GZ_EV_TOUCH_UP && gfx_rect_contains(gfx_r(66, 174, 108, 29), e.x, e.y)) {
                     all_updates = false;
                     stop_fetch();
@@ -599,8 +739,12 @@ int main(void)
                         cursor = strlen(query);
                         rebuild();
                     } else if (tab && gfx_rect_contains(all_button, e.x, e.y)) {
-                        all_updates = true;
-                        next_update();
+                        if (os_update)
+                            os_confirm = os_ready();
+                        else {
+                            all_updates = true;
+                            next_update();
+                        }
                     }
                 }
             }
@@ -618,7 +762,7 @@ int main(void)
         }
         if (worker_ok)
             dirty |= step_worker();
-        if (gz_time_ms() - last_poll > 2000 && !(fetch && kind == 3))
+        if (gz_time_ms() - last_poll > 2000 && !(fetch && kind >= 3))
             scan_pending = true;
         schedule();
         dirty |= selected >= 0 ? ui_scroll_step(&detail_scroll) : ui_scroll_step(&list.sc);

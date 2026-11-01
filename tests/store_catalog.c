@@ -64,5 +64,32 @@ int main(int argc, char **argv)
     assert(!store_parse(&catalog, text, n + extra));
     assert(store_parse(&catalog, "GZSTORE1\n", 9) && !catalog.count);
     free(text);
+
+    /* The OS update record (tools/mkota.py's os/catalog.txt). */
+    static const char os_text[] = "GZOS1\n[os]\nversion=1.1\nbuild=abc\npackage=os/glaze-1.1.gzu\n"
+        "size=4900000\nsha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        "spl_min=2\nnotes=Faster Notes.\n";
+    struct store_os os;
+    assert(store_os_parse(&os, os_text, strlen(os_text)));
+    assert(!strcmp(os.version, "1.1") && !strcmp(os.package, "os/glaze-1.1.gzu") &&
+           os.size == 4900000 && os.spl_min == 2 && !strcmp(os.notes, "Faster Notes."));
+    char os_copy[sizeof(os_text)];
+    for (size_t i = 6; i < strlen(os_text); i++) {
+        /* Removing any required field's line makes it invalid. */
+        if (os_text[i - 1] != '\n' || !strncmp(os_text + i, "build", 5) || !strncmp(os_text + i, "notes", 5))
+            continue;
+        const char *eol = strchr(os_text + i, '\n');
+        size_t keep = i;
+        memcpy(os_copy, os_text, keep);
+        strcpy(os_copy + keep, eol + 1);
+        assert(!store_os_parse(&os, os_copy, strlen(os_copy)));
+    }
+    strcpy(os_copy, os_text);
+    strstr(os_copy, "size=")[5] = '9';      /* 9900000: too large */
+    assert(!store_os_parse(&os, os_copy, strlen(os_copy)));
+    strcpy(os_copy, os_text);
+    strstr(os_copy, "package=")[8] = '/';   /* an absolute path */
+    assert(!store_os_parse(&os, os_copy, strlen(os_copy)));
+    assert(!store_os_parse(&os, "GZOS2\n", 6));
     puts("store catalog: PASS");
 }

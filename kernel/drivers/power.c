@@ -213,6 +213,7 @@ static void verify_after(void)
 /* RAM the boot ROM works in, copied aside for the SPL to put back
  * (kernel/resume.h). Last before HIBERNATE, so little changes after. */
 extern uint8_t __kernel_end[];
+extern const uint8_t __text_start[], __ro_end[];
 
 static bool save_page(uint32_t pa)
 {
@@ -295,6 +296,10 @@ static int hibernate_until(uint64_t alarm)
 #ifdef GLAZE_HIBERNATE_VERIFY
     verify_before();
 #endif
+    /* What the SPL checks once it has put low RAM back. */
+    record->text_va = (uint32_t)(uintptr_t)__text_start;
+    record->text_len = (uint32_t)(__ro_end - __text_start) & ~3u;
+    record->text_sum = gz_resume_sum((const uint32_t *)__text_start, record->text_len);
     record->magic = GZ_RESUME_MAGIC;
     dcache_writeback_all();
     PMU_INT = PMUINT_CLEAR_ALL;
