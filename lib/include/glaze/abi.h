@@ -178,8 +178,12 @@ enum {
     GZ_KEY_SELECT_RIGHT,
     GZ_KEY_SELECT_HOME,
     GZ_KEY_SELECT_END,
+    /* The printed touch icons below the LCD, left to right, for a front app
+     * that claimed them (sb_shared.hard_icons, glaze/hardicon.h). */
+    GZ_KEY_ICON1,
+    GZ_KEY_ICON7 = GZ_KEY_ICON1 + 6,
 };
-#define GZ_KEY_LAST GZ_KEY_SELECT_END
+#define GZ_KEY_LAST GZ_KEY_ICON7
 
 #define GZ_INPUT_STOWAWAY   0x1u
 

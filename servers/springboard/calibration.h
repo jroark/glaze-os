@@ -18,4 +18,8 @@ bool sb_calibration_expire(struct sb_calibration *s, uint32_t now);
 void sb_calibration_cancel(struct sb_calibration *s);
 /* Returns true when this touch must go directly to the sampling app. */
 bool sb_calibration_input(const struct sb_calibration *s, struct gz_input_event *ev);
+/* The touch's mapped point before sb_calibration_input clamps it to the LCD,
+ * so rows below it (the hard icons) can be told apart. */
+void sb_calibration_point(const struct sb_calibration *s, const struct gz_input_event *ev,
+                          struct touch_point *p);
 #endif

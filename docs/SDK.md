@@ -206,6 +206,13 @@ the process; it resumes with `GZ_EV_APP_ACTIVATE`. A suspended app may be
 killed without another callback. Background networking apps can explicitly
 opt into `ui_set_background_running(true)` and should block while idle.
 
+The BE-300's seven printed touch icons below the screen run whatever the
+user assigned in Settings → Icon Buttons. An app that wants some of them
+while it is in front calls `ui_claim_hard_icons(mask)` (bit n is icon n + 1,
+left to right); those then arrive as `GZ_EV_KEY_DOWN`/`GZ_EV_KEY_UP` with
+`GZ_KEY_ICON1` + n instead, unless the user turned App Overrides off. See
+`docs/HARD_ICONS.md`.
+
 Write saves under `<res_bundle()>/data/`, not in `res/` or romfs.
 Installation creates a bundle under `/Applications/<id>.app` or
 `/Card/Applications/<id>.app`. Updates preserve `data/`; uninstall removes
