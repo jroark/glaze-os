@@ -33,6 +33,11 @@ bool ui_in_background(void);
  * SpringBoard freezes it anyway a second later. An app with work to do in
  * the background (a network connection) turns suspension off here. */
 void ui_set_background_running(bool on);
+/* While in front, the printed icons below the screen whose bits are set
+ * (bit n = icon n + 1, left to right) arrive as GZ_KEY_ICON1 + n key events
+ * instead of running the user's assignment, unless the user turned that off
+ * in Settings → Icon Buttons. */
+void ui_claim_hard_icons(unsigned mask);
 bool ui_has_hardware_keyboard(void);
 /* Height reserved for the on-screen keyboard (zero with a dock). */
 int ui_keyboard_height(void);

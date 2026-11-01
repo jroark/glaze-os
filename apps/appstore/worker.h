@@ -6,13 +6,18 @@
 #include <glaze/pkg.h>
 
 #define STORE_CACHE "/Library/Caches/AppStore"
+/* OS updates are staged here for the SPL (docs/OTA.md); the boot job
+ * clears what an earlier run left. */
+#define STORE_UPDATES "/Library/Updates"
 enum store_job_kind {
     STORE_BOOT,
     STORE_REFRESH,
     STORE_ICON_CACHE,
     STORE_ICON,
     STORE_SCAN,
-    STORE_DOWNLOAD
+    STORE_DOWNLOAD,
+    STORE_OS_CATALOG,
+    STORE_OS_DOWNLOAD
 };
 struct store_local {
     char bundle[PKG_BUNDLE_MAX];
@@ -29,6 +34,7 @@ struct store_job {
     unsigned generation;
     int index;
     struct store_app app;
+    struct store_os os;         /* STORE_OS_DOWNLOAD */
     char root[8];
     /* Ownership passes to the worker, including when cancelled. */
     struct store_catalog *catalog;
@@ -39,6 +45,7 @@ struct store_result {
     int index, error, status, received;
     char message[96];
     struct store_catalog *catalog;
+    struct store_os *os;        /* STORE_OS_CATALOG */
     struct store_local *local;
     void *data;
     gfx_image image;

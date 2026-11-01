@@ -12,12 +12,17 @@ struct nand_boot_map {
     bool protected;
     uint8_t protected_block[NAND_BOOT_BLOCKS];
     uint8_t quarantine[128]; /* conservative CE tag/ECC physical inventory */
+    uint16_t journal;        /* an OTA journal's physical block (glaze/ota.h), or NONE */
+    uint16_t journals;       /* how many blocks carried one */
 };
 typedef int (*nand_boot_raw_fn)(void *ctx, uint32_t physical_page, uint8_t raw[528]);
 /* Both operations fail closed on read/ECC error, missing or duplicate mapping.
  * allow_no_ecc exists for data-only emulator images with synthetic spare tags.
  * Once any real parity is observed, every selected tag quorum and content
  * page must have valid ECC even in that compatibility mode. */
+/* The scan also finds an OTA journal block: one whose first five pages
+ * carry at least three GZ_OTA_JOURNAL_TAG spare tags and no logical tag.
+ * It is neither mapped nor quarantined. */
 int nand_boot_scan(struct nand_boot_map *map, nand_boot_raw_fn read, void *ctx,
                    bool allow_no_ecc);
 int nand_boot_read(struct nand_boot_map *map, nand_boot_raw_fn read, void *ctx,

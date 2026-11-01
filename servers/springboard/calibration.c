@@ -85,8 +85,14 @@ bool sb_calibration_input(const struct sb_calibration *s, struct gz_input_event 
     if (s->owner && !s->preview)
         return true;
     struct touch_point p;
-    touch_apply(s->owner && s->preview ? &s->candidate : &s->saved, ev->x, ev->y, &p);
+    sb_calibration_point(s, ev, &p);
     ev->x = (int16_t)MAX(0, MIN(GZ_FB_WIDTH - 1, p.x));
     ev->y = (int16_t)MAX(0, MIN(GZ_FB_HEIGHT - 1, p.y));
     return false;
+}
+
+void sb_calibration_point(const struct sb_calibration *s, const struct gz_input_event *ev,
+                          struct touch_point *p)
+{
+    touch_apply(s->owner && s->preview ? &s->candidate : &s->saved, ev->x, ev->y, p);
 }

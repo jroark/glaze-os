@@ -80,11 +80,52 @@ static volatile uint8_t *reg8(uint32_t a)
     else assert((a & 0xffff) == 0x8680);
     return &byte_reg;
 }
+/* The hibernate resume (spl_resume): PMU, RTC and button halfwords, a RAM
+ * model for the record, the kernel text and the saved pages, and the
+ * HIBERNATE and the jump into the kernel as flags. */
+static volatile uint16_t pmu_int, pmu_cnt, etime16[3], keys_latch, keys_word;
+static uint16_t pmu_int_written;
+static volatile uint16_t *reg16(uint32_t a)
+{
+    switch (a) {
+    case 0xAF0000C0u: return &pmu_int;
+    case 0xAF0000C2u: return &pmu_cnt;
+    case 0xAF000100u: case 0xAF000102u: case 0xAF000104u: return &etime16[(a - 0xAF000100u) / 2];
+    case 0xAA00A042u: return &keys_latch;
+    case 0xAA00A044u: return &keys_word;
+    }
+    assert(!"unexpected 16-bit register");
+    return NULL;
+}
+#define RAM_BYTES 0x60000u
+static uint32_t ram[RAM_BYTES / 4];
+static unsigned hibernations, resumes;
+static jmp_buf resumed;
+#define SPL_REG16(a) (*reg16(a))
+#define SPL_RESUME_RECORD ((struct gz_resume *)&ram[GZ_RESUME_PA / 4])
+#define SPL_KERNEL_TEXT(va) ((const volatile uint32_t *)&ram[((va) & 0x1FFFFFFFu) / 4])
+#define SPL_SAVED_PAGE(pa) ((volatile uint32_t *)&ram[(pa) / 4])
+#define SPL_HIBERNATE() (hibernations++, pmu_int_written = pmu_int)
+#define SPL_RESUME(r) (resumes++, longjmp(resumed, 1))
 #define SPL_REG32(a) (*reg32(a))
 #define SPL_REG8(a) (*reg8(a))
 #define SPL_TEST_STOP() longjmp(stopped, 1)
 #define SPL_COUNT() (fake_count += 50000u)  /* 5 ms a read */
 #include "../boot/spl.c"
+/* OTA is tested by ota-test (tests/ota.c); here only its CRC is needed. */
+int ota_apply(const struct ota_nand *io, struct nand_boot_map *map, struct gz_spl_info *info)
+{
+    (void)io; (void)map; info->ota_result = GZ_OTA_NONE;
+    return OTA_APPLY_NONE;
+}
+uint32_t ota_crc32(uint32_t crc, const volatile uint8_t *p, uint32_t n)
+{
+    return gz_crc32(crc, (const void *)p, n);
+}
+bool ota_kernel_header_ok(const struct gz_kernel_header *h)
+{
+    return h->magic == GZ_KHDR_MAGIC;
+}
 /* The kernel reader must also stop before exposing a timed-out page. */
 #define GLAZE_HW_H
 #define NAND_PAGES_PER_BLOCK 32u
@@ -109,8 +150,77 @@ static volatile uint8_t *reg8(uint32_t a)
 #undef nand_read_page
 void panic(const char *fmt, ...) { (void)fmt; longjmp(stopped, 1); }
 
+/* A record as power.c leaves it, with page 0x10000 (kernel text, zeros
+ * here) saved to 0x50000; the boot ROM has since overwritten the original. */
+static struct gz_resume *hibernated(uint32_t alarm)
+{
+    struct gz_resume *r = (struct gz_resume *)&ram[GZ_RESUME_PA / 4];
+    memset(ram, 0, sizeof(ram));
+    r->magic = GZ_RESUME_MAGIC;
+    r->entry = 0x8001EB40u;
+    r->alarm_lo = alarm;
+    r->nsaved = 1;
+    r->saved[0].pa = 0x10000;
+    r->saved[0].copy = 0x50000;
+    r->text_va = 0x80010000u;           /* power.c's sum of the kernel text: zeros */
+    r->text_len = 0x1000u;
+    r->text_sum = 0;
+    ram[0x10000 / 4] = 0x00010000u;     /* the ROM's probe */
+    pmu_int = 0; pmu_cnt = 0; keys_latch = keys_word = 0;
+    etime16[0] = etime16[1] = etime16[2] = 0;
+    hibernations = resumes = 0;
+    spl_resume_failed = NULL;
+    return r;
+}
+
+static bool try_resume(void)
+{
+    if (setjmp(resumed))
+        return true;
+    spl_resume();
+    return false;
+}
+
+static void resume_tests(void)
+{
+    struct gz_resume *r = hibernated(0);
+    r->magic = 0;                       /* an ordinary boot */
+    assert(!try_resume() && !spl_resume_failed && ram[0x10000 / 4]);
+
+    r = hibernated(0);                  /* Power+Reset: boot afresh */
+    pmu_int = 0x0008;
+    assert(!try_resume() && !r->magic && spl_resume_failed && spl_resume_value == 8);
+
+    r = hibernated(0);                  /* Power held: put low RAM back and resume */
+    keys_word = 0x8000;
+    assert(try_resume() && r->wake == 1 && !r->magic && (pmu_cnt & 4) && !hibernations);
+    assert(!ram[0x10000 / 4]);
+
+    r = hibernated(5000);               /* the alarm, not yet */
+    etime16[0] = 4999;
+    assert(try_resume() && hibernations == 1 && r->rests == 1 && pmu_int_written == 0xFB3B);
+    assert(r->wake == 1);               /* HIBERNATE didn't take: awake, not stuck */
+    r = hibernated(5000);               /* the alarm, due */
+    etime16[0] = 5000;
+    assert(try_resume() && r->wake == 2 && !hibernations);
+    r = hibernated(0x10000u);           /* the alarm across a halfword */
+    etime16[1] = 1;
+    assert(try_resume() && r->wake == 2);
+
+    r = hibernated(0);                  /* a record without the kernel's text range */
+    keys_word = 0x8000;
+    r->text_len = 0;
+    assert(!try_resume() && !r->magic && spl_resume_failed && !resumes);
+
+    r = hibernated(0);                  /* the saved copy is no good */
+    keys_word = 0x8000;
+    ram[0x50000 / 4 + 7] = 1;
+    assert(!try_resume() && !r->magic && spl_resume_failed && !resumes);
+}
+
 int main(void)
 {
+    resume_tests();
     regs[0x1CC0 / 4] = 1;   /* DMA owning the NAND at the handoff */
     nand_init(); flush();
     assert(resets == 1 && regs[0x1CC0 / 4] == 1);
@@ -164,5 +274,5 @@ int main(void)
     if (!setjmp(stopped)) { kernel_nand_read_page(12, data); assert(!"kernel timeout returned"); }
     flush();
     assert(reads == old_reads && !regs[0xA410 / 4]);
-    puts("spl-io: NAND DMA and stream only after Casio SPL gates, kernel DMA reclaim, page boundaries, full spare drain, gated and absent serial, fatal timeout and its error beeps PASS");
+    puts("spl-io: NAND DMA and stream only after Casio SPL gates, kernel DMA reclaim, page boundaries, full spare drain, gated and absent serial, fatal timeout and its error beeps, hibernate resume, sleeping on and its refusals PASS");
 }

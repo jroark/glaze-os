@@ -50,6 +50,12 @@ void buzzer_beeps(unsigned n)
     DISP_BL_GATE = gate;
 }
 
+void buzzer_stop(void)
+{
+    BUZZ_CONTROL = 0;
+    buzzer_until = 0;
+}
+
 void buzzer_poll(void)
 {
     if (buzzer_until && time_us() >= buzzer_until) {

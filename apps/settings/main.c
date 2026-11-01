@@ -1,14 +1,17 @@
-/* Settings: network, sounds, wallpaper, date & time, passcode, touch, about. */
+/* Settings: network, sounds, wallpaper, date & time, passcode, touch, icon buttons, about. */
 
 #include <glaze/audio.h>
+#include <glaze/builtin_apps.h>
 #include <glaze/debug_net.h>
 #include <glaze/fs.h>
+#include <glaze/hardicon.h>
 #include <glaze/display.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
 #include <glaze/notify.h>
 #include <glaze/ntp.h>
 #include <glaze/passcode.h>
+#include <glaze/pkg.h>
 #include <glaze/power.h>
 #include <glaze/prefs.h>
 #include <glaze/sys.h>
@@ -19,7 +22,10 @@
 #include <string.h>
 
 enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
-            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD, V_BATTERY };
+            V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD, V_BATTERY,
+            V_SLEEP, V_SLEEP_MODE, V_ICONS, V_ICON_ACTION };
+
+#define ICON_CHOICES    64      /* what V_ICON_ACTION lists */
 
 enum {
     R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
@@ -39,6 +45,10 @@ enum {
     R_REBOOT_CE, R_REBOOT_CONFIRM, R_DEBUG, R_DEBUG_TOGGLE, R_DEBUG_IMPORT,
     R_INPUT_METHOD, R_INPUT_KEYS, R_INPUT_WRITE,
     R_BATTERY, R_BATTERY_PCT,
+    R_SLEEP, R_SLEEP_MODE0, R_SLEEP_MODE1, R_SLEEP_DOWN0, R_SLEEP_UP0, R_SLEEP_DOWN1, R_SLEEP_UP1,
+    R_SLEEP_PICK0, R_SLEEP_PICK_LAST = R_SLEEP_PICK0 + 2,
+    R_ICONS, R_ICON0, R_ICON_APPS = R_ICON0 + HARDICON_COUNT,
+    R_ICONACT0, R_ICONACT_LAST = R_ICONACT0 + ICON_CHOICES - 1,
 };
 
 struct hit {
@@ -176,6 +186,29 @@ static gfx_rect volume_rect;
 static bool volume_drag;
 static int volume_before;           /* restored if the drag is cancelled */
 
+/* Icon Buttons (glaze/hardicon.h): the seven printed icons below the screen.
+ * V_ICON_ACTION lists icon_choices for icon icon_for, in groups. */
+static struct hardicon_config s_icons;
+static int icon_for;
+static char icon_values[HARDICON_COUNT][32];
+struct icon_choice {
+    uint8_t group;              /* 0 system, 1 apps, 2 keys */
+    char label[32];
+    struct hardicon_action act;
+};
+static struct icon_choice icon_choices[ICON_CHOICES];
+static int icon_nchoices;
+static const char *const icon_groups[3] = { "System", "Apps", "Keys" };
+static const char *const icon_system[] = { "None", "Home", "App Switcher", "Lock", "Sleep", "Screen Off" };
+#define BUILTIN_LABEL(l, icon, path, style, dock) l,
+#define BUILTIN_PATH(l, icon, path, style, dock) path,
+static const char *const builtin_labels[] = { GZ_BUILTIN_APPS(BUILTIN_LABEL) };
+static const char *const builtin_paths[] = { GZ_BUILTIN_APPS(BUILTIN_PATH) };
+#define NUM_BUILTINS ((int)(sizeof(builtin_paths) / sizeof(builtin_paths[0])))
+static const char *const icon_key_labels[] = {
+    "Back (Esc)", "OK", "Enter", "Up", "Down", "Left", "Right", "Page Up", "Page Down", "Tab", "Backspace",
+};
+
 static void load(void)
 {
     ce_boot = gz_boot_mode() == GZ_BOOT_MODE_CE;
@@ -195,6 +228,7 @@ static void load(void)
     pref_get(AUDIO_PREF_TOUCH, &s_touch, 4);
     pref_get(AUDIO_PREF_SWIPE, &s_swipe, 4);
     pref_get(AUDIO_PREF_LOCK, &s_lock, 4);
+    hardicon_load(&s_icons);
     for (int i = 0; i < 3; i++) {
         pref_get(tone_keys[i], &s_tones[i], 4);
         if (s_tones[i] < 0 || s_tones[i] >= AUDIO_TONES)
@@ -332,7 +366,7 @@ static void draw_root(gfx_surface *s)
     if (cell_visible(s))
         root_card = card_key(&st);
     if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
-    root_scroll.content_h = (10 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
+    root_scroll.content_h = (11 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
     root_scroll.view_h = UI_H - UI_NAV_H;
     if (!root_scroll.dragging && !root_scroll.animating)
         root_scroll.offset = MAX(0, MIN(root_scroll.offset, ui_scroll_max(&root_scroll)));
@@ -356,7 +390,8 @@ static void draw_root(gfx_surface *s)
     cell(s, 2, "About", NULL, true, R_ABOUT);
     /* Last, so the rows above keep their places (tests/t_*.txt tap them). */
     char level[16];
-    cell(s, 3, "Battery", cell_visible(s) ? battery_summary(level, sizeof(level)) : NULL, true, R_BATTERY);
+    cell(s, 2, "Battery", cell_visible(s) ? battery_summary(level, sizeof(level)) : NULL, true, R_BATTERY);
+    cell(s, 3, "Icon Buttons", NULL, true, R_ICONS);
     if (ce_boot) {
         section_gap();
         cell(s, 0, "Reboot to Windows CE", NULL, true, R_REBOOT_CE);
@@ -480,6 +515,14 @@ static void draw_datetime(gfx_surface *s)
 /* ---- Battery (docs/POWER.md) -------------------------------------------- */
 
 static bool battery_pct;
+static struct power_sleep s_sleep = POWER_SLEEP_DEFAULTS;
+static int sleep_for;                   /* V_SLEEP_MODE: 0 on battery, 1 plugged in */
+static const char *sleep_msg;
+
+static bool sb_on_battery(const struct gz_power_status *st)
+{
+    return (st->flags & (GZ_POWER_VALID | GZ_POWER_AC)) == GZ_POWER_VALID;
+}
 
 static const char *battery_summary(char *buf, size_t cap)
 {
@@ -526,7 +569,9 @@ static void draw_battery(gfx_surface *s)
     cell(s, 1, "Status", state, false, 0);
     cell(s, 3, "Level", level, false, 0);
     section_gap();
-    switch_cell(s, 0, "Percentage", battery_pct, R_BATTERY_PCT);
+    switch_cell(s, 1, "Percentage", battery_pct, R_BATTERY_PCT);
+    cell(s, 3, "Sleep", power_sleep_mode_name(sb_on_battery(&st) ? s_sleep.battery_mode : s_sleep.ac_mode),
+         true, R_SLEEP);
     section_gap();
 
     /* The A/D counts Windows CE's driver reads, against the calibration it
@@ -535,25 +580,124 @@ static void draw_battery(gfx_surface *s)
         snprintf(reading, sizeof(reading), "%u (avg %u)", st.adc_last, st.adc_avg);
     else
         strlcpy(reading, "None yet", sizeof(reading));
-    snprintf(range, sizeof(range), "%u-%u", st.cal_min, st.cal_max);
+    snprintf(range, sizeof(range), "%s %u-%u", st.flags & GZ_POWER_CAL_EEPROM ? "EEPROM" : "Default",
+             st.cal_min, st.cal_max);
     snprintf(idle, sizeof(idle), "%u%%", si.uptime_ms ? (uint32_t)((uint64_t)st.idle_ms * 100 / si.uptime_ms) : 0);
     cell(s, 1, "Reading", reading, false, 0);
-    cell(s, 2, "Calibration", st.flags & GZ_POWER_CAL_EEPROM ? "EEPROM" : "Default", false, 0);
-    cell(s, 2, "Range", range, false, 0);
+    cell(s, 2, "Calibration", range, false, 0);
     cell(s, 3, "CPU Idle", idle, false, 0);
+}
+
+/* ---- Sleep (glaze/power.h, docs/POWER.md "Power off") ------------------- */
+
+static const char *const sleep_sources[] = { "On Battery", "Plugged In" };
+static const uint8_t sleep_modes[] = { GZ_SLEEP_SUSPEND, GZ_SLEEP_HIBERNATE, POWER_SLEEP_NEVER };
+
+static uint8_t *sleep_mode_of(int source)
+{
+    return source ? &s_sleep.ac_mode : &s_sleep.battery_mode;
+}
+
+static uint16_t *sleep_min_of(int source)
+{
+    return source ? &s_sleep.ac_min : &s_sleep.battery_min;
+}
+
+static int sleep_choice(int source)
+{
+    for (int i = 0; i < POWER_SLEEP_CHOICES; i++)
+        if (power_sleep_minutes(i) >= *sleep_min_of(source))
+            return i;
+    return POWER_SLEEP_CHOICES - 1;
+}
+
+static void sleep_save(void)
+{
+    int p = gz_port_lookup(SB_PORT_NAME);
+    sleep_msg = power_sleep_put(&s_sleep) < 0 ? "Could not save. Try again." : NULL;
+    if (p > 0)
+        gz_notify(p, SB_NOTIFY_POWER);
+}
+
+static void draw_sleep(gfx_surface *s)
+{
+    const gfx_font *hf = ui_font(FONT_B13), *nf = ui_font(FONT_R12);
+    char after[16];
+
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Sleep", "Battery", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 8;
+    for (int src = 0; src < 2; src++) {
+        gfx_text(s, CELL_X + 10, section_y, hf, sleep_sources[src], 0x4C566C, 255);
+        section_y += hf->line_height + 4;
+        int min = power_sleep_minutes(sleep_choice(src));
+        if (!min)
+            strlcpy(after, "At once", sizeof(after));
+        else if (min == 60)
+            strlcpy(after, "1 hour", sizeof(after));
+        else
+            snprintf(after, sizeof(after), "%d min", min);
+        cell(s, 1, "Sleep", power_sleep_mode_name(*sleep_mode_of(src)), true, R_SLEEP_MODE0 + src);
+        stepper_cell(s, 3, "After", after, R_SLEEP_DOWN0 + 2 * src, R_SLEEP_UP0 + 2 * src);
+        section_y += 10;
+    }
+    const char *notes[] = {
+        "After: once the screen is off.",
+        "Hold Power to sleep; press it to wake.",
+        gz_boot_mode() == GZ_BOOT_MODE_CE ? "From Windows CE, Hibernate suspends." : NULL,
+        sleep_msg,
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(notes); i++) {
+        if (!notes[i])
+            continue;
+        gfx_text_center(s, 0, section_y, UI_W, nf, notes[i], UI_TEXT_DETAIL, 255);
+        section_y += nf->line_height + 1;
+    }
+}
+
+static void draw_sleep_mode(gfx_surface *s)
+{
+    const gfx_font *lf = ui_font(FONT_B13);
+
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, sleep_sources[sleep_for], "Sleep", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    for (int i = 0; i < 3; i++) {
+        gfx_rect r = gfx_r(CELL_X, section_y, CELL_W, UI_ROW_H);
+        bool on = *sleep_mode_of(sleep_for) == sleep_modes[i], sel = pressed == R_SLEEP_PICK0 + i;
+        uint32_t ink = sel ? 0xFFFFFF : on ? UI_TEXT_DETAIL : UI_TEXT;
+        ui_draw_group_cell(s, r, i == 0 ? 1 : i == 2 ? 3 : 2, sel);
+        gfx_text(s, r.x + 10, r.y + (r.h - lf->line_height) / 2, lf, power_sleep_mode_name(sleep_modes[i]), ink, 255);
+        if (on)
+            gfx_text(s, r.x + r.w - 22, r.y + (r.h - lf->line_height) / 2, lf, GFX_CH_CHECK, ink, 255);
+        add_hit(r, R_SLEEP_PICK0 + i);
+        section_y += UI_ROW_H;
+    }
+    section_y += 8;
+    const gfx_font *nf = ui_font(FONT_R12);
+    gfx_text_center(s, 0, section_y, UI_W, nf, "Hibernate uses the least power", UI_TEXT_DETAIL, 255);
+    gfx_text_center(s, 0, section_y + nf->line_height + 1, UI_W, nf, "and takes a moment longer to wake.",
+                    UI_TEXT_DETAIL, 255);
 }
 
 static void draw_about(gfx_surface *s)
 {
     struct gz_sysinfo si;
+    struct gz_ota_status ota;
     char ver[48], cap[16], avail[16], procs[8], up[24];
 
     gz_sysinfo(&si);
+    if (gz_ota_status(&ota))
+        strcpy(ota.version, "?");
     nhits = 0;
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
     ui_draw_navbar(s, "About", "Settings", &back_rect, 0);
     add_hit(back_rect, R_BACK);
-    snprintf(ver, sizeof(ver), "Glaze 1.0 (%s)", si.build);
+    snprintf(ver, sizeof(ver), "Glaze %.15s (%s)", ota.version, si.build);
     snprintf(cap, sizeof(cap), "%u MB", (si.total_pages * 4 + 1023) / 1024);
     snprintf(avail, sizeof(avail), "%u KB", si.free_pages * 4);
     snprintf(procs, sizeof(procs), "%u", si.nprocs);
@@ -694,6 +838,185 @@ static void draw_tone(gfx_surface *s)
         add_hit(r, R_TONE0 + i);
         section_y += UI_ROW_H;
     }
+}
+
+static bool icon_same(const struct hardicon_action *a, const struct hardicon_action *b)
+{
+    return a->kind == b->kind && a->key == b->key && !strcmp(a->target, b->target);
+}
+
+static void icon_add(int group, const char *label, const struct hardicon_action *act)
+{
+    if (icon_nchoices >= ICON_CHOICES)
+        return;
+    struct icon_choice *c = &icon_choices[icon_nchoices++];
+    c->group = (uint8_t)group;
+    strlcpy(c->label, label, sizeof(c->label));
+    c->act = *act;
+}
+
+static void icon_add_package(const char *bundle, const struct pkg_info *info, void *arg)
+{
+    (void)bundle;
+    (void)arg;
+    struct hardicon_action a = { .kind = HARDICON_PACKAGE };
+    strlcpy(a.target, info->id, sizeof(a.target));
+    for (int i = 0; i < icon_nchoices; i++)
+        if (icon_same(&icon_choices[i].act, &a))
+            return;             /* on both volumes */
+    icon_add(1, info->name, &a);
+}
+
+/* Built-ins this romfs holds (a RAM boot's may not have them all); mapping
+ * costs only address space, so look once. */
+static bool builtin_present(int i)
+{
+    static int8_t present[NUM_BUILTINS];
+    uint32_t size;
+    if (!present[i])
+        present[i] = gz_romfs_map(builtin_paths[i], &size) ? 1 : -1;
+    return present[i] > 0;
+}
+
+static void icon_build_choices(void)
+{
+    icon_nchoices = 0;
+    for (int i = 0; i < (int)(sizeof(icon_system) / sizeof(icon_system[0])); i++) {
+        struct hardicon_action a = { .kind = (uint8_t)(HARDICON_NONE + i) };
+        icon_add(0, icon_system[i], &a);
+    }
+    for (int i = 0; i < NUM_BUILTINS; i++) {
+        if (!builtin_present(i))
+            continue;
+        struct hardicon_action a = { .kind = HARDICON_APP };
+        strlcpy(a.target, builtin_paths[i], sizeof(a.target));
+        icon_add(1, builtin_labels[i], &a);
+    }
+    pkg_list("", icon_add_package, NULL);
+    pkg_list("/Card", icon_add_package, NULL);
+    /* Keep an assignment whose app is gone, so it can be seen and changed. */
+    const struct hardicon_action *cur = &s_icons.icon[icon_for];
+    if (cur->kind == HARDICON_PACKAGE) {
+        bool listed = false;
+        for (int i = 0; i < icon_nchoices; i++)
+            listed |= icon_same(&icon_choices[i].act, cur);
+        if (!listed)
+            icon_add(1, cur->target, cur);
+    }
+    for (int i = 0; i < hardicon_num_keys; i++) {
+        struct hardicon_action a = { .kind = HARDICON_KEY, .key = hardicon_keys[i] };
+        icon_add(2, icon_key_labels[i], &a);
+    }
+}
+
+/* The value V_ICONS shows for an assignment. */
+static void icon_describe(const struct hardicon_action *a, char *out, size_t cap)
+{
+    char bundle[PKG_BUNDLE_MAX];
+    struct pkg_info info;
+
+    strlcpy(out, "None", cap);
+    switch (a->kind) {
+    case HARDICON_HOME: case HARDICON_SWITCHER: case HARDICON_LOCK: case HARDICON_SLEEP: case HARDICON_SCREEN_OFF:
+        strlcpy(out, icon_system[a->kind - HARDICON_NONE], cap);
+        break;
+    case HARDICON_APP:
+        strlcpy(out, a->target, cap);
+        for (int i = 0; i < NUM_BUILTINS; i++)
+            if (!strcmp(builtin_paths[i], a->target))
+                strlcpy(out, builtin_labels[i], cap);
+        break;
+    case HARDICON_PACKAGE:
+        if (pkg_find(a->target, bundle) == 0 && pkg_bundle_info(bundle, &info) == 0)
+            strlcpy(out, info.name, cap);
+        else
+            strlcpy(out, "Not Installed", cap);
+        break;
+    case HARDICON_KEY:
+        for (int i = 0; i < hardicon_num_keys; i++)
+            if (hardicon_keys[i] == a->key)
+                strlcpy(out, icon_key_labels[i], cap);
+        break;
+    default:
+        break;
+    }
+}
+
+static void icon_refresh(void)
+{
+    for (int i = 0; i < HARDICON_COUNT; i++)
+        icon_describe(&s_icons.icon[i], icon_values[i], sizeof(icon_values[i]));
+}
+
+static void icon_save(void)
+{
+    hardicon_save(&s_icons);
+    int p = gz_port_lookup(SB_PORT_NAME);
+    if (p > 0)
+        gz_notify(p, SB_NOTIFY_ICONS);
+}
+
+static void draw_icons(gfx_surface *s)
+{
+    char label[40];
+
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Icon Buttons", "Settings", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 10;
+    for (int i = 0; i < HARDICON_COUNT; i++) {
+        snprintf(label, sizeof(label), "%d  %s", i + 1, hardicon_label(i));
+        cell(s, i == 0 ? 1 : i == HARDICON_COUNT - 1 ? 3 : 2, label, icon_values[i], true, R_ICON0 + i);
+    }
+    section_y += 10;
+    /* Off: an app's ui_claim_hard_icons is ignored. */
+    switch_cell(s, 0, "App Overrides", s_icons.apps, R_ICON_APPS);
+}
+
+#define ICON_HEADER_H   22
+
+static int icon_content_h(void)
+{
+    int h = 8;
+    for (int i = 0; i < icon_nchoices; i++)
+        h += UI_ROW_H + (i == 0 || icon_choices[i].group != icon_choices[i - 1].group ? ICON_HEADER_H : 0);
+    return h + 12;
+}
+
+static void draw_icon_action(gfx_surface *s)
+{
+    const gfx_font *lf = ui_font(FONT_B13), *hf = ui_font(FONT_B12);
+    gfx_surface c = *s;
+    gfx_rect area = gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
+    char title[32];
+
+    nhits = 0;
+    ui_draw_pinstripes(s, area);
+    gfx_rect_intersect(s->clip, area, &c.clip);
+    section_y = UI_NAV_H + 8 - zone_scroll.offset;
+    for (int i = 0; i < icon_nchoices; i++, section_y += UI_ROW_H) {
+        const struct icon_choice *ch = &icon_choices[i];
+        bool first = i == 0 || ch->group != icon_choices[i - 1].group;
+        bool last = i == icon_nchoices - 1 || ch->group != icon_choices[i + 1].group;
+        if (first) {
+            gfx_text(&c, CELL_X + 8, section_y + 4, hf, icon_groups[ch->group], 0x4C566C, 255);
+            section_y += ICON_HEADER_H;
+        }
+        gfx_rect r = gfx_r(CELL_X, section_y, CELL_W, UI_ROW_H), vis;
+        if (!gfx_rect_intersect(r, area, &vis))
+            continue;
+        bool on = icon_same(&ch->act, &s_icons.icon[icon_for]), sel = pressed == R_ICONACT0 + i;
+        uint32_t ink = sel ? 0xFFFFFF : on ? UI_TEXT_DETAIL : UI_TEXT;
+        ui_draw_group_cell(&c, r, first && last ? 0 : first ? 1 : last ? 3 : 2, sel);
+        gfx_text(&c, r.x + 10, r.y + (r.h - lf->line_height) / 2, lf, ch->label, ink, 255);
+        if (on)
+            gfx_text(&c, r.x + r.w - 22, r.y + (r.h - lf->line_height) / 2, lf, GFX_CH_CHECK, ink, 255);
+        add_hit(vis, R_ICONACT0 + i);
+    }
+    snprintf(title, sizeof(title), "%d  %s", icon_for + 1, hardicon_label(icon_for));
+    ui_draw_navbar(s, title, "Icons", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
 }
 
 static gfx_rect zone_area(void)
@@ -991,6 +1314,8 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_DATETIME: draw_datetime(s); break;
     case V_ABOUT: draw_about(s); break;
     case V_BATTERY: draw_battery(s); break;
+    case V_SLEEP: draw_sleep(s); break;
+    case V_SLEEP_MODE: draw_sleep_mode(s); break;
     case V_NETWORK: draw_network(s); break;
     case V_DEBUG: draw_debug(s); break;
     case V_INPUT_METHOD: draw_input_method(s); break;
@@ -1006,6 +1331,8 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_TOUCH_TEST: draw_touch_test(s); break;
     case V_DISPLAY: draw_display(s); break;
     case V_TIMEOUT: draw_timeout(s); break;
+    case V_ICONS: draw_icons(s); break;
+    case V_ICON_ACTION: draw_icon_action(s); break;
     case V_REBOOT: draw_reboot(s); break;
     }
 }
@@ -1436,6 +1763,12 @@ static void activate(int id)
         go(V_TIMEOUT, true);
         return;
     }
+    if (view == V_SLEEP_MODE && id >= R_SLEEP_PICK0 && id <= R_SLEEP_PICK_LAST) {
+        *sleep_mode_of(sleep_for) = sleep_modes[id - R_SLEEP_PICK0];
+        sleep_save();
+        go(V_SLEEP, false);
+        return;
+    }
     if (view == V_TIMEOUT && id >= R_TIMEOUT0 && id <= R_TIMEOUT_LAST) {
         int32_t seconds = timeout_seconds[id - R_TIMEOUT0];
         if (pref_put(DISPLAY_TIMEOUT_PREF, &seconds, sizeof(seconds)) < 0) {
@@ -1486,7 +1819,9 @@ static void activate(int id)
     }
     if (id == R_BACK || id == R_PIN_CANCEL) {
         go(view == V_PREVIEW ? V_WALLPAPER : view == V_PIN ? V_PASSCODE : view == V_TONE ? V_SOUNDS
-           : view == V_ZONE ? V_DATETIME : (view == V_WALLPAPER || view == V_TIMEOUT) ? V_DISPLAY : V_ROOT, false);
+           : view == V_ZONE ? V_DATETIME : (view == V_WALLPAPER || view == V_TIMEOUT) ? V_DISPLAY
+           : view == V_SLEEP ? V_BATTERY : view == V_SLEEP_MODE ? V_SLEEP
+           : view == V_ICON_ACTION ? V_ICONS : V_ROOT, false);
         return;
     }
     switch (id) {
@@ -1539,10 +1874,41 @@ static void activate(int id)
         go(V_ZONE, true);
         return;
     case R_SOUNDS: go(V_SOUNDS, true); return;
+    case R_ICONS:
+        icon_refresh();
+        go(V_ICONS, true);
+        return;
+    case R_ICON_APPS:
+        s_icons.apps = !s_icons.apps;
+        icon_save();
+        break;
     case R_BATTERY:
         battery_pct = power_percent_get();
+        s_sleep = power_sleep_get();
         go(V_BATTERY, true);
         return;
+    case R_SLEEP:
+        s_sleep = power_sleep_get();
+        sleep_msg = NULL;
+        go(V_SLEEP, true);
+        return;
+    case R_SLEEP_MODE0:
+    case R_SLEEP_MODE1:
+        sleep_for = id - R_SLEEP_MODE0;
+        go(V_SLEEP_MODE, true);
+        return;
+    case R_SLEEP_DOWN0:
+    case R_SLEEP_UP0:
+    case R_SLEEP_DOWN1:
+    case R_SLEEP_UP1: {
+        int src = (id - R_SLEEP_DOWN0) / 2, up = (id - R_SLEEP_DOWN0) % 2;
+        int i = sleep_choice(src) + (up ? 1 : -1);
+        if (i < 0 || i >= POWER_SLEEP_CHOICES)
+            break;
+        *sleep_min_of(src) = (uint16_t)power_sleep_minutes(i);
+        sleep_save();
+        break;
+    }
     case R_BATTERY_PCT: {
         int p = gz_port_lookup(SB_PORT_NAME);
         if (power_percent_put(!battery_pct) == 0)
@@ -1646,6 +2012,20 @@ static void activate(int id)
             go(V_PREVIEW, true);
             return;
         }
+        if (id >= R_ICON0 && id < R_ICON0 + HARDICON_COUNT) {
+            icon_for = id - R_ICON0;
+            icon_build_choices();
+            ui_scroll_reset(&zone_scroll, icon_content_h(), UI_H - UI_NAV_H);
+            go(V_ICON_ACTION, true);
+            return;
+        }
+        if (id >= R_ICONACT0 && id < R_ICONACT0 + icon_nchoices) {
+            s_icons.icon[icon_for] = icon_choices[id - R_ICONACT0].act;
+            icon_save();
+            icon_refresh();
+            go(V_ICONS, false);
+            return;
+        }
         if (id >= R_TONE0 && id <= R_TONE0 + AUDIO_TONES) {
             int tone = id - R_TONE0 < AUDIO_TONES ? id - R_TONE0 : AUDIO_TONE_NONE;
             s_tones[tone_for] = tone;
@@ -1742,7 +2122,7 @@ static int hit_test(int x, int y);
 /* Scroll and tap list views; leave navbar events to the normal handler. */
 static bool zone_touch(const struct gz_input_event *ev)
 {
-    if ((view != V_ZONE && view != V_WIFI && view != V_ROOT) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
+    if ((view != V_ZONE && view != V_WIFI && view != V_ROOT && view != V_ICON_ACTION) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
                            ev->type != GZ_EV_TOUCH_UP))
         return false;
     if (ev->type == GZ_EV_TOUCH_DOWN)
@@ -1804,7 +2184,7 @@ int main(void)
                     : view == V_ROOT ? 2000 : -1;
         if (view == V_TOUCH_TEST)
             timeout = 250;
-        if ((view == V_ZONE || view == V_WIFI) && zone_scroll.animating)
+        if ((view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION) && zone_scroll.animating)
             timeout = 16;
         if (view == V_ROOT && root_scroll.animating)
             timeout = 16;
@@ -1832,7 +2212,7 @@ int main(void)
                 int rv = net_wifi_status(&wireless_status);
                 if (rv) { memset(&wireless_status, 0, sizeof(wireless_status)); wifi_error = rv; }
                 redraw_rect(zone_area());
-            } else if (view == V_ZONE || view == V_WIFI) {
+            } else if (view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION) {
                 int old_offset = zone_scroll.offset;
                 ui_scroll_step(&zone_scroll);
                 if (zone_scroll.offset != old_offset)

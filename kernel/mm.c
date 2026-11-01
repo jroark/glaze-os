@@ -16,6 +16,7 @@
 #include "mips.h"
 #include "proc.h"
 #include <glaze/bootinfo.h>
+#include "resume.h"
 
 extern uint8_t __kernel_end[];
 
@@ -28,6 +29,27 @@ static uint32_t alloc_hint;
 pte_t **cur_pgd;
 static pte_t *empty_pt;
 
+#define SPL_RESERVE_PA  0x00F00000u     /* the SPL image, at most 64 KiB */
+#define SPL_RESERVE_LEN 0x00010000u
+#define SPL_STACK_PA    0x00FE0000u
+#define SPL_STACK_LEN   0x00010000u
+
+static void mm_reserve(uint32_t pa, uint32_t len)
+{
+    for (uint32_t i = pa / PAGE_SIZE; i < (pa + len) / PAGE_SIZE; i++) {
+        if (!page_used[i]) {
+            page_used[i] = 1;
+            total_count--;
+            free_count--;
+        }
+    }
+}
+
+bool mm_page_used(uint32_t frame)
+{
+    return frame < NPAGES && page_used[frame];
+}
+
 void mm_init(void)
 {
     uint32_t first = ALIGN_UP(PHYS(__kernel_end), PAGE_SIZE) / PAGE_SIZE;
@@ -37,21 +59,26 @@ void mm_init(void)
     /* Low page 0 holds the exception vectors; already below `first`. */
     total_count = free_count = NPAGES - first;
     alloc_hint = first;
-    /* A RAM boot's romfs and RAM disk (checked in main.c) are never free. */
-    if (ram_boot) {
+    /* A HIBERNATE wakes through the boot ROM, which loads the SPL at
+     * 0x00F00000 again, and the SPL runs on a stack below 0x00FF0000
+     * (boot/spl.lds, spl_start.S): neither may hold a page the kernel
+     * resumes with (docs/POWER.md "Power off"). A RAM boot never
+     * hibernates, and GlazeBoot's layout owns its RAM. */
+    if (!ram_boot) {
+        mm_reserve(SPL_RESERVE_PA, SPL_RESERVE_LEN);
+        mm_reserve(SPL_STACK_PA, SPL_STACK_LEN);
+        /* The boot ROM's RAM probes (kernel/resume.h); power.c saves the
+         * ones inside the kernel. */
+        for (uint32_t pa = GZ_RESUME_PROBE_LOW; pa < SDRAM_SIZE; pa <<= 1)
+            mm_reserve(pa, PAGE_SIZE);
+    } else {
+        /* A RAM boot's romfs and RAM disk (checked in main.c) are never free. */
         uint32_t ranges[2][2] = {
             { ram_boot->romfs_pa, ALIGN_UP(ram_boot->romfs_size, PAGE_SIZE) },
             { ram_boot->ramfs_pa, ram_boot->ramfs_blocks * GZ_FLASH_PAGES_PER_BLOCK * GZ_FLASH_PAGE_SIZE },
         };
-        for (int r = 0; r < 2; r++) {
-            for (uint32_t i = ranges[r][0] / PAGE_SIZE; i < (ranges[r][0] + ranges[r][1]) / PAGE_SIZE; i++) {
-                if (!page_used[i]) {
-                    page_used[i] = 1;
-                    total_count--;
-                    free_count--;
-                }
-            }
-        }
+        for (int r = 0; r < 2; r++)
+            mm_reserve(ranges[r][0], ranges[r][1]);
     }
 
     empty_pt = page_alloc();

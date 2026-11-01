@@ -93,6 +93,8 @@ enum {
 #define SB_NOTIFY_DISPLAY   0x8u
 /* Settings changed POWER_PERCENT_PREF (glaze/power.h); redraw the status. */
 #define SB_NOTIFY_POWER     0x10u
+/* Settings changed HARDICON_PREF (glaze/hardicon.h); reload it. */
+#define SB_NOTIFY_ICONS     0x20u
 
 #define SB_RING             64
 
@@ -118,6 +120,9 @@ struct sb_shared {
     char bundle[48];                /* an installed app's bundle folder, else "" */
     volatile uint32_t background;   /* 1 while the app is in the background */
     volatile uint32_t keep_running; /* app: not to be suspended there (ui_set_background_running) */
+    /* app: bit n sends icon n as GZ_KEY_ICON1 + n instead of its action
+     * (ui_claim_hard_icons). Appended, so older apps leave it zero. */
+    volatile uint32_t hard_icons;
 };
 
 /* App-level events beyond the kernel's input codes. */

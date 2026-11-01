@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Publish verified App Store assets first and atomically replace the catalog last.
 Requires AWS CLI v2; infrastructure is defined in infra/appstore/stack.json.
+With --os, also an OS update (tools/mkota.py, docs/OTA.md): os/glaze-V.gzu,
+then os/catalog.txt.
 """
 import argparse
 import hashlib
 import json
 import re
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
@@ -80,6 +83,37 @@ def artifacts(directory):
     return catalog, records, assets
 
 
+OS_FIELDS = {'version', 'build', 'package', 'size', 'sha256', 'spl_min', 'notes'}
+
+
+def os_artifacts(directory):
+    """Validate an OS update release (out/ota) before any AWS calls."""
+    directory = directory.resolve()
+    catalog = (directory / 'os/catalog.txt').read_bytes()
+    if not catalog.startswith(b'GZOS1\n[os]\n') or len(catalog) > 4096:
+        raise ValueError('Invalid OS catalog header or size')
+    record = {}
+    for line in catalog.decode('ascii').splitlines()[2:]:
+        key, sep, value = line.partition('=')
+        if not sep or key in record or key not in OS_FIELDS or any(not 32 <= ord(c) <= 126 for c in value):
+            raise ValueError('Invalid or duplicate OS catalog field')
+        record[key] = value
+    if OS_FIELDS - {'build', 'notes'} - set(record):
+        raise ValueError('Incomplete OS catalog')
+    if not re.fullmatch(r'\d{1,6}(\.\d{1,6})*', record['version']) or len(record['version']) > 15:
+        raise ValueError('Invalid OS version')
+    key = record['package']
+    if key != f'os/glaze-{record["version"]}.gzu':
+        raise ValueError('The OS update must use its versioned path')
+    data = (directory / key).read_bytes()
+    if digest(data) != record['sha256'] or len(data) != int(record['size']):
+        raise ValueError(f'{key}: checksum or size mismatch')
+    if data[:8] != b'GZOTA1\0\0' or struct.unpack_from('<I', data, 12)[0] != len(data) or \
+            data[24:40].rstrip(b'\0').decode() != record['version']:
+        raise ValueError(f'{key}: not an update file for this version')
+    return catalog, {key: directory / key}
+
+
 class Aws:
     def __init__(self, profile, region):
         self.prefix = ['aws', '--region', region, '--no-cli-pager', '--output', 'json',
@@ -113,14 +147,14 @@ def download_object(aws, bucket, key, destination, etag=None):
 def upload(aws, bucket, key, path, cache, etag=None):
     data = path.read_bytes()
     args = ['s3api', 'put-object', '--bucket', bucket, '--key', key, '--body', str(path),
-            '--content-type', 'text/plain; charset=us-ascii' if key == 'catalog.txt' else 'application/octet-stream',
+            '--content-type', 'text/plain; charset=us-ascii' if key.endswith('catalog.txt') else 'application/octet-stream',
             '--cache-control', cache, '--checksum-algorithm', 'SHA256',
             '--metadata', json.dumps({'sha256': digest(data)})]
     args += ['--if-match', etag] if etag else ['--if-none-match', '*']
     return aws.call(*args)
 
 
-def publish(aws, config, directory, catalog, assets):
+def publish(aws, config, directory, catalog, assets, catalog_key='catalog.txt'):
     bucket = config['BucketName']
     with tempfile.TemporaryDirectory(prefix='glaze-store-publish-') as tmp:
         downloaded = Path(tmp) / 'object'
@@ -140,29 +174,29 @@ def publish(aws, config, directory, catalog, assets):
             if downloaded.read_bytes() != path.read_bytes() or metadata.get('CacheControl') != ASSET_CACHE:
                 raise RuntimeError(f'{key}: upload verification failed; catalog was not changed')
             print(f'Uploaded and verified {key}', flush=True)
-        head = aws.call('s3api', 'head-object', '--bucket', bucket, '--key', 'catalog.txt', missing_ok=True)
+        head = aws.call('s3api', 'head-object', '--bucket', bucket, '--key', catalog_key, missing_ok=True)
         if head:
-            metadata = download_object(aws, bucket, 'catalog.txt', downloaded, head['ETag'])
+            metadata = download_object(aws, bucket, catalog_key, downloaded, head['ETag'])
             if downloaded.read_bytes() == catalog and metadata.get('CacheControl') == CATALOG_CACHE:
                 print('Catalog already current.', flush=True)
                 return
-        upload(aws, bucket, 'catalog.txt', directory / 'catalog.txt', CATALOG_CACHE,
+        upload(aws, bucket, catalog_key, directory / catalog_key, CATALOG_CACHE,
                etag=head['ETag'] if head else None)
-        metadata = download_object(aws, bucket, 'catalog.txt', downloaded)
+        metadata = download_object(aws, bucket, catalog_key, downloaded)
         if downloaded.read_bytes() != catalog or metadata.get('CacheControl') != CATALOG_CACHE:
             raise RuntimeError('Catalog upload verification failed')
         print('Published and verified catalog last.', flush=True)
 
 
-def verify(config, catalog, assets):
+def verify(config, catalog, assets, catalog_key='catalog.txt'):
     base = config['StoreUrl']
-    for key, expected in [('catalog.txt', catalog)] + [(key, path.read_bytes()) for key, path in assets.items()]:
+    for key, expected in [(catalog_key, catalog)] + [(key, path.read_bytes()) for key, path in assets.items()]:
         request = Request(base + '/' + key, headers={'Accept-Encoding': 'identity'})
         with urlopen(request, timeout=60) as response:
             data = response.read(len(expected) + 1)
             if response.status != 200 or data != expected or response.headers.get('Content-Encoding', 'identity') != 'identity':
                 raise RuntimeError(f'{key}: public HTTPS verification failed')
-            expected_cache = CATALOG_CACHE if key == 'catalog.txt' else ASSET_CACHE
+            expected_cache = CATALOG_CACHE if key == catalog_key else ASSET_CACHE
             if response.headers.get('Cache-Control') != expected_cache:
                 raise RuntimeError(f'{key}: wrong cache headers')
         print(f'HTTPS verified {key}', flush=True)
@@ -181,6 +215,7 @@ def main():
     parser.add_argument('--region', default='us-east-1')
     parser.add_argument('--stack', default='glaze-os-appstore')
     parser.add_argument('--directory', type=Path, default=Path('out/store'))
+    parser.add_argument('--os', type=Path, help='also publish the OS update in this directory (out/ota)')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--dry-run', action='store_true', help='Validate the release without contacting AWS')
     mode.add_argument('--verify-only', action='store_true', help='Check live HTTPS without changing S3')
@@ -189,14 +224,22 @@ def main():
         directory = args.directory.resolve()
         catalog, records, assets = artifacts(directory)
         print(f'Validated {len(records)} apps and {len(assets)} assets.', flush=True)
+        os_release = os_artifacts(args.os) if args.os else None
+        if os_release:
+            print(f'Validated OS update {list(os_release[1])[0]}.', flush=True)
         if args.dry_run:
-            print(json.dumps({'catalog_sha256': digest(catalog), 'assets': list(assets)}, indent=2))
+            print(json.dumps({'catalog_sha256': digest(catalog), 'assets': list(assets),
+                              'os': list(os_release[1]) if os_release else []}, indent=2))
             return
         aws = Aws(args.profile, args.region)
         config = outputs(aws, args.stack)
         if not args.verify_only:
             publish(aws, config, directory, catalog, assets)
+            if os_release:
+                publish(aws, config, args.os.resolve(), *os_release, catalog_key='os/catalog.txt')
         verify(config, catalog, assets)
+        if os_release:
+            verify(config, *os_release, catalog_key='os/catalog.txt')
         print('App Store ready: ' + config['StoreUrl'] + '/catalog.txt', flush=True)
     except (ValueError, KeyError, OSError, RuntimeError) as error:
         parser.exit(1, f'publish_appstore: {error}\n')

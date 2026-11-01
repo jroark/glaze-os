@@ -63,6 +63,16 @@ The idle thread runs VR4131 STANDBY (`IDLE_STANDBY=0` disables it). Use
 `make -C host battery-test settings-test` and be300's `--battery`,
 `--battery-state`, `--battery-drain` through `BE300_ARGS`.
 
+Power off (`docs/POWER.md` "Power off") follows Windows CE's OEMPowerOff:
+holding Power (or the Settings → Battery → Sleep delay after the screen goes
+off) shows Goodbye, then `SYS_POWER_SLEEP` (`kernel/drivers/power.c`)
+suspends or hibernates until Power or the next notification's RTC alarm.
+Hibernate resumes through the SPL (`kernel/resume.h`): the boot ROM
+overwrites low RAM and probes powers of two, so the kernel saves those pages
+and `mm.c` reserves the SPL's; keep this in mind when moving anything in low
+RAM. Use `make -C host idle-test boot-init-test`, `tests/t_poweroff.txt`,
+`t_hibernate.txt`, `t_poweroff_alarm.txt` and `HIBERNATE_VERIFY=1`.
+
 Network development transport is in `servers/usb/network.c`, sharing the
 USB dispatcher's capabilities and lifecycle. `glaze-usb --host HOST --key FILE`
 uses TLS 1.2 ECDHE-PSK; it is off by default. See `docs/NETWORK_DEBUG.md`.
@@ -94,6 +104,15 @@ offsets stay unchanged. Do not extend this structure without considering SDK
 clients. Use `make -C host handwriting-test ui-events-test settings-test` and
 `make sdk-test`; `tests/t_handwriting_notes.txt` checks Notes with scripted input.
 
+Hard icons (`docs/HARD_ICONS.md`) are the seven printed touch buttons below
+the LCD (panel rows 320..359). Their zones and Windows CE's assignments come
+from touch.dll and COShell's registry. SpringBoard captures strokes that start
+there (`servers/springboard/hardicon.c`) and runs the `sb.icons` assignment
+(`glaze/hardicon.h`, Settings → Icon Buttons). It never fires while locked.
+`ui_claim_hard_icons` lets a front app receive `GZ_KEY_ICON1..7` instead,
+through the appended `sb_shared.hard_icons`. Use `make -C host hardicon-test
+settings-test` and `tests/t_hardicon.txt`.
+
 The text clipboard (`docs/CLIPBOARD.md`) is volatile SpringBoard state in
 `servers/springboard/clipboard.c`, with chunked, atomic IPC through the existing
 request area. `lib/ui/edit.c` owns one focused selection per process; apps opt
@@ -103,6 +122,21 @@ Preserve the keyboard/shared-memory ABI. Run `clipboard-test stowaway-test
 handwriting-test ui-events-test settings-test mirror-test usb-input-test`,
 `browser-test`, full builds and `sdk-test`; `tests/t_clipboard.txt` exercises
 cross-app touch copy/paste. Clear INPUT_SCRIPT for normal builds afterward.
+
+OTA updates (`docs/OTA.md`, `glaze/ota.h`) replace the kernel and romfs
+(logical boot blocks 5-319) on a physical NAND image. App Store → Updates
+downloads a signed `.gzu` (per-block deflate) to `/Library/Updates`; the
+file server streams it to the kernel (`FS_OS_UPDATE`, `SYS_OTA_STAGE`,
+`kernel/ota_stage.c`: Ed25519 with the key in `config/ota_pubkey.bin`,
+SHA-256, block CRCs), which writes a `GZOJ` journal to a reserve block and
+resets; the SPL (`boot/ota_apply.c`, read-only `ftl.c` with
+`FTL_READONLY`, puff) installs it, resuming after any power cut. The SPL is
+never updated over the air. `VERSION` is the OS version; bump it per
+release. `make ota` signs `out/ota/os/` natively with
+`~/.config/glaze/ota-ed25519.pem` (never commit it); `OTA_PUBKEY=` builds
+an image trusting a test key. Use `make -C host ota-test boot-init-test`,
+`host/fstest` after `ftl.c` changes, and `tests/run_ota.py` (emulator, power
+cuts).
 
 ## Running and testing
 
@@ -136,7 +170,7 @@ be300 --nand out/glaze.bin --rtc-host-time --cf out/cf.img    # with a CompactFl
 
 ## Architecture
 
-**Boot.** The boot ROM loads the SPL (`boot/`) from the B000FF container at NAND 0x4000. The SPL streams the flat kernel from 0x14000 to 0x80010000 and jumps to it. The SPL bakes in the kernel's load, entry and size from `tools/elf_consts.py`; `tools/mk_nand.py` packs the image.
+**Boot.** The boot ROM loads the SPL (`boot/`) from the B000FF container at NAND 0x4000. The SPL reads the kernel slot's 512-byte header at 0x14000 (`struct gz_kernel_header`, `glaze/ota.h`: load, entry, size, CRC, version), streams the flat kernel from 0x14200, checks its CRC and jumps to it; it isn't built against a particular kernel. `tools/mk_nand.py` packs the image (`--version` from `VERSION`).
 
 **Flash layout.** The SPL loads only the kernel (about 56 KB) from 0x14000. The romfs (`tools/mkromfs.py`: apps, libraries and assets, files page-aligned) sits raw at `ROMFS_OFFSET` 0x40000 up to 0x500000 (`tools/mk_nand.py --romfs` checks the 4.75 MiB slot), and 0x500000 to the end is the file server's region (`FLASH_FS_OFFSET`, `GZ_FLASH_BLOCKS`). There is no other persistent store on the device; a CompactFlash card mounts as `/Card`.
 

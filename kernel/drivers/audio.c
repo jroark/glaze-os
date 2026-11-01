@@ -205,6 +205,20 @@ static void notify_if_low(void)
         ipc_notify(bound_port, GZ_NOTIFY_AUDIO);
 }
 
+/* wavedev's initialization (0x01912478), independent of WinCE's last
+ * volume, playback and power state. Again after a HIBERNATE. */
+static void hw_init(void)
+{
+    KJ_SRC_EN &= ~AUD_SRC_EN_BIT;
+    hw_disable();
+    hw_ack();
+    AUD_WAKE_CODEC = 1;
+    AUD_CTRL16 |= AUD_CTRL_IDLE;
+    AUD_FORMAT16 = 3;
+    (void)codec_cmd(0xD007);  /* A failed codec can be retried on start. */
+    program_buffers();
+}
+
 void audio_init(void)
 {
     uint8_t *pages = page_alloc_n(2);
@@ -217,16 +231,7 @@ void audio_init(void)
     dma_buf[0] = (uint8_t *)KSEG1(PHYS(pages));
     dma_buf[1] = (uint8_t *)KSEG1(PHYS(pages) + DMA_BYTES);
     hw_dump("inherited");
-    KJ_SRC_EN &= ~AUD_SRC_EN_BIT;
-    hw_disable();
-    hw_ack();
-    /* wavedev's initialization (0x01912478), independent of WinCE's
-     * last volume, playback and power state. */
-    AUD_WAKE_CODEC = 1;
-    AUD_CTRL16 |= AUD_CTRL_IDLE;
-    AUD_FORMAT16 = 3;
-    (void)codec_cmd(0xD007);  /* A failed codec can be retried on start. */
-    program_buffers();
+    hw_init();
     /* Keep the source masked until playback starts. A codec/power event
      * with no buffer completion must not interrupt an idle driver. */
     present = true;
@@ -313,24 +318,9 @@ int sys_audio_bind(struct proc *p, int port)
     return 0;
 }
 
-int sys_audio_start(struct proc *p, uint32_t rate, uint32_t channels)
+static int hw_start(uint32_t rate, uint32_t code, uint32_t x2, uint32_t channels)
 {
-    uint32_t code, x2;
-    int rv = check(p);
-
-    if (rv)
-        return rv;
-    bool start_idle = channels & GZ_AUDIO_START_IDLE;
-    channels &= ~GZ_AUDIO_START_IDLE;
-    if (rate_setup(rate, &code, &x2) || (channels != 1 && channels != 2))
-        return GZ_EINVAL;
-    if (running && (rv = hw_stop()))
-        return rv;
-    running = false;
-    idle = start_idle;
-    cur_rate = rate;
-    cur_channels = channels;
-    next_drain = 0;
+    int rv;
 
     /* wavedev start (0x01911B8C, 0x01911388, 0x019111DC).
      * The emulator doesn't gate DMA on the codec power/clock bits, but
@@ -381,6 +371,55 @@ failed:
     AUD_POWER &= ~AUD_POWER_CODEC;
     hw_ack();
     return rv;
+}
+
+int sys_audio_start(struct proc *p, uint32_t rate, uint32_t channels)
+{
+    uint32_t code, x2;
+    int rv = check(p);
+
+    if (rv)
+        return rv;
+    bool start_idle = channels & GZ_AUDIO_START_IDLE;
+    channels &= ~GZ_AUDIO_START_IDLE;
+    if (rate_setup(rate, &code, &x2) || (channels != 1 && channels != 2))
+        return GZ_EINVAL;
+    if (running && (rv = hw_stop()))
+        return rv;
+    running = false;
+    idle = start_idle;
+    cur_rate = rate;
+    cur_channels = channels;
+    next_drain = 0;
+    return hw_start(rate, code, x2, channels);
+}
+
+/* A sleep stops the DMA, which SUSPEND must not run through (VR4131 UM
+ * 12.1.4(3)), and the wake starts it again where it was; the audio server
+ * never sees the gap but as time. A HIBERNATE lost the block's setup too. */
+static bool resume_running;
+
+void audio_suspend(void)
+{
+    resume_running = running;
+    if (running)
+        (void)hw_stop();
+    KJ_SRC_EN &= ~AUD_SRC_EN_BIT;
+}
+
+void audio_resume(bool cold)
+{
+    uint32_t code, x2;
+
+    if (!present)
+        return;
+    if (cold)
+        hw_init();
+    if (resume_running && !rate_setup(cur_rate, &code, &x2)) {
+        next_drain = 0;
+        (void)hw_start(cur_rate, code, x2, cur_channels);
+    }
+    resume_running = false;
 }
 
 int sys_audio_write(struct proc *p, uint32_t ubuf, uint32_t len)

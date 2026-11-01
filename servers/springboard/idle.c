@@ -72,3 +72,58 @@ enum sb_idle_input sb_idle_input(struct sb_idle *s, const struct gz_input_event 
     }
     return consume ? SB_IDLE_CONSUME : SB_IDLE_PASS;
 }
+
+void sb_idle_set_sleep(struct sb_idle *s, bool on, uint32_t after_ms)
+{
+    s->sleep = on;
+    s->sleep_after_ms = after_ms;
+}
+
+/* From the last activity, like the screen timeout it follows; never with
+ * the timeout off, since the screen then never goes dark. */
+int sb_idle_sleep_wait(const struct sb_idle *s, uint32_t now)
+{
+    if (!s->sleep || !s->timeout_ms)
+        return -1;
+    uint32_t due = s->timeout_ms + s->sleep_after_ms;
+    uint32_t elapsed = now - s->last_activity;
+    return elapsed >= due ? 0 : (int)(due - elapsed);
+}
+
+enum sb_hold_result sb_hold_input(struct sb_hold *h, const struct gz_input_event *e, uint32_t now)
+{
+    if (e->code != GZ_KEY_POWER)
+        return SB_HOLD_NONE;
+    if (e->type == GZ_EV_KEY_DOWN && !h->held) {
+        h->held = true;
+        h->fired = false;
+        h->down_at = now;
+    } else if (e->type == GZ_EV_KEY_UP && h->held) {
+        bool press = !h->fired;
+        sb_hold_reset(h);
+        return press ? SB_HOLD_PRESS : SB_HOLD_NONE;
+    }
+    return SB_HOLD_NONE;
+}
+
+int sb_hold_wait(const struct sb_hold *h, uint32_t now)
+{
+    if (!h->held || h->fired)
+        return -1;
+    uint32_t elapsed = now - h->down_at;
+    return elapsed >= SB_POWER_HOLD_MS ? 0 : (int)(SB_POWER_HOLD_MS - elapsed);
+}
+
+bool sb_hold_due(struct sb_hold *h, uint32_t now)
+{
+    if (sb_hold_wait(h, now) != 0)
+        return false;
+    h->fired = true;
+    return true;
+}
+
+/* After a sleep: the press that woke the device was never seen down. */
+void sb_hold_reset(struct sb_hold *h)
+{
+    h->held = h->fired = false;
+}

@@ -92,6 +92,9 @@ enum {
     SYS_NAND_REPAIR,       /* PROC_USB + explicit repair RAM boot: op, buffer, length */
     SYS_HWDUMP,            /* privileged, HWDUMP=1 builds: op, buffer (0 = size), length */
     SYS_POWER_STATUS,      /* read-only: struct gz_power_status, its size */
+    SYS_POWER_SLEEP,       /* privileged: GZ_SLEEP_* mode, alarm seconds (0 = none) */
+    SYS_OTA_STATUS,        /* read-only: struct gz_ota_status, its size (glaze/ota.h) */
+    SYS_OTA_STAGE,         /* PROC_FLASH: GZ_OTA_OP_*, three arguments (docs/OTA.md) */
     SYS_COUNT
 };
 
@@ -177,8 +180,12 @@ enum {
     GZ_KEY_SELECT_RIGHT,
     GZ_KEY_SELECT_HOME,
     GZ_KEY_SELECT_END,
+    /* The printed touch icons below the LCD, left to right, for a front app
+     * that claimed them (sb_shared.hard_icons, glaze/hardicon.h). */
+    GZ_KEY_ICON1,
+    GZ_KEY_ICON7 = GZ_KEY_ICON1 + 6,
 };
-#define GZ_KEY_LAST GZ_KEY_SELECT_END
+#define GZ_KEY_LAST GZ_KEY_ICON7
 
 #define GZ_INPUT_STOWAWAY   0x1u
 
@@ -222,6 +229,17 @@ struct gz_power_status {
     uint32_t idle_ms;           /* time the CPU spent in STANDBY since boot */
     uint32_t standby_count;     /* STANDBY entries since boot */
 };
+
+/* SYS_POWER_SLEEP (docs/POWER.md "Power off"): the LCD goes off and the CPU
+ * sleeps until the Power button, or the alarm a1 seconds from now. It
+ * returns GZ_WAKE_* | the mode used << 8: a RAM boot from Windows CE
+ * suspends when asked to hibernate. */
+#define GZ_SLEEP_SUSPEND        1   /* VR4131 SUSPEND: RAM and CPU state kept */
+#define GZ_SLEEP_HIBERNATE      2   /* VR4131 HIBERNATE: woken through the SPL */
+#define GZ_WAKE_POWER           1
+#define GZ_WAKE_ALARM           2
+#define GZ_WAKE_REASON(rv)      ((rv) & 0xFF)
+#define GZ_WAKE_MODE(rv)        (((rv) >> 8) & 0xFF)
 
 struct gz_sysinfo {
     uint32_t total_pages;       /* all of SDRAM */

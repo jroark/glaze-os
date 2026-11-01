@@ -327,9 +327,8 @@ static void test_threads(void)
  * than the NAND region, with none of the factory volume's files. */
 static bool ram_boot(void)
 {
-    struct fs_info info;
-
-    return fs_statfs(&info) == 0 && info.flash_blocks && info.flash_blocks < GZ_FLASH_BLOCKS;
+    /* Not the volume's size: a physical NAND image's is smaller too. */
+    return gz_boot_mode() == GZ_BOOT_MODE_CE;
 }
 
 static void test_fs(void)
@@ -1168,6 +1167,59 @@ static int zone_named(const char *name)
     return -1;
 }
 
+/* OTA (docs/OTA.md): the status call always; and with an update staged at
+ * KTEST_OTA (tests/run_ota.py puts one in the factory volume), the file
+ * server's stepped verification and its lock on the file. Arming resets
+ * the device, so that happens after the summary line (ota_arm). */
+#define KTEST_OTA "/Library/Updates/ktest.gzu"
+
+static bool ota_ready;
+
+static void test_ota(void)
+{
+    struct gz_ota_status st;
+    struct fs_stat fst;
+
+    CHECK(gz_ota_status(&st) == 0 && st.version[0], "ota status");
+    printf("ktest: INFO ota: running %s, SPL %u, flags 0x%x, last result %u (%s, %u)\n", st.version,
+           st.spl_version, st.flags, st.last_result, st.last_version, st.last_detail);
+    if (st.last_result == GZ_OTA_APPLIED) {
+        /* The test's update keeps the same kernel, which still reports its
+         * own version: don't install it again. */
+        printf("ktest: ota installed %s\n", st.last_version);
+        CHECK(fs_remove(KTEST_OTA) == 0, "ota staged file removed after install");
+        return;
+    }
+    if (fs_stat(KTEST_OTA, &fst)) {
+        puts("ktest: SKIP ota staging (no update staged)");
+        return;
+    }
+    if (!(st.flags & GZ_OTA_S_SUPPORTED)) {
+        puts("ktest: SKIP ota staging (not a physical image with an OTA SPL)");
+        return;
+    }
+    int size = fs_ota_begin(KTEST_OTA), rv = 0;
+    CHECK(size == (int)fst.size, "ota begin");
+    CHECK(fs_remove(KTEST_OTA) == GZ_EBUSY, "ota staged file locked");
+    CHECK(fs_open(KTEST_OTA, FS_O_WRITE) == GZ_EBUSY, "ota staged file not writable");
+    CHECK(fs_ota_arm() == GZ_EPERM, "ota arm refused before verification");
+    while (rv >= 0 && rv < size)
+        rv = fs_ota_step();
+    CHECK(rv == (int)fst.size, "ota verified");
+    gz_ota_status(&st);
+    CHECK(st.flags & GZ_OTA_S_STAGED, "ota staged");
+    ota_ready = rv == (int)fst.size;
+}
+
+static void ota_arm(void)
+{
+    if (!ota_ready)
+        return;
+    puts("ktest: arming the OTA update; the SPL installs it after the reset");
+    int rv = fs_ota_arm();
+    printf("ktest: FAIL ota arm returned %d\n", rv);
+}
+
 static void test_time(void)
 {
     int la = zone_named("Los Angeles"), ldn = zone_named("London"), par = zone_named("Paris");
@@ -1299,6 +1351,7 @@ int main(void)
     test_audio();
     test_sounds();
     test_net();
+    test_ota();
 
     struct gz_sysinfo si;
     gz_sysinfo(&si);
@@ -1308,6 +1361,8 @@ int main(void)
     test_romfs_cache();     /* last: it takes the memory it frees and keeps it */
 
     printf("ktest: %s (%d failures)\n", failures ? "FAILED" : "ALL PASS", failures);
+    if (!failures)
+        ota_arm();
     for (;;)
         gz_sleep_ms(1000);
 }

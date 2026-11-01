@@ -18,6 +18,8 @@ DYNAMIC ?= 1
 # First user process started by the kernel.
 INIT    ?= bin/springboard
 BUILD_ID ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
+# The OS version OTA updates compare (docs/OTA.md): dotted numeric, in VERSION.
+GLAZE_VERSION := $(shell cat VERSION)
 # Test builds: replay this input script (see kernel/drivers/input.c).
 INPUT_SCRIPT ?=
 # Read-only physical NAND diagnostic after a CE RAM handoff.
@@ -31,6 +33,10 @@ BOOT_BEEP ?=
 # The idle thread's VR4131 STANDBY (docs/POWER.md); IDLE_STANDBY=0 spins
 # instead, for bisecting on hardware. Rebuild kernel/sched.o after changing it.
 IDLE_STANDBY ?= 1
+# HIBERNATE_VERIFY=1: checksum every page in use across a HIBERNATE and log
+# any the boot ROM or SPL overwrote on the way back (docs/POWER.md). Rebuild
+# kernel/drivers/power.o after changing it.
+HIBERNATE_VERIFY ?=
 
 # GCC's VR41xx errata workarounds, off by default as in Linux's VR41xx
 # builds: VR_FIX="-mfix-vr4130 -mfix-vr4120" pads mflo/mfhi and keeps GCC
@@ -461,16 +467,24 @@ $(OUT)/romfs.img: $(DRIVER_FILES) $(OUT)/services.bin $(ROMFS_LIBRARY_FILES) $(R
 
 # ---- kernel -----------------------------------------------------------------
 
+# wolfCrypt's Ed25519 verification and SHA-256 for OTA updates (kernel/ota_stage.c),
+# configured by kernel/crypto/user_settings.h.
+KCRYPTO_INC := -Ithird_party/wolfssl -Ikernel/crypto -DWOLFSSL_USER_SETTINGS
+KCRYPTO_SRCS := $(addprefix third_party/wolfssl/wolfcrypt/src/,ed25519.c ge_low_mem.c fe_low_mem.c sha512.c sha256.c)
+KCRYPTO_OBJS := $(patsubst third_party/%.c,$(OUT)/kernel/crypto/%.o,$(KCRYPTO_SRCS))
+
 KERNEL_SRCS := $(filter-out $(foreach d,$(DRIVER_NAMES),kernel/drivers/$(d).c),$(wildcard kernel/*.c kernel/*.S kernel/drivers/*.c))
-KERNEL_OBJS := $(patsubst %,$(OUT)/%.o,$(basename $(KERNEL_SRCS))) $(OUT)/kernel/string.o $(OUT)/kernel/divdi3.o
+KERNEL_OBJS := $(patsubst %,$(OUT)/%.o,$(basename $(KERNEL_SRCS))) $(OUT)/kernel/string.o $(OUT)/kernel/divdi3.o \
+    $(OUT)/kernel/bitops.o $(KCRYPTO_OBJS)
 KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -Ikernel -MMD \
-    -DGLAZE_BUILD='"$(BUILD_ID)"' -DGLAZE_INIT='"$(INIT)"' \
+    -DGLAZE_BUILD='"$(BUILD_ID)"' -DGLAZE_VERSION='"$(GLAZE_VERSION)"' -DGLAZE_INIT='"$(INIT)"' \
     $(if $(INPUT_SCRIPT),-DGLAZE_INPUT_SCRIPT) \
     $(if $(COLD_SOCKET_TEST),-DGLAZE_COLD_SOCKET_TEST) \
     $(if $(NAND_BOOT_PROBE),-DGLAZE_NAND_BOOT_PROBE) \
     $(if $(HWDUMP),-DGLAZE_HWDUMP) \
     $(if $(BOOT_BEEP),-DGLAZE_BOOT_BEEP) \
-    $(if $(filter 0,$(IDLE_STANDBY)),-DGLAZE_NO_STANDBY)
+    $(if $(filter 0,$(IDLE_STANDBY)),-DGLAZE_NO_STANDBY) \
+    $(if $(HIBERNATE_VERIFY),-DGLAZE_HIBERNATE_VERIFY)
 
 $(OUT)/kernel/%.o: kernel/%.c
 	@mkdir -p $(dir $@)
@@ -485,8 +499,24 @@ $(OUT)/kernel/%.o: lib/libc/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(KERNEL_CFLAGS) -c -o $@ $<
 
-# These bake in INIT/BUILD_ID/INPUT_SCRIPT; rebuild them every time.
-$(OUT)/kernel/main.o $(OUT)/kernel/syscall.o $(OUT)/kernel/drivers/input.o $(OUT)/romfs.img: FORCE
+$(KCRYPTO_OBJS): $(OUT)/kernel/crypto/%.o: third_party/%.c kernel/crypto/user_settings.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_COMMON) -Os -ffunction-sections -fdata-sections -w $(KCRYPTO_INC) -c -o $@ $<
+
+# The OTA release key (docs/OTA.md), as a C array; config/ota_pubkey.bin is
+# the 32-byte Ed25519 public key.
+# OTA_PUBKEY lets a test image (tests/run_ota.py) trust a throwaway key.
+OTA_PUBKEY ?= config/ota_pubkey.bin
+$(OUT)/gen/ota_key.h: $(OTA_PUBKEY) tools/mkota.py FORCE
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/mkota.py key-header $(OTA_PUBKEY) $@.tmp
+	@cmp -s $@.tmp $@ && rm $@.tmp || mv $@.tmp $@
+$(OUT)/kernel/ota.o: $(OUT)/gen/ota_key.h
+$(OUT)/kernel/ota.o: KERNEL_CFLAGS += -I$(OUT)/gen
+$(OUT)/kernel/ota_stage.o: KERNEL_CFLAGS += $(KCRYPTO_INC)
+
+# These bake in INIT/BUILD_ID/INPUT_SCRIPT/VERSION; rebuild them every time.
+$(OUT)/kernel/main.o $(OUT)/kernel/ota.o $(OUT)/kernel/syscall.o $(OUT)/kernel/drivers/input.o $(OUT)/kernel/drivers/power.o $(OUT)/romfs.img: FORCE
 
 $(OUT)/kernel/reboot.checked: $(OUT)/kernel/reboot_entry.o
 	@if $(CROSS)objdump -r -j .text.reboot $< | grep -q 'R_MIPS_'; then \
@@ -498,11 +528,26 @@ $(OUT)/kernel.elf: $(KERNEL_OBJS) kernel/kernel.lds $(OUT)/kernel/reboot.checked
 
 # ---- SPL --------------------------------------------------------------------
 
-# The SPL bakes in the kernel's load address, entry and size.
-$(OUT)/kernel_consts.flags: $(OUT)/kernel.elf tools/elf_consts.py
-	$(PYTHON) tools/elf_consts.py $< > $@
+# The SPL reads the kernel's load address, entry and size from the kernel
+# slot's header (glaze/ota.h), so it isn't built against a particular kernel.
+# It applies OTA updates (boot/ota_apply.c) through a read-only build of the
+# file server's flash stack.
+SPL_CFLAGS := $(CFLAGS_COMMON) -Os -ffunction-sections -fdata-sections $(if $(BOOT_BEEP),-DSPL_BOOT_BEEP)
+SPL_FS_DEFS := -DFTL_READONLY -DGF13_NO_TABLES -DLFS_READONLY -DLFS_NO_MALLOC -DLFS_NO_DEBUG -DLFS_NO_WARN \
+    -DLFS_NO_ERROR -DLFS_NO_ASSERT -Ithird_party/littlefs -Ithird_party/dhara
+SPL_FS_SRCS := servers/fs/ftl.c third_party/puff/puff.c third_party/littlefs/lfs.c third_party/littlefs/lfs_util.c \
+    third_party/dhara/dhara/map.c third_party/dhara/dhara/journal.c third_party/dhara/dhara/error.c \
+    third_party/dhara/ecc/bch.c third_party/dhara/ecc/gf13.c lib/libc/string.c lib/libc/bitops.c \
+    lib/libc/divdi3.c
+SPL_FS_OBJS := $(patsubst %.c,$(OUT)/boot/fs/%.o,$(SPL_FS_SRCS))
+SPL_OBJS := $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o $(OUT)/boot/ota_apply.o $(OUT)/boot/setjmp.o \
+    $(OUT)/boot/nand_boot.o $(OUT)/boot/nand_ecc.o $(SPL_FS_OBJS)
 
-SPL_CFLAGS := $(CFLAGS_COMMON) -Os $(if $(BOOT_BEEP),-DSPL_BOOT_BEEP)
+$(SPL_FS_OBJS): $(OUT)/boot/fs/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(SPL_CFLAGS) $(SPL_FS_DEFS) $(if $(filter third_party/%,$<),-w) -c -o $@ $<
+$(OUT)/boot/ota_apply.o: SPL_CFLAGS += $(SPL_FS_DEFS) -Ithird_party/puff
+$(OUT)/boot/fs/third_party/puff/puff.o: SPL_FS_DEFS += -Iboot/include
 
 # Rebuild the SPL when BOOT_BEEP changes.
 $(OUT)/boot/spl.flags: FORCE
@@ -511,20 +556,20 @@ $(OUT)/boot/spl.flags: FORCE
 
 $(OUT)/boot/spl.o: $(OUT)/boot/spl.flags
 
-$(OUT)/boot/%.o: boot/%.S $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
+$(OUT)/boot/%.o: boot/%.S kernel/drivers/nand_boot.h kernel/resume.h
 	@mkdir -p $(dir $@)
-	$(CC) $(SPL_CFLAGS) $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
+	$(CC) $(SPL_CFLAGS) -c -o $@ $<
 
-$(OUT)/boot/%.o: boot/%.c $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
+$(OUT)/boot/%.o: boot/%.c kernel/drivers/nand_boot.h kernel/resume.h lib/include/glaze/ota.h boot/ota_apply.h boot/splash.h
 	@mkdir -p $(dir $@)
-	$(CC) $(SPL_CFLAGS) $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
+	$(CC) $(SPL_CFLAGS) -c -o $@ $<
 
 $(OUT)/boot/nand_%.o: kernel/drivers/nand_%.c kernel/drivers/nand_boot.h kernel/drivers/nand_ecc.h
 	@mkdir -p $(dir $@)
 	$(CC) $(SPL_CFLAGS) -c -o $@ $<
 
-$(OUT)/spl.elf: $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o $(OUT)/boot/nand_boot.o $(OUT)/boot/nand_ecc.o boot/spl.lds
-	$(LD) -m elf32ltsmip -T boot/spl.lds -o $@ $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o $(OUT)/boot/nand_boot.o $(OUT)/boot/nand_ecc.o
+$(OUT)/spl.elf: $(SPL_OBJS) boot/spl.lds
+	$(LD) -m elf32ltsmip --gc-sections -T boot/spl.lds -o $@ $(SPL_OBJS)
 
 # ---- app packages -------------------------------------------------------------
 # Apps that are installed rather than built in (glaze/pkg.h). packages/<name>
@@ -603,8 +648,9 @@ $(OUT)/fs.img: $(OUT)/wifi-entropy $(OUT)/host/mkfsimg $(USERDATA_FILES) lib/inc
 
 # romfs sits raw in NAND after the kernel, not in the kernel image,
 # and the kernel pages it in (kernel/romfs.c).
-$(OUT)/glaze.bin: $(OUT)/spl.elf $(OUT)/kernel.elf $(OUT)/romfs.img $(OUT)/fs.img tools/mk_nand.py
-	$(PYTHON) tools/mk_nand.py --kernel $(OUT)/kernel.elf --spl $(OUT)/spl.elf \
+MK_NAND_VERSION := --version '$(GLAZE_VERSION)' --build '$(BUILD_ID)'
+$(OUT)/glaze.bin: $(OUT)/spl.elf $(OUT)/kernel.elf $(OUT)/romfs.img $(OUT)/fs.img tools/mk_nand.py VERSION
+	$(PYTHON) tools/mk_nand.py --kernel $(OUT)/kernel.elf --spl $(OUT)/spl.elf $(MK_NAND_VERSION) \
 	    --romfs $(OUT)/romfs.img --fs-image $(OUT)/fs.img --out $@
 
 all: $(OUT)/glaze.bin $(PKG_FILES)
@@ -712,19 +758,20 @@ usb-probe-exe: $(GB_DIR)/UsbProbe.exe
 RB_DIR := $(OUT)/ramboot
 RAMBOOT_FS ?=
 
-$(RB_DIR)/%.o: boot/%.S $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
+$(RB_DIR)/%.o: boot/%.S kernel/drivers/nand_boot.h kernel/resume.h
 	@mkdir -p $(dir $@)
-	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
+	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT -c -o $@ $<
 
-$(RB_DIR)/%.o: boot/%.c $(OUT)/kernel_consts.flags kernel/drivers/nand_boot.h
+$(RB_DIR)/%.o: boot/%.c kernel/drivers/nand_boot.h kernel/resume.h lib/include/glaze/ota.h boot/ota_apply.h boot/splash.h
 	@mkdir -p $(dir $@)
-	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT $$(cat $(OUT)/kernel_consts.flags) -c -o $@ $<
+	$(CC) $(SPL_CFLAGS) -DSPL_RAMBOOT -c -o $@ $<
 
-$(RB_DIR)/spl.elf: $(RB_DIR)/spl_start.o $(RB_DIR)/spl.o $(GB_DIR)/tramp.o $(GB_DIR)/tramp.checked $(OUT)/boot/nand_boot.o $(OUT)/boot/nand_ecc.o boot/spl.lds
-	$(LD) -m elf32ltsmip -T boot/spl.lds -o $@ $(RB_DIR)/spl_start.o $(RB_DIR)/spl.o $(GB_DIR)/tramp.o $(OUT)/boot/nand_boot.o $(OUT)/boot/nand_ecc.o
+RB_OBJS := $(RB_DIR)/spl_start.o $(RB_DIR)/spl.o $(GB_DIR)/tramp.o $(filter-out $(OUT)/boot/spl_start.o $(OUT)/boot/spl.o,$(SPL_OBJS))
+$(RB_DIR)/spl.elf: $(RB_OBJS) $(GB_DIR)/tramp.checked boot/spl.lds
+	$(LD) -m elf32ltsmip --gc-sections -T boot/spl.lds -o $@ $(RB_OBJS)
 
 $(OUT)/glaze-ramboot.bin: $(RB_DIR)/spl.elf $(OUT)/kernel.elf $(OUT)/romfs.img $(RAMBOOT_FS) tools/mk_nand.py
-	$(PYTHON) tools/mk_nand.py --kernel $(OUT)/kernel.elf --spl $(RB_DIR)/spl.elf \
+	$(PYTHON) tools/mk_nand.py --kernel $(OUT)/kernel.elf --spl $(RB_DIR)/spl.elf $(MK_NAND_VERSION) \
 	    --romfs $(OUT)/romfs.img $(if $(RAMBOOT_FS),--fs-image $(RAMBOOT_FS)) --out $@
 
 ramboot: $(OUT)/glaze-ramboot.bin
@@ -737,6 +784,16 @@ FORCE:
 .PHONY: all clean packages FORCE
 
 -include $(shell find $(OUT) -name '*.d' 2>/dev/null)
+
+# OTA update (docs/OTA.md) of the built kernel and romfs as VERSION, signed
+# with GLAZE_OTA_KEY (default ~/.config/glaze/ota-ed25519.pem): out/ota/os/.
+# It builds nothing, so run it natively after ./build.sh: signing needs
+# OpenSSL 3 and the private key, which the container has neither of.
+OTA_NOTES ?=
+ota:
+	$(PYTHON) tools/mkota.py build --kernel $(OUT)/kernel.elf --romfs $(OUT)/romfs.img \
+	    --version '$(GLAZE_VERSION)' --build '$(BUILD_ID)' --notes '$(OTA_NOTES)' --out $(OUT)/ota
+.PHONY: ota
 
 # Portable static store: run ./build.sh store, then publish out/store over HTTPS.
 store: packages

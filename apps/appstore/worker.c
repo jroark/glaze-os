@@ -26,6 +26,7 @@ static char discard_package[FS_PATH_MAX];
 void store_result_free(struct store_result *r)
 {
     free(r->catalog);
+    free(r->os);
     free(r->local);
     free(r->data);
     memset(r, 0, sizeof(*r));
@@ -168,9 +169,11 @@ static int write_bytes(const uint8_t *data, int n, void *arg)
 static void download(const struct store_job *j, struct store_result *r, unsigned token)
 {
     char path[FS_PATH_MAX], url[320];
-    const char *asset = j->kind == STORE_REFRESH ? "catalog.txt"
-                        : j->kind == STORE_ICON  ? j->app.icon
-                                                 : j->app.package;
+    const char *asset = j->kind == STORE_REFRESH       ? "catalog.txt"
+                        : j->kind == STORE_ICON        ? j->app.icon
+                        : j->kind == STORE_OS_CATALOG  ? "os/catalog.txt"
+                        : j->kind == STORE_OS_DOWNLOAD ? j->os.package
+                                                       : j->app.package;
     if (!store_path_ok(asset)) {
         r->error = WE_PROTOCOL;
         return;
@@ -198,6 +201,16 @@ static void download(const struct store_job *j, struct store_result *r, unsigned
             return;
         }
         snprintf(path, sizeof(path), "%s/Applications/.store-download", j->root);
+    } else if (j->kind == STORE_OS_DOWNLOAD) {
+        /* The SPL reads the update from the flash volume only. */
+        struct fs_info volume;
+        if (fs_mkdirs(STORE_UPDATES) || fs_statvfs("/", &volume) ||
+            volume.total - volume.used < j->os.size + 65536u) {
+            strlcpy(r->message, "Not enough space on Flash for the update.", sizeof(r->message));
+            r->error = WE_TOO_BIG;
+            return;
+        }
+        strlcpy(path, STORE_UPDATES "/.download", sizeof(path));
     } else
         strlcpy(path, STORE_CACHE "/download.tmp", sizeof(path));
     struct transfer t = {.fd = -1, .token = token};
@@ -214,9 +227,11 @@ static void download(const struct store_job *j, struct store_result *r, unsigned
         return;
     }
     snprintf(url, sizeof(url), "%s/%s", APPSTORE_URL, asset);
-    int max = j->kind == STORE_REFRESH ? STORE_CATALOG_MAX
-              : j->kind == STORE_ICON  ? STORE_ICON_MAX
-                                       : (int)j->app.size;
+    int max = j->kind == STORE_REFRESH       ? STORE_CATALOG_MAX
+              : j->kind == STORE_ICON        ? STORE_ICON_MAX
+              : j->kind == STORE_OS_CATALOG  ? STORE_OS_CATALOG_MAX
+              : j->kind == STORE_OS_DOWNLOAD ? (int)j->os.size
+                                             : (int)j->app.size;
     struct http *h = http_start_stream(url, max, write_bytes, &t);
     int rv = h ? 0 : WE_NOMEM;
     while (h && !cancelled(token) && !(rv = http_step(h)))
@@ -235,11 +250,7 @@ static void download(const struct store_job *j, struct store_result *r, unsigned
         fs_remove(path);
         return;
     }
-    printf("appstore: fetch kind=%d result=%d HTTP=%d bytes=%d\n",
-           j->kind == STORE_REFRESH ? 1
-           : j->kind == STORE_ICON  ? 2
-                                    : 3,
-           rv, r->status, t.received);
+    printf("appstore: fetch kind=%d result=%d HTTP=%d bytes=%d\n", (int)j->kind, rv, r->status, t.received);
     if (rv < 0 || r->status != 200 || closed < 0 || hashed) {
         r->error = rv < 0 ? rv : WE_PROTOCOL;
         if (t.error || closed < 0)
@@ -257,6 +268,26 @@ static void download(const struct store_job *j, struct store_result *r, unsigned
         } else {
             r->error = WE_PROTOCOL;
             strlcpy(r->message, "Invalid store catalog. Please Retry.", sizeof(r->message));
+        }
+    } else if (j->kind == STORE_OS_CATALOG) {
+        char text[STORE_OS_CATALOG_MAX];
+        int n = fs_read_file(path, text, sizeof(text));
+        r->os = malloc(sizeof(*r->os));
+        if (!r->os || n <= 0 || !store_os_parse(r->os, text, (size_t)n)) {
+            free(r->os);
+            r->os = NULL;
+            r->error = WE_PROTOCOL;
+        }
+    } else if (j->kind == STORE_OS_DOWNLOAD) {
+        char dest[FS_PATH_MAX];
+        snprintf(dest, sizeof(dest), STORE_UPDATES "/glaze-%s.gzu", j->os.version);
+        fs_remove(dest);
+        if (t.received != (int)j->os.size || strcmp(hex, j->os.sha256) || fs_rename(path, dest)) {
+            r->error = WE_PROTOCOL;
+            strlcpy(r->message, "Update verification failed. Please Retry.", sizeof(r->message));
+        } else {
+            strlcpy(r->package, dest, sizeof(r->package));
+            return;
         }
     } else if (j->kind == STORE_ICON) {
         if (!read_icon(&j->app, path, r))
@@ -291,6 +322,16 @@ static void run(const struct store_job *j, struct store_result *r, unsigned toke
         fs_remove(STORE_CACHE "/download.tmp");
         fs_remove("/Applications/.store-download");
         fs_remove("/Card/Applications/.store-download");
+        /* An OS update is staged only between its download and the reset
+         * that installs it; anything here now is left over. */
+        struct fs_dirent entry;
+        uint32_t skip = 0;
+        while (fs_list(STORE_UPDATES, skip, &entry, 1) == 1) {
+            char path[FS_PATH_MAX];
+            snprintf(path, sizeof(path), STORE_UPDATES "/%s", entry.name);
+            if (fs_remove(path))
+                skip++;
+        }
         r->catalog = read_catalog(STORE_CACHE "/catalog.txt");
     } else if (j->kind == STORE_SCAN) {
         r->local = calloc(STORE_MAX_APPS, sizeof(*r->local));

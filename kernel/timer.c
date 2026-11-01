@@ -135,6 +135,45 @@ void timer_init(void)
     write_c0_compare(next_compare);
 }
 
+/*
+ * Across a SUSPEND or HIBERNATE, Count stops or restarts from a reset, and
+ * one Count delta can't span more than 2^32 counts (about 413 s) anyway.
+ * The monotonic clock is carried across on the RTC's elapsed-time counter,
+ * which keeps running in both (VR4131 UM table 12-3).
+ */
+static uint64_t sleep_etime;
+
+uint64_t timer_etime(void)
+{
+    uint16_t h, m, l, m2;
+
+    do {
+        h = RTC_ETIME_H;
+        m = RTC_ETIME_M;
+        l = RTC_ETIME_L;
+        m2 = RTC_ETIME_M;
+    } while (m != m2);
+    return ((uint64_t)h << 32) | ((uint32_t)m << 16) | l;
+}
+
+uint64_t timer_suspend(void)
+{
+    clock_update();
+    sleep_etime = timer_etime();
+    return sleep_etime;
+}
+
+void timer_resume(void)
+{
+    uint64_t slept = (timer_etime() - sleep_etime) & 0xFFFFFFFFFFFFull;
+
+    /* RTC ticks to Count: count_per_ms per 32.768 ticks. */
+    count_total += slept * count_per_ms * 1000u / RTC_HZ;
+    last_count = read_c0_count();
+    next_compare = last_count + count_per_tick;
+    write_c0_compare(next_compare);
+}
+
 void timer_irq(void)
 {
     uint32_t now = read_c0_count();

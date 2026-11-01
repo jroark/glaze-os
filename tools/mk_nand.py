@@ -18,21 +18,25 @@ reference image):
   NAND[0x4000..)       partition 1 = SPL B000FF container
                          "B000FF\\n", image_start, image_length, records,
                          terminator (0, kernel_entry_via_SPL, 0xFFFFFFFF)
-  NAND[0x14000..)      partition 2 = flat kernel binary (objcopy -O binary)
+  NAND[0x14000..)      partition 2 = the kernel slot: a 512-byte header
+                         (struct gz_kernel_header, glaze/ota.h: load, entry,
+                         size, CRC, version), then the flat kernel binary
   NAND[0x40000..)      partition 4 = romfs (tools/mkromfs.py), paged in by the
                          kernel (kernel/romfs.c); not loaded by the SPL
   NAND[0x500000..)     partition 3 = the file server's region (host/mkfsimg)
   NAND[0x10000000-1]   padded with 0xFF to 16 MiB
 
-The boot ROM walks partition 1 (the SPL); the SPL then reads partition 2 a
-page at a time via the VRC4173 SPL transfer engine and jumps to the kernel
-entry. The kernel hands the file-system region to the file server
+The boot ROM walks partition 1 (the SPL); the SPL then reads partition 2's
+header, loads the image a page at a time via the VRC4173 SPL transfer engine,
+checks its CRC and jumps to the kernel entry. An OTA update (docs/OTA.md)
+replaces everything from partition 2 to the end of the romfs slot. The kernel hands the file-system region to the file server
 (servers/fs), which runs littlefs on Dhara there. See boot/ for the SPL.
 """
 
 import argparse
 import struct
 import sys
+import zlib
 from pathlib import Path
 
 NAND_IMAGE_SIZE = 16 * 1024 * 1024
@@ -45,6 +49,9 @@ NAND_FILL = 0xFF
 RECORD_CKSUM = 0xFFFFFFFF
 PARTITION_ENTRY_SIZE = 16
 DEFAULT_CHUNK = 0x8000
+KHDR_MAGIC = 0x324B5A47    # "GZK2", struct gz_kernel_header in glaze/ota.h
+KHDR_SIZE = 512
+LOAD_MIN, LOAD_END = 0x80010000, 0x80F00000
 
 ELF_MAGIC = b"\x7fELF"
 ELFCLASS32 = 1
@@ -147,6 +154,26 @@ def kernel_flat_bytes(kernel_data: bytes) -> tuple[bytes, dict]:
     return bytes(flat), {"load_va": base, "size": end - base, "entry_va": e_entry}
 
 
+def kernel_slot(kernel_data: bytes, version: str, build: str) -> tuple[bytes, dict]:
+    """The kernel slot's contents: the header page, then the flat image."""
+    flat, meta = kernel_flat_bytes(kernel_data)
+    load, entry, size = meta["load_va"], meta["entry_va"], meta["size"]
+    if load < LOAD_MIN or load + size > LOAD_END or not load <= entry < load + size:
+        raise ValueError(f"kernel at 0x{load:08X}+0x{size:X} (entry 0x{entry:08X}) "
+                         "is outside what the SPL loads")
+    if KHDR_SIZE + size > ROMFS_OFFSET - KERNEL_OFFSET:
+        raise ValueError(f"kernel ({size} bytes) overflows its slot of 0x{ROMFS_OFFSET - KERNEL_OFFSET - KHDR_SIZE:X} bytes")
+    version_b, build_b = version.encode(), build.encode()[:31]
+    if not version_b or len(version_b) > 15:
+        raise ValueError(f"version {version!r} must be 1-15 characters")
+    header = bytearray(KHDR_SIZE)
+    struct.pack_into("<6I", header, 0, KHDR_MAGIC, 1, load, entry, size, zlib.crc32(flat))
+    header[32:32 + len(version_b)] = version_b
+    header[48:48 + len(build_b)] = build_b
+    struct.pack_into("<I", header, 508, zlib.crc32(header[:508]))
+    return bytes(header) + flat, meta
+
+
 def write_partition_table(image: bytearray, entries: list[tuple[int, int]]):
     """Lay out a 16-byte-per-entry partition table at NAND page 0.
     `entries` is a list of (start_sector, sector_count). Up to 8 entries."""
@@ -164,6 +191,8 @@ def main() -> int:
                     "where the kernel pages it in".format(ROMFS_OFFSET))
     ap.add_argument("--fs-image", help="Optional file-system region image (host/mkfsimg) to place at NAND offset 0x{:X}".format(FS_OFFSET))
     ap.add_argument("--out", required=True, help="Output NAND image path")
+    ap.add_argument("--version", default="0", help="OS version for the kernel header (VERSION)")
+    ap.add_argument("--build", default="dev", help="build identifier for the kernel header")
     ap.add_argument("--chunk", type=lambda s: int(s, 0), default=DEFAULT_CHUNK,
                     help=f"Max bytes per SPL B000FF record (default: 0x{DEFAULT_CHUNK:X})")
     args = ap.parse_args()
@@ -181,8 +210,11 @@ def main() -> int:
             f"partition slot (0x{KERNEL_OFFSET - SPL_OFFSET:X} bytes)"
         )
 
-    # Build the kernel flat image (partition 2 payload, read raw by the SPL).
-    kernel_flat, kernel_meta = kernel_flat_bytes(vmlinux)
+    # The kernel slot (partition 2: header and flat image, read by the SPL).
+    try:
+        kernel_flat, kernel_meta = kernel_slot(vmlinux, args.version, args.build)
+    except ValueError as e:
+        raise SystemExit(f"mk_nand.py: {e}")
 
     spl_sectors = (len(spl_container) + 511) // 512
     kernel_sectors = (len(kernel_flat) + 511) // 512
@@ -236,7 +268,7 @@ def main() -> int:
         f"  SPL slot     = sector 0x{SPL_OFFSET // 512:X} count 0x{spl_sectors:X}\n"
         f"  Kernel load  = 0x{kernel_meta['load_va']:08X}\n"
         f"  Kernel entry = 0x{kernel_meta['entry_va']:08X}\n"
-        f"  Kernel flat  = 0x{kernel_meta['size']:X} bytes\n"
+        f"  Kernel flat  = 0x{kernel_meta['size']:X} bytes (version {args.version})\n"
         f"  Kernel slot  = sector 0x{KERNEL_OFFSET // 512:X} count 0x{kernel_sectors:X}"
     )
     if fs_image is not None:

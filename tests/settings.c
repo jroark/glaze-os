@@ -22,6 +22,8 @@ static int display_error, display_saves;
 static int32_t timeout_disk;
 static int timeout_len = GZ_ENOENT, timeout_error, timeout_notifications;
 static gfx_rect last_present;
+static char icons_disk[512];
+static int icons_len = GZ_ENOENT, icons_notifications;
 static struct gz_datetime rtc = {.year = 2026, .month = 10, .day = 19, .hour = 12, .minute = 34};
 
 uint32_t gz_time_ms(void)
@@ -49,6 +51,12 @@ int gz_sysinfo(struct gz_sysinfo *si)
     si->total_pages = 4096;
     return 0;
 }
+int gz_ota_status(struct gz_ota_status *st)
+{
+    memset(st, 0, sizeof(*st));
+    strcpy(st->version, "1.0");
+    return 0;
+}
 int gz_boot_mode(void) { return boot_mode; }
 int gz_power_status(struct gz_power_status *st)
 {
@@ -67,6 +75,8 @@ int gz_notify(int port, uint32_t bits)
     if (bits == SB_NOTIFY_DISPLAY) {
         timeout_notifications++;
     }
+    if (bits == SB_NOTIFY_ICONS)
+        icons_notifications++;
     return 0;
 }
 int gz_getpid(void) { return 7; }
@@ -106,6 +116,11 @@ int pref_get(const char *key, void *buf, uint32_t len)
         if(input_len>0)memcpy(buf,&input_disk,MIN(len,sizeof(input_disk)));
         return input_len;
     }
+    if (!strcmp(key, HARDICON_PREF)) {
+        if (icons_len > 0)
+            memcpy(buf, icons_disk, MIN(len, (uint32_t)icons_len));
+        return icons_len;
+    }
     if (!strcmp(key, DISPLAY_TIMEOUT_PREF)) {
         if (timeout_len > 0)
             memcpy(buf, &timeout_disk, MIN(len, sizeof(timeout_disk)));
@@ -118,6 +133,11 @@ int pref_put(const char *key, const void *buf, uint32_t len)
     if(!strcmp(key,UI_INPUT_PREF)){
         if(input_error)return input_error;
         memcpy(&input_disk,buf,sizeof(input_disk));input_len=len;
+    }
+    if (!strcmp(key, HARDICON_PREF)) {
+        memcpy(icons_disk, buf, MIN(len, sizeof(icons_disk) - 1));
+        icons_len = (int)len;
+        icons_disk[icons_len] = 0;
     }
     if (!strcmp(key, DISPLAY_TIMEOUT_PREF)) {
         if (timeout_error)
@@ -139,6 +159,37 @@ bool passcode_check(const char *code)
 }
 int passcode_set(const char *code)
 {
+    return 0;
+}
+/* A RAM boot without Videos; Gmail on both volumes, Doom on the card. */
+const void *gz_romfs_map(const char *name, uint32_t *size)
+{
+    *size = 1;
+    return strcmp(name, "bin/video") ? (const void *)name : NULL;
+}
+int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_info *info, void *arg), void *arg)
+{
+    struct pkg_info gmail = { .id = "gmail", .name = "Gmail" }, doom = { .id = "doom", .name = "Doom" };
+    if (!*root) {
+        fn("/Applications/gmail.app", &gmail, arg);
+        return 1;
+    }
+    fn("/Card/Applications/doom.app", &doom, arg);
+    fn("/Card/Applications/gmail.app", &gmail, arg);
+    return 2;
+}
+int pkg_find(const char *id, char bundle[PKG_BUNDLE_MAX])
+{
+    if (strcmp(id, "gmail"))
+        return GZ_ENOENT;
+    strcpy(bundle, "/Applications/gmail.app");
+    return 0;
+}
+int pkg_bundle_info(const char *bundle, struct pkg_info *info)
+{
+    memset(info, 0, sizeof(*info));
+    strcpy(info->id, "gmail");
+    strcpy(info->name, "Gmail");
     return 0;
 }
 int net_status(struct net_status *st)
@@ -239,6 +290,80 @@ static void compare_full(void)
     require(!memcmp(full, screen, sizeof(full)), "partial pixels differ from full draw");
     require(count == nhits && !memcmp(saved, hits, (size_t)count * sizeof(*hits)),
             "partial draw lost hit geometry");
+}
+
+static void press_all(void)
+{
+    int ids[sizeof(hits) / sizeof(hits[0])], count = nhits;
+    for (int i = 0; i < count; i++)
+        ids[i] = hits[i].id;
+    for (int i = 0; i < count; i++) {
+        press(ids[i]);
+        compare_full();
+        press(R_NONE);
+        compare_full();
+    }
+}
+
+static int icon_choice(const char *label)
+{
+    for (int i = 0; i < icon_nchoices; i++)
+        if (!strcmp(icon_choices[i].label, label))
+            return i;
+    require(false, label);
+    return -1;
+}
+
+/* Settings → Icon Buttons: CE's defaults, the picker, saving and telling
+ * SpringBoard. */
+static void icon_tests(void)
+{
+    hardicon_load(&s_icons);        /* as load() does: nothing saved yet */
+    view = V_ROOT;
+    redraw();
+    activate(R_ICONS);
+    require(view == V_ICONS, "Icon Buttons did not open");
+    compare_full();
+    press_all();
+    require(!strcmp(icon_values[0], "Calendar") && !strcmp(icon_values[1], "None") &&
+            !strcmp(icon_values[4], "Gmail") && !strcmp(icon_values[6], "Settings"), "default icon values");
+    host_write_bmp("../out/host/settings-icons.bmp", &ui.surf);
+
+    activate(R_ICON0 + 1);
+    require(view == V_ICON_ACTION && icon_for == 1, "icon picker did not open");
+    require(icon_nchoices == 6 + 10 + 2 + hardicon_num_keys, "picker choices (no Videos, Gmail once)");
+    compare_full();
+    for (int offset = -20; offset < ui_scroll_max(&zone_scroll) + 40; offset += 17) {
+        zone_scroll.offset = offset;
+        redraw_rect(zone_area());
+        compare_full();
+    }
+    zone_scroll.offset = 0;
+    redraw();
+    host_write_bmp("../out/host/settings-icon-action.bmp", &ui.surf);
+
+    activate(R_ICONACT0 + icon_choice("Home"));
+    require(view == V_ICONS && s_icons.icon[1].kind == HARDICON_HOME, "Home was not assigned");
+    require(icons_notifications == 1 && strstr(icons_disk, "\nhome\n"), "assignment not saved");
+    require(!strcmp(icon_values[1], "Home"), "assignment not shown");
+    activate(R_ICON0 + 5);
+    activate(R_ICONACT0 + icon_choice("Doom"));
+    activate(R_ICON0 + 2);
+    activate(R_ICONACT0 + icon_choice("Page Down"));
+    require(strstr(icons_disk, "pkg doom\n") && strstr(icons_disk, "key pagedown\n"), "package and key saved");
+    require(!strcmp(icon_values[2], "Page Down"), "key not shown");
+    activate(R_ICON_APPS);
+    require(!s_icons.apps && strstr(icons_disk, "apps 0\n") && icons_notifications == 4, "apps switch");
+    redraw();
+    compare_full();
+
+    struct hardicon_config disk;
+    hardicon_load(&disk);
+    for (int i = 0; i < HARDICON_COUNT; i++)
+        require(icon_same(&disk.icon[i], &s_icons.icon[i]), "saved icons do not load back");
+    require(disk.apps == s_icons.apps, "saved apps switch does not load back");
+    activate(R_BACK);
+    require(view == V_ROOT, "Icon Buttons back");
 }
 
 static void calibration_tap(int x, int y)
@@ -624,6 +749,7 @@ int main(void)
     test_wifi_error = GZ_ENOENT;
     wifi_available = false;
     calibration_tests();
+    icon_tests();
     display_tests();
     timeout_tests();
     reboot_tests();

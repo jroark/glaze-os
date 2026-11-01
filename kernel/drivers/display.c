@@ -72,6 +72,48 @@ void display_init(bool inherit)
     contrast_now = DISPLAY_CONTRAST_DEFAULT;
 }
 
+/*
+ * The panel off for a sleep, as Windows CE's OEMPowerOff does before
+ * HIBERNATE (nk.exe 0x80079BB4): 0x48 = 0x10F (0x200 off), the backlight
+ * off, 0x48 = 0x101, then 0, 0x30 = 1 and the LCD gate 110C off. That is
+ * lcd_start()'s sequence in reverse; the waits between the steps mirror
+ * its own. The BLG configuration and gate stay as display_power() leaves
+ * them for the piezo. display_wake() starts the panel again with the
+ * backlight still off: SpringBoard paints, then turns it on.
+ */
+void display_sleep(void)
+{
+    display_power(0);
+    DISP_LCD(0x48) &= ~0x0200u;
+    display_delay_us(20000);
+    DISP_LCD(0x48) &= ~0x000Eu;
+    display_delay_us(1000);
+    DISP_LCD(0x48) = 0;
+    DISP_LCD(0x30) = 1;
+    DISP_LCD_GATE = 0;
+}
+
+void display_wake(void)
+{
+    int brightness = brightness_now, contrast = contrast_now;
+
+    lcd_start();
+    /* As display_power(0) would leave it, for SpringBoard's display_power(1). */
+    saved_control = DISP_BL_CONTROL;
+    saved_config = DISP_BL_CONFIG;
+    saved_gate = DISP_BL_GATE & 1u;
+    DISP_BL_CONTROL = 0;
+    if (!buzzer_active()) {
+        DISP_BL_CONFIG &= ~0xFu;
+        DISP_BL_GATE &= ~1u;
+    }
+    powered = false;
+    brightness_now = DISPLAY_BRIGHTNESS_MAX;
+    contrast_now = DISPLAY_CONTRAST_DEFAULT;
+    if (brightness > 0 && contrast >= 0)
+        display_set(brightness, contrast);
+}
+
 int display_set(int brightness, int contrast)
 {
     struct display_settings v = { DISPLAY_VERSION, brightness, contrast };
