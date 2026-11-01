@@ -25,13 +25,14 @@ def main():
         default_resources = Path(sys.executable).resolve().parents[1] / 'Resources/resources'
     parser = argparse.ArgumentParser()
     parser.add_argument('--resources', type=Path, default=default_resources)
-    parser.add_argument('--worker', choices=['probe', 'prepare', 'install', 'restore', 'install-device'])
+    parser.add_argument('--worker', choices=['probe', 'prepare', 'install', 'restore', 'install-device', 'maintenance-info', 'install-apps', 'update-os'])
     parser.add_argument('--argument', default='')
     parser.add_argument('--skip-backup', action='store_true')
     parser.add_argument('--skip-wince-verification', action='store_true')
     parser.add_argument('--apps', help='JSON list of selected app IDs')
     parser.add_argument('--check-bundle', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--device', default='auto')
+    parser.add_argument('--smoke-maintenance', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--smoke-test', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.check_bundle:
@@ -54,6 +55,12 @@ def main():
             if args.worker == 'probe':
                 installer.verify()
                 installer.probe()
+            elif args.worker == 'maintenance-info':
+                installer.maintenance_info()
+            elif args.worker == 'install-apps':
+                installer.install_apps(json.loads(args.apps) if args.apps else [])
+            elif args.worker == 'update-os':
+                installer.update_os()
             elif args.worker == 'install-device':
                 installer.install_device(args.argument, json.loads(args.apps) if args.apps else None,
                                          save_backup=not args.skip_backup, verify_wince=not args.skip_wince_verification)
@@ -93,7 +100,7 @@ def main():
     consequence = tk.StringVar()
     events = queue.Queue()
     state = {'busy': False, 'confirming': False, 'operation': None, 'done': False, 'details': False,
-             'last_error': None, 'backup': None}
+             'last_error': None, 'backup': None, 'maintenance': False}
     controls = []
     if args.smoke_test:
         log_folder = Path(tempfile.mkdtemp(prefix='glaze-ui-smoke-'))
@@ -104,7 +111,7 @@ def main():
     log_path = log_folder / ('session-' + __import__('datetime').datetime.now().strftime('%Y%m%d-%H%M%S') + '.jsonl')
 
     def selected_app_count():
-        return sum(a['id'] in selected for a in catalog if a['kind'] != 'firmware')
+        return sum(a['id'] in selected for a in catalog if a['kind'] == 'package' or (not state['maintenance'] and a['kind'] == 'builtin'))
 
     def choose_apps():
         window = tk.Toplevel(root)
@@ -113,9 +120,11 @@ def main():
         window.grab_set()
         panel = ttk.Frame(window, padding=18)
         panel.pack(fill='both', expand=True)
-        ttk.Label(panel, text='Files and Settings are always included.').pack(anchor='w', pady=8)
+        ttk.Label(panel, text='Unchecked apps stay installed.' if state['maintenance'] else 'Files and Settings are always included.').pack(anchor='w', pady=8)
         variables = {}
         for kind, title in [('builtin', 'Built-in apps'), ('package', 'Additional apps'), ('firmware', 'Optional hardware')]:
+            if state['maintenance'] and kind != 'package':
+                continue
             group = ttk.LabelFrame(panel, text=title, padding=10)
             group.pack(fill='x', pady=5)
             for index, app in enumerate(a for a in catalog if a['kind'] == kind):
@@ -130,13 +139,14 @@ def main():
         def preset(all_apps):
             wanted = {a['id'] for a in catalog if (all_apps and a['kind'] != 'firmware') or a.get('required')}
             if all_apps:
-                wanted.update(a['id'] for a in catalog if a['kind'] == 'firmware' and variables[a['id']].get())
+                wanted.update(a['id'] for a in catalog if a['kind'] == 'firmware' and a['id'] in variables and variables[a['id']].get())
             for key, variable in variables.items():
                 variable.set(key in wanted)
         def save():
             chosen = select(catalog, [key for key, value in variables.items() if value.get()])
             try:
-                customize_logical((args.resources / 'glaze.bin').read_bytes(), catalog, chosen, args.resources)
+                if not state['maintenance']:
+                    customize_logical((args.resources / 'glaze.bin').read_bytes(), catalog, chosen, args.resources)
             except ValueError as error:
                 messagebox.showerror('Choose fewer options', str(error), parent=window)
                 return
@@ -211,6 +221,9 @@ def main():
         threading.Thread(target=work, daemon=True).start()
 
     def install():
+        if state['maintenance']:
+            launch('install-apps')
+            return
         if state['done']:
             root.destroy()
             return
@@ -226,6 +239,28 @@ def main():
     install_button = ttk.Button(actions, text='Install Glaze', command=install)
     install_button.pack(side='right')
     controls.append(install_button)
+    def update_os():
+        if messagebox.askyesno('Update Glaze OS?', 'Install the bundled standard OS? Built-in apps and firmware follow this release. Apps, settings and saved data are preserved. Keep external power connected.'):
+            launch('update-os')
+    update_button = ttk.Button(actions, text='Update Glaze OS…', command=update_os)
+    check_button = ttk.Button(actions, text='Check status', command=lambda: launch('maintenance-info'))
+    controls += [update_button, check_button]
+    def maintenance_mode(enabled):
+        state['maintenance'] = enabled
+        state['done'] = False
+        install_button.configure(text='Install apps' if enabled else 'Install Glaze')
+        apps_button.configure(text=f'Choose apps… ({selected_app_count()} selected)')
+        for widget in (backup_check, folder_button, verify_check):
+            widget.grid_remove() if enabled else widget.grid()
+        if enabled:
+            consequence.set('OS updates use the bundled standard image. Unchecked apps stay installed.')
+            update_button.pack(side='right', padx=6)
+            check_button.pack(side='left', padx=6)
+        else:
+            update_button.pack_forget()
+            check_button.pack_forget()
+            backup_changed()
+
     def restore():
         state['confirming'] = True
         try:
@@ -298,7 +333,12 @@ def main():
                 log.see('end')
                 log.configure(state='disabled')
             if kind == 'device' and state['operation'] == 'probe':
-                status.set('BE-300 connected. Ready to install.')
+                maintenance_mode(event.get('runtime') == 'Glaze' and not event.get('capabilities', 0) & 32768)
+                status.set('Glaze connected. Check status to see the running and bundled releases.' if state['maintenance'] else 'BE-300 connected. Ready to install.')
+            if kind == 'maintenance-info':
+                maintenance_mode(True)
+                outcome = {1: ' Last OS update applied.', 2: ' Last OS update was rejected.'}.get(event['last_result'], '')
+                status.set(f"Running Glaze {event['version'] or 'an older OS'}; bundled {event['bundled']}. " + ('Signed OS updates supported.' if event['flags'] & 1 else 'OS/SPL cannot install signed updates.') + outcome)
             if kind == 'backup-saved':
                 state['backup'] = event['path']
             if kind in ('status', 'programming'):
@@ -314,11 +354,11 @@ def main():
                 elif 'final verification' in event.get('phase', ''):
                     status.set('Checking the installation…')
             if kind == 'success':
-                state['done'] = True
+                state['done'] = not state['maintenance']
                 status.set(text)
                 progress.stop()
                 progress.configure(mode='determinate', maximum=100, value=100)
-                install_button.configure(text='Done')
+                install_button.configure(text='Install apps' if state['maintenance'] else 'Done')
                 if state['backup']:
                     backup_button.pack(side='left', padx=8)
             if kind == 'error':
@@ -339,6 +379,8 @@ def main():
                 for control in controls:
                     control.configure(state='normal')
                 folder_button.configure(state='normal' if save_backup.get() else 'disabled')
+                if state['operation'] == 'probe' and not event['code'] and state['maintenance']:
+                    root.after(0, lambda: launch('maintenance-info'))
                 if state['operation'] == 'probe' and event['code']:
                     root.after(3000, auto_detect)
         root.after(100, poll)
@@ -365,6 +407,8 @@ def main():
     root.geometry(f'620x{base_height}')
     poll()
     if args.smoke_test:
+        if args.smoke_maintenance:
+            maintenance_mode(True)
         root.after(50, choose_apps)
         root.after(500, root.destroy)
     else:

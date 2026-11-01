@@ -1,3 +1,23 @@
+# Offline maintenance validation — 2026-11-01
+
+Maintenance changes build the MIPS companion and native USB helper. Fourteen orchestration/resource tests and six native companion tests pass.
+New tests exercise production companion behavior with native service fixtures, installer
+orchestration, and signed update resource verification. Existing installer,
+app-selection, physical-NAND, transaction, USB and package-recovery checks are
+run alongside them (17 installer tests and five app-selection tests passed;
+three artifact-dependent cases skipped). Four physical-NAND and five transaction
+tests, USB PC Connect/staging tests, package recovery tests, and macOS Tk GUI
+smoke checks in both modes passed. The full OTA suite passed, including 121 power cuts across 7,955 flash
+operations, signature/tamper/downgrade rejection, bad-block replacement and
+filesystem preservation. Exact commands and results are recorded in the worktree's
+`out/maintenance-*.log` files where applicable.
+
+These changes have not produced new distributable DMG/EXE files. A matching signed
+release and complete firmware/CE build inputs are required for packaging. Real USB,
+post-reset emulator reconnection, Windows GUI, and physical BE-300 maintenance
+remain release validation requirements. The older artifact results below describe
+the original fresh installer only.
+
 # Validation — 2026-10-31
 
 Branch `codex/usb-gui-installer`, base `cc8c1c4`.

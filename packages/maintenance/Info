@@ -1,0 +1,4 @@
+id=maintenance
+name=Glaze Installer
+version=1.0
+exec=app

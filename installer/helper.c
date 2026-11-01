@@ -5,10 +5,34 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-/* This executable deliberately has no network, CF, upload or shell interface. */
+/* Maintenance file access is confined to installer staging paths. */
+static int maintenance_path(const char *p) {
+    return !strcmp(p,"/Library/Installer/request") || !strcmp(p,"/Library/Installer/result") ||
+           !strcmp(p,"/Library/Installer/app.gzp") || !strcmp(p,"/Library/Installer/maintenance.gzp") ||
+           !strcmp(p,"/Library/Updates/installer.gzu");
+}
 void debug_host_close(struct usb_link *l) { (void)l; }
 int debug_host_read(struct usb_link *l,void *p,size_t n,unsigned t) { (void)l;(void)p;(void)n;(void)t;return -1; }
 int debug_host_write(struct usb_link *l,const void *p,size_t n,unsigned t) { (void)l;(void)p;(void)n;(void)t;return -1; }
+/* Companion replies are at most 8 KiB; never download an unbounded file. */
+static int maintenance_result(struct gu_client *c,const char *local)
+{
+    static const char path[]="/Library/Installer/result";
+    FILE *f=fopen(local,"wx");
+    if(!f)return -1;
+    uint8_t data[4+sizeof(path)-1]; unsigned offset=0; int rv=-1;
+    for(;;) {
+        gu_put32(data,offset); memcpy(data+4,path,sizeof(path)-1);
+        int n=gu_call(c,GU_GET,data,sizeof(data));
+        if(n<0 || (unsigned)n>8192-offset)break;
+        if(fwrite(c->frame+GU_HEADER,1,(size_t)n,f)!=(size_t)n)break;
+        offset+=(unsigned)n;
+        if((unsigned)n<GU_PAYLOAD) { rv=0;break; }
+    }
+    if(fclose(f))rv=-1;
+    if(rv)remove(local);
+    return rv;
+}
 int main(int argc,char **argv) {
     installer_binary(); setbuf(stdout,NULL); setbuf(stderr,NULL);
     if(argc<3) return 2;
@@ -44,6 +68,9 @@ int main(int argc,char **argv) {
             }
             if(valid)r=gu_call(&c,GU_INSTALL_STATUS,data,sizeof(data));
         }
+        else if(!strcmp(argv[2],"put") && argc==5 && maintenance_path(argv[4]) && strcmp(argv[4],"/Library/Installer/result")) r=gu_upload(&c,argv[3],argv[4]);
+        else if(!strcmp(argv[2],"get-result") && argc==4) r=maintenance_result(&c,argv[3]);
+        else if(!strcmp(argv[2],"maintenance") && argc==3) r=gu_call(&c,GU_RUN,"/Library/Installer/maintenance.gzp",strlen("/Library/Installer/maintenance.gzp"));
         else if(!strcmp(argv[2],"snapshot") && argc==4) r=gu_nand_snapshot(&c,argv[3]);
         else if(!strcmp(argv[2],"backup") && argc==4) r=gu_nand_backup(&c,argv[3]);
         else if(!strcmp(argv[2],"apply") && argc==6) r=gu_nand_apply(&c,argv[3],argv[4],argv[5],false);

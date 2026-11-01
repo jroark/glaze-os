@@ -2,17 +2,72 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import struct
+import tempfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def stage_resources(out, native_dir, build_id, ext=''):
+def validate_update(path, build_id):
+    if path is None:
+        raise ValueError('A signed matching OS update is required (--os-update).')
+    data = Path(path).read_bytes()
+    if len(data) < 512 or data[:8] != b'GZOTA1\0\0':
+        raise ValueError('Invalid signed OS update')
+    header, size, count, spl = struct.unpack_from('<IIII', data, 8)
+    version = data[24:40].split(b'\0')[0].decode('ascii')
+    build = data[40:72].split(b'\0')[0].decode('ascii')
+    if (header != 512 or size != len(data) or not 12 <= count <= 315 or
+            build != build_id or version != (ROOT / 'VERSION').read_text().strip() or
+            hashlib.sha256(data[512:]).digest() != data[72:104]):
+        raise ValueError('OS update does not match the release')
+    # Verify with the same pinned release key trusted by the device.
+    with tempfile.TemporaryDirectory() as folder:
+        folder = Path(folder)
+        (folder / 'key.der').write_bytes(bytes.fromhex('302a300506032b6570032100') + (ROOT / 'config/ota_pubkey.bin').read_bytes())
+        (folder / 'header').write_bytes(data[:448])
+        (folder / 'signature').write_bytes(data[448:512])
+        candidates = [os.environ['OPENSSL']] if os.environ.get('OPENSSL') else ['openssl', '/opt/homebrew/bin/openssl', '/usr/local/opt/openssl@3/bin/openssl', '/opt/homebrew/opt/openssl@3/bin/openssl']
+        openssl = None
+        for candidate in candidates:
+            binary = shutil.which(candidate)
+            if binary and subprocess.run([binary, 'version'], capture_output=True, text=True).stdout.startswith('OpenSSL 3.'):
+                openssl = binary
+                break
+        if openssl is None:
+            raise ValueError('Packaging signed updates requires OpenSSL 3; set OPENSSL.')
+        subprocess.run([openssl, 'pkeyutl', '-verify', '-pubin', '-keyform', 'DER',
+                        '-inkey', str(folder / 'key.der'), '-rawin', '-in', str(folder / 'header'),
+                        '-sigfile', str(folder / 'signature')], check=True, capture_output=True)
+    # Check the signed ROMFS against the standard OS image being packaged.
+    blocks = []
+    for i in range(count):
+        offset, length, crc = struct.unpack_from('<III', data, 512 + i * 12)
+        if offset < 512 + count * 12 or offset + length > len(data):
+            raise ValueError('Invalid update block')
+        block = data[offset:offset+length]
+        if length != 16384:
+            block = zlib.decompress(block, -15)
+        if len(block) != 16384 or zlib.crc32(block) != crc:
+            raise ValueError('Invalid update block checksum')
+        blocks.append(block)
+    payload = b''.join(blocks)
+    logical = (ROOT / 'out/glaze.bin').read_bytes()
+    if payload != logical[0x14000:0x14000+len(payload)]:
+        raise ValueError('Signed update differs from bundled NAND kernel/ROMFS')
+    return {'version': version, 'build': build, 'spl_min': spl}
+
+
+def stage_resources(out, native_dir, build_id, ext='', os_update=None):
+    os_metadata = validate_update(os_update, build_id)
     resources = out / 'resources'
     if resources.exists():
         shutil.rmtree(resources)
@@ -23,6 +78,8 @@ def stage_resources(out, native_dir, build_id, ext=''):
     for name in ('GlazeBoot.exe', 'UsbProbe.exe', 'kernel.bin', 'romfs.img'):
         shutil.copy2(ROOT / 'out/glazeboot' / name, resources / 'ram')
     shutil.copy2(ROOT / 'out/glaze.bin', resources)
+    shutil.copy2(os_update, resources / 'update.gzu')
+    shutil.copy2(ROOT / 'out/pkg/maintenance.gzp', resources / 'maintenance.gzp')
     shutil.copy2(ROOT / 'LICENSE', resources / 'LICENSE')
     shutil.copytree(ROOT / 'userdata', resources / 'userdata')
     (resources / 'tools').mkdir()
@@ -40,7 +97,7 @@ def stage_resources(out, native_dir, build_id, ext=''):
     for info in sorted((ROOT / 'packages').glob('*/Info')):
         metadata = dict(line.split('=', 1) for line in info.read_text().splitlines() if '=' in line)
         program = metadata['id']
-        if program == 'hello':
+        if program in ('hello', 'maintenance'):
             continue
         shutil.copy2(ROOT / 'out/pkg' / (program + '.gzp'), resources / 'packages')
         catalog.append({'id': 'package:' + program, 'name': metadata['name'], 'program': program,
@@ -73,7 +130,7 @@ def stage_resources(out, native_dir, build_id, ext=''):
         for path in (ROOT / 'third_party' / component).glob('*'):
             if path.is_file() and path.name.lower().startswith(('license', 'copying')):
                 shutil.copy2(path, notices / (component + '-' + path.name))
-    manifest = {'version': 1, 'build_id': build_id, 'files': {}}
+    manifest = {'version': 1, 'build_id': build_id, 'os': os_metadata, 'files': {}}
     for path in sorted(resources.rglob('*')):
         if path.is_file() and path.parent != resources / 'bin':
             manifest['files'][str(path.relative_to(resources)).replace('\\', '/')] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -84,6 +141,7 @@ def stage_resources(out, native_dir, build_id, ext=''):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--build-id', required=True, help='BUILD_ID used to compile the bundled kernel')
+    p.add_argument('--os-update', type=Path, required=True, help='Signed .gzu matching the bundled build')
     p.add_argument('--native-dir', type=Path, default=ROOT / 'out/installer-native')
     p.add_argument('--stage-only', action='store_true')
     args = p.parse_args()
@@ -91,7 +149,7 @@ def main():
     if sys.platform != 'darwin':
         p.error('Use package_windows.py to build the offline Windows installer')
     ext = ''
-    resources = stage_resources(out, args.native_dir, args.build_id, ext)
+    resources = stage_resources(out, args.native_dir, args.build_id, ext, args.os_update)
     if args.stage_only:
         return
     sep = ':'

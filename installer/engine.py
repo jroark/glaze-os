@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
+from contextlib import contextmanager
 from app_selection import load_catalog, select, customize_logical, install_packages, entries, archive
 
 RAW_SIZE = 17301504
@@ -93,6 +95,7 @@ class Installer:
         device = next(e for e in events if e.get('event') == 'device')
         self.device = device['location']
         device['capabilities'] = next((e['value'] for e in events if e.get('event') == 'capabilities'), 0)
+        self.emit(dict(device, event='device'))
         return device
 
     def wait_glaze(self, required=0):
@@ -278,3 +281,126 @@ class Installer:
         except RuntimeError as error:
             raise RuntimeError('NAND programming verified; boot verification incomplete. ' + str(error)) from error
         self.emit({'event': 'success', 'text': 'Glaze is installed. You can disconnect USB.'})
+
+    @contextmanager
+    def maintenance_session(self):
+        self.verify()
+        device = self.probe()
+        if device['runtime'] != 'Glaze' or device['capabilities'] & 3 != 3 or device['capabilities'] & 32768:
+            raise ValueError('Connect a BE-300 running Glaze with USB file and app support. Fresh installation is a separate action.')
+        with tempfile.TemporaryDirectory(prefix='glaze-maintenance-') as directory:
+            self.maintenance_dir = Path(directory)
+            self.run('put', self.resources / 'maintenance.gzp', '/Library/Installer/maintenance.gzp')
+            self.run('maintenance')
+            self.maintenance_armed = False
+            try:
+                yield
+            finally:
+                try:
+                    if not self.maintenance_armed:
+                        self.maintenance_request('quit', timeout=10)
+                except (RuntimeError, ValueError):
+                    pass  # Arming an OS update disconnects USB.
+
+    def maintenance_request(self, action, timeout=120, wait=True):
+        operation_id = uuid.uuid4().hex
+        request = self.maintenance_dir / 'request'
+        request.write_text(operation_id + ' ' + action)
+        self.run('put', request, '/Library/Installer/request')
+        if not wait:
+            return
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            result = self.maintenance_dir / (uuid.uuid4().hex + '.json')
+            try:
+                self.run('get-result', result)
+                data = json.loads(result.read_text())
+                if data.get('id') == operation_id:
+                    if data['code'] < 0:
+                        raise ValueError(f"Device {action} failed ({data['code']}). Check free space, power and OS/SPL support; completed app installations are retained.")
+                    if data.get('phase') == 'arming':
+                        self.maintenance_armed = True
+                    return data
+            except (RuntimeError, OSError, json.JSONDecodeError):
+                pass
+            finally:
+                result.unlink(missing_ok=True)
+            time.sleep(0.5)
+        raise RuntimeError('Device response timed out. Reconnect USB and check status before trying again.')
+
+    def maintenance_info(self):
+        with self.maintenance_session():
+            info = self.maintenance_request('info')
+            info.update(event='maintenance-info', bundled=self.manifest['os']['version'])
+            self.emit(info)
+            return info
+
+    def install_apps(self, requested):
+        failures = []
+        with self.maintenance_session():
+            info = self.maintenance_request('info')
+            self.emit(dict(info, event='maintenance-info', bundled=self.manifest['os']['version']))
+            catalog = load_catalog(self.resources)
+            chosen = select(catalog, requested)
+            for app in catalog:
+                if app['kind'] != 'package' or app['id'] not in chosen:
+                    continue
+                self.emit({'event': 'status', 'text': 'Installing ' + app['name'] + '…'})
+                try:
+                    package = self.resources / 'packages' / (app['program'] + '.gzp')
+                    files = entries(package.read_bytes(), b'GZPK')
+                    metadata = dict(line.split('=', 1) for line in files.get('Info', b'').decode().splitlines() if '=' in line)
+                    if metadata.get('id') != app['program'] or metadata.get('exec', 'app') not in files:
+                        raise ValueError('Bundled package metadata does not match the app catalog.')
+                    installed = info.get('apps', {}).get(app['program'])
+                    if installed and version_key(metadata['version']) <= version_key(installed):
+                        self.emit({'event': 'log', 'text': app['name'] + ' is already current.'})
+                        continue
+                    self.run('put', package, '/Library/Installer/app.gzp')
+                    result = self.maintenance_request('install')
+                    self.emit({'event': 'log', 'text': app['name'] + (' is already current.' if result['code'] == 1 else ' installed.')})
+                except (RuntimeError, ValueError) as error:
+                    failures.append(app['name'] + ': ' + str(error))
+        if failures:
+            raise RuntimeError('Some apps were not installed. ' + '; '.join(failures))
+        self.emit({'event': 'success', 'text': 'Selected apps are installed. Existing app data was preserved.'})
+
+    def update_os(self):
+        expected = None
+        with self.maintenance_session():
+            info = self.maintenance_request('info')
+            expected = self.manifest['os']
+            if not info['flags'] & 1:
+                raise ValueError('This OS or SPL does not support signed updates. No NAND programming was started.')
+            if version_key(expected['version']) <= version_key(info['version']):
+                raise ValueError('The bundled OS is already installed, or the device has a newer version.')
+            payload = self.resources / 'update.gzu'
+            if info['free'] < payload.stat().st_size + 65536:
+                raise ValueError('Not enough Flash space for the OS update.')
+            self.emit({'event': 'status', 'text': 'Transferring and verifying Glaze OS ' + expected['version'] + '…'})
+            self.run('put', payload, '/Library/Updates/installer.gzu')
+            self.maintenance_request('update', timeout=300)
+            self.emit({'event': 'status', 'text': 'Installing Glaze OS. Keep external power connected; this can take several minutes.'})
+            # Do not send another request to a companion that is about to reset.
+            time.sleep(5)
+        deadline = time.monotonic() + 900
+        while time.monotonic() < deadline:
+            try:
+                with self.maintenance_session():
+                    info = self.maintenance_request('info', timeout=10)
+                    if info['version'] == expected['version'] and info['build'] == expected['build'] and info['last_result'] == 1:
+                        self.emit({'event': 'success', 'text': 'Glaze OS updated. Apps, settings and saved data were preserved.'})
+                        return
+                    if info['last_result'] == 2:
+                        raise ValueError('The SPL rejected the update. The previous OS is running.')
+            except RuntimeError:
+                pass
+            time.sleep(5)
+        raise RuntimeError('OS boot verification is incomplete. Keep power connected and use Check status after reconnecting USB. The update will not be armed again automatically.')
+
+
+def version_key(version):
+    parts = [int(p) for p in version.split('.')]
+    while parts and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
