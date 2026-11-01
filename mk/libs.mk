@@ -165,12 +165,6 @@ endif
 $(OUT)/dyn/packages/chatgpt/http_io.o: FORCE
 
 # InfoNES is portable C despite upstream's historical .cpp filenames.
-PROG_CFLAGS_nes := -fno-strict-aliasing
-PROG_CFLAGS_gameboy := -fno-strict-aliasing -DIS_LITTLE_ENDIAN
-PROG_CFLAGS_mastersystem := -Ithird_party/totalsms -Ithird_party/totalsms/scheduler -DSMS_PIXEL_WIDTH=16 -DSMS_LITTLE_ENDIAN=1
-PROG_CFLAGS_genesis := -DNDEBUG -Ithird_party/clownmdemu/platform
-PROG_CFLAGS_gamegear := $(PROG_CFLAGS_mastersystem)
-PROG_CFLAGS_turbografx16 := -fno-strict-aliasing
 
 USER_LIBS := $(OUT)/lib/libui.a $(OUT)/lib/libgfx.a $(OUT)/lib/libmedia.a $(OUT)/lib/libwolfssl.a \
     $(OUT)/lib/libc.a $(OUT)/lib/libfsstack.a $(OUT)/lib/libnetstack.a

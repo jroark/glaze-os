@@ -35,8 +35,8 @@ See `docs/dev/SDK.md`. Keep packaged SDKs and generated apps under ignored outpu
 Romfs is for the OS and built-in apps only. User files, settings and app data belong in the file system: `userdata/` is the factory volume, which `mkfsimg` (`out/buildtools/mkfsimg`, built with `HOSTCC`, default `cc`; `make -C host mkfsimg` builds a native copy in `out/host`) formats into `out/fs.img` and `tools/mk_nand.py --fs-image` places at 0x500000. Don't name files in `userdata/` with spaces, since make lists them.
 
 ROM binaries must not be committed, including original demos and uploaded test games.
-Generate demo cartridges only under ignored `out/pkg-res/`; keep external ROMs outside
-the source tree or under ignored `out/`. Build and native-test targets generate their own demos.
+Keep external ROMs outside the source tree or under ignored `out/`. The console
+emulators and their generated demo cartridges live in the sibling glaze-emulators repo.
 
 Never commit secrets or vendor material: the OTA signing key (`~/.config/glaze/ota-ed25519.pem`),
 `DEBUG.KEY` and other pairing files, `CODEX.AUTH` login exports and other credentials,

@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import struct
@@ -60,7 +61,20 @@ def immutable(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
 
+def package_dirs(root):
+    """out/pkg here, then the sibling app repositories' builds (EMU_DIR)."""
+    root = Path(root)
+    emulators = Path(os.environ.get('EMU_DIR', root.parent / 'glaze-emulators'))
+    return [root / 'out/pkg', emulators / 'out/pkg']
+
+def find_package(packages, ident):
+    for directory in ([packages] if isinstance(packages, Path) else packages):
+        if (Path(directory) / f'{ident}.gzp').is_file():
+            return Path(directory) / f'{ident}.gzp'
+    raise ValueError(f'{ident}.gzp is in none of the package directories')
+
 def build(metadata, packages, output):
+    """packages: a directory, or directories searched in order, holding <id>.gzp."""
     apps = json.loads(metadata.read_text())
     if len(apps) > 32:
         raise ValueError('too many apps')
@@ -73,7 +87,7 @@ def build(metadata, packages, output):
         if ident in seen or not re.fullmatch(r'[a-z0-9][a-z0-9.-]{0,23}', ident) or '..' in ident:
             raise ValueError('invalid or duplicate id')
         seen.add(ident)
-        data, info, icon = package(packages / f'{ident}.gzp')
+        data, info, icon = package(find_package(packages, ident))
         if info['id'] != ident:
             raise ValueError('package identity mismatch')
         app = {key: info[key] if key in ('id','name','version') else item[key] for key in FIELDS}
@@ -106,10 +120,11 @@ def build(metadata, packages, output):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--metadata', type=Path, default=Path('store/apps.json'))
-    ap.add_argument('--packages', type=Path, default=Path('out/pkg'))
+    ap.add_argument('--packages', type=Path, action='append',
+                    help='directory of <id>.gzp files; repeat to search several (default: package_dirs)')
     ap.add_argument('--output', type=Path, default=Path('out/store'))
     args = ap.parse_args()
     try:
-        build(args.metadata, args.packages, args.output)
+        build(args.metadata, args.packages or package_dirs(Path.cwd()), args.output)
     except (ValueError, KeyError, UnicodeError, struct.error) as e:
         ap.exit(1, f'mkstore: {e}\n')

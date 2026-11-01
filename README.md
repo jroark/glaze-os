@@ -339,23 +339,11 @@ early companion-UART output is consumed by the dock model when enabled.
 Run `make -C host stowaway-test` for native decoder/editor tests with ASan/UBSan.
 See [tests/STOWAWAY.md](tests/STOWAWAY.md) for emulator regression checks.
 
-## NES emulator
+## Console emulators
 
-`make out/pkg/nes.gzp` builds the installable NES app, with an original demo,
-iNES 1.0/NES 2.0 ROM browsing, physical controls, audio and battery saves. See
-[NES](docs/NES.md) for cartridge support, installation and tests.
-
-Game Boy and Game Boy Color are available as the installable `gameboy.gzp` package,
-with hardware controls, audio, battery saves and cartridge clocks. See
-[Game Boy](docs/GAMEBOY.md) for installation, compatibility and tests.
-
-Master System and Genesis are available as separate `mastersystem.gzp` and
-`genesis.gzp` packages, with hardware controls, audio and cartridge RAM saves.
-See [Sega emulators](docs/SEGA.md) for installation, controls, limits and tests.
-
-[Game Gear](docs/GAMEGEAR.md) (`gamegear.gzp`) and
-[TurboGrafx-16 / PC Engine HuCard](docs/TURBOGRAFX16.md) (`turbografx16.gzp`) are
-also installable apps, with hardware controls, audio and cartridge RAM saves.
+NES, Game Boy and Game Boy Color, Master System, Genesis, Game Gear and
+TurboGrafx-16 / PC Engine are installable packages, built against this
+repository's SDK in [glaze-emulators](https://github.com/jroark/glaze-emulators).
 
 Doom is available as the installable `out/pkg/doom.gzp` package, with physical
 buttons, sound effects and saves. Supply your own IWAD; no game data is included.

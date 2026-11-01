@@ -20,7 +20,8 @@ if __name__=='__main__':
     root=Path(__file__).resolve().parents[1]
     output=args.output.resolve(); output.mkdir(parents=True,exist_ok=True)
     packages=output/'packages'; packages.mkdir(exist_ok=True)
-    for path in (root/'out/pkg').glob('*.gzp'): shutil.copy2(path,packages/path.name)
+    for directory in reversed(mkstore.package_dirs(root)):
+        for path in directory.glob('*.gzp'): shutil.copy2(path,packages/path.name)
     mkstore.build(root/'store/apps.json',packages,output)
     original=(output/'catalog.txt').read_bytes()
     hello=packages/'hello.gzp'; data=bytearray(hello.read_bytes())

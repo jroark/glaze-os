@@ -18,30 +18,7 @@ PKG_FILES :=
 endif
 
 # Files in packages/<name>/res/ go in as res/<file>, next to the icon.
-# ROM binaries are generated into ignored build output, never source directories.
-PKG_GENERATED_mastersystem := $(OUT)/pkg-res/mastersystem/demo.sms
-PKG_GENERATED_gamegear := $(OUT)/pkg-res/gamegear/demo.gg
-PKG_GENERATED_turbografx16 := $(OUT)/pkg-res/turbografx16/demo.pce
-PKG_GENERATED_genesis := $(OUT)/pkg-res/genesis/demo.gen
-PKG_GENERATED_nes := $(OUT)/pkg-res/nes/demo.nes
-PKG_GENERATED_gameboy := $(OUT)/pkg-res/gameboy/demo.gb $(OUT)/pkg-res/gameboy/demo.gbc
-PKG_RES = $(wildcard packages/$(1)/res/*) $(PKG_GENERATED_$(1))
-
-$(OUT)/pkg-res/mastersystem/demo.sms: tools/mksegademo.py
-	$(PYTHON) $< sms --output $@
-$(OUT)/pkg-res/gamegear/demo.gg: tools/mksegademo.py
-	$(PYTHON) $< gamegear --output $@
-$(OUT)/pkg-res/turbografx16/demo.pce: tools/mkpcedemo.py
-	$(PYTHON) $< --output $@
-$(OUT)/pkg-res/genesis/demo.gen: tools/mksegademo.py
-	$(PYTHON) $< genesis --output $@
-
-$(OUT)/pkg-res/nes/demo.nes: tools/mknesdemo.py
-	$(PYTHON) $< --output $@
-$(OUT)/pkg-res/gameboy/demo.gb: tools/mkgbdemo.py
-	$(PYTHON) $< --output-dir $(dir $@) --mode dmg
-$(OUT)/pkg-res/gameboy/demo.gbc: tools/mkgbdemo.py
-	$(PYTHON) $< --output-dir $(dir $@) --mode cgb
+PKG_RES = $(wildcard packages/$(1)/res/*)
 
 .SECONDEXPANSION:
 $(OUT)/pkg/%.gzp: $(OUT)/bin/%.elf packages/%/Info packages/%/icon.gzi $$(call PKG_RES,$$*) tools/mkromfs.py
