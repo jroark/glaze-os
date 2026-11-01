@@ -1,5 +1,5 @@
 /* Clipboard substitute for native UI previews. Device builds use the IPC
- * client; tests/clipboard.c exercises that client and the actual server. */
+ * client; tests/native/clipboard.c exercises that client and the actual server. */
 #include <glaze/ui.h>
 #include <string.h>
 static char contents[UI_CLIPBOARD_MAX + 1];

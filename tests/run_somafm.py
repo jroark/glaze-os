@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Boot a disposable image with the real SomaFM package preinstalled.
 
-Build first: ./build.sh INPUT_SCRIPT=tests/t_somafm.txt
+Build first: ./build.sh INPUT_SCRIPT=tests/ui/t_somafm.txt
 Then: python3 tests/run_somafm.py --seconds 660
 Use --no-net for the Ethernet error screen. Artifacts stay under out/.
 """

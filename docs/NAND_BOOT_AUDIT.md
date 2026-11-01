@@ -398,7 +398,7 @@ nothing shows they matter. The SPL's fatal stops never jump to a partly
 loaded kernel. The emulator plays the same tones with `--audio`, and
 `--log-mmio` shows the `9A0`/`9A4` writes. A physical candidate with a kernel
 page corrupted past its ECC gives checkpoints 1 and 2 and then error 2.
-`tests/spl_io.c` checks the error pattern at power-on gate state.
+`tests/native/spl_io.c` checks the error pattern at power-on gate state.
 
 ## Boot splash
 

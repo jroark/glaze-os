@@ -142,7 +142,7 @@ wraparound, secret and filtered fields, partial selection and replacement.
 Keyboard tests cover opt-in/legacy layouts, cancellation and disabled commands;
 mirroring/input tests cover shortcuts, releases and disconnect cleanup.
 
-For an emulator UI check, build with `INPUT_SCRIPT=tests/t_clipboard.txt`,
+For an emulator UI check, build with `INPUT_SCRIPT=tests/ui/t_clipboard.txt`,
 boot a copy with `--speed 166`, and stop after 24 seconds. It copies
 `GlazeClipboard` through Notes' touch Edit panel and pastes it into Browser's
 address field. Rebuild with `INPUT_SCRIPT=` before using the image normally.

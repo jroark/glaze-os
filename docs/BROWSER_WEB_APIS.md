@@ -189,7 +189,7 @@ storage across processes, module cycles/cache/dynamic imports, nonce policy,
 redirect resolution, MIME rejection, and graph limits. Test pages live under
 `tests/web/`; `tests/browser_transport.py` serves them locally.
 
-`make INPUT_SCRIPT=tests/t_browser_apis.txt` builds the offline MIPS smoke test.
+`make INPUT_SCRIPT=tests/ui/t_browser_apis.txt` builds the offline MIPS smoke test.
 Boot a copy of the NAND for 35 seconds and check for all five `browser APIs:`
 PASS messages. `tests/web/browser_device.js`, served at `/device` by the HTTP
 fixture, additionally exercises real guest lwIP, JSON GET/POST, flash storage,

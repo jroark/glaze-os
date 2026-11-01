@@ -4,20 +4,20 @@
 The screenshots are the final screens of scripted runs (tests/run.sh writes
 out/shots/<name>.png). Capture these, then run this script:
 
-    tests/run.sh tests/t_site_lock.txt 8
-    tests/run.sh tests/t_site_lockmid.txt 8
-    tests/run.sh tests/t_site_lockdrag.txt 8
-    tests/run.sh tests/unlock.txt 10
-    tests/run.sh tests/notes.txt 16
-    tests/run.sh tests/t_photos.txt 15
-    tests/run.sh tests/t_music.txt 13
-    tests/run.sh tests/t_browser.txt 11
-    tests/run.sh tests/t_calendar.txt 13
-    tests/run.sh tests/t_world.txt 12
-    NET=1 tests/run.sh tests/t_appstore.txt 30
+    tests/run.sh tests/ui/t_site_lock.txt 8
+    tests/run.sh tests/ui/t_site_lockmid.txt 8
+    tests/run.sh tests/ui/t_site_lockdrag.txt 8
+    tests/run.sh tests/ui/unlock.txt 10
+    tests/run.sh tests/ui/notes.txt 16
+    tests/run.sh tests/ui/t_photos.txt 15
+    tests/run.sh tests/ui/t_music.txt 13
+    tests/run.sh tests/ui/t_browser.txt 11
+    tests/run.sh tests/ui/t_calendar.txt 13
+    tests/run.sh tests/ui/t_world.txt 12
+    NET=1 tests/run.sh tests/ui/t_appstore.txt 30
     tools/mkcfimg.sh out/cf.img 16 16 out/pkg/hello.gzp out/pkg/minesweeper.gzp out/pkg/solitaire.gzp
-    CF=out/cf.img tests/run.sh tests/t_minesweeper.txt 34
-    CF=out/cf.img tests/run.sh tests/t_solitaire.txt 40
+    CF=out/cf.img tests/run.sh tests/ui/t_minesweeper.txt 34
+    CF=out/cf.img tests/run.sh tests/ui/t_solitaire.txt 40
     tools/mksite.py out/shots ../be300/src/ui/assets/be300_frame.png
 
 The hero's lock screen is split into layers so the page can slide its knob:

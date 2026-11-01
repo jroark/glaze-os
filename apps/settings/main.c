@@ -388,7 +388,7 @@ static void draw_root(gfx_surface *s)
     cell(s, 2, "Debugging", NULL, true, R_DEBUG);
     cell(s, 2, "Input Method", NULL, true, R_INPUT_METHOD);
     cell(s, 2, "About", NULL, true, R_ABOUT);
-    /* Last, so the rows above keep their places (tests/t_*.txt tap them). */
+    /* Last, so the rows above keep their places (tests/ui/t_*.txt tap them). */
     char level[16];
     cell(s, 2, "Battery", cell_visible(s) ? battery_summary(level, sizeof(level)) : NULL, true, R_BATTERY);
     cell(s, 3, "Icon Buttons", NULL, true, R_ICONS);

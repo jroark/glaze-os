@@ -119,7 +119,7 @@ clears the mask. `GZ_KEY_ICON1` to `GZ_KEY_ICON7` are 25 to 31, so
 - `make -C host settings-test` renders the Icon Buttons pages and picker
   against full redraws, assigns a system action, a package and a key, and
   checks what gets saved.
-- `tests/run.sh tests/t_hardicon.txt 32` runs in the emulator with scripted
+- `tests/run.sh tests/ui/t_hardicon.txt 32` runs in the emulator with scripted
   taps at y 340. It opens Calendar, then Notes, checks that a locked tap does
   nothing, opens Settings from icon 7, reassigns icon 2 to Home there, and
   then uses it.

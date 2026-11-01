@@ -78,7 +78,7 @@ clean file system each run. Add `--ne2000` to insert the emulated PCMCIA Etherne
 card (see Networking). `--wl54cf` selects the AmbiCom wireless CF model
 with Glaze firmware built using `WL54CF=1`; see [WL54-CF](docs/WL54CF.md).
 
-For unattended UI tests, build with `INPUT_SCRIPT=tests/calc.txt`. The kernel
+For unattended UI tests, build with `INPUT_SCRIPT=tests/ui/calc.txt`. The kernel
 then replays the timed touch and key events in that file (see
 `kernel/drivers/input.c`).
 
@@ -87,7 +87,7 @@ path, `tests/touch.sh` drives the emulator window with xdotool on an X display
 (Linux, needs Xvfb, xdotool and ImageMagick):
 
 ```sh
-Xvfb :99 & DISPLAY=:99 tests/touch.sh tests/touch_unlock.act
+Xvfb :99 & DISPLAY=:99 tests/touch.sh tests/ui/touch_unlock.act
 ```
 
 Settings > Touch Calibration aligns the stylus with five targets, then gives
@@ -104,8 +104,8 @@ for hardware details and validation.
 
 Run `make -C host touch-calibration-test settings-test ui-events-test` for
 native calibration and UI checks. For emulator coverage, run
-`tests/run.sh tests/t_touch_calibration.txt 18`, then
-`FS_FROM=out/shots/t_touch_calibration/glaze.bin tests/run.sh tests/t_touch_calibration_reboot.txt 12`.
+`tests/run.sh tests/ui/t_touch_calibration.txt 18`, then
+`FS_FROM=out/shots/t_touch_calibration/glaze.bin tests/run.sh tests/ui/t_touch_calibration_reboot.txt 12`.
 The first run saves a deliberately offset calibration; the second loads it
 at boot and restores the factory defaults.
 

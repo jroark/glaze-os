@@ -238,9 +238,9 @@ files are limited to 2 MiB, with at most 32 loaded objects per process.
 `make sdk-test` checks an SDK copied to a different location, builds an app
 outside the OS tree, rebuilds the included library sources, exercises
 header/resource changes, excludes host libc headers, and rejects invalid
-packages and incompatible executables. The OS checkout's `tests/t_sdk.txt`
+packages and incompatible executables. The OS checkout's `tests/ui/t_sdk.txt`
 installs and exercises a generated app from a CF image. Build the OS with
-`INPUT_SCRIPT=tests/t_sdk.txt`, boot a NAND copy with the app's card image,
+`INPUT_SCRIPT=tests/ui/t_sdk.txt`, boot a NAND copy with the app's card image,
 and check for `sdk-app: ready count=0`, `count=1` and `count=2` in stdout.
 Rebooting the saved copy and repeating the install must show `ready count=2`,
 then `count=3` and `count=4`.

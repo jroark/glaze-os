@@ -89,7 +89,7 @@ recognizer source ship in the standalone SDK's corresponding library source.
 ```sh
 make -C host handwriting-test ui-events-test settings-test gmail-test stowaway-test
 make -j4 all glazeboot sdk-test
-tests/run.sh tests/t_handwriting_notes.txt 18
+tests/run.sh tests/ui/t_handwriting_notes.txt 18
 ```
 
 Native ASan/UBSan tests use independent stylus traces, check all template glyphs,

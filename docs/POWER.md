@@ -306,9 +306,9 @@ and the EEPROM (`src/hw/eeprom.c`). It takes these options:
 
 `tests/run.sh` passes `BE300_ARGS` through to the emulator.
 
-- `tests/run.sh tests/t_poweroff.txt 40` types a note, holds Power, wakes
-  and finds it again. `tests/t_hibernate.txt` (40 s) selects Hibernate in
-  Settings and resumes through the SPL. `tests/t_poweroff_alarm.txt` (90 s)
+- `tests/run.sh tests/ui/t_poweroff.txt 40` types a note, holds Power, wakes
+  and finds it again. `tests/ui/t_hibernate.txt` (40 s) selects Hibernate in
+  Settings and resumes through the SPL. `tests/ui/t_poweroff_alarm.txt` (90 s)
   wakes on Clock's timer.
 - `make -C host idle-test` covers the hold and the auto-sleep deadline, and
   `boot-init-test` covers the SPL's resume decisions and the clock across a
@@ -316,7 +316,7 @@ and the EEPROM (`src/hw/eeprom.c`). It takes these options:
 
 - `make -C host battery-test` runs the arithmetic and the driver on fake
   registers.
-- `BE300_ARGS="--battery 60 --battery-state battery" tests/run.sh tests/t_battery.txt 16`
+- `BE300_ARGS="--battery 60 --battery-state battery" tests/run.sh tests/ui/t_battery.txt 16`
   opens the Battery page and turns on Percentage.
 - `--battery 25 --battery-state battery --battery-drain 20` over about 150 s
   logs both warnings and then `springboard: battery critical, sleeping`.

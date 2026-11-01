@@ -83,7 +83,7 @@ out/host/glaze-usb logs             # Ctrl-C stops streaming
 out/host/glaze-usb logs --once      # drain a bounded batch
 out/host/glaze-usb reload           # fresh kernel + romfs from out/glazeboot
 out/host/glaze-usb screenshot out/screen.png
-out/host/glaze-usb script tests/unlock.txt out/home.png
+out/host/glaze-usb script tests/ui/unlock.txt out/home.png
 out/host/glaze-usb connect          # hold a debugger connection until Ctrl-C
 out/host/glaze-usb run bin/settings --wait
 out/host/glaze-usb reboot           # restart the current OS

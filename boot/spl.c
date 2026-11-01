@@ -19,7 +19,7 @@
 #define NAND_PAGE_DATA      512u
 
 /* Register overrides allow the production loader to run against a strict
- * host MMIO model (tests/spl_io.c). */
+ * host MMIO model (tests/native/spl_io.c). */
 #ifndef SPL_REG32
 #define SPL_REG32(a) (*(volatile uint32_t *)(a))
 #define SPL_REG8(a)  (*(volatile uint8_t *)(a))

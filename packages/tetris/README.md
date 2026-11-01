@@ -27,14 +27,14 @@ UBSan. For the emulator smoke test, put only this package on a card:
 
 ```
 tools/mkcfimg.sh out/tetris-cf.img 16 16 out/pkg/tetris.gzp
-CF=out/tetris-cf.img tests/run.sh tests/t_tetris.txt 46
+CF=out/tetris-cf.img tests/run.sh tests/ui/t_tetris.txt 46
 ```
 
 To check persistence across a fresh boot after the smoke run:
 
 ```
-./build.sh INPUT_SCRIPT=tests/t_tetris_resume.txt out/glaze.bin
-FS_FROM=out/shots/t_tetris/glaze.bin NO_BUILD=1 tests/run.sh tests/t_tetris_resume.txt 16
+./build.sh INPUT_SCRIPT=tests/ui/t_tetris_resume.txt out/glaze.bin
+FS_FROM=out/shots/t_tetris/glaze.bin NO_BUILD=1 tests/run.sh tests/ui/t_tetris_resume.txt 16
 ```
 
 The resume run launches the installed package from the previous filesystem,

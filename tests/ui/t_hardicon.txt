@@ -1,0 +1,18 @@
+# The printed icons below the LCD (docs/HARD_ICONS.md). With the default
+# assignments icon 1 opens Calendar and icon 4 switches to Notes; a tap on
+# icon 7 while locked does nothing (no "icon 7" line until after the
+# unlock). Icon 7 then opens Settings, Icon Buttons sets icon 2 (Contacts,
+# unassigned) to Home, and icon 2 goes back to the home screen.
+# tests/run.sh tests/ui/t_hardicon.txt 32
+3000 drag 40 280 235 280 500
+5000 tap 17 340
+8000 tap 120 340
+11000 key power
+12500 tap 223 340
+13500 drag 40 280 235 280 500
+15500 tap 223 340
+18500 drag 120 250 120 100 1000
+21000 tap 120 299
+23000 tap 120 101
+25000 tap 120 121
+27000 tap 51 340

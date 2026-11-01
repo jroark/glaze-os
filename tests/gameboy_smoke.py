@@ -29,7 +29,7 @@ def main():
             subprocess.run(command, cwd=ROOT, stdout=buildlog,
                            stderr=subprocess.STDOUT, check=True)
         try:
-            run(['make', '-j4', 'INPUT_SCRIPT=tests/t_gameboy.txt'])
+            run(['make', '-j4', 'INPUT_SCRIPT=tests/ui/t_gameboy.txt'])
             shutil.copyfile(ROOT / 'out/pkg-res/gameboy/demo.gb', work / 'test.gb')
             shutil.copyfile(ROOT / 'out/pkg-res/gameboy/demo.gbc', work / 'test.gbc')
             run(['sh', 'tools/mkcfimg.sh', str(work / 'cf.img'), '16', '16',

@@ -141,7 +141,7 @@ file, uploads `os/glaze-V.gzu` as an immutable asset, and replaces
 
 ## Tests
 
-- `make -C host ota-test` (`tests/ota.c`, `tests/ota_test.py`) runs the
+- `make -C host ota-test` (`tests/native/ota.c`, `tests/ota_test.py`) runs the
   kernel's staging and the SPL's apply engine natively, against a NAND model
   and a 684-block file system built by `mkfsimg` that holds the staged file.
   It checks:

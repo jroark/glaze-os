@@ -132,7 +132,7 @@ def main():
     (root / "out").mkdir(exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=f"{app_id}-", dir=root / "out"))
     print(work, flush=True)
-    script = args.input or Path("tests/t_wince_package.txt" if package else f"tests/t_wince_{args.app}.txt")
+    script = args.input or Path("tests/ui/t_wince_package.txt" if package else f"tests/t_wince_{args.app}.txt")
     if not args.no_build:
         with (work / "build.log").open("w") as log:
             subprocess.run(["./build.sh", f"INPUT_SCRIPT={script}"], stdout=log, stderr=subprocess.STDOUT, check=True)

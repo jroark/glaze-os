@@ -14,7 +14,7 @@
 #define EPOCH_YEAR      1850
 #define EPOCH_WEEKDAY   2       /* 1850-01-01 was a Tuesday */
 
-/* tests/rtc_boot.c supplies these two with a model of the write latency. */
+/* tests/native/rtc_boot.c supplies these two with a model of the write latency. */
 #ifndef RTC_ETIME_MODEL
 static uint64_t etime_read(void)
 {

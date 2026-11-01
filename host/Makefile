@@ -40,16 +40,16 @@ $(shell mkdir -p $(O))
 
 all: sheet preview fstest fattest mkfsimg browse mediatest
 
-clipboard-test: ../tests/clipboard.c ../tests/clipboard_sys.h ../lib/ui/clipboard.c ../lib/ui/edit.c ../servers/springboard/clipboard.c
+clipboard-test: ../tests/native/clipboard.c ../tests/native/clipboard_sys.h ../lib/ui/clipboard.c ../lib/ui/edit.c ../servers/springboard/clipboard.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/clipboard_sys.h \
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/clipboard_sys.h \
 	    $(filter %.c,$^) -o ../out/host/clipboard-test
 	../out/host/clipboard-test
 .PHONY: clipboard-test
 
 CHATGPT_SOURCES := ../packages/chatgpt/protocol.c ../apps/browser/url.c
 CHATGPT_AUTH := $(addprefix ../packages/chatgpt/,json.c tokens.c oauth.c responses.c http_io.c)
-../out/host/chatgpt-protocol: ../tests/chatgpt.c $(CHATGPT_SOURCES) ../packages/chatgpt/json.c ../packages/chatgpt/tokens.c $(wildcard ../packages/chatgpt/*.h)
+../out/host/chatgpt-protocol: ../tests/native/chatgpt.c $(CHATGPT_SOURCES) ../packages/chatgpt/json.c ../packages/chatgpt/tokens.c $(wildcard ../packages/chatgpt/*.h)
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -I../packages/chatgpt -I../apps/browser -fsanitize=address,undefined $(filter %.c,$^) -o $@
 ../out/host/chatgpt-client: chatgpt.c $(CHATGPT_SOURCES) $(CHATGPT_AUTH) ../apps/browser/http.c ../apps/browser/conn.c ../apps/browser/tls.c ../apps/appstore/inflate.c $(O)/libwolfssl.a $(wildcard ../packages/chatgpt/*.h)
@@ -73,57 +73,57 @@ USB_TLS := -I../third_party/wolfssl -I../apps/browser/tls -DWOLFSSL_USER_SETTING
 glaze-usb: ../out/host/glaze-usb
 .PHONY: glaze-usb
 
-usb-wire-test: ../tests/usb_wire.c ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h
+usb-wire-test: ../tests/native/usb_wire.c ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_wire.c -o ../out/host/usb-wire-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/usb_wire.c -o ../out/host/usb-wire-test
 	../out/host/usb-wire-test
-usb-driver-test: ../tests/usb_driver.c ../kernel/drivers/usb.c
+usb-driver-test: ../tests/native/usb_driver.c ../kernel/drivers/usb.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -Wno-pointer-to-int-cast -fsanitize=address,undefined -I$(BE300_SOURCE)/src/hw ../tests/usb_driver.c $(BE300_SOURCE)/src/hw/usbf.c -o ../out/host/usb-driver-test
+	$(CC) $(CFLAGS) -Wno-pointer-to-int-cast -fsanitize=address,undefined -I$(BE300_SOURCE)/src/hw ../tests/native/usb_driver.c $(BE300_SOURCE)/src/hw/usbf.c -o ../out/host/usb-driver-test
 	../out/host/usb-driver-test
 .PHONY: usb-wire-test usb-driver-test
 .PHONY: usb-net-test
 .PHONY: mirror-test
-../out/host/mirror-fixture: ../tests/mirror_fixture.c ../tools/glaze-usb/mirror.c ../tools/glaze-usb/rfb.c ../servers/usb/mirror.c ../tools/glaze-usb/rfb.h ../servers/usb/mirror.h ../lib/include/glaze/mirror.h
+../out/host/mirror-fixture: ../tests/native/mirror_fixture.c ../tools/glaze-usb/mirror.c ../tools/glaze-usb/rfb.c ../servers/usb/mirror.c ../tools/glaze-usb/rfb.h ../servers/usb/mirror.h ../lib/include/glaze/mirror.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) -fsanitize=address,undefined $(filter %.c,$^) -o $@
 mirror-test: ../out/host/mirror-fixture
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/mirror_frame.c ../servers/usb/mirror.c -o ../out/host/mirror-frame
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/mirror_frame.c ../servers/usb/mirror.c -o ../out/host/mirror-frame
 	../out/host/mirror-frame
 	python3 ../tests/mirror.py
-usb-net-test: ../tests/usb_ethernet.c ../servers/usb/ethernet.c ../tools/glaze-usb/ethernet.c ../tools/glaze-usb/ethernet_packet.c ../lib/include/glaze/usb_net.h ../servers/usb/ethernet.h ../tools/glaze-usb/ethernet_packet.h
+usb-net-test: ../tests/native/usb_ethernet.c ../servers/usb/ethernet.c ../tools/glaze-usb/ethernet.c ../tools/glaze-usb/ethernet_packet.c ../lib/include/glaze/usb_net.h ../servers/usb/ethernet.h ../tools/glaze-usb/ethernet_packet.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) -fsanitize=address,undefined $(filter %.c,$^) -o ../out/host/usb-net-test
 	../out/host/usb-net-test
-usb-reload-test: ../tests/usb_reload.c ../kernel/usb_reload.c ../out/glazeboot/gen/tramp_blob.h
+usb-reload-test: ../tests/native/usb_reload.c ../kernel/usb_reload.c ../out/glazeboot/gen/tramp_blob.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -I../out/glazeboot/gen -fsanitize=address,undefined ../tests/usb_reload.c -o ../out/host/usb-reload-test
+	$(CC) $(CFLAGS) -I../out/glazeboot/gen -fsanitize=address,undefined ../tests/native/usb_reload.c -o ../out/host/usb-reload-test
 	../out/host/usb-reload-test
 .PHONY: usb-reload-test
-usb-pcconnect-test: ../tests/usb_pcconnect.c ../tools/glaze-usb/pcconnect.c ../tools/glaze-usb/pcconnect.h
+usb-pcconnect-test: ../tests/native/usb_pcconnect.c ../tools/glaze-usb/pcconnect.c ../tools/glaze-usb/pcconnect.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_pcconnect.c ../tools/glaze-usb/pcconnect.c $(USB_FLAGS) -o ../out/host/usb-pcconnect-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/usb_pcconnect.c ../tools/glaze-usb/pcconnect.c $(USB_FLAGS) -o ../out/host/usb-pcconnect-test
 	../out/host/usb-pcconnect-test
 .PHONY: usb-pcconnect-test
 usb-input-test:
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_input.c -o ../out/host/usb-input-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/usb_input.c -o ../out/host/usb-input-test
 	../out/host/usb-input-test
 usb-script-test:
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_script.c ../tools/glaze-usb/script.c ../tools/glaze-usb/screen.c $(USB_FLAGS) -o ../out/host/usb-script-test
-	../out/host/usb-script-test ../tests/*.txt
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/usb_script.c ../tools/glaze-usb/script.c ../tools/glaze-usb/screen.c $(USB_FLAGS) -o ../out/host/usb-script-test
+	../out/host/usb-script-test ../tests/ui/*.txt
 .PHONY: usb-input-test usb-script-test
 usb-cleanup-test:
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_cleanup.c ../tools/glaze-usb/cleanup.c $(USB_FLAGS) -o ../out/host/usb-cleanup-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/usb_cleanup.c ../tools/glaze-usb/cleanup.c $(USB_FLAGS) -o ../out/host/usb-cleanup-test
 	../out/host/usb-cleanup-test
 .PHONY: usb-cleanup-test
 
 # Real native CLI, with USB calls forwarded into the emulator by a test peer.
-glaze-usb-emulator: $(USB_SOURCES) ../tests/usb_libusb_stub.c ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
+glaze-usb-emulator: $(USB_SOURCES) ../tests/native/usb_libusb_stub.c ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(USB_TLS) $(USB_SOURCES) ../tests/usb_libusb_stub.c $(O)/libwolfssl.a -o ../out/host/glaze-usb-emulator
+	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(USB_TLS) $(USB_SOURCES) ../tests/native/usb_libusb_stub.c $(O)/libwolfssl.a -o ../out/host/glaze-usb-emulator
 .PHONY: glaze-usb-emulator
 
 .PHONY: sheet
@@ -202,53 +202,53 @@ clean:
 
 # Byte decoder and shared text editing, with ASan/UBSan.
 # The NAND ECC decoder ported from Windows CE's nanddisk.dll (RAM boot /NAND).
-nand-ecc-test: ../tests/nand_ecc.c ../kernel/drivers/nand_ecc.c ../kernel/drivers/nand_ecc.h
+nand-ecc-test: ../tests/native/nand_ecc.c ../kernel/drivers/nand_ecc.c ../kernel/drivers/nand_ecc.h
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ $(filter %.c,$^)
 	$(O)/$@
 .PHONY: nand-ecc-test
 
-audio-driver-test: ../tests/audio_driver.c ../kernel/drivers/audio.c ../kernel/hw.h
+audio-driver-test: ../tests/native/audio_driver.c ../kernel/drivers/audio.c ../kernel/hw.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fno-strict-aliasing -fsanitize=address,undefined -o ../out/host/$@ ../tests/audio_driver.c
+	$(CC) $(CFLAGS) -fno-strict-aliasing -fsanitize=address,undefined -o ../out/host/$@ ../tests/native/audio_driver.c
 	../out/host/$@
 .PHONY: audio-driver-test
 
-buzzer-driver-test: ../tests/buzzer_driver.c ../kernel/drivers/buzzer.c ../kernel/hw.h
+buzzer-driver-test: ../tests/native/buzzer_driver.c ../kernel/drivers/buzzer.c ../kernel/hw.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/$@ ../tests/buzzer_driver.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/$@ ../tests/native/buzzer_driver.c
 	../out/host/$@
 .PHONY: buzzer-driver-test
 
-battery-test: ../tests/battery_driver.c ../kernel/drivers/battery.c ../lib/include/glaze/battery.h ../kernel/hw.h
+battery-test: ../tests/native/battery_driver.c ../kernel/drivers/battery.c ../lib/include/glaze/battery.h ../kernel/hw.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/$@ ../tests/battery_driver.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/$@ ../tests/native/battery_driver.c
 	../out/host/$@
 .PHONY: battery-test
 
-audio-volume-test: ../tests/audio_volume.c ../tests/audio_volume_sys.h ../servers/audio/sound.c ../servers/audio/buzzer.c ../lib/media/wav.c ../lib/media/resample.c
+audio-volume-test: ../tests/native/audio_volume.c ../tests/native/audio_volume_sys.h ../servers/audio/sound.c ../servers/audio/buzzer.c ../lib/media/wav.c ../lib/media/resample.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -include ../tests/audio_volume_sys.h -o ../out/host/$@ ../tests/audio_volume.c ../servers/audio/buzzer.c ../lib/media/wav.c ../lib/media/resample.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -include ../tests/native/audio_volume_sys.h -o ../out/host/$@ ../tests/native/audio_volume.c ../servers/audio/buzzer.c ../lib/media/wav.c ../lib/media/resample.c
 	../out/host/$@
 .PHONY: audio-volume-test
 
-stowaway-test: ../tests/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c $(EDIT)
+stowaway-test: ../tests/native/stowaway.c ../kernel/drivers/stowaway.c ../lib/ui/input.c $(EDIT)
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ $^
 	$(O)/$@
 .PHONY: stowaway-test
 
-elf-test: ../tests/elf.c ../lib/include/glaze/elf.h
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ ../tests/elf.c
+elf-test: ../tests/native/elf.c ../lib/include/glaze/elf.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ ../tests/native/elf.c
 	$(O)/$@
 .PHONY: elf-test
 
-store-catalog-test: ../tests/store_catalog.c ../apps/appstore/catalog.c
+store-catalog-test: ../tests/native/store_catalog.c ../apps/appstore/catalog.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/store-catalog-test $^
 	../out/host/store-catalog-test ../out/store/catalog.txt
 	python3 ../tests/store_generator.py
 .PHONY: store-catalog-test
 
-store-package-test: ../tests/store_packages.c ../lib/libc/pkg.c
+store-package-test: ../tests/native/store_packages.c ../lib/libc/pkg.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/store-package-test $^
 	../out/host/store-package-test
@@ -256,13 +256,13 @@ store-package-test: ../tests/store_packages.c ../lib/libc/pkg.c
 
 store-http-test: $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(CC) $(WEB_CFLAGS) -o ../out/host/store-http-test ../tests/store_http.c \
+	$(CC) $(WEB_CFLAGS) -o ../out/host/store-http-test ../tests/native/store_http.c \
 	    ../apps/browser/http.c ../apps/browser/conn.c ../apps/browser/tls.c ../apps/browser/url.c \
 	    ../apps/appstore/inflate.c $(O)/libwolfssl.a
 	python3 ../tests/store_transport.py
 .PHONY: store-http-test
 
-radio-test: ../tests/radio_protocol.c ../servers/audio/radio_protocol.c ../servers/audio/radio_mp3.c
+radio-test: ../tests/native/radio_protocol.c ../servers/audio/radio_protocol.c ../servers/audio/radio_mp3.c
 	@mkdir -p ../out/host
 	$(CC) $(MEDIA_CFLAGS) -o ../out/host/radio-test $^ $(wildcard ../third_party/helix-mp3/*.c ../third_party/helix-mp3/real/*.c)
 	../out/host/radio-test ../userdata/Music/Demo.mp3
@@ -271,190 +271,190 @@ radio-test: ../tests/radio_protocol.c ../servers/audio/radio_protocol.c ../serve
 radio-worker-test: $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(CC) $(MEDIA_CFLAGS) -I../apps/browser -I../third_party/wolfssl -I../apps/browser/tls \
-	    -DWOLFSSL_USER_SETTINGS -include ../tests/radio_host.h -o ../out/host/radio-worker-test \
-	    ../tests/radio_worker.c ../servers/audio/radio.c ../servers/audio/radio_protocol.c ../servers/audio/radio_mp3.c \
+	    -DWOLFSSL_USER_SETTINGS -include ../tests/native/radio_host.h -o ../out/host/radio-worker-test \
+	    ../tests/native/radio_worker.c ../servers/audio/radio.c ../servers/audio/radio_protocol.c ../servers/audio/radio_mp3.c \
 	    ../apps/browser/conn.c ../apps/browser/tls.c ../apps/browser/url.c \
 	    $(wildcard ../third_party/helix-mp3/*.c ../third_party/helix-mp3/real/*.c) $(O)/libwolfssl.a -lpthread
 	python3 ../tests/radio_transport.py
 .PHONY: radio-worker-test
 
-somafm-ui-test: ../tests/somafm_ui.c ../tests/somafm_sys.h ../packages/somafm/main.c ../packages/somafm/stations.h
+somafm-ui-test: ../tests/native/somafm_ui.c ../tests/native/somafm_sys.h ../packages/somafm/main.c ../packages/somafm/stations.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -include ../tests/somafm_sys.h \
-	    -o ../out/host/somafm-ui-test ../tests/somafm_ui.c hostres.c $(GFX) \
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -include ../tests/native/somafm_sys.h \
+	    -o ../out/host/somafm-ui-test ../tests/native/somafm_ui.c hostres.c $(GFX) \
 	    ../lib/ui/widgets.c ../lib/ui/list.c ../lib/ui/text.c
 	../out/host/somafm-ui-test
 .PHONY: somafm-ui-test
 
 # Scalar pixel oracles for clipping, alpha, dithering and three-slice sampling.
-gfx-test: ../tests/gfx.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
+gfx-test: ../tests/native/gfx.c ../lib/gfx/gfx.c ../lib/gfx/blit.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/gfx-test $^
 	../out/host/gfx-test
 .PHONY: gfx-test
 
-settings-test: ../tests/settings.c ../tests/settings_sys.h ../apps/settings/main.c ../lib/libc/touch.c ../lib/libc/hardicon.c
+settings-test: ../tests/native/settings.c ../tests/native/settings_sys.h ../apps/settings/main.c ../lib/libc/touch.c ../lib/libc/hardicon.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/settings_sys.h \
-	    -o ../out/host/settings-test ../tests/settings.c hostres.c $(GFX) \
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/settings_sys.h \
+	    -o ../out/host/settings-test ../tests/native/settings.c hostres.c $(GFX) \
 	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/hardicon.c ../lib/libc/wifi.c ../lib/ui/input.c $(KEYBOARD)
 	../out/host/settings-test
 .PHONY: settings-test
 
-reboot-test: ../tests/reboot.c ../kernel/reboot.c
+reboot-test: ../tests/native/reboot.c ../kernel/reboot.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/reboot-test ../tests/reboot.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/reboot-test ../tests/native/reboot.c
 	../out/host/reboot-test
 .PHONY: reboot-test
 
 entropy-test:
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -DGLAZE_ENTROPY_TEST -fsanitize=address,undefined \
-	    -o ../out/host/entropy-test ../tests/entropy.c ../lib/libc/entropy.c
+	    -o ../out/host/entropy-test ../tests/native/entropy.c ../lib/libc/entropy.c
 	../out/host/entropy-test
 	$(CC) $(CFLAGS) -O0 -DGLAZE_ENTROPY_TEST -I../third_party/jitterentropy -fsanitize=address,undefined \
-	    -o ../out/host/entropy-clock-test ../tests/entropy_clock.c ../lib/libc/entropy_jent.c
+	    -o ../out/host/entropy-clock-test ../tests/native/entropy_clock.c ../lib/libc/entropy_jent.c
 	../out/host/entropy-clock-test
 .PHONY: entropy-test
 
-hardicon-test: ../tests/hardicon.c ../lib/libc/hardicon.c ../servers/springboard/hardicon.c
+hardicon-test: ../tests/native/hardicon.c ../lib/libc/hardicon.c ../servers/springboard/hardicon.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/hardicon-test $^
 	../out/host/hardicon-test
 .PHONY: hardicon-test
 
-touch-calibration-test: ../tests/touch_calibration.c ../lib/libc/touch.c ../servers/springboard/calibration.c
+touch-calibration-test: ../tests/native/touch_calibration.c ../lib/libc/touch.c ../servers/springboard/calibration.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/touch-calibration-test $^
 	../out/host/touch-calibration-test
 .PHONY: touch-calibration-test
 
-display-test: ../tests/display.c ../tests/display_sys.h ../kernel/drivers/display.c ../servers/springboard/display.c
+display-test: ../tests/native/display.c ../tests/native/display_sys.h ../kernel/drivers/display.c ../servers/springboard/display.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/display_sys.h \
-	    -o ../out/host/display-test ../tests/display.c ../servers/springboard/display.c
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/display_sys.h \
+	    -o ../out/host/display-test ../tests/native/display.c ../servers/springboard/display.c
 	../out/host/display-test
 .PHONY: display-test
 
-idle-test: ../tests/idle.c ../servers/springboard/idle.c ../servers/springboard/idle.h ../lib/include/glaze/display.h
+idle-test: ../tests/native/idle.c ../servers/springboard/idle.c ../servers/springboard/idle.h ../lib/include/glaze/display.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/idle-test ../tests/idle.c ../servers/springboard/idle.c
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/idle-test ../tests/native/idle.c ../servers/springboard/idle.c
 	../out/host/idle-test
 .PHONY: idle-test
 
-taskmanager-test: ../tests/taskmanager.c ../tests/taskmanager_sys.h ../packages/taskmanager/main.c ../packages/taskmanager/monitor.c
+taskmanager-test: ../tests/native/taskmanager.c ../tests/native/taskmanager_sys.h ../packages/taskmanager/main.c ../packages/taskmanager/monitor.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/taskmanager_sys.h \
-	    -o ../out/host/taskmanager-test ../tests/taskmanager.c ../packages/taskmanager/monitor.c \
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/taskmanager_sys.h \
+	    -o ../out/host/taskmanager-test ../tests/native/taskmanager.c ../packages/taskmanager/monitor.c \
 	    hostres.c $(GFX) ../lib/ui/widgets.c ../lib/ui/list.c
 	../out/host/taskmanager-test
 .PHONY: taskmanager-test
 
-ui-events-test: ../tests/ui_events.c ../tests/ui_events_sys.h ../lib/ui/app.c ../lib/ui/list.c $(KEYBOARD)
+ui-events-test: ../tests/native/ui_events.c ../tests/native/ui_events_sys.h ../lib/ui/app.c ../lib/ui/list.c $(KEYBOARD)
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/ui_events_sys.h \
-	    -o ../out/host/ui-events-test ../tests/ui_events.c ../lib/ui/app.c ../lib/ui/list.c \
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/ui_events_sys.h \
+	    -o ../out/host/ui-events-test ../tests/native/ui_events.c ../lib/ui/app.c ../lib/ui/list.c \
 	    $(KEYBOARD) ../lib/ui/widgets.c hostres.c $(GFX)
 	../out/host/ui-events-test
 .PHONY: ui-events-test
 
-handwriting-test: ../tests/handwriting.c $(KEYBOARD) ../lib/ui/input.c
+handwriting-test: ../tests/native/handwriting.c $(KEYBOARD) ../lib/ui/input.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/ui_events_sys.h -o ../out/host/handwriting-test $^ ../lib/ui/widgets.c hostres.c $(GFX)
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/ui_events_sys.h -o ../out/host/handwriting-test $^ ../lib/ui/widgets.c hostres.c $(GFX)
 	../out/host/handwriting-test
 .PHONY: handwriting-test
 
-aim-test: ../tests/aim.c ../packages/aim/oscar.c ../packages/aim/md5.c ../packages/aim/text.c ../packages/aim/oscar.h
+aim-test: ../tests/native/aim.c ../packages/aim/oscar.c ../packages/aim/md5.c ../packages/aim/text.c ../packages/aim/oscar.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/aim-test ../tests/aim.c \
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/aim-test ../tests/native/aim.c \
 	    ../packages/aim/oscar.c ../packages/aim/md5.c ../packages/aim/text.c
 	../out/host/aim-test
 .PHONY: aim-test
 
-gmail-test: ../tests/gmail.c ../tests/settings_sys.h ../packages/gmail/main.c ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c ../packages/gmail/mail.h ../packages/gmail/gmail.h $(O)/libwolfssl.a
+gmail-test: ../tests/native/gmail.c ../tests/native/settings_sys.h ../packages/gmail/main.c ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c ../packages/gmail/mail.h ../packages/gmail/gmail.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(CC) $(WEB_CFLAGS) -include ../tests/settings_sys.h -o ../out/host/gmail-test ../tests/gmail.c \
+	$(CC) $(WEB_CFLAGS) -include ../tests/native/settings_sys.h -o ../out/host/gmail-test ../tests/native/gmail.c \
 	    ../packages/gmail/mime.c ../packages/gmail/imap.c ../packages/gmail/smtp.c \
 	    hostres.c $(GFX) ../lib/ui/widgets.c ../lib/ui/list.c $(KEYBOARD) \
 	    ../lib/ui/text.c ../lib/ui/input.c ../lib/ui/transition.c ../lib/libc/tz.c $(O)/libwolfssl.a
 	../out/host/gmail-test
 .PHONY: gmail-test
 
-gfx-bench: ../tests/gfx_bench.c ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c
+gfx-bench: ../tests/native/gfx_bench.c ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -o ../out/host/gfx-bench $^
 	../out/host/gfx-bench
 .PHONY: gfx-bench
 
-gfx-text-test: ../tests/gfx_text.c ../lib/gfx/gfx.c ../lib/gfx/text.c
+gfx-text-test: ../tests/native/gfx_text.c ../lib/gfx/gfx.c ../lib/gfx/text.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/gfx-text-test $^
 	../out/host/gfx-text-test ../assets/gen/*.gzf
 .PHONY: gfx-text-test
 
-ftl-verify-test: ../tests/ftl_verify.c $(FS)
+ftl-verify-test: ../tests/native/ftl_verify.c $(FS)
 	@mkdir -p ../out/host
 	$(CC) $(FS_CFLAGS) -fsanitize=address,undefined -o ../out/host/ftl-verify-test $^
 	../out/host/ftl-verify-test
 .PHONY: ftl-verify-test
 
-ftl-verify-bench: ../tests/ftl_verify.c $(FS)
+ftl-verify-bench: ../tests/native/ftl_verify.c $(FS)
 	@mkdir -p ../out/host
 	$(CC) $(FS_CFLAGS) -DFTL_BENCH -o ../out/host/ftl-verify-bench $^
 	../out/host/ftl-verify-bench
 .PHONY: ftl-verify-bench
 
-wince-test: ../tests/wince_pe.c ../apps/wince/pe.c ../apps/wince/pe.h ../tests/wince_datetime.c ../apps/wince/datetime.c ../apps/wince/datetime.h ../tests/wince_ordinals.c ../apps/wince/ordinals.c ../apps/wince/ordinals.h
-wince-test: ../tests/wince_registry.c ../apps/wince/registry.c ../apps/wince/registry.h ../tests/wince_dialog.c ../apps/wince/dialog_template.c ../apps/wince/dialog_template.h
-wince-test: ../tests/wince_property.c ../apps/wince/property_state.c ../apps/wince/property_state.h ../apps/wince/number.c ../apps/wince/number.h
-wince-test: ../tests/wince_text.c ../apps/wince/text.c ../apps/wince/text.h
-wince-test: ../tests/wince_runtime.c ../tests/wince_runtime_host.h ../tests/wince_filemeta.c ../apps/wince/filemeta.c ../apps/wince/thread.c ../apps/wince/mapping.c ../apps/wince/timezone.c ../apps/wince/scan.c ../apps/wince/string.c ../apps/wince/view.c ../apps/wince/winsock.c ../apps/wince/ole.c
+wince-test: ../tests/native/wince_pe.c ../apps/wince/pe.c ../apps/wince/pe.h ../tests/native/wince_datetime.c ../apps/wince/datetime.c ../apps/wince/datetime.h ../tests/native/wince_ordinals.c ../apps/wince/ordinals.c ../apps/wince/ordinals.h
+wince-test: ../tests/native/wince_registry.c ../apps/wince/registry.c ../apps/wince/registry.h ../tests/native/wince_dialog.c ../apps/wince/dialog_template.c ../apps/wince/dialog_template.h
+wince-test: ../tests/native/wince_property.c ../apps/wince/property_state.c ../apps/wince/property_state.h ../apps/wince/number.c ../apps/wince/number.h
+wince-test: ../tests/native/wince_text.c ../apps/wince/text.c ../apps/wince/text.h
+wince-test: ../tests/native/wince_runtime.c ../tests/native/wince_runtime_host.h ../tests/native/wince_filemeta.c ../apps/wince/filemeta.c ../apps/wince/thread.c ../apps/wince/mapping.c ../apps/wince/timezone.c ../apps/wince/scan.c ../apps/wince/string.c ../apps/wince/view.c ../apps/wince/winsock.c ../apps/wince/ole.c
 wince-test: ../apps/wince/list.c ../apps/wince/date_control.c ../apps/wince/tabs.c
-wince-test: ../apps/wince/database.c ../tests/wince_database.c
+wince-test: ../apps/wince/database.c ../tests/native/wince_database.c
 	@mkdir -p ../out/host
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/wince-pe-test ../tests/wince_pe.c ../apps/wince/pe.c
+	    -o ../out/host/wince-pe-test ../tests/native/wince_pe.c ../apps/wince/pe.c
 	../out/host/wince-pe-test
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/wince-datetime-test ../tests/wince_datetime.c ../apps/wince/datetime.c
+	    -o ../out/host/wince-datetime-test ../tests/native/wince_datetime.c ../apps/wince/datetime.c
 	../out/host/wince-datetime-test
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/wince-ordinals-test ../tests/wince_ordinals.c ../apps/wince/ordinals.c
+	    -o ../out/host/wince-ordinals-test ../tests/native/wince_ordinals.c ../apps/wince/ordinals.c
 	../out/host/wince-ordinals-test
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/wince-registry-test ../tests/wince_registry.c ../apps/wince/registry.c ../apps/wince/pe.c
+	    -o ../out/host/wince-registry-test ../tests/native/wince_registry.c ../apps/wince/registry.c ../apps/wince/pe.c
 	../out/host/wince-registry-test
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/wince-dialog-test ../tests/wince_dialog.c ../apps/wince/dialog_template.c ../apps/wince/pe.c
+	    -o ../out/host/wince-dialog-test ../tests/native/wince_dialog.c ../apps/wince/dialog_template.c ../apps/wince/pe.c
 	../out/host/wince-dialog-test
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/wince-property-test ../tests/wince_property.c ../apps/wince/property_state.c ../apps/wince/number.c
+	    -o ../out/host/wince-property-test ../tests/native/wince_property.c ../apps/wince/property_state.c ../apps/wince/number.c
 	../out/host/wince-property-test
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/wince-text-test ../tests/wince_text.c ../apps/wince/text.c
+	    -o ../out/host/wince-text-test ../tests/native/wince_text.c ../apps/wince/text.c
 	../out/host/wince-text-test
 	$(CC) -std=c11 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -I../lib/include \
-	    -fsanitize=address,undefined -pthread -o ../out/host/wince-runtime-test ../tests/wince_runtime.c ../apps/wince/pe.c ../apps/wince/datetime.c ../lib/libc/tz.c
+	    -fsanitize=address,undefined -pthread -o ../out/host/wince-runtime-test ../tests/native/wince_runtime.c ../apps/wince/pe.c ../apps/wince/datetime.c ../lib/libc/tz.c
 	../out/host/wince-runtime-test
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined -D_DEFAULT_SOURCE \
-	    -o ../out/host/wince-filemeta-test ../tests/wince_filemeta.c ../apps/wince/datetime.c ../apps/wince/pe.c
+	    -o ../out/host/wince-filemeta-test ../tests/native/wince_filemeta.c ../apps/wince/datetime.c ../apps/wince/pe.c
 	../out/host/wince-filemeta-test
 	$(CC) -std=c11 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/wince-database-test ../tests/wince_database.c ../apps/wince/pe.c
+	    -o ../out/host/wince-database-test ../tests/native/wince_database.c ../apps/wince/pe.c
 	../out/host/wince-database-test
 	python3 ../tests/wince_assets_test.py
 	python3 ../tests/wince_runner_test.py
 .PHONY: wince-test
 
 # GlazeBoot's hand-over plan (wince/glazeboot/plan.h) on a RAM model.
-glazeboot-test: ../tests/glazeboot_plan.c ../wince/glazeboot/plan.h
+glazeboot-test: ../tests/native/glazeboot_plan.c ../wince/glazeboot/plan.h
 	@mkdir -p ../out/host
 	$(CC) -std=gnu11 -O2 -g -Wall -Wextra -fsanitize=address,undefined \
-	    -o ../out/host/glazeboot-plan-test ../tests/glazeboot_plan.c
+	    -o ../out/host/glazeboot-plan-test ../tests/native/glazeboot_plan.c
 	../out/host/glazeboot-plan-test
 .PHONY: glazeboot-test
 
-../out/host/wince-fs-read: ../tests/wince_fs_read.c $(FS)
+../out/host/wince-fs-read: ../tests/native/wince_fs_read.c $(FS)
 	@mkdir -p ../out/host
 	$(CC) $(FS_CFLAGS) -o $@ $^
 
@@ -463,14 +463,14 @@ NES := $(filter-out ../packages/nes/main.c,$(wildcard ../packages/nes/*.c))
 nes-test: ../out/pkg-res/nes/demo.nes
 	@mkdir -p ../out/host
 	$(CC) -std=gnu11 -O2 -g -fno-strict-aliasing -fsanitize=address,undefined \
-	    -o ../out/host/nes-test ../tests/nes.c $(NES)
+	    -o ../out/host/nes-test ../tests/native/nes.c $(NES)
 	../out/host/nes-test ../out/pkg-res/nes/demo.nes
 .PHONY: nes-test
 
 nes-cpu-test:
 	@mkdir -p ../out/host
 	$(CC) -std=gnu11 -O2 -g -fno-strict-aliasing -fsanitize=address,undefined \
-	    -o ../out/host/nes-trace ../tests/nes_trace.c $(NES)
+	    -o ../out/host/nes-trace ../tests/native/nes_trace.c $(NES)
 	../out/host/nes-trace "$(NES_TEST_ROM)" "$(NES_TEST_LOG)"
 .PHONY: nes-cpu-test
 
@@ -479,14 +479,14 @@ GAMEBOY := $(filter-out ../packages/gameboy/main.c ../packages/gameboy/save.c,$(
 gameboy-test: gameboy-save-test ../out/pkg-res/gameboy/demo.gb ../out/pkg-res/gameboy/demo.gbc
 	@mkdir -p ../out/host
 	$(CC) -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -fno-strict-aliasing -DIS_LITTLE_ENDIAN -fsanitize=address,undefined \
-	    -o ../out/host/gameboy-test ../tests/gameboy.c $(GAMEBOY)
+	    -o ../out/host/gameboy-test ../tests/native/gameboy.c $(GAMEBOY)
 	../out/host/gameboy-test ../out/pkg-res/gameboy/demo.gb ../out/pkg-res/gameboy/demo.gbc
 .PHONY: gameboy-test
 
 gameboy-rom-test:
 	@mkdir -p ../out/host
 	$(CC) -std=gnu11 -O2 -g -fno-strict-aliasing -DIS_LITTLE_ENDIAN -fsanitize=address,undefined \
-	    -o ../out/host/gameboy-rom ../tests/gameboy_rom.c $(GAMEBOY)
+	    -o ../out/host/gameboy-rom ../tests/native/gameboy_rom.c $(GAMEBOY)
 	../out/host/gameboy-rom "$(GB_TEST_ROM)"
 .PHONY: gameboy-rom-test
 
@@ -494,7 +494,7 @@ gameboy-rom-test:
 gameboy-save-test:
 	@mkdir -p ../out/host
 	$(CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/gameboy-save ../tests/gameboy_save.c ../packages/gameboy/save.c
+	    -o ../out/host/gameboy-save ../tests/native/gameboy_save.c ../packages/gameboy/save.c
 	../out/host/gameboy-save
 .PHONY: gameboy-save-test
 
@@ -513,11 +513,11 @@ SMS_FLAGS := -I../third_party/totalsms -I../third_party/totalsms/scheduler -DSMS
 SEGA_TEST_FLAGS := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefined -fno-sanitize-recover=all
 mastersystem-test: ../out/pkg-res/mastersystem/demo.sms
 	@mkdir -p ../out/host
-	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-test ../tests/sega.c $(SMS_CORE)
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-test ../tests/native/sega.c $(SMS_CORE)
 	../out/host/sms-test $< ../out/host/sms.ppm
 genesis-test: ../out/pkg-res/genesis/demo.gen
 	@mkdir -p ../out/host
-	$(CC) $(SEGA_TEST_FLAGS) -DTEST_GENESIS -o ../out/host/genesis-test ../tests/sega.c $(GENESIS_CORE)
+	$(CC) $(SEGA_TEST_FLAGS) -DTEST_GENESIS -o ../out/host/genesis-test ../tests/native/sega.c $(GENESIS_CORE)
 	../out/host/genesis-test $< ../out/host/genesis.ppm
 ../out/pkg-res/mastersystem/demo.sms: ../tools/mksegademo.py
 	python3 $< sms --output $@
@@ -527,25 +527,25 @@ genesis-test: ../out/pkg-res/genesis/demo.gen
 
 sms-banks-test:
 	@mkdir -p ../out/host
-	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-banks ../tests/sms_banks.c $(SMS_CORE) ../tests/sega_audio_stub.c
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-banks ../tests/native/sms_banks.c $(SMS_CORE) ../tests/native/sega_audio_stub.c
 	../out/host/sms-banks
 .PHONY: sms-banks-test
 
 sega-rom-runners:
 	@mkdir -p ../out/host
-	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-rom ../tests/sega_rom.c $(SMS_CORE)
-	$(CC) $(SEGA_TEST_FLAGS) -o ../out/host/genesis-rom ../tests/sega_rom.c $(GENESIS_CORE)
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/sms-rom ../tests/native/sega_rom.c $(SMS_CORE)
+	$(CC) $(SEGA_TEST_FLAGS) -o ../out/host/genesis-rom ../tests/native/sega_rom.c $(GENESIS_CORE)
 .PHONY: sega-rom-runners
 
 GG_CORE := $(filter-out ../packages/gamegear/main.c ../packages/gamegear/save.c,$(wildcard ../packages/gamegear/*.c))
 PCE_CORE := $(filter-out ../packages/turbografx16/main.c ../packages/turbografx16/save.c,$(wildcard ../packages/turbografx16/*.c))
 gamegear-test: ../out/pkg-res/gamegear/demo.gg
 	@mkdir -p ../out/host
-	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -DTEST_GG -o ../out/host/gamegear-test ../tests/console.c $(GG_CORE)
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -DTEST_GG -o ../out/host/gamegear-test ../tests/native/console.c $(GG_CORE)
 	../out/host/gamegear-test $< ../out/host/gamegear.ppm
 turbografx16-test: ../out/pkg-res/turbografx16/demo.pce
 	@mkdir -p ../out/host
-	$(CC) $(SEGA_TEST_FLAGS) -fno-strict-aliasing -o ../out/host/turbografx16-test ../tests/console.c $(PCE_CORE)
+	$(CC) $(SEGA_TEST_FLAGS) -fno-strict-aliasing -o ../out/host/turbografx16-test ../tests/native/console.c $(PCE_CORE)
 	../out/host/turbografx16-test $< ../out/host/turbografx16.ppm
 ../out/pkg-res/gamegear/demo.gg: ../tools/mksegademo.py
 	python3 $< gamegear --output $@
@@ -555,11 +555,11 @@ turbografx16-test: ../out/pkg-res/turbografx16/demo.pce
 
 gamegear-hardware-test: ../out/pkg-res/gamegear/demo.gg
 	@mkdir -p ../out/host
-	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/gamegear-hardware ../tests/gamegear_hardware.c $(GG_CORE) ../tests/sega_audio_stub.c
+	$(CC) $(SEGA_TEST_FLAGS) $(SMS_FLAGS) -o ../out/host/gamegear-hardware ../tests/native/gamegear_hardware.c $(GG_CORE) ../tests/native/sega_audio_stub.c
 	../out/host/gamegear-hardware $<
 pce-hardware-test:
 	@mkdir -p ../out/host
-	$(CC) $(SEGA_TEST_FLAGS) -fno-strict-aliasing -o ../out/host/pce-hardware ../tests/pce_hardware.c $(PCE_CORE)
+	$(CC) $(SEGA_TEST_FLAGS) -fno-strict-aliasing -o ../out/host/pce-hardware ../tests/native/pce_hardware.c $(PCE_CORE)
 	../out/host/pce-hardware
 .PHONY: gamegear-hardware-test pce-hardware-test
 
@@ -575,30 +575,30 @@ $(O)/libjerry.a: $(O)/jerry.o
 	@mkdir -p ../out/host
 	$(CC) $(WEB_CFLAGS) -Dmain=browser_preview_main -c -o $@ $<
 browser-test: $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a ../out/host/browser-platform.o
-	$(CC) $(WEB_CFLAGS) -o ../out/host/browser-test ../tests/browser_script.c \
+	$(CC) $(WEB_CFLAGS) -o ../out/host/browser-test ../tests/native/browser_script.c \
 	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a -lm
 	python3 ../tests/browser_transport.py ../out/host/browser-test
 .PHONY: browser-test
 
 # Opt-in live Google Search workflow; build only, never run as part of CI.
 browser-google: $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a ../out/host/browser-platform.o
-	$(CC) $(WEB_CFLAGS) -o ../out/host/browser-google ../tests/browser_google.c \
+	$(CC) $(WEB_CFLAGS) -o ../out/host/browser-google ../tests/native/browser_google.c \
 	    ../out/host/browser-platform.o hostres.c $(GFX) $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a -lm
 .PHONY: browser-google
 
 .PHONY: net-driver-test
-net-driver-test: ../tests/net_driver.c ../kernel/drivers/net.c
+net-driver-test: ../tests/native/net_driver.c ../kernel/drivers/net.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -falign-functions=16 -fsanitize=address,undefined -o ../out/host/net-driver-test ../tests/net_driver.c
+	$(CC) $(CFLAGS) -falign-functions=16 -fsanitize=address,undefined -o ../out/host/net-driver-test ../tests/native/net_driver.c
 	../out/host/net-driver-test
 
 # Optional peer-model tests; point at the matching be300 worktree.
 BE300_SOURCE ?= ../../be300
 .PHONY: wl54cf-driver-test
-wl54cf-driver-test: ../tests/wl54cf_driver.c ../kernel/drivers/wl54cf.c ../kernel/drivers/wl54cf_io.h
+wl54cf-driver-test: ../tests/native/wl54cf_driver.c ../kernel/drivers/wl54cf.c ../kernel/drivers/wl54cf_io.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -I$(BE300_SOURCE)/src -Dwl54cf_init=wl54cf_model_init -c $(BE300_SOURCE)/src/hw/wl54cf.c -o ../out/host/wl54cf-model.o
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -I$(BE300_SOURCE)/src ../tests/wl54cf_driver.c ../out/host/wl54cf-model.o $(BE300_SOURCE)/src/hw/wifi_security.c -o ../out/host/wl54cf-driver-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -I$(BE300_SOURCE)/src ../tests/native/wl54cf_driver.c ../out/host/wl54cf-model.o $(BE300_SOURCE)/src/hw/wifi_security.c -o ../out/host/wl54cf-driver-test
 	../out/host/wl54cf-driver-test
 
 OPENSSL_FLAGS ?= -I/opt/homebrew/opt/openssl@3/include
@@ -608,12 +608,12 @@ HOSTAP_FLAGS := $(CFLAGS) -O2 -include ../servers/net/wpa/config.h -I../third_pa
 .PHONY: wifi-supplicant-test xi825-test
 wifi-supplicant-test:
 	@mkdir -p ../out/host
-	$(CC) $(HOSTAP_FLAGS) -DBE300_WIFI_OPENSSL -I$(BE300_SOURCE)/src $(OPENSSL_FLAGS) -fsanitize=address,undefined -o ../out/host/wifi-supplicant-test ../tests/wifi_supplicant.c ../servers/net/wifi_supplicant.c ../lib/libc/wifi.c $(HOSTAP) $(BE300_SOURCE)/src/hw/wifi_security.c $(OPENSSL_LIBS)
+	$(CC) $(HOSTAP_FLAGS) -DBE300_WIFI_OPENSSL -I$(BE300_SOURCE)/src $(OPENSSL_FLAGS) -fsanitize=address,undefined -o ../out/host/wifi-supplicant-test ../tests/native/wifi_supplicant.c ../servers/net/wifi_supplicant.c ../lib/libc/wifi.c $(HOSTAP) $(BE300_SOURCE)/src/hw/wifi_security.c $(OPENSSL_LIBS)
 	../out/host/wifi-supplicant-test
 xi825-test:
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -Dxi825_init=prism_init -c $(BE300_SOURCE)/src/hw/xi825.c -o ../out/host/xi825-model.o
-	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -I$(BE300_SOURCE)/src/hw -o ../out/host/xi825-test ../tests/xi825.c ../out/host/xi825-model.o $(BE300_SOURCE)/src/hw/wifi_security.c
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -I$(BE300_SOURCE)/src/hw -o ../out/host/xi825-test ../tests/native/xi825.c ../out/host/xi825-model.o $(BE300_SOURCE)/src/hw/wifi_security.c
 	../out/host/xi825-test
 
 .PHONY: wifi-mkfs
@@ -623,23 +623,23 @@ wifi-mkfs:
 
 store-worker-test: $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(CC) $(WEB_CFLAGS) -I../apps/browser -include ../tests/radio_host.h -o ../out/host/store-worker-test \
-	    ../tests/store_worker.c ../apps/appstore/worker.c ../apps/appstore/schedule.c \
+	$(CC) $(WEB_CFLAGS) -I../apps/browser -include ../tests/native/radio_host.h -o ../out/host/store-worker-test \
+	    ../tests/native/store_worker.c ../apps/appstore/worker.c ../apps/appstore/schedule.c \
 	    ../apps/appstore/catalog.c ../lib/libc/pkg.c ../lib/gfx/gfx.c ../lib/gfx/blit.c \
 	    $(O)/libwolfssl.a -lpthread
 	../out/host/store-worker-test
 .PHONY: store-worker-test
 
 .PHONY: module-test
-module-test: ../tests/module.c ../kernel/module.c
+module-test: ../tests/native/module.c ../kernel/module.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/module-test ../tests/module.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/module-test ../tests/native/module.c
 	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko
 
 .PHONY: service-test
-service-test: ../tests/service.c ../kernel/service.c
+service-test: ../tests/native/service.c ../kernel/service.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/service-test ../tests/service.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/service-test ../tests/native/service.c
 	../out/host/service-test
 
 # Doom's real engine and Glaze I/O/audio/video glue; no WAD in the repository.
@@ -660,20 +660,20 @@ doom-test: ../out/host/doom-test
 	../out/host/doom-test
 	$(if $(DOOM_WAD),ASAN_OPTIONS=detect_leaks=0 ../out/host/doom-test "$(DOOM_WAD)",@echo "Optional full engine test: make doom-test DOOM_WAD=/absolute/path/doom1.wad")
 
-../out/host/debug-net-fixture: ../tests/debug_net_native.c ../servers/usb/network.c ../servers/usb/network.h ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
+../out/host/debug-net-fixture: ../tests/native/debug_net_native.c ../servers/usb/network.c ../servers/usb/network.h ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(USB_TLS) -fsanitize=address,undefined $(filter %.c,$^) $(O)/libwolfssl.a -o $@
 .PHONY: debug-net-test
 debug-net-test: ../out/host/debug-net-fixture ../out/host/glaze-usb
 	python3 ../tests/debug_network.py
-../out/host/debug-net-client: ../tests/debug_net_client.c ../tools/glaze-usb/network.c ../tools/glaze-usb/network.h ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
+../out/host/debug-net-client: ../tests/native/debug_net_client.c ../tools/glaze-usb/network.c ../tools/glaze-usb/network.h ../lib/include/glaze/debug_net.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) $(USB_TLS) $(shell $(USB_PKG_CONFIG) --cflags libusb-1.0) $(filter %.c,$^) $(O)/libwolfssl.a -o $@
 debug-net-test: ../out/host/debug-net-client
 
-wince-nand-test: ../tests/wince_assets_native.c ../tests/wince_nand_assets.py ../apps/wince/assets.c ../apps/wince/assets.h ../apps/wince/pe.c
+wince-nand-test: ../tests/native/wince_assets_native.c ../tests/wince_nand_assets.py ../apps/wince/assets.c ../apps/wince/assets.h ../apps/wince/pe.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/wince-assets-native ../tests/wince_assets_native.c ../apps/wince/assets.c ../apps/wince/pe.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/wince-assets-native ../tests/native/wince_assets_native.c ../apps/wince/assets.c ../apps/wince/pe.c
 	python3 ../tests/wince_nand_assets.py
 .PHONY: wince-nand-test
 
@@ -691,30 +691,30 @@ OTA_TP_OBJS := $(patsubst ../third_party/%.c,../out/host/ota.o/%.o,$(OTA_TP))
 $(OTA_TP_OBJS): ../out/host/ota.o/%.o: ../third_party/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O2 -g -w $(OTA_DEFS) -c -o $@ $<
-../out/host/ota-test: ../tests/ota.c ../boot/ota_apply.c ../boot/ota_apply.h ../kernel/ota_stage.c ../kernel/ota_stage.h \
+../out/host/ota-test: ../tests/native/ota.c ../boot/ota_apply.c ../boot/ota_apply.h ../kernel/ota_stage.c ../kernel/ota_stage.h \
     ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c ../servers/fs/ftl.c ../lib/include/glaze/ota.h $(OTA_TP_OBJS)
-	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined $(OTA_DEFS) -o $@ ../tests/ota.c ../boot/ota_apply.c \
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined $(OTA_DEFS) -o $@ ../tests/native/ota.c ../boot/ota_apply.c \
 	    ../kernel/ota_stage.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c ../servers/fs/ftl.c $(OTA_TP_OBJS)
-ota-test: ../out/host/ota-test mkfsimg
-	python3 ../tests/ota_test.py ./mkfsimg ../out/host/ota-test
+ota-test: ../out/host/ota-test $(O)/mkfsimg
+	python3 ../tests/ota_test.py $(O)/mkfsimg ../out/host/ota-test
 .PHONY: ota-test
 
 # Production early boot I/O with fake registers and failure injection.
-boot-init-test: ../tests/spl_io.c ../boot/spl.c ../kernel/drivers/nand.c ../tests/timer_boot.c ../kernel/timer.c ../tests/irq_boot.c ../kernel/drivers/irq.c ../tests/rtc_boot.c ../kernel/drivers/rtc.c
+boot-init-test: ../tests/native/spl_io.c ../boot/spl.c ../kernel/drivers/nand.c ../tests/native/timer_boot.c ../kernel/timer.c ../tests/native/irq_boot.c ../kernel/drivers/irq.c ../tests/native/rtc_boot.c ../kernel/drivers/rtc.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/spl_io.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c -o ../out/host/spl-io-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/spl_io.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c -o ../out/host/spl-io-test
 	../out/host/spl-io-test
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/timer_boot.c -o ../out/host/timer-boot-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/timer_boot.c -o ../out/host/timer-boot-test
 	../out/host/timer-boot-test
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/irq_boot.c -o ../out/host/irq-boot-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/irq_boot.c -o ../out/host/irq-boot-test
 	../out/host/irq-boot-test
-	$(CC) $(CFLAGS) -fsanitize=address,undefined -I../kernel ../tests/rtc_boot.c -o ../out/host/rtc-boot-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -I../kernel ../tests/native/rtc_boot.c -o ../out/host/rtc-boot-test
 	../out/host/rtc-boot-test
 .PHONY: boot-init-test
 
-nand-boot-test: ../tests/nand_boot.c ../tests/nand_ecc.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_boot.h ../kernel/drivers/nand_ecc.c
+nand-boot-test: ../tests/native/nand_boot.c ../tests/native/nand_ecc.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_boot.h ../kernel/drivers/nand_ecc.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/nand_boot.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c -o ../out/host/nand-boot-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/nand_boot.c ../kernel/drivers/nand_boot.c ../kernel/drivers/nand_ecc.c -o ../out/host/nand-boot-test
 	../out/host/nand-boot-test
 .PHONY: nand-boot-test
 
@@ -724,33 +724,33 @@ nand-boot-test: ../tests/nand_boot.c ../tests/nand_ecc.c ../kernel/drivers/nand_
 nand-image-tools: ../out/host/nand-inventory mkfsimg
 .PHONY: nand-image-tools
 
-ftl-factory-test: ../tests/ftl_factory_bad.c $(FS)
+ftl-factory-test: ../tests/native/ftl_factory_bad.c $(FS)
 	@mkdir -p ../out/host
 	$(CC) $(FS_CFLAGS) -fsanitize=address,undefined -o ../out/host/ftl-factory-test $^
 	../out/host/ftl-factory-test
 .PHONY: ftl-factory-test
 
-nand-backup-test: ../tests/nand_backup.c ../tools/glaze-usb/nand.c
+nand-backup-test: ../tests/native/nand_backup.c ../tools/glaze-usb/nand.c
 	@mkdir -p ../out/host
 	$(USB_CC) $(CFLAGS) $(USB_FLAGS) -fsanitize=address,undefined $^ -o ../out/host/nand-backup-test
 	../out/host/nand-backup-test
 .PHONY: nand-backup-test
 
-nand-policy-test: ../tests/nand_raw_policy.c ../kernel/drivers/flash.c ../kernel/drivers/nand_ecc.c
+nand-policy-test: ../tests/native/nand_raw_policy.c ../kernel/drivers/flash.c ../kernel/drivers/nand_ecc.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/nand_raw_policy.c ../kernel/drivers/nand_ecc.c -o ../out/host/nand-policy-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/nand_raw_policy.c ../kernel/drivers/nand_ecc.c -o ../out/host/nand-policy-test
 	../out/host/nand-policy-test
 .PHONY: nand-policy-test
 
-cf-boot-test: ../tests/cf_boot.c ../kernel/drivers/cf.c
+cf-boot-test: ../tests/native/cf_boot.c ../kernel/drivers/cf.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/cf_boot.c -o ../out/host/cf-boot-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/cf_boot.c -o ../out/host/cf-boot-test
 	../out/host/cf-boot-test
 .PHONY: cf-boot-test
 
-nand-program-test: ../tests/nand_program.c ../kernel/drivers/nand.c $(BE300_SOURCE)/src/hw/nand.c $(BE300_SOURCE)/src/hw/nand_restore.c
+nand-program-test: ../tests/native/nand_program.c ../kernel/drivers/nand.c $(BE300_SOURCE)/src/hw/nand.c $(BE300_SOURCE)/src/hw/nand_restore.c
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -I$(BE300_SOURCE)/src -fsanitize=address,undefined ../tests/nand_program.c $(BE300_SOURCE)/src/hw/nand.c $(BE300_SOURCE)/src/hw/nand_restore.c -o ../out/host/nand-program-test
+	$(CC) $(CFLAGS) -I$(BE300_SOURCE)/src -fsanitize=address,undefined ../tests/native/nand_program.c $(BE300_SOURCE)/src/hw/nand.c $(BE300_SOURCE)/src/hw/nand_restore.c -o ../out/host/nand-program-test
 	../out/host/nand-program-test
 .PHONY: nand-program-test
 
@@ -760,32 +760,32 @@ nand-program-test: ../tests/nand_program.c ../kernel/drivers/nand.c $(BE300_SOUR
 cf-recovery-tools: ../out/host/mkcf-recovery
 .PHONY: cf-recovery-tools
 
-cf-read-test: ../tests/cf_read.c ../tools/glaze-usb/cf.c
+cf-read-test: ../tests/native/cf_read.c ../tools/glaze-usb/cf.c
 	@mkdir -p ../out/host
 	$(USB_CC) $(CFLAGS) $(USB_FLAGS) -fsanitize=address,undefined $^ -o ../out/host/cf-read-test
 	../out/host/cf-read-test
 .PHONY: cf-read-test
 
-nand-writer-test: ../tests/nand_writer.c ../tools/glaze-usb/nand_write.c ../kernel/nand_repair.c $(O)/libwolfssl.a
+nand-writer-test: ../tests/native/nand_writer.c ../tools/glaze-usb/nand_write.c ../kernel/nand_repair.c $(O)/libwolfssl.a
 	@mkdir -p ../out/host
-	$(USB_CC) $(CFLAGS) $(USB_FLAGS) $(USB_TLS) -fsanitize=address,undefined ../tests/nand_writer.c ../tools/glaze-usb/nand_write.c $(O)/libwolfssl.a -o ../out/host/nand-writer-test
+	$(USB_CC) $(CFLAGS) $(USB_FLAGS) $(USB_TLS) -fsanitize=address,undefined ../tests/native/nand_writer.c ../tools/glaze-usb/nand_write.c $(O)/libwolfssl.a -o ../out/host/nand-writer-test
 	../out/host/nand-writer-test
 .PHONY: nand-writer-test
 
-usb-ce-staging-test: ../tests/usb_ce_staging.c ../tools/glaze-usb/client.c ../tools/glaze-usb/pcconnect.h
+usb-ce-staging-test: ../tests/native/usb_ce_staging.c ../tools/glaze-usb/client.c ../tools/glaze-usb/pcconnect.h
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/usb_ce_staging.c $(USB_FLAGS) -o ../out/host/usb-ce-staging-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/usb_ce_staging.c $(USB_FLAGS) -o ../out/host/usb-ce-staging-test
 	../out/host/usb-ce-staging-test
 .PHONY: usb-ce-staging-test
 
-installer-ui-test: ../tests/installer_ui.c ../servers/springboard/installer.c ../servers/springboard/installer.h hostres.c $(GFX)
+installer-ui-test: ../tests/native/installer_ui.c ../servers/springboard/installer.c ../servers/springboard/installer.h hostres.c $(GFX)
 	@mkdir -p ../out/host
-	$(CC) $(CFLAGS) -O2 -o ../out/host/installer-ui-test ../tests/installer_ui.c ../servers/springboard/installer.c hostres.c $(GFX)
+	$(CC) $(CFLAGS) -O2 -o ../out/host/installer-ui-test ../tests/native/installer_ui.c ../servers/springboard/installer.c hostres.c $(GFX)
 	../out/host/installer-ui-test
 .PHONY: installer-ui-test
 
 # Portable falling-block rules and versioned save-state validation.
-tetris-test: ../tests/tetris.c ../packages/tetris/game.c ../packages/tetris/game.h
+tetris-test: ../tests/native/tetris.c ../packages/tetris/game.c ../packages/tetris/game.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined $(filter %.c,$^) -o ../out/host/tetris-test
 	UBSAN_OPTIONS=halt_on_error=1 ../out/host/tetris-test

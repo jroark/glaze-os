@@ -147,7 +147,7 @@ address reachable by the emulator NAT, not `127.0.0.1` (lwIP routes loopback
 inside the guest). On macOS, use the native Python runtime if the legacy
 runtime cannot receive connections on the chosen interface.
 
-`NET=wl54cf BE300=/path/to/be300 tests/run.sh tests/t_network.txt 15` selects the
+`NET=wl54cf BE300=/path/to/be300 tests/run.sh tests/ui/t_network.txt 15` selects the
 card for existing UI scripts and includes firmware automatically. `NET=1`
 continues to select NE2000.
 

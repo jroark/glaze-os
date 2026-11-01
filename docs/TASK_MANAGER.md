@@ -75,11 +75,11 @@ For offline installation and UI checks, put only this package on a card:
 
 ```sh
 tools/mkcfimg.sh out/taskmanager-cf.img 16 16 out/pkg/taskmanager.gzp
-CF=out/taskmanager-cf.img tests/run.sh tests/t_taskmanager.txt 90
+CF=out/taskmanager-cf.img tests/run.sh tests/ui/t_taskmanager.txt 90
 ```
 
 For HTTPS store installation, build with
-`INPUT_SCRIPT=tests/t_appstore_taskmanager.txt`, boot a fresh copy with
+`INPUT_SCRIPT=tests/ui/t_appstore_taskmanager.txt`, boot a fresh copy with
 `--rtc-host-time --ne2000`, and allow at least 75 guest seconds. Ship the OS
 with the default HTTPS store URL and no input script.
 

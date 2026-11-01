@@ -159,15 +159,15 @@ Actual backlight shutdown, wake brightness and repeated sleep/wake cycles
 also require physical-device validation; emulator black pixels alone do not
 establish a power saving.
 
-`tests/run.sh tests/t_display.txt 19` saves new levels and cancels a drag
+`tests/run.sh tests/ui/t_display.txt 19` saves new levels and cancels a drag
 with Home. Then run
-`FS_FROM=out/shots/t_display/glaze.bin tests/run.sh tests/t_display_reboot.txt 12`
+`FS_FROM=out/shots/t_display/glaze.bin tests/run.sh tests/ui/t_display_reboot.txt 12`
 to verify the saved levels after reboot. Both runs should end on Display
 with brightness 5 and contrast 8.
 
-`tests/t_screen_timeout.txt` selects 30 seconds, then uses two unlock swipes.
+`tests/ui/t_screen_timeout.txt` selects 30 seconds, then uses two unlock swipes.
 Separate runs ending at 41, 44 and 51 seconds must show black, the lock
-screen, then Display, respectively. Boot `tests/t_screen_timeout_reboot.txt`
+screen, then Display, respectively. Boot `tests/ui/t_screen_timeout_reboot.txt`
 with the saved filesystem and stop at 40 seconds to verify the saved 30-second
 timeout. Set `BE300` to an absolute emulator path when running from a worktree.
 

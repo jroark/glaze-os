@@ -106,9 +106,9 @@ status bit B when comparing registers, because B is a stack encoding rather
 than a physical stored flag. Stable unofficial composite instructions are
 covered; this does not establish PPU timing accuracy.
 
-`tests/t_nes.txt` exercises installation, the demo, controls, pause/resume,
+`tests/ui/t_nes.txt` exercises installation, the demo, controls, pause/resume,
 loading the same cartridge from Card, save restoration, reset, and Home/warm resume. Build with
-`make -j4 INPUT_SCRIPT=tests/t_nes.txt`, then boot a copy of the resulting NAND
+`make -j4 INPUT_SCRIPT=tests/ui/t_nes.txt`, then boot a copy of the resulting NAND
 with a card containing `nes.gzp` and the demo renamed `test.nes`. Run for 60
 seconds, capture both serial streams, and check `nes: loaded`, `nes: paused`,
 `nes: resumed`, `nes: battery restored` and `nes: reset`. Always boot copies:

@@ -91,9 +91,9 @@ player movement, firing with nonzero PCM, and save/load position restoration.
 Leak checking is disabled for this process-lifetime engine run; ASan and UBSan
 remain active except historical signed-overflow and shift arithmetic.
 
-`tests/t_doom.txt` installs from a card holding only `doom.gzp` and an external
+`tests/ui/t_doom.txt` installs from a card holding only `doom.gzp` and an external
 `doom1.wad`, starts E1M1 with the real button event path, saves/loads, and returns
-from Home. `tests/t_doom_reload.txt` reboots that saved filesystem, reinstalls
+from Home. `tests/ui/t_doom_reload.txt` reboots that saved filesystem, reinstalls
 the package while keeping data, loads directly from the title screen, and quits
 using physical OK. Boot a copy of the NAND. See `CLAUDE.md` for scripted emulator runs.
 Physical BE-300 performance still requires testing on a device.

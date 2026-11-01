@@ -1,5 +1,5 @@
 /* Battery level arithmetic, shared by the kernel driver
- * (kernel/drivers/battery.c) and its host test (tests/battery_driver.c).
+ * (kernel/drivers/battery.c) and its host test (tests/native/battery_driver.c).
  *
  * It follows Windows CE's battery driver, compiled into gwes.exe
  * (be300-modules 03_gwes.exe.bin, VA = file offset + 0x10000):

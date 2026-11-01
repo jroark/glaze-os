@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the native OTA test (make -C host ota-test, tests/ota.c).
+"""Drive the native OTA test (make -C host ota-test, tests/native/ota.c).
 
 Makes throwaway Ed25519 keys, a stand-in kernel ELF and romfs for an old
 (1.0) and a new (1.1) OS, signs update files with tools/mkota.py, builds a

@@ -102,7 +102,7 @@ removes the bundle and its data.
 
 ```
 python3 -m http.server 18765 --directory out/store
-./build.sh APPSTORE_URL=http://HOST_LAN_IP:18765 INPUT_SCRIPT=tests/t_appstore.txt
+./build.sh APPSTORE_URL=http://HOST_LAN_IP:18765 INPUT_SCRIPT=tests/ui/t_appstore.txt
 be300 --nand COPY_OF_OUT_GLAZE_BIN --rtc-host-time --ne2000
 ```
 
@@ -123,7 +123,7 @@ harness starts local HTTP/HTTPS fixtures and checks framing, bounds, cancellatio
 trusted TLS and rejected certificates. It needs permission for loopback sockets.
 Existing `ktest` cases also exercise device package installation, saved-data
 preservation and launch. `tests/store_fixture.py` offers Hello 1.0 on its first
-catalog request and 1.1 thereafter for `tests/t_appstore_install.txt`. That
+catalog request and 1.1 thereafter for `tests/ui/t_appstore_install.txt`. That
 scenario installs and launches the original three apps, draws in Sketch, and checks
 Hello after updating; allow at least 160 seconds of guest time. The
 `t_appstore_minesweeper.txt` and `t_appstore_solitaire.txt` scenarios each

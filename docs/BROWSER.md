@@ -116,7 +116,7 @@ arguments select the query and expected result hostname. Exit code 3 means
 Google requires human verification; it does not count as a compatibility pass.
 The live check is separate from the deterministic integration tests.
 
-`make INPUT_SCRIPT=tests/t_browser_script.txt` builds the offline device smoke
+`make INPUT_SCRIPT=tests/ui/t_browser_script.txt` builds the offline device smoke
 test. Run a copy of the NAND under be300 for 36 seconds and check its console
 for `browser demo:` messages, including math/JSON, click, timer, child script
 and same-origin frame results. The test also opens `res:script-limits.html`

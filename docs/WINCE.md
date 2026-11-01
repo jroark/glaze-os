@@ -212,7 +212,7 @@ Dialog and property-page templates may come from any loaded module (the
 program, `LC.dll` or a bundled DLL).
 `RegDeleteKeyW` removes subkeys too, as
 [Windows CE's RegDeleteKey](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms891451(v=msdn.10))
-does. `wsprintfW` (`apps/wince/text.c`, host test `tests/wince_text.c`)
+does. `wsprintfW` (`apps/wince/text.c`, host test `tests/native/wince_text.c`)
 supports flags, `*` widths and precisions, `%S`/`%hs`/`%ls`, `%o` and `%p`.
 The ANSI code page is Windows-1252.
 
@@ -296,7 +296,7 @@ REQ's original tree, report list, menus and dialogs support this registry workfl
 
 ```sh
 python3 tests/run_wince.py --package out/cbea/cbea.req.gzp \
-  --input tests/t_wince_req.txt --seconds 65 --headless --expect-exit 0 \
+  --input tests/ui/t_wince_req.txt --seconds 65 --headless --expect-exit 0 \
   --check-key 'HKLM\SOFTWARE\GlazeCompat' \
   --check-string 'HKLM\SOFTWARE\GlazeCompat' Greeting 'Hello from REQ'
 ```
@@ -307,12 +307,12 @@ NAND. To inspect the value after a cold boot, use the printed run directory:
 
 ```sh
 python3 tests/run_wince.py --package out/cbea/cbea.req.gzp \
-  --input tests/t_wince_req_reopen.txt --seconds 35 --headless \
+  --input tests/ui/t_wince_req_reopen.txt --seconds 35 --headless \
   --reuse-fs out/cbea.req-EXAMPLE/glaze.bin \
   --check-string 'HKLM\SOFTWARE\GlazeCompat' Greeting 'Hello from REQ'
 ```
 
-`tests/t_wince_req_modify.txt` reopens the existing string, changes it to
+`tests/ui/t_wince_req_modify.txt` reopens the existing string, changes it to
 `Updated by REQ`, and closes the app. Run it against the save image with
 `--seconds 60 --expect-exit 0` and the corresponding `--check-string` assertion.
 The REQ scripts allow additional startup time for the larger compatibility runner.
@@ -372,12 +372,12 @@ the NAND, build/serial logs and a BMP screenshot.
 The RegEdit script selects HKCU, creates `GlazeCompat`, opens that key, and
 creates `Greeting` with `Hello from RegEdit` through the original dialogs.
 `--check-regedit` reads the saved registry from littlefs. Cold-boot it with
-`--input tests/t_wince_regedit_reopen.txt --reuse-fs <previous>/glaze.bin
+`--input tests/ui/t_wince_regedit_reopen.txt --reuse-fs <previous>/glaze.bin
 --check-regedit`. Native sanitizer tests cover registry round trips, empty keys,
 legacy streams, deletion, capacity limits and malformed/truncated registry and
 dialog templates.
 
-`tests/t_wince_regedit_modify.txt` reopens the original SZ Editor, changes
+`tests/ui/t_wince_regedit_modify.txt` reopens the original SZ Editor, changes
 the data to `Updated by RegEdit`, saves and closes the app. Run it with the
 fresh save image, `--check-regedit --regedit-value 'Updated by RegEdit'
 --expect-exit 1`. The original RegEdit WinMain returns 1 on normal exit.
@@ -386,10 +386,10 @@ The PalmTweak script disables the General animation checkbox, enables the
 battery idle timer, enters five minutes, increments it to six with the spinner,
 switches pages, applies, and closes. `--check-tweak` verifies the original
 callbacks saved DWORD `Animate=0` and `BattPowerOff=360` in its private registry.
-Reuse that test image with `tests/t_wince_tweak_reopen.txt --check-tweak` to
-inspect the restored Power Off page, or `tests/t_wince_tweak_cancel.txt
+Reuse that test image with `tests/ui/t_wince_tweak_reopen.txt --check-tweak` to
+inspect the restored Power Off page, or `tests/ui/t_wince_tweak_cancel.txt
 --check-tweak --expect-exit 1` to verify Cancel discards a later checkbox edit.
-`tests/t_wince_tweak_escape.txt` checks Escape closes the modal sheet before
+`tests/ui/t_wince_tweak_escape.txt` checks Escape closes the modal sheet before
 any touch establishes focus.
 Native sanitizer tests check page validation vetoes, Apply/Cancel notifications,
 lazy-page persistence, resource-title ordinals and signed/unsigned numeric
@@ -399,13 +399,13 @@ To check persistence after a cold boot, use the Notepad save run's printed path:
 
 ```sh
 python3 tests/run_wince.py --image ../be300/nand/beshell.bin --app notepad \
-  --input tests/t_wince_notepad_reopen.txt \
+  --input tests/ui/t_wince_notepad_reopen.txt \
   --reuse-fs out/wince-notepad-EXAMPLE/glaze.bin --check-document
 ```
 
 The screenshot should display the same saved text. `BE300` can select another
 emulator binary. The test runner fails if the original executable does not
-start, or a runtime error/kernel fault occurs. `tests/t_wince_install.txt`
+start, or a runtime error/kernel fault occurs. `tests/ui/t_wince_install.txt`
 separately exercises installation from a card through Files.
 
 WorldTALK takes about 40 seconds of emulator time to lay out its home page:
@@ -421,11 +421,11 @@ buttons are not drawn yet.
 
 To load a page over the network, serve one from the host on its own address
 (not 127.0.0.1, which lwIP cannot reach through the emulator's NAT). Set
-that URL in `tests/t_wince_internet_url.txt`, and run:
+that URL in `tests/ui/t_wince_internet_url.txt`, and run:
 
 ```sh
 python3 tests/run_wince.py --image ../be300/nand/expod.bin --app internet \
-  --net --input tests/t_wince_internet_url.txt --seconds 150 --headless
+  --net --input tests/ui/t_wince_internet_url.txt --seconds 150 --headless
 ```
 
 The script taps the address box (focus selects its text, so typing replaces
@@ -437,8 +437,8 @@ Owner tests enter **Alex from Glaze**, switch to Notes, enter **Original app
 compatibility**, select the Notes checkbox, and save with the toolbar button. `--check-owner`
 checks both binary registry records and the checkbox; `--expect-exit 0` checks
 that the original CRT terminates normally. For a cold-boot visual check, reuse
-that run's NAND with `--input tests/t_wince_owner_reopen.txt` or
-`tests/t_wince_owner_notes.txt`, keeping `--app` the same. The test runner
+that run's NAND with `--input tests/ui/t_wince_owner_reopen.txt` or
+`tests/ui/t_wince_owner_notes.txt`, keeping `--app` the same. The test runner
 rejects a reused filesystem containing a different runner binary, so an older
 runtime cannot accidentally stand in for the current implementation.
 
@@ -501,13 +501,13 @@ Private-file assertions support both encodings used by the original apps:
 
 ```sh
 python3 tests/run_wince.py --package out/cbea/cbea.tasks.gzp \
-  --input tests/t_wince_tasks.txt --seconds 120 --headless \
+  --input tests/ui/t_wince_tasks.txt --seconds 120 --headless \
   --check-file-utf16 drive/ToDo/00000001 'Compatibility task'
 python3 tests/run_wince.py --package out/cbea/cbea.contacts.gzp \
-  --input tests/t_wince_contacts.txt --seconds 140 --headless \
+  --input tests/ui/t_wince_contacts.txt --seconds 140 --headless \
   --check-file-utf16 drive/Address/00000001 'Contact, Compatibility'
 python3 tests/run_wince.py --package out/cbea/cbea.notes.gzp \
-  --input tests/t_wince_notes.txt --seconds 140 --headless \
+  --input tests/ui/t_wince_notes.txt --seconds 140 --headless \
   --check-file-text drive/Text/Text1.txt 'Compatibility note'
 ```
 
@@ -526,7 +526,7 @@ by another launch using its saved registry and `Xpcs_Registry.dat`. Its server i
 configured through private `HKCU\Software\America Online\AimCE\Config` values
 `Host` (REG_SZ) and `Port` (REG_DWORD). Both the login address and the OSCAR
 server's advertised BOS address must be reachable from the emulator; guest
-`127.0.0.1` addresses the guest. `tests/t_wince_aim_message.txt` uses local test
+`127.0.0.1` addresses the guest. `tests/ui/t_wince_aim_message.txt` uses local test
 accounts “Glaze User” and “GlazeBob”. The original client sent “Compatibility
 ping” to a local `aim-test` echo account and displayed its “echo from aim-test”
 reply in the original conversation window. Notification sounds use Glaze's default

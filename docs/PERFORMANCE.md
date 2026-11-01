@@ -25,7 +25,7 @@ The back-button result includes a sampling correctness fix; its old output is
 not the visual reference. Other optimized primitives retain the original pixels.
 These are guest drawing times, not whole-app speedups or physical-device results.
 
-Settings timings use `tests/t_datetime.txt`, three fresh NAND copies per build,
+Settings timings use `tests/ui/t_datetime.txt`, three fresh NAND copies per build,
 and temporary instrumentation around drawing and synchronous presentation:
 
 | Pressed control | Draw before → after | Present before → after |
@@ -50,7 +50,7 @@ slider values, and time-zone overscroll; stationary input must not present.
 They also write preview images under `out/host/`.
 
 `make -C host gfx-bench` reports current host timings without sanitizers. It uses
-`tests/gfx_bench.c`, which also supports MIPS guest timing through `gz_time_us()`.
+`tests/native/gfx_bench.c`, which also supports MIPS guest timing through `gz_time_us()`.
 For before/after comparison, compile both renderer snapshots with identical flags,
 rename the baseline's exported functions with a `before_` prefix, and define
 `GFX_BASELINE` when compiling the benchmark. Host timings must be reported
@@ -117,8 +117,8 @@ SpringBoard boot also pass.
 `make -C host gfx-bench ftl-verify-bench` runs the current native CPU benchmarks.
 Both benchmark sources support guest timing with `gz_time_us()`. To compare
 flash snapshots, rename the baseline's exported `ftl_*` and `dhara_nand_*`
-functions with a `before_` prefix and build `tests/ftl_verify.c` with
+functions with a `before_` prefix and build `tests/native/ftl_verify.c` with
 `FTL_BASELINE` and `FTL_BENCH`. For graphics comparisons, also include and rename
 the baseline's text functions alongside its core and blit functions before
-building `tests/gfx_bench.c` with `GFX_BASELINE`. Use identical compiler flags
+building `tests/native/gfx_bench.c` with `GFX_BASELINE`. Use identical compiler flags
 for both snapshots and report host and guest results separately.

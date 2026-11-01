@@ -40,6 +40,6 @@ polled Start and stereo-mask-aware PSG output downmixed to mono. Both apps share
 `lib/sega/sms_core.c`; their package wrappers select hardware mode. Headerless
 images require a known CRC matching the selected system.
 Upstream database-selected mapper variants beyond Sega/Codemasters remain
-unverified. See `docs/SEGA.md` and `tests/sms_banks.c` for tested boundaries.
+unverified. See `docs/SEGA.md` and `tests/native/sms_banks.c` for tested boundaries.
 The combined Glaze app is distributed under GPLv3; package resources contain
 the applicable notices and licenses. No ROM binaries are vendored.

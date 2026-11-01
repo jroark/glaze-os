@@ -43,7 +43,7 @@ out/host/glaze-usb --host 192.168.1.42 --key /tmp/DEBUG.KEY run /Downloads/hello
 out/host/glaze-usb --host 192.168.1.42 --key /tmp/DEBUG.KEY get /Documents/example.txt /tmp/example.txt
 out/host/glaze-usb --host 192.168.1.42 --key /tmp/DEBUG.KEY logs --once
 out/host/glaze-usb --host 192.168.1.42 --key /tmp/DEBUG.KEY screenshot out/screen.png
-out/host/glaze-usb --host 192.168.1.42 --key /tmp/DEBUG.KEY script tests/unlock.txt out/home.png
+out/host/glaze-usb --host 192.168.1.42 --key /tmp/DEBUG.KEY script tests/ui/unlock.txt out/home.png
 out/host/glaze-usb --host 192.168.1.42 --key /tmp/DEBUG.KEY run bin/settings --wait
 out/host/glaze-usb --host 192.168.1.42 --key /tmp/DEBUG.KEY connect
 out/host/glaze-usb --host 192.168.1.42 --key /tmp/DEBUG.KEY reload
