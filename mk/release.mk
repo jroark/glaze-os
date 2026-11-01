@@ -1,5 +1,5 @@
 
-# OTA update (docs/OTA.md) of the built kernel and romfs as VERSION, signed
+# OTA update (docs/os/OTA.md) of the built kernel and romfs as VERSION, signed
 # with GLAZE_OTA_KEY (default ~/.config/glaze/ota-ed25519.pem): out/ota/os/.
 # It builds nothing, so run it natively after ./build.sh: signing needs
 # OpenSSL 3 and the private key, which the container has neither of.

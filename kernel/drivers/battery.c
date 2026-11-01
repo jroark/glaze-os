@@ -1,6 +1,6 @@
 /*
  * Battery, AC adapter and charger, read as Windows CE's battery driver does
- * (gwes.exe BatteryPDDGetStatus 0xB02CC-0xB09DC; docs/POWER.md):
+ * (gwes.exe BatteryPDDGetStatus 0xB02CC-0xB09DC; docs/hardware/POWER.md):
  *
  *   GIUPIODL bit 12   1 on battery, 0 with the adapter in
  *   GIUPIODL bit 2    with the adapter: 1 charging, 0 charged

@@ -15,12 +15,12 @@
  * HIBERNATE. */
 void companion_gates_on(void);
 
-/* power.c: SYS_POWER_SLEEP (docs/POWER.md "Power off"). */
+/* power.c: SYS_POWER_SLEEP (docs/hardware/POWER.md "Power off"). */
 int power_sleep(int mode, uint32_t alarm_s);
 bool power_trap(void *tf);              /* trap(): the wake interrupt, while asleep */
 void power_boot(void);                  /* kmain: drop a stale resume record */
 
-/* ota.c: OTA updates (docs/OTA.md). */
+/* ota.c: OTA updates (docs/os/OTA.md). */
 void ota_boot(void);                    /* kmain: what the SPL left (glaze/ota.h) */
 int sys_ota_status(struct addrspace *as, uint32_t uout, uint32_t size);
 int sys_ota_stage(struct proc *p, uint32_t op, uint32_t a1, uint32_t a2, uint32_t a3);
@@ -86,7 +86,7 @@ void input_resume(bool cold);
 int input_script_next_ms(void);       /* INPUT_SCRIPT builds: -1 when done */
 void input_notify(uint32_t bits);     /* to the compositor's input port */
 
-/* battery.c: battery, adapter and charger (docs/POWER.md). */
+/* battery.c: battery, adapter and charger (docs/hardware/POWER.md). */
 void battery_init(void);
 void battery_tick(void);
 int battery_status(struct addrspace *as, uint32_t uout, uint32_t size);

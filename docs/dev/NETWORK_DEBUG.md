@@ -5,7 +5,7 @@ USB and paired TLS/TCP. Network debugging is **off by default**. It needs an
 established Ethernet, Wi-Fi or USB network connection, and a pairing record.
 No listener or TLS context is opened while disabled or without a network.
 
-The [USB network interface](USB_NETWORK.md) can supply that connection without
+The [USB network interface](../hardware/USB_NETWORK.md) can supply that connection without
 a network card. Start `glaze-usb usb-net` on macOS or Linux, then connect the
 paired debugger to `192.168.7.2` in another terminal.
 
@@ -76,7 +76,7 @@ app-running and script activity colors as the USB badge.
 | Live VNC mirroring and immediate input through the host bridge | Yes | Yes |
 
 The filesystem boundaries, locked-screen launch restrictions, image validation,
-script limits and request replay handling are shared with [USB](USB.md).
+script limits and request replay handling are shared with [USB](../hardware/USB.md).
 This is development automation, without GDB breakpoints or single-stepping.
 
 Stock Windows CE's PC Connect commands (`ce-*`, CE executable upload/boot),

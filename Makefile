@@ -18,7 +18,7 @@ DYNAMIC ?= 1
 # First user process started by the kernel.
 INIT    ?= bin/springboard
 BUILD_ID ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
-# The OS version OTA updates compare (docs/OTA.md): dotted numeric, in VERSION.
+# The OS version OTA updates compare (docs/os/OTA.md): dotted numeric, in VERSION.
 GLAZE_VERSION := $(shell cat VERSION)
 # Test builds: replay this input script (see kernel/drivers/input.c).
 INPUT_SCRIPT ?=
@@ -30,11 +30,11 @@ COLD_SOCKET_TEST ?=
 HWDUMP ?=
 # Beep at early kernel stages, before the LCD is on (power-on bring-up).
 BOOT_BEEP ?=
-# The idle thread's VR4131 STANDBY (docs/POWER.md); IDLE_STANDBY=0 spins
+# The idle thread's VR4131 STANDBY (docs/hardware/POWER.md); IDLE_STANDBY=0 spins
 # instead, for bisecting on hardware. Rebuild kernel/sched.o after changing it.
 IDLE_STANDBY ?= 1
 # HIBERNATE_VERIFY=1: checksum every page in use across a HIBERNATE and log
-# any the boot ROM or SPL overwrote on the way back (docs/POWER.md). Rebuild
+# any the boot ROM or SPL overwrote on the way back (docs/hardware/POWER.md). Rebuild
 # kernel/drivers/power.o after changing it.
 HIBERNATE_VERIFY ?=
 

@@ -88,11 +88,11 @@ def main():
         copy(ROOT / "sdk/host.mk", stage / "host/Makefile")
         for name in ("usb_wire.h", "usb_boot.h", "abi.h", "types.h"):
             copy(ROOT / "lib/include/glaze" / name, stage / "host/include/glaze" / name)
-        for name in ("SDK.md", "USB.md", "DYNAMIC_LIBRARIES.md"):
+        for name in ("dev/SDK.md", "hardware/USB.md", "os/DYNAMIC_LIBRARIES.md"):
             copy(ROOT / "docs" / name, stage / "docs" / name)
         (stage / "README.md").write_text(
             "# Glaze application SDK\n\n"
-            "Start with the [SDK guide](docs/SDK.md) for host setup, building,\n"
+            "Start with the [SDK guide](docs/dev/SDK.md) for host setup, building,\n"
             "packaging, emulator testing and USB deployment.\n\n"
             "`bin/glaze-sdk new my-app --id my-app --name 'My App'` creates\n"
             "a project. Set `GLAZE_SDK` to this directory before running make.\n"

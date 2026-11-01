@@ -46,7 +46,7 @@ SPL (boot/ota_apply.c): journal? → read-only littlefs → inflate and check ev
 - **Installing.** The SPL finds the journal during its usual tag scan. It
   mounts littlefs read-only (`servers/fs/ftl.c` with `FTL_READONLY`, littlefs
   `LFS_READONLY`, Dhara with `GF13_NO_TABLES`) and inflates every block
-  ([puff](../third_party/puff)). It checks each one against the journal, and
+  ([puff](../../third_party/puff)). It checks each one against the journal, and
   the new kernel's header, image CRC and version and the romfs table besides.
   Any problem now rejects the update: the journal is erased, and the installed
   OS boots. Otherwise a marker page records that writing has started. Each
@@ -64,7 +64,7 @@ SPL (boot/ota_apply.c): journal? → read-only littlefs → inflate and check ev
 A power cut repeats the SPL's work on the next boot. Blocks that already
 match are skipped, and the staged file hasn't moved. Once writing has
 started, a failure stops the boot with a red bar and five beeps. The next boot
-tries again, and CF recovery (`docs/PHYSICAL_NAND.md`) is the last resort.
+tries again, and CF recovery (`docs/hardware/PHYSICAL_NAND.md`) is the last resort.
 
 ## Formats (`lib/include/glaze/ota.h`)
 
@@ -103,7 +103,7 @@ installs only newer versions.
 OTA needs the physical NAND layout (`GZNAND1`) and an SPL with
 `GZ_SPL_F_OTA`. `SYS_OTA_STATUS` reports both, and the App Store offers
 updates only when they hold. The first OTA-capable SPL goes on once, through
-the USB path in `docs/PHYSICAL_NAND.md`: `tools/nand_transaction.py
+the USB path in `docs/hardware/PHYSICAL_NAND.md`: `tools/nand_transaction.py
 --keep-filesystem --installed …`, then `glaze-usb nand-apply …
 --keep-filesystem`. After an OTA, the boot blocks no longer match the image
 that USB installed, so a later USB update needs a fresh two-pass snapshot as

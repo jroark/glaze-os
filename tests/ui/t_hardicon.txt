@@ -1,4 +1,4 @@
-# The printed icons below the LCD (docs/HARD_ICONS.md). With the default
+# The printed icons below the LCD (docs/os/HARD_ICONS.md). With the default
 # assignments icon 1 opens Calendar and icon 4 switches to Notes; a tap on
 # icon 7 while locked does nothing (no "icon 7" line until after the
 # unlock). Icon 7 then opens Settings, Icon Buttons sets icon 2 (Contacts,

@@ -1,5 +1,5 @@
 /*
- * wolfCrypt configuration for the kernel (kernel/ota.c, docs/OTA.md): only
+ * wolfCrypt configuration for the kernel (kernel/ota.c, docs/os/OTA.md): only
  * Ed25519 signature verification and SHA-256/SHA-512, with no heap, RNG,
  * threads, file system or time. The same file configures the native
  * build in host/ (make -C host ota-test).

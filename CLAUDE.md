@@ -14,7 +14,7 @@ make -j8 INPUT_SCRIPT=tests/ui/x.txt # replay scripted input (see Testing)
 make -C host fstest               # native build of the file-system stack test
 make -C host fat-test             # CF/FAT volume test on FAT12/16/32 images, then fsck.fat
 make -C host ui-events-test       # libui's touch cancel, suspension and resume, natively
-make glazeboot                    # GlazeBoot's GCC parts, booting Glaze from RAM out of Windows CE (docs/GLAZEBOOT.md)
+make glazeboot                    # GlazeBoot's GCC parts, booting Glaze from RAM out of Windows CE (docs/dev/GLAZEBOOT.md)
 make glazeboot-exe                # the GlazeBoot.exe loader, natively with ../be300-dev (BE300_DEV)
 make -C host glazeboot-test       # its page hand-over plan on random layouts
 make -C host nand-ecc-test        # Windows CE's NAND ECC (kernel/drivers/nand_ecc.c), natively
@@ -28,7 +28,7 @@ There is no linter; the build uses `-Wall -Wextra` and should stay warning-free.
 building a NAND. `make sdk-test` tests relocated, out-of-tree app builds,
 package validation and included library source rebuilds. SDK build rules,
 templates and CLI live in `sdk/`; the exporter is `tools/mksdk.py`.
-See `docs/SDK.md`. Keep packaged SDKs and generated apps under ignored output.
+See `docs/dev/SDK.md`. Keep packaged SDKs and generated apps under ignored output.
 
 `main.o`, `input.o` and `romfs.img` are always rebuilt because `INIT`, `BUILD_ID` and `INPUT_SCRIPT` are baked into them. Every directory under `apps/` and `servers/` becomes a program, `bin/<dirname>` in romfs, with no Makefile edit, except the optional `ldtest*` and `ldmem` test apps, and `ktest`/`ktest_pong`, which go in only when `INIT=bin/ktest`. romfs is nearly full (its slot ends at 0x500000), which is why wolfSSL is built `-Os`; `NAND_DROP=<apps>` leaves apps out of a NAND image's romfs (`NAND_DROP=wince` makes room for `WL54CF=1`'s firmware, and for `INIT=bin/ktest`). Assets in `assets/gen/` are checked in; they are regenerated only on macOS with `swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures`. The system sounds in `assets/sounds/` (romfs `sounds/`) are checked in too, synthesized by `tools/mksounds.py assets/sounds`.
 
@@ -36,7 +36,7 @@ See `docs/SDK.md`. Keep packaged SDKs and generated apps under ignored output.
 
 The website (glaze-os.com) is static HTML in `site/`; `tools/mksite.py` builds its images from emulator screenshots and `tools/publish_site.py` publishes it to the `glaze-os-site` stack (`infra/site/stack.json`). See `docs/WEBSITE.md`.
 
-The built-in piezo (`docs/BUZZER.md`) is BLG channel `09A0/9A4/9A8`, not
+The built-in piezo (`docs/hardware/BUZZER.md`) is BLG channel `09A0/9A4/9A8`, not
 backlight `0980/988/98C`. Its kernel driver is `kernel/drivers/buzzer.c`;
 the audio server sequences patterns in `servers/audio/buzzer.c`. Preserve
 shared BLG config `0984` and gate `1128` across display power changes.
@@ -54,7 +54,7 @@ fetched). Platform I/O, buttons, indexed video and PCM effects live in
 `make -C host doom-test` uses synthetic data; `DOOM_WAD=/external/doom1.wad`
 adds real-engine movement/audio/save/load checks. See `docs/DOOM.md`.
 
-Battery, charging and idle power (`docs/POWER.md`) follow Windows CE's
+Battery, charging and idle power (`docs/hardware/POWER.md`) follow Windows CE's
 gwes.exe battery driver: GIUPIODL bits 12/2, a PIU A/D port sample at
 `0x0A000390` from `kernel/drivers/battery.c`'s tick, EEPROM calibration and
 the averaging/bands in `glaze/battery.h`. `gz_power_status()` is
@@ -63,7 +63,7 @@ The idle thread runs VR4131 STANDBY (`IDLE_STANDBY=0` disables it). Use
 `make -C host battery-test settings-test` and be300's `--battery`,
 `--battery-state`, `--battery-drain` through `BE300_ARGS`.
 
-Power off (`docs/POWER.md` "Power off") follows Windows CE's OEMPowerOff:
+Power off (`docs/hardware/POWER.md` "Power off") follows Windows CE's OEMPowerOff:
 holding Power (or the Settings → Battery → Sleep delay after the screen goes
 off) shows Goodbye, then `SYS_POWER_SLEEP` (`kernel/drivers/power.c`)
 suspends or hibernates until Power or the next notification's RTC alarm.
@@ -75,20 +75,20 @@ RAM. Use `make -C host idle-test boot-init-test`, `tests/ui/t_poweroff.txt`,
 
 Network development transport is in `servers/usb/network.c`, sharing the
 USB dispatcher's capabilities and lifecycle. `glaze-usb --host HOST --key FILE`
-uses TLS 1.2 ECDHE-PSK; it is off by default. See `docs/NETWORK_DEBUG.md`.
+uses TLS 1.2 ECDHE-PSK; it is off by default. See `docs/dev/NETWORK_DEBUG.md`.
 `make -C host debug-net-test` runs native paired-TLS tests; the opt-in
 `NETDEBUG_TESTS=1 INIT=bin/debug_guest DEBUG_RELOAD_ADDR=HOST_LAN_IP` image and
 `tests/debug_runtime.py` check real lwIP/RPC and reload/reconnect. Rebuild normally
 after testing. Never commit `DEBUG.KEY`, other pairing files, or fixture images.
 
-USB networking (`docs/USB_NETWORK.md`) uses `kernel/drivers/usbnet.c` queues
+USB networking (`docs/hardware/USB_NETWORK.md`) uses `kernel/drivers/usbnet.c` queues
 and `servers/usb/ethernet.c`'s independent framed tunnel parser. macOS uses
 utun (IPv4 plus an AF_INET prefix, ARP adaptation); Linux uses TAP. Native
 `make -C host usb-net-test net-driver-test service-test usb-driver-test` covers
 packet framing, backpressure/replay and lifecycle. USB takes routing precedence
 while the host helper runs; changing transport restarts the network service.
 
-Screen mirroring (`docs/MIRRORING.md`) adds a localhost-only VNC bridge to
+Screen mirroring (`docs/dev/MIRRORING.md`) adds a localhost-only VNC bridge to
 `glaze-usb mirror`. Device snapshots/deltas are in `servers/usb/mirror.c`;
 the host bridge/RFB engine are `tools/glaze-usb/mirror.c` and `rfb.c`. Input is
 capability-gated and shares timed input's disconnect release state. Use
@@ -96,7 +96,7 @@ capability-gated and shares timed input's disconnect release state. Use
 fixture also checks complete mirror CRCs and live input. No capture buffer
 exists until a viewer connects; no VNC listener is opened on the device.
 
-Handwriting input (`docs/HANDWRITING.md`) is shared by the existing keyboard
+Handwriting input (`docs/os/HANDWRITING.md`) is shared by the existing keyboard
 API: `lib/ui/handwriting.c` renders/captures ink and `recognize.c` performs
 bounded integer point-cloud recognition using original `ink_shapes.h` data.
 The new method byte uses `ui_keyboard`'s former padding; size and old field
@@ -104,7 +104,7 @@ offsets stay unchanged. Do not extend this structure without considering SDK
 clients. Use `make -C host handwriting-test ui-events-test settings-test` and
 `make sdk-test`; `tests/ui/t_handwriting_notes.txt` checks Notes with scripted input.
 
-Hard icons (`docs/HARD_ICONS.md`) are the seven printed touch buttons below
+Hard icons (`docs/os/HARD_ICONS.md`) are the seven printed touch buttons below
 the LCD (panel rows 320..359). Their zones and Windows CE's assignments come
 from touch.dll and COShell's registry. SpringBoard captures strokes that start
 there (`servers/springboard/hardicon.c`) and runs the `sb.icons` assignment
@@ -113,7 +113,7 @@ there (`servers/springboard/hardicon.c`) and runs the `sb.icons` assignment
 through the appended `sb_shared.hard_icons`. Use `make -C host hardicon-test
 settings-test` and `tests/ui/t_hardicon.txt`.
 
-The text clipboard (`docs/CLIPBOARD.md`) is volatile SpringBoard state in
+The text clipboard (`docs/os/CLIPBOARD.md`) is volatile SpringBoard state in
 `servers/springboard/clipboard.c`, with chunked, atomic IPC through the existing
 request area. `lib/ui/edit.c` owns one focused selection per process; apps opt
 into keyboard commands with `ui_keyboard_edit_init` and route text through
@@ -123,7 +123,7 @@ handwriting-test ui-events-test settings-test mirror-test usb-input-test`,
 `browser-test`, full builds and `sdk-test`; `tests/ui/t_clipboard.txt` exercises
 cross-app touch copy/paste. Clear INPUT_SCRIPT for normal builds afterward.
 
-OTA updates (`docs/OTA.md`, `glaze/ota.h`) replace the kernel and romfs
+OTA updates (`docs/os/OTA.md`, `glaze/ota.h`) replace the kernel and romfs
 (logical boot blocks 5-319) on a physical NAND image. App Store → Updates
 downloads a signed `.gzu` (per-block deflate) to `/Library/Updates`; the
 file server streams it to the kernel (`FS_OS_UPDATE`, `SYS_OTA_STAGE`,
@@ -184,7 +184,7 @@ be300 --nand out/glaze.bin --rtc-host-time --cf out/cf.img    # with a CompactFl
 - Syscall numbers and the ABI are in `lib/include/glaze/abi.h` (shared with userspace); user wrappers are in `glaze/sys.h`.
 - Device access is gated by process flags. `PROC_PRIVILEGED` (framebuffer, input) can be passed down by a privileged spawner. `PROC_FLASH` (raw NAND and the CF card's sectors), `PROC_NET` (Ethernet frames) and `PROC_AUDIO` (wave output) are granted only by the kernel, to `bin/fs`, `bin/net` and `bin/audio`; `sys_spawn` masks other flags.
 - The trusted `config/services.json` catalog starts `bin/fs` and `bin/audio`; `bin/net` starts only when a network driver is up. A deferred kernel worker handles hardware dependencies and service restarts. `INIT` (default `bin/springboard`) remains the compositor/test entry point.
-- Network backends are separate romfs `drivers/*.ko` ELF32/MIPS ET_REL modules, loaded by CIS identity and released on removal; they are excluded from the linked kernel. See `docs/DRIVERS_SERVICES.md`. Use `make -C host module-test net-driver-test service-test`, `python3 tests/services_catalog.py`, and `SERVICE_TESTS=1 INIT=bin/service_hotplug` for lifecycle validation.
+- Network backends are separate romfs `drivers/*.ko` ELF32/MIPS ET_REL modules, loaded by CIS identity and released on removal; they are excluded from the linked kernel. See `docs/os/DRIVERS_SERVICES.md`. Use `make -C host module-test net-driver-test service-test`, `python3 tests/services_catalog.py`, and `SERVICE_TESTS=1 INIT=bin/service_hotplug` for lifecycle validation.
 - Managed apps have three `SYS_PROC_BG` states (`GZ_PROC_FG`, `GZ_PROC_BG` at `PRIO_LOW`, `GZ_PROC_SUSPENDED`): a suspended process's runnable threads stay off the run queue until another state thaws them (`sched_freeze_proc`). Only a privileged caller sets them, except that an app in the background may suspend itself. A parent that registers a port with `SYS_CHILD_NOTIFY` gets `GZ_NOTIFY_CHILD` when a child exits. `SYS_SHM_UNMAP` drops a mapping (the object is freed with its last one), and shm mappings reuse freed address ranges.
 - `SYS_SPAWN_IMAGE` (`gz_spawn_image`) starts an installed app from an ELF in the caller's memory: `image_map_exec` copies it into shared image frames like a `GZ_IMAGE_BYTES` library, `elf_load` serves both it and romfs, and the result is always unprivileged and must use `/lib/ld-glaze.so.1`.
 - `tests/bench.py LABEL` boots a launch-script image and ktest a few times headless and writes medians to `out/bench/LABEL.txt` (boot time, free memory, cold/warm app launch, ktest), from SpringBoard's `sb: ...` lines and ktest's `done` line; compare two labels around a change that affects memory or speed.
@@ -219,7 +219,7 @@ and shared text editor.
 
 **UI libraries.** `libgfx` (`lib/gfx`) is a software RGB565 renderer for GZI images and GZF fonts; the formats are described in `lib/include/glaze/gfx.h`. `libui` (`lib/ui`) provides the nav bar, bar buttons, grouped cells, alerts, the keyboard, inertial scroll views and push/pop transitions. Apps follow the Settings/Notes pattern: draw the whole view, keep hit rects, `redraw()` after events, and use `ui_transition(draw_fn, forward)` for navigation. `host/` builds `libgfx` natively to render SpringBoard previews.
 
-**Dynamic linking.** Apps and SpringBoard are PIE by default, sharing libc, gfx and UI through `lib/ldso` and `kernel/image.c`. `fs` and `net` stay static; `bin/audio` is dynamic. Read-only image frames are shared; writable data/GOT/BSS are private. Use the export maps and existing PIC rules for libraries; never embed another libc or static client archive in a plugin. `dlclose` releases an unreachable library after destructors: callers must stop its threads/callbacks and discard pointers first. No Linux compatibility, compiler TLS or C++ runtime. See `docs/DYNAMIC_LIBRARIES.md`. Run `make -C host elf-test`, `LD_TESTS=1 INIT=bin/ldtest`, and ordinary `ktest` after loader changes. Use `OUT=out/static DYNAMIC=0` for the fallback; keep build variants in separate output directories.
+**Dynamic linking.** Apps and SpringBoard are PIE by default, sharing libc, gfx and UI through `lib/ldso` and `kernel/image.c`. `fs` and `net` stay static; `bin/audio` is dynamic. Read-only image frames are shared; writable data/GOT/BSS are private. Use the export maps and existing PIC rules for libraries; never embed another libc or static client archive in a plugin. `dlclose` releases an unreachable library after destructors: callers must stop its threads/callbacks and discard pointers first. No Linux compatibility, compiler TLS or C++ runtime. See `docs/os/DYNAMIC_LIBRARIES.md`. Run `make -C host elf-test`, `LD_TESTS=1 INIT=bin/ldtest`, and ordinary `ktest` after loader changes. Use `OUT=out/static DYNAMIC=0` for the fallback; keep build variants in separate output directories.
 
 **File system** (`servers/fs`, `glaze/fs.h`, client in `lib/libc/fs.c`):
 - littlefs runs on the Dhara NAND translation layer, both vendored unmodified in `third_party/` and built into `libfsstack.a`. Don't edit them; put changes in `servers/fs/ftl.c`.
@@ -251,7 +251,7 @@ and shared text editor.
 - Network: `conn.c` (BSD sockets, TLS through wolfSSL's I/O callbacks), `http.c` (HTTP/1.1, chunked, gzip via stb's zlib), `loader.c` (queue, redirects, cookies, cache), `load.c` (document, then CSS, then images). `plat.h` is what differs between `main.c` (device) and `host/browse.c`.
 - https: `tls.c` runs vendored wolfSSL (`third_party/wolfssl`, GPLv3; TLS 1.2/1.3 client, configured by `apps/browser/tls/user_settings.h`, a private PIC archive of `bin/browser` like `libhelix.a`). Certificates are checked against Mozilla's roots (`assets/ssl/roots.der`, romfs `ssl/`, regenerated by `tools/mkroots.py`), by host name, and by date with a day of slack because the RTC is local time; a wrong RTC date fails every site. The context loads on the first https fetch; sessions are resumed per host. With no hardware RNG, the DRBG is seeded from `/Browser/seed` (rewritten each run) plus scheduler timing jitter. `WOLFSSL_USE_ALIGN` must stay: wolfSSL otherwise stores words to unaligned addresses, which fault on MIPS. `out/host/browse` builds wolfSSL natively; `BROWSE_ROOTS=ca.der` trusts a test CA (an `openssl s_server -WWW` makes a local https server).
 - `res:` URLs are the bundled pages in `assets/web` (romfs `web/`); the start page is `res:start.html`. State persists in `/Browser/state` and `/Browser/bookmarks`.
-- JavaScript and frame support, runtime bounds and native/device tests are documented in `docs/BROWSER.md` and `docs/BROWSER_WEB_APIS.md`. Bounded fetch
+- JavaScript and frame support, runtime bounds and native/device tests are documented in `docs/apps/BROWSER.md` and `docs/apps/BROWSER_WEB_APIS.md`. Bounded fetch
 and module graphs share the asynchronous loader; `script_web.inc` and
 `script_modules.inc` run inside script.c's VM failure boundary. Cancel their
 fetches and release native buffers on document retirement and VM failure.
@@ -260,7 +260,7 @@ a mutable filesystem. Local storage uses exact-origin records with atomic
 replacement; preserve quota and origin checks when changing its backend. JerryScript, its DOM facade and soft-float helpers are private to Browser.
 - Images go through vendored `stb_image.h` (PNG, JPEG, GIF), downscaled at decode time; a document tree's decoded images are capped at 3 MiB.
 
-**RAM boot** (`wince/glazeboot`, `glaze/bootinfo.h`, `docs/GLAZEBOOT.md`):
+**RAM boot** (`wince/glazeboot`, `glaze/bootinfo.h`, `docs/dev/GLAZEBOOT.md`):
 - GlazeBoot is a Windows CE program, not a Glaze one, and lives outside `apps/`. The loader (`wince/glazeboot/GlazeBoot.c`) is C built with the be300-dev toolchain (clang and the Casio SDK; `make glazeboot-exe`, natively, since `./build.sh` runs in a container). `make glazeboot` supplies its generated headers in `out/glazeboot/gen`:
   - `tramp_blob.h`: the trampoline (`tramp.c`, position independent) as bytes;
   - `glazeboot_abi.h`: shared layouts from `wince/glazeboot/mkabi.c`.
@@ -273,7 +273,7 @@ replacement; preserve quota and origin checks when changing its backend. JerrySc
 - The file server mounts Windows CE's FAT partition as `/NAND` (`servers/fs/nanddisk.c`, FatFs drive 1; the card is drive 0, and card paths go to FatFs unprefixed). The kernel maps NAND pages through Windows CE's block table (built from the spare tags as nanddisk.dll does) and corrects them with its spare-area Reed-Solomon ECC (`kernel/drivers/nand_ecc.c`, `make -C host nand-ecc-test`); erased-parity pages, as in the emulator, pass unchecked. Writes don't keep the tags or ECC, so `glaze.cfg` ships `nand=ro` and writes are opt-in (`nand=rw`); `nand=off` is `GZ_BOOT_NAND_OFF`.
 - `make ramboot` (`boot/spl.c` with `-DSPL_RAMBOOT`) hands over the same way from the SPL, so the emulator can test it.
 
-Direct CE NAND launches (`docs/WINCE_NAND.md`) use Files' `sb_wince_launch`
+Direct CE NAND launches (`docs/apps/WINCE_NAND.md`) use Files' `sb_wince_launch`
 request and SpringBoard contexts under `/Library/WinCE`. `apps/wince/source.c`
 keeps original NAND assets read-only and stores mutations in the context;
 `assets.c` recovers matching NK exports/CCFS metadata and decodes CPK blocks.
@@ -290,7 +290,7 @@ Register addresses and bit meanings follow the VR4131 and VRC4173 user's manuals
 - **Factory bad-block marks:** these sit in the spare area and are never read.
 - **PCMCIA card setup:** the NE2000 and CF drivers assume the card already decodes I/O at port 0x300, as the emulator's does, and that a CF card decodes the secondary IDE ports. A real card needs its configuration option register written through attribute memory first; 0x0A00D200/D202 is the NAND direct-I/O port, not attribute offset 0x200, so `CF_CIS` only reaches the tuples. After Windows CE the CF data register carries one byte per access, so the driver uses 8-bit transfers.
 
-Learned on a real BE-300 through GlazeBoot (docs/GLAZEBOOT.md has the details), none of which the emulator showed:
+Learned on a real BE-300 through GlazeBoot (docs/dev/GLAZEBOOT.md has the details), none of which the emulator showed:
 - **VR4131 PRId 0x0C80** needs Linux's CACHE-instruction workaround (Config bits 22 and 16), applied in `start.S` before any cached store because it also halves the D-cache line size.
 - **Watchdog:** Casio's power-management microcontroller (ScCmcu, 0x0A007800) resets the device 150 s after its last reload; `kernel/drivers/cmcu.c` replays Windows CE's reloads from the tick.
 - **GIRQ0 source enables:** bit 3 of 0x0A000010 + 4n enables source n (`KJ_SRC_*`); writing pending bits there is not an acknowledge.

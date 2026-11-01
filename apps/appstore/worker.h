@@ -6,7 +6,7 @@
 #include <glaze/pkg.h>
 
 #define STORE_CACHE "/Library/Caches/AppStore"
-/* OS updates are staged here for the SPL (docs/OTA.md); the boot job
+/* OS updates are staged here for the SPL (docs/os/OTA.md); the boot job
  * clears what an earlier run left. */
 #define STORE_UPDATES "/Library/Updates"
 enum store_job_kind {

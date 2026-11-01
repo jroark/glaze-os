@@ -39,7 +39,7 @@ struct file {
 static lfs_t lfs;
 static int mount_err;       /* 0 when mounted */
 
-/* An OTA update being verified (FS_OS_UPDATE, docs/OTA.md). */
+/* An OTA update being verified (FS_OS_UPDATE, docs/os/OTA.md). */
 static struct {
     int session;            /* -1 = none */
     char path[GZ_OTA_PATH_MAX];

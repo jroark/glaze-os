@@ -10,7 +10,7 @@ SSL_FILES := $(wildcard assets/ssl/*)
 # System sounds, romfs "sounds/", synthesized by tools/mksounds.py and checked in.
 SOUND_FILES := $(wildcard assets/sounds/*)
 
-# Local Marvell firmware (never checked in). See docs/WL54CF.md.
+# Local Marvell firmware (never checked in). See docs/hardware/WL54CF.md.
 WL54CF ?= 0
 WL54CF_FW_DIR ?= firmware/wl54cf
 WL54CF_FW :=

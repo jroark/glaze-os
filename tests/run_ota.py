@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OTA update end to end in the emulator (docs/OTA.md).
+"""OTA update end to end in the emulator (docs/os/OTA.md).
 
 Builds a ktest image (INIT=bin/ktest) that trusts a throwaway key, and an
 update to "1.1" with the same kernel and a different romfs (NAND_DROP adds

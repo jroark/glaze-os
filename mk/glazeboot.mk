@@ -1,4 +1,4 @@
-# ---- GlazeBoot: boot from RAM out of Windows CE (docs/GLAZEBOOT.md) -----------
+# ---- GlazeBoot: boot from RAM out of Windows CE (docs/dev/GLAZEBOOT.md) -----------
 
 # The loader (wince/glazeboot/GlazeBoot.c) is a Windows CE program, built
 # on the host with the be300-dev toolchain (clang and the Casio SDK):

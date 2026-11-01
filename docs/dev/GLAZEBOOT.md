@@ -27,7 +27,7 @@ In a RAM boot:
 
 ## Using it
 
-For USB-only setup, use [`glaze-usb`](USB.md). It stages GlazeBoot and the
+For USB-only setup, use [`glaze-usb`](../hardware/USB.md). It stages GlazeBoot and the
 images through stock CE and launches the loader with `--usb-boot`, bypassing
 the confirmation window and serial-console setup. `--usb-probe` runs the
 loader's diagnostic checks unattended and returns to CE; both modes retain
@@ -193,7 +193,7 @@ runs pass `INIT=bin/ktest`. Headphone output is also confirmed on a real
 BE-300. The internal piezo uses the separate BLG channel at `0x0A0009A0`
 with period/duty at `9A4/9A8`; `0x0A000980` controls the backlight.
 The independent buzzer driver and system-sound patterns are described in
-[BUZZER.md](BUZZER.md). Physical piezo validation is still required.
+[BUZZER.md](../hardware/BUZZER.md). Physical piezo validation is still required.
 
 Settings → Sounds → Volume controls music, radio, video streams and effects.
 The audio server reads `snd.volume`, uses the existing squared gain curve
@@ -297,7 +297,7 @@ image is unchanged. SpringBoard shows a built-in app only when romfs holds its
 program. The default leaves about 7.9 MiB free at SpringBoard in the current emulator
 fixture; available memory changes with the build and running services. Files
 can launch supported CE executables directly from `/NAND`; see
-[WINCE_NAND.md](WINCE_NAND.md). The public full download on glaze-os.com uses
+[WINCE_NAND.md](../apps/WINCE_NAND.md). The public full download on glaze-os.com uses
 `GB_APPS=all`, restoring Calendar, Photos, Clock, Calculator, Files, Music,
 Videos and Notes alongside Browser, App Store and Settings. The full archive
 uses more RAM; additional packages can still be installed from the App Store.

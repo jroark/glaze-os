@@ -39,7 +39,7 @@ enum {
     FS_SET_END,             /* w2 = handle; truncate/extend at current position */
     FS_NAND_READ,           /* read-only CE logical NAND: w2 byte offset, w3 bytes <= FS_IO_MAX */
     FS_CARD_FORMAT,         /* CF-only FAT16 superfloppy: w2 generation, w3 sector count */
-    FS_OS_UPDATE,           /* OTA (docs/OTA.md): w2 = FS_OTA_*; BEGIN takes buf: path */
+    FS_OS_UPDATE,           /* OTA (docs/os/OTA.md): w2 = FS_OTA_*; BEGIN takes buf: path */
 };
 
 /* FS_OS_UPDATE steps. BEGIN checks a staged update file's header with the

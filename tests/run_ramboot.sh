@@ -1,6 +1,6 @@
 #!/bin/sh
 # Boot Glaze from RAM the way GlazeBoot hands over from Windows CE
-# (docs/GLAZEBOOT.md), in the emulator: the ramboot SPL scatters the kernel
+# (docs/dev/GLAZEBOOT.md), in the emulator: the ramboot SPL scatters the kernel
 # and romfs over RAM and runs GlazeBoot's trampoline. The NAND's file-system
 # partition holds a FAT16 volume (userdata/Documents), which Glaze mounts as
 # /NAND, read/write.

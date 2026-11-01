@@ -1,7 +1,7 @@
 /*
  * Hard icons: the seven printed touch buttons in the panel rows below the
  * LCD (factory-scaled y 320..359). SpringBoard turns a tap there into the
- * icon's action; Settings → Icon Buttons edits them. docs/HARD_ICONS.md.
+ * icon's action; Settings → Icon Buttons edits them. docs/os/HARD_ICONS.md.
  */
 #ifndef GLAZE_HARDICON_H
 #define GLAZE_HARDICON_H

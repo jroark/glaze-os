@@ -160,7 +160,7 @@ and debug input waits for configured+DTR before accepting HELLO.
 ## Over-the-air updates
 
 Once a device runs the physical layout with an OTA-capable SPL, it updates
-its kernel and romfs itself ([OTA updates](OTA.md)): the SPL rewrites
+its kernel and romfs itself ([OTA updates](../os/OTA.md)): the SPL rewrites
 logical blocks 5-319 from an image staged in the file system and keeps the
 manifest, the SPL and the file system as they are. Installing that first SPL
 takes the USB update below. After an OTA, use a fresh snapshot as the

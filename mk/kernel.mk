@@ -36,7 +36,7 @@ $(KCRYPTO_OBJS): $(OUT)/kernel/crypto/%.o: third_party/%.c kernel/crypto/user_se
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_COMMON) -Os -ffunction-sections -fdata-sections -w $(KCRYPTO_INC) -c -o $@ $<
 
-# The OTA release key (docs/OTA.md), as a C array; config/ota_pubkey.bin is
+# The OTA release key (docs/os/OTA.md), as a C array; config/ota_pubkey.bin is
 # the 32-byte Ed25519 public key.
 # OTA_PUBKEY lets a test image (tests/run_ota.py) trust a throwaway key.
 OTA_PUBKEY ?= config/ota_pubkey.bin

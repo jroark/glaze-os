@@ -677,7 +677,7 @@ wince-nand-test: ../tests/native/wince_assets_native.c ../tests/wince_nand_asset
 	python3 ../tests/wince_nand_assets.py
 .PHONY: wince-nand-test
 
-# OTA updates (docs/OTA.md): the kernel's verification and journal and the
+# OTA updates (docs/os/OTA.md): the kernel's verification and journal and the
 # SPL's apply engine over the read-only flash stack, on a NAND model with
 # power cuts, a failing block and a damaged staged file (tests/ota_test.py).
 OTA_TP := ../third_party/puff/puff.c ../third_party/littlefs/lfs.c ../third_party/littlefs/lfs_util.c \

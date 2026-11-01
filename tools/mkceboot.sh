@@ -1,6 +1,6 @@
 #!/bin/sh
 # Makes a CompactFlash image for booting Glaze from Windows CE with
-# GlazeBoot (docs/GLAZEBOOT.md): a FAT16 volume with \Glaze holding the
+# GlazeBoot (docs/dev/GLAZEBOOT.md): a FAT16 volume with \Glaze holding the
 # loader, glaze.cfg, kernel.bin and romfs.img from `make glazeboot` and
 # `make glazeboot-exe`.
 #

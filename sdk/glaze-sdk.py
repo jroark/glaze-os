@@ -203,7 +203,7 @@ def doctor(args):
         print(f"  {command}: {path or 'MISSING'}")
         if not path:
             missing.append(command)
-    require(not missing, "install the cross toolchain and GNU make; see docs/SDK.md")
+    require(not missing, "install the cross toolchain and GNU make; see docs/dev/SDK.md")
     result = subprocess.run([args.cross + "gcc", "-dumpmachine"], check=True, text=True, capture_output=True)
     require(result.stdout.strip().startswith("mipsel"), "cross compiler must target little-endian MIPS")
     print("Optional: Pillow for PNG conversion; mtools/dosfstools for CF; libusb/pkg-config for device deployment.")

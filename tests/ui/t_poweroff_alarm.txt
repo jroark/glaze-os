@@ -1,4 +1,4 @@
-# An alarm wake (docs/POWER.md "Power off"): start Clock's one-minute timer
+# An alarm wake (docs/hardware/POWER.md "Power off"): start Clock's one-minute timer
 # as tests/ui/t_notify.txt does, go Home and hold Power. The device suspends
 # until the timer's notification is due, then wakes to the lock screen with
 # it ("power: awake (alarm)"); no scripted event follows the hold, so only

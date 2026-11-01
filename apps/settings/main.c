@@ -512,7 +512,7 @@ static void draw_datetime(gfx_surface *s)
     }
 }
 
-/* ---- Battery (docs/POWER.md) -------------------------------------------- */
+/* ---- Battery (docs/hardware/POWER.md) -------------------------------------------- */
 
 static bool battery_pct;
 static struct power_sleep s_sleep = POWER_SLEEP_DEFAULTS;
@@ -588,7 +588,7 @@ static void draw_battery(gfx_surface *s)
     cell(s, 3, "CPU Idle", idle, false, 0);
 }
 
-/* ---- Sleep (glaze/power.h, docs/POWER.md "Power off") ------------------- */
+/* ---- Sleep (glaze/power.h, docs/hardware/POWER.md "Power off") ------------------- */
 
 static const char *const sleep_sources[] = { "On Battery", "Plugged In" };
 static const uint8_t sleep_modes[] = { GZ_SLEEP_SUSPEND, GZ_SLEEP_HIBERNATE, POWER_SLEEP_NEVER };

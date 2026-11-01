@@ -242,7 +242,7 @@
 #define DISP_LCD_GATE       REG32(0x0A00110Cu)
 #define DISP_LCD(offset)    REG32(0x0A000C00u + (offset))
 /* Stock ddi.dll 0x01A56BB0/BD0 (backlight), 0x01A56A5C (contrast).
- * See docs/DISPLAY.md for the register trace and native level tables. */
+ * See docs/hardware/DISPLAY.md for the register trace and native level tables. */
 #define DISP_BACKLIGHT      REG32(0x0A00098Cu)
 #define DISP_BL_CONTROL     REG32(0x0A000980u)
 #define DISP_BL_CONFIG      REG32(0x0A000984u)
@@ -281,7 +281,7 @@
 #define PIUINT_PAGE1        0x10u
 
 /* The battery's A/D port scan, as Windows CE's battery driver runs it
- * (gwes.exe 0xB0348-0xB0590, docs/POWER.md): wait for state Standby or
+ * (gwes.exe 0xB0348-0xB0590, docs/hardware/POWER.md): wait for state Standby or
  * WaitPenTouch, stop the sequencer, GPIO8 low, 10 ms, then PIUMODE 01 with
  * 0x314 = 5 and 0x318 = 0x14E converts, raising bit 6 of PIUINT, and 0x390
  * holds the 12-bit result. CE accesses 0x314/0x318/0x390 as words. */

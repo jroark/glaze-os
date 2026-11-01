@@ -1,6 +1,6 @@
 #!/bin/sh
 # Boot Glaze through GlazeBoot from the emulator's stock Windows CE
-# (docs/GLAZEBOOT.md): builds the loader with be300-dev, puts it on a CF
+# (docs/dev/GLAZEBOOT.md): builds the loader with be300-dev, puts it on a CF
 # card as \CE\R4100\AutoRun.exe with confirm=0, and boots a copy of the
 # Windows CE restore image with the card inserted.
 #

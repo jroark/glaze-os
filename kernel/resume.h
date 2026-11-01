@@ -1,12 +1,12 @@
 /*
- * The Hibernate resume record (docs/POWER.md "Power off"), shared by the
+ * The Hibernate resume record (docs/hardware/POWER.md "Power off"), shared by the
  * kernel (kernel/drivers/power.c, kernel/power_resume.S) and the SPL
  * (boot/spl.c). HIBERNATE wakes through the reset vector: the boot ROM
  * loads the SPL again, and the SPL resumes the kernel still in RAM instead
  * of loading it when this record is valid and the kernel's text and
  * read-only data still sum to text_sum, which the kernel computed just
  * before it hibernated. (The SPL isn't built against a particular kernel:
- * an OTA update, docs/OTA.md, replaces the kernel but never the SPL.)
+ * an OTA update, docs/os/OTA.md, replaces the kernel but never the SPL.)
  *
  * It sits in the page below GZ_BOOTINFO_PA (glaze/bootinfo.h), which the
  * kernel never allocates, clear of the reset stub at PA 0x1000 and of

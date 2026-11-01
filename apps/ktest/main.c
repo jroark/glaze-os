@@ -1167,7 +1167,7 @@ static int zone_named(const char *name)
     return -1;
 }
 
-/* OTA (docs/OTA.md): the status call always; and with an update staged at
+/* OTA (docs/os/OTA.md): the status call always; and with an update staged at
  * KTEST_OTA (tests/run_ota.py puts one in the factory volume), the file
  * server's stepped verification and its lock on the file. Arming resets
  * the device, so that happens after the summary line (ota_arm). */

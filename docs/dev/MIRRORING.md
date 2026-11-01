@@ -12,7 +12,7 @@ This is screen sharing from Glaze to your computer, rather than a VNC client
 for viewing another computer on the BE-300.
 
 Current Glaze builds support Ctrl/Command+A, C, X and V and Shift+Left/Right
-or Home/End for editing within Glaze. These use [Glaze's text clipboard](CLIPBOARD.md);
+or Home/End for editing within Glaze. These use [Glaze's text clipboard](../os/CLIPBOARD.md);
 the computer's clipboard is not synchronized and VNC ClientCutText is ignored.
 
 ## On a Mac
@@ -57,7 +57,7 @@ out/host/glaze-usb --host DEVICE_IP --key /private/tmp/DEBUG.KEY mirror
 open vnc://127.0.0.1:5901
 ```
 
-For the [USB IP interface](USB_NETWORK.md), keep `glaze-usb usb-net` running
+For the [USB IP interface](../hardware/USB_NETWORK.md), keep `glaze-usb usb-net` running
 in its own Terminal and use `--host 192.168.7.2`. The tunnel owns the physical
 USB handle; mirroring uses paired TLS through that interface. A separate raw
 USB debugger command cannot share the handle with a direct USB mirror session.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch the unmodified, redistributable Linux CF8385 firmware. See docs/WL54CF.md."""
+"""Fetch the unmodified, redistributable Linux CF8385 firmware. See docs/hardware/WL54CF.md."""
 import argparse
 import base64
 import hashlib

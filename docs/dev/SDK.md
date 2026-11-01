@@ -8,7 +8,7 @@ The cross compiler, emulator and OS images are separate dependencies.
 
 Native text fields can opt into shared selection and copy/paste with
 `ui_keyboard_edit_init()` and `ui_edit_key()`/`ui_edit_event()`. See
-[CLIPBOARD.md](CLIPBOARD.md) for field flags, highlighting and clipboard APIs.
+[CLIPBOARD.md](../os/CLIPBOARD.md) for field flags, highlighting and clipboard APIs.
 
 ## Build the SDK
 
@@ -127,7 +127,7 @@ the kernel/dynamic loader's full validation or a runtime test. Initial
 `DT_NEEDED` dependencies must be supplied by the OS's romfs. Bundling a
 new startup library in a package does not make it available to the loader.
 For optional libraries/plugins loaded after startup, see
-[dynamic libraries](DYNAMIC_LIBRARIES.md).
+[dynamic libraries](../os/DYNAMIC_LIBRARIES.md).
 
 ## Run in the emulator
 
@@ -149,7 +149,7 @@ delivered through the same app event API.
 For an unattended boot, set `SDL_VIDEODRIVER=dummy` and
 `SDL_AUDIODRIVER=dummy`, use a copied NAND and an orderly SIGTERM shutdown.
 `printf`/`puts` go to the emulator console. Input scripts are documented in
-the OS source's `CLAUDE.md`; USB scripts are described in [USB](USB.md).
+the OS source's `CLAUDE.md`; USB scripts are described in [USB](../hardware/USB.md).
 
 ## Deploy to a BE-300 over USB
 
@@ -171,7 +171,7 @@ make deploy
 `deploy` verifies the package, uploads to `/Downloads/sdk-app.gzp`, and
 asks SpringBoard to install and launch it. Set `GLAZE_USB` to another
 client path if needed. Reinstalling the same id preserves its `data/` and
-replaces any running copy. See [USB](USB.md) for device selection, input
+replaces any running copy. See [USB](../hardware/USB.md) for device selection, input
 scripts, RAM boot and reload. RAM boot needs GlazeBoot/OS artifacts and the
 separate Windows CE toolchain; those are not part of this app SDK. The
 USB guide's `out/host/glaze-usb` is `bin/glaze-usb` in an extracted SDK.
@@ -211,7 +211,7 @@ user assigned in Settings → Icon Buttons. An app that wants some of them
 while it is in front calls `ui_claim_hard_icons(mask)` (bit n is icon n + 1,
 left to right); those then arrive as `GZ_EV_KEY_DOWN`/`GZ_EV_KEY_UP` with
 `GZ_KEY_ICON1` + n instead, unless the user turned App Overrides off. See
-`docs/HARD_ICONS.md`.
+`docs/os/HARD_ICONS.md`.
 
 Write saves under `<res_bundle()>/data/`, not in `res/` or romfs.
 Installation creates a bundle under `/Applications/<id>.app` or

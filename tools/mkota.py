@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and sign Glaze OTA updates (docs/OTA.md, lib/include/glaze/ota.h).
+"""Build and sign Glaze OTA updates (docs/os/OTA.md, lib/include/glaze/ota.h).
 
   mkota.py keygen [--key PEM] [--pub config/ota_pubkey.bin]
       Make the release key: a private Ed25519 key outside the source tree

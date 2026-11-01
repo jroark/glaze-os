@@ -1,5 +1,5 @@
 /* Native curated App Store, with the two tabs Search and Updates. Updates
- * also offers Glaze OS updates (docs/OTA.md): downloaded to the flash,
+ * also offers Glaze OS updates (docs/os/OTA.md): downloaded to the flash,
  * verified by the kernel through the file server, then installed by the SPL
  * after a reset. */
 #include "catalog.h"

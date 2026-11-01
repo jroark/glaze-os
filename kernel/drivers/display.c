@@ -1,5 +1,5 @@
 /* Original LCD startup and physical display controls, traced from the
- * stock BE-300 Windows CE 3.0 SPL, OAL and ddi.dll. See docs/DISPLAY.md. */
+ * stock BE-300 Windows CE 3.0 SPL, OAL and ddi.dll. See docs/hardware/DISPLAY.md. */
 #include "../kernel.h"
 #include "../hw.h"
 #include "../drivers.h"
@@ -17,7 +17,7 @@ int display_power(int on)
         return 0;
     /* Stock ddi.dll 0x01A55900: off writes zero to BLG+0/+4, then
      * clears CMM+0 bit 0. The inverse enables that gate before configuring
-     * PWM and enabling BLG+0. See docs/DISPLAY.md for the pointer mapping.
+     * PWM and enabling BLG+0. See docs/hardware/DISPLAY.md for the pointer mapping.
      * Restore our mode nibble while preserving the buzzer/other channel
      * settings; leave both channels' period and duty words untouched. */
     if (!on) {

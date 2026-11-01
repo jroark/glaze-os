@@ -1,4 +1,4 @@
-# Power off (docs/POWER.md "Power off"): type a note, hold Power for 2 s
+# Power off (docs/hardware/POWER.md "Power off"): type a note, hold Power for 2 s
 # (Goodbye, then Suspend), wake with Power 10 s later, unlock, and find the
 # note still open in Notes. The log has "power: suspend" and "power: awake".
 3000 drag 40 280 235 280 500

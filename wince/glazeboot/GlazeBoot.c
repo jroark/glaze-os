@@ -20,7 +20,7 @@
  * Then it asks Windows CE for kernel mode and calls the trampoline, which
  * takes the machine over. With mode=probe in glaze.cfg it only checks what
  * the hand-over relies on and writes the results to glazeboot.log.
- * docs/GLAZEBOOT.md describes the whole path.
+ * docs/dev/GLAZEBOOT.md describes the whole path.
  */
 
 #include <windows.h>

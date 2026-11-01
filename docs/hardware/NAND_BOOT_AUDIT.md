@@ -65,15 +65,15 @@ ROM itself from state it leaves enabled for its replacement SPL.
 
 ### Initial Glaze ordering and RAM-boot contrast
 
-[SPL entry](../boot/spl_start.S) disables interrupts, assigns a stack at
+[SPL entry](../../boot/spl_start.S) disables interrupts, assigns a stack at
 `0x80FF0000`, and calls C using cached code/stack addresses. Its first action
-in [spl_main](../boot/spl.c) is unbounded UART output, then kernel reads through
+in [spl_main](../../boot/spl.c) is unbounded UART output, then kernel reads through
 the NAND transfer engine, then a direct kernel jump with arguments cleared.
 It neither returns through the ROM mailboxes nor runs the stock SPL's setup.
 
-[Kernel entry](../kernel/start.S) switches uncached for the VR4131 cache erratum
+[Kernel entry](../../kernel/start.S) switches uncached for the VR4131 cache erratum
 workaround, flushes both caches before/after changing Config, installs a stack,
-and clears BSS. [kmain](../kernel/main.c) acknowledges HALTimer, prints, sets up
+and clears BSS. [kmain](../../kernel/main.c) acknowledges HALTimer, prints, sets up
 traps/memory, USB, romfs, IRQs, timer, display, buzzer, CMCU, RTC, input, network,
 CF, and audio before services and scheduling. Thus romfs NAND reads precede
 timer initialization; their timeout must not depend on `time_us()` yet.
@@ -82,7 +82,7 @@ CE RAM boot inherits an operational bus, power state, UART and potentially
 live LCD. Its trampoline quiesces selected hardware and the kernel reclaims it;
 it also keeps romfs in RAM, bypassing NAND-backed executable faults. Hardware
 success through GlazeBoot therefore does not exercise the NAND SPL or establish
-cold-boot power defaults. See [GLAZEBOOT.md](GLAZEBOOT.md).
+cold-boot power defaults. See [GLAZEBOOT.md](../dev/GLAZEBOOT.md).
 
 ## Initial dependency matrix
 
@@ -95,7 +95,7 @@ verification. Emulator observations are direct source findings, not silicon fact
 | --- | --- | --- | --- | --- |
 | H01 / P0 | BCU/SDRAM setup, ROM `9FC005A0`, stock SPL `80F025A0`; halfword accesses listed above. Direct. | **ROM-provided** basic setup; no Glaze reprogramming. Exact handoff timing values open. | `E:gxemul/src/devices/dev_vr41xx.c` BCU/SDRAM handlers store bytes; RAM works without enforcing refresh, timing or bank configuration. | Record executed ROM table selection and final values at SPL entry; compare against board documentation. Preserve working ROM setup unless a demonstrated difference requires a change. |
 | H02 / P0 | CPU cache/config and executable visibility; ROM tag init, stock SPL `80F02404` switches to KSEG1 before its setup. Direct. | **Partial:** kernel workaround exists; SPL executes C and stack through KSEG0 before that workaround. Kernel copied via KSEG1, then entered via KSEG0. | Host-backed RAM and CPU translation are insufficient evidence of real cache coherency or VR4131 CACHE errata. | Prove ROM cache state and SPL cache safety; verify SPL text/stack and loaded kernel visibility on silicon. Consider moving SPL execution/stack uncached before C; do not label kernel workaround missing. |
-| H03 / P0 | Early companion SIU power, clock, divisor, line format and cable transceiver. `[console.c](../kernel/console.c)` documents CE COM1 ownership. | **Missing explicit cold UART setup:** SPL polls LSR bit `0x20` at `AA008694` forever and writes bytes at `AA008680`; kernel bounds its polls. ROM inheritance unproven. Stowaway setup occurs much later. | Companion SIU is a generic ns16550 (`addr_mult=4`); `E:gxemul/src/devices/dev_ns16550.c` seeds 9600 8N1 and services TX without a physical transceiver. Companion clock block is mostly storage. | Identify ROM/stock serial enable routine and handoff values. Initialize or explicitly validate UART before output; bound SPL polls so unavailable serial cannot stop boot. Test output without CE or dock initialization. |
+| H03 / P0 | Early companion SIU power, clock, divisor, line format and cable transceiver. `[console.c](../../kernel/console.c)` documents CE COM1 ownership. | **Missing explicit cold UART setup:** SPL polls LSR bit `0x20` at `AA008694` forever and writes bytes at `AA008680`; kernel bounds its polls. ROM inheritance unproven. Stowaway setup occurs much later. | Companion SIU is a generic ns16550 (`addr_mult=4`); `E:gxemul/src/devices/dev_ns16550.c` seeds 9600 8N1 and services TX without a physical transceiver. Companion clock block is mostly storage. | Identify ROM/stock serial enable routine and handoff values. Initialize or explicitly validate UART before output; bound SPL polls so unavailable serial cannot stop boot. Test output without CE or dock initialization. |
 | H04 / P0 | NAND unit clock `0A001134`, framing `0A00A400/A408/A40C/A410`, phase/ACK and stream state. All framing writes are 32-bit; command/address bytes 8-bit. | **Partial:** kernel `nand.c:select()` enables clock and four control words; SPL omits these, writes ACK rather than kernel's read ACK, omits phase-close/deselect and engine reset. ROM inheritance unproven. | `E:src/hw/nand.c:nand_write()` starts a stream on MODE 5 and sets ready immediately without requiring all those enable words or clock. `be300_devices.c:cmu_write()` stores NAND clock without enforcing it. | Compare raw stock ROM/SPL NAND instruction sequences with both Glaze paths. Establish the handoff contract, then make SPL independently frame reads and bound readiness waits. Test with clock/control words cleared and stale engine state. |
 | H05 / P0 | NAND page completion and error reporting. Stock kernel reference range `80F0A658..80F0AE80` is documented in Glaze `nand.c`; physical page is 512+16 bytes. | **Partial:** SPL drains 512+8 bytes; kernel drains 512+16 and resets MODE. SPL readiness wait is infinite; kernel logs timeout then continues without returning read failure. | MODE 5's comment says 520 bytes, but its actual `stream_limit` is `NAND_PAGE_RAW-col` (528 at column zero); a subsequent MODE 5 restarts cursor. No physical transfer latency. | Resolve mode/trailer contract from stock instructions or hardware capture. Exercise consecutive reads and page/block boundaries. Propagate failure before jumping to corrupted code; determine exact drain/reset requirements rather than blindly changing 8 to 16. |
 | H06 / P1 | GIU line 0 direction, polarity, edge/level and companion source routing; registers `0F000140`, `150/154/158` (16-bit). | **Partial:** `irq_init()` masks ICU/GIU, clears pending and enables line 0, but does not program direction/type/polarity/hold selection. Companion source controls mostly use read/modify/write. | `dev_vr41xx.c` latches type/polarity/hold registers; GIU callback routing does not model all pin configuration, and CPU IP2 uses an edge-delivery workaround. | Trace stock OAL and ROM for all line-0 prerequisites, then explicitly establish required routing. Test level assertion, deassertion and a held foreign source, not just successful tick polling. |
@@ -114,7 +114,7 @@ verification. Emulator observations are direct source findings, not silicon fact
 
 | ID | Finding and evidence | Required closure before a flash procedure |
 | --- | --- | --- |
-| N01 | [mk_nand.py](../tools/mk_nand.py) emits exactly 16 MiB of page data, a partition table, a B000FF SPL and fixed kernel/romfs/filesystem offsets. `E:src/hw/nand.c:nand_stream_oob_byte()` synthesizes spare tags from image coverage. | Specify physical-page/OOB encoding and who writes it. Prove the masked ROM recognizes the actual partition/SPL placement and spare tags; do not feed a data-only emulator image to an unspecified raw programmer. |
+| N01 | [mk_nand.py](../../tools/mk_nand.py) emits exactly 16 MiB of page data, a partition table, a B000FF SPL and fixed kernel/romfs/filesystem offsets. `E:src/hw/nand.c:nand_stream_oob_byte()` synthesizes spare tags from image coverage. | Specify physical-page/OOB encoding and who writes it. Prove the masked ROM recognizes the actual partition/SPL placement and spare tags; do not feed a data-only emulator image to an unspecified raw programmer. |
 | N02 | Real CE data uses logical-block tags/remapping. `flash.c` builds a CE map and decodes RS parity for `/NAND`, but normal SPL kernel reads and `romfs.c` use fixed absolute page numbers without that map. | Choose and document physical placement/lookup for immutable boot content, including factory bad blocks. Test a bad block inside SPL, kernel and romfs independently. CE mapping support in `/NAND` does not cover these readers. |
 | N03 | Kernel/SPL boot reads do not perform ECC correction. The CE read path's `nand_ecc.c` and filesystem BCH checkpoint parity are separate mechanisms. | Define boot-content ECC/error detection and recovery across the entire chain, including the ROM's own expected ECC/spare layout. Corruption must prevent transfer to an invalid kernel. |
 | N04 | `servers/fs/ftl.c` tracks runtime failures, but initialization explicitly omits factory spare-area bad-block marks. README also calls this out. | Import factory bad marks before allocating/erasing filesystem blocks, including treatment of bad BBT storage blocks. Never erase the evidence before importing it. |
@@ -286,7 +286,7 @@ Windows CE's state leaked into every one of them. A true power-on (battery out,
 card in) is the closest non-destructive stand-in for a NAND boot, and it
 exposed the gaps below. No NAND was written.
 
-**Method.** `HWDUMP=1` kernels ([hwdump.c](../kernel/hwdump.c)) snapshot the
+**Method.** `HWDUMP=1` kernels ([hwdump.c](../../kernel/hwdump.c)) snapshot the
 VR4131 units and companion windows at kernel entry and after driver setup.
 SpringBoard saves them to `/Card/HWDUMPnn.BIN` and `/Library/Caches/HWDUMP.BIN`
 and posts lock-screen summaries. `BOOT_BEEP=1` adds piezo checkpoints (the

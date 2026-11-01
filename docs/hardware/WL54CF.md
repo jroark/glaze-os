@@ -14,14 +14,14 @@ host driver does not replace the card's firmware. The pinned Linux pair is
 redistributable in binary form for use **only with Marvell silicon products**,
 provided its copyright, conditions and disclaimer accompany it. No modification,
 reverse engineering, decompilation or disassembly is permitted. Read the full
-[LICENCE.Marvell](../firmware/LICENCE.Marvell).
+[LICENCE.Marvell](../../firmware/LICENCE.Marvell).
 
 Glaze pins linux-firmware revision
 [`ba2549fc973076ac1500a9ba5adf8864c130e7f5`](https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware.git/+/ba2549fc973076ac1500a9ba5adf8864c130e7f5/).
 Its [WHENCE](https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware.git/+/ba2549fc973076ac1500a9ba5adf8864c130e7f5/WHENCE)
 identifies both `libertas/cf8385.bin` and `libertas/cf8385_helper.bin` as
 redistributable under that license, extracted with Marvell's permission.
-[The manifest](../firmware/wl54cf-linux.json) records their sizes and SHA-256
+[The manifest](../../firmware/wl54cf-linux.json) records their sizes and SHA-256
 values. Fetch them without a vendor CAB:
 
 ```sh
@@ -74,7 +74,7 @@ The register/handshake/descriptor definitions follow Linux v6.6 Libertas
 [cfg.c](https://github.com/torvalds/linux/blob/v6.6/drivers/net/wireless/marvell/libertas/cfg.c),
 [tx.c](https://github.com/torvalds/linux/blob/v6.6/drivers/net/wireless/marvell/libertas/tx.c) and
 [rx.c](https://github.com/torvalds/linux/blob/v6.6/drivers/net/wireless/marvell/libertas/rx.c).
-The corresponding emulator's `docs/WL54CF.md` records the firmware offsets,
+The corresponding emulator's `docs/hardware/WL54CF.md` records the firmware offsets,
 SHA-256 values, CIS assumptions and exact emulation boundaries.
 
 The driver configures COR, uploads helper/main firmware through the command

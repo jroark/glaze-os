@@ -1,5 +1,5 @@
 /*
- * Over-the-air OS updates (docs/OTA.md): the formats shared by the build
+ * Over-the-air OS updates (docs/os/OTA.md): the formats shared by the build
  * tools (tools/mkota.py, tools/mk_nand.py), the SPL (boot/), the kernel
  * (kernel/ota.c) and userspace. All words are little-endian.
  *

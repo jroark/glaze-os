@@ -6,7 +6,7 @@ transfer files, launch Glaze apps, read console logs, and reload the kernel
 and romfs directly from a running Glaze system.
 
 Paired network debugging exposes the same Glaze runtime commands through
-`--host ADDRESS --key KEYFILE`; see [Network debugging](NETWORK_DEBUG.md) for
+`--host ADDRESS --key KEYFILE`; see [Network debugging](../dev/NETWORK_DEBUG.md) for
 pairing, Settings controls, encrypted transport and reload reconnection.
 
 ## Build and boot
@@ -58,20 +58,20 @@ by a Wi-Fi card. An existing seed is preserved for the network service's
 ratchet. Seed packets are excluded from `--trace`; the OS random API failing
 stops the connection rather than substituting a weaker source. Untethered
 boots prefer the factory or boot-card seed described in [Wi-Fi](WIFI.md), then
-fall back to [device-local timing entropy](ENTROPY.md) before WPA/WPA2 association.
+fall back to [device-local timing entropy](../os/ENTROPY.md) before WPA/WPA2 association.
 
 The boot runs in RAM. It replaces CE's live RAM, including its object store;
 save anything important there before booting. Files staged through CE remain
 in its filesystem. USB boot does not flash firmware or write raw NAND.
 Return to stock CE with `reboot --ce` on an updated kernel. A full cold reset
-also works, as described in [GlazeBoot](GLAZEBOOT.md).
+also works, as described in [GlazeBoot](../dev/GLAZEBOOT.md).
 
 ## Commands
 
 The USB cable can also provide an IP connection through a macOS utun or Linux
 TAP interface. See [USB networking](USB_NETWORK.md) for `glaze-usb usb-net`.
 
-`glaze-usb mirror` provides live [VNC screen mirroring](MIRRORING.md), including
+`glaze-usb mirror` provides live [VNC screen mirroring](../dev/MIRRORING.md), including
 mouse/stylus and keyboard control, through the same USB or paired TLS link.
 
 ```sh
@@ -125,7 +125,7 @@ it is literal text.
 
 Current builds also accept `selectall`, `copy`, `cut`, `paste`, `selectleft`,
 `selectright`, `selecthome` and `selectend` for native text editing. These
-operate on [Glaze's clipboard](CLIPBOARD.md), including over network debugging.
+operate on [Glaze's clipboard](../os/CLIPBOARD.md), including over network debugging.
 
 The entire script is validated before input starts. Up to 2048 events and
 one hour are supported; expanded taps, drags and text count toward the event

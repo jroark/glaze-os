@@ -28,7 +28,7 @@ reference image):
 
 The boot ROM walks partition 1 (the SPL); the SPL then reads partition 2's
 header, loads the image a page at a time via the VRC4173 SPL transfer engine,
-checks its CRC and jumps to the kernel entry. An OTA update (docs/OTA.md)
+checks its CRC and jumps to the kernel entry. An OTA update (docs/os/OTA.md)
 replaces everything from partition 2 to the end of the romfs slot. The kernel hands the file-system region to the file server
 (servers/fs), which runs littlefs on Dhara there. See boot/ for the SPL.
 """

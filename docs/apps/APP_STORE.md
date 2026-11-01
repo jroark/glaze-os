@@ -13,7 +13,7 @@ Updates also offers Glaze OS updates when the host has an `os/catalog.txt`
 newer than the running OS and the device can install one: a physical NAND
 image with an OTA-capable SPL. The OS update is downloaded to
 `/Library/Updates`, verified by the kernel, and installed by the SPL after a
-reset. See [OTA updates](OTA.md), including `make ota` and
+reset. See [OTA updates](../os/OTA.md), including `make ota` and
 `publish_appstore.py --os`.
 
 In the web emulator, use network bridge helper version `20261021a` or later
@@ -52,7 +52,7 @@ those headers separately elsewhere. Upload assets first and replace the
 catalog last. Retain older assets for clients with cached catalogs.
 
 The AWS backend uses private S3 storage and CloudFront. See
-[App Store on AWS](APP_STORE_AWS.md) for infrastructure, initial setup and the
+[App Store on AWS](../APP_STORE_AWS.md) for infrastructure, initial setup and the
 release publisher. Credentials stay in your AWS CLI profile.
 
 ## Add or release an app

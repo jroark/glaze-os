@@ -1,6 +1,6 @@
 /*
  * Verifying an OTA update image as the file server streams it in, and
- * writing the journal the SPL applies (docs/OTA.md). Plain C over the
+ * writing the journal the SPL applies (docs/os/OTA.md). Plain C over the
  * structures in glaze/ota.h, so host/ tests it natively with the SPL's
  * apply engine (boot/ota_apply.c). kernel/ota.c is the syscall layer.
  */

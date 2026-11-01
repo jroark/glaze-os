@@ -54,7 +54,7 @@ static uint32_t hwdump_words[2048];
  * console write (the SIU at 0x0A008680) stalled the bus, and with 1120 off
  * the socket status at 0x0A001000 read 0 although a card was in. 1120 is
  * followed by 1B24 = 0, 1B20 = 1 as the ROM's NAND path does (ROM
- * 9FC01D9E..1DA6, docs/NAND_ROM_HANDOFF.md). With 1104 off, USB enumerated
+ * 9FC01D9E..1DA6, docs/hardware/NAND_ROM_HANDOFF.md). With 1104 off, USB enumerated
  * but its DMA never ran. Which unit each other gate clocks is still being
  * identified.
  */

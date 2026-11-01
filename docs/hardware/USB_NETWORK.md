@@ -71,7 +71,7 @@ supported. The MTU is 1500 bytes.
 
 ## Debugging on the same cable
 
-Pair and enable [network debugging](NETWORK_DEBUG.md) **before** starting the
+Pair and enable [network debugging](../dev/NETWORK_DEBUG.md) **before** starting the
 USB helper:
 
 ```sh

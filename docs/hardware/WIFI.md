@@ -64,7 +64,7 @@ host's CSPRNG. The network server advances and saves it before releasing
 nonce bytes. If the seed is missing, the server collects a device-local timing
 jitter seed before starting WPA/WPA2 association; the initial Join request can
 take seconds. Authentication fails if collection or saving fails. See
-[Device entropy](ENTROPY.md). The seed is not in ROMFS or source control. Copies or rollbacks of NAND
+[Device entropy](../os/ENTROPY.md). The seed is not in ROMFS or source control. Copies or rollbacks of NAND
 also copy or roll back its random state; generate separate images/seeds for
 separate devices. Older images without the collector still need a freshly
 provisioned seed for WPA. The lwIP timing PRNG is never used for

@@ -43,7 +43,7 @@ Task Manager 1.0 was published as the sixth app on October 19, 2026. The
 publisher verified the catalog, all packages/icons and cache headers over
 public HTTPS, and confirmed that the S3 origin remains private. Task Manager's
 CPU and task features need the updated kernel; older OS builds retain its
-memory and uptime view. See [Task Manager](TASK_MANAGER.md).
+memory and uptime view. See [Task Manager](apps/TASK_MANAGER.md).
 
 Chat 1.0 and Doom 1.0 were published on October 29, 2026, and Hello was
 removed from the public catalog. The store now lists 16 apps. The other

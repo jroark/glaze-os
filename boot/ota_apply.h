@@ -1,5 +1,5 @@
 /*
- * The SPL's OTA apply engine (docs/OTA.md): rewrites the logical boot blocks
+ * The SPL's OTA apply engine (docs/os/OTA.md): rewrites the logical boot blocks
  * from the kernel slot to the end of romfs from an update image staged in
  * the file system, as the journal the kernel armed describes. Platform
  * independent, so host/ runs it against a NAND model with power cuts.

@@ -29,7 +29,7 @@ host or card supplies a seed.
 
 The OS and exported SDK build the collector at `-O0`, as upstream requires.
 Its port and provenance are documented in
-[`third_party/jitterentropy/UPSTREAM.md`](../third_party/jitterentropy/UPSTREAM.md).
+[`third_party/jitterentropy/UPSTREAM.md`](../../third_party/jitterentropy/UPSTREAM.md).
 No new kernel syscall or privileged hardware access is needed.
 The extra collector code uses image space: use the standard GlazeBoot app
 set if `GB_APPS=all` plus Wi-Fi firmware exceeds the existing 4.75 MiB limit.
