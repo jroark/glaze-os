@@ -87,8 +87,13 @@ int main(void)
     assert(!pc_reboot(&p));
     assert(written_len == 10 && pc_valid(written, 10) && pc_be16(written + 4) == 0x032a);
     assert(position == old_position); /* SoftReset has no response to read. */
+#ifdef _WIN32
+    char pathfile[MAX_PATH],root[MAX_PATH];
+    assert(GetTempPathA(sizeof(root),root) && GetTempFileNameA(root,"gzc",0,pathfile));
+#else
     char pathfile[]="/tmp/glaze-ce-match-XXXXXX";
     int fd=mkstemp(pathfile);assert(fd>=0);close(fd);
+#endif
     for(unsigned i=0;i<sizeof(remote_data);i++)remote_data[i]=(uint8_t)(i*17);
     unsigned lengths[]={0,4096,5000,8192};
     file_peer=1;chunk=31;

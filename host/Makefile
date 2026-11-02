@@ -575,6 +575,12 @@ nand-backup-test: ../tests/native/nand_backup.c ../tools/glaze-usb/nand.c
 	../out/host/nand-backup-test
 .PHONY: nand-backup-test
 
+usb-client-test:
+	@mkdir -p ../out/host
+	$(USB_CC) $(CFLAGS) $(USB_FLAGS) ../tests/native/usb_client_failures.c ../tools/glaze-usb/pcconnect.c -o ../out/host/usb-client-test
+	../out/host/usb-client-test
+.PHONY: usb-client-test
+
 nand-policy-test: ../tests/native/nand_raw_policy.c ../kernel/drivers/flash.c ../kernel/drivers/nand_ecc.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/nand_raw_policy.c ../kernel/drivers/nand_ecc.c -o ../out/host/nand-policy-test

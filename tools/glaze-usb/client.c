@@ -55,18 +55,19 @@ static uint64_t now(void)
 }
 int gu_call(struct gu_client *c, uint32_t op, const void *data, uint32_t n)
 {
+    c->transport_failed = 0;
     uint8_t out[GU_FRAME], in[4096];
     uint32_t id = ++c->id;
     size_t size = gu_encode(out, op, id, 0, data, n);
     if (!size || !id) return -1;
     int r = usb_write(c->usb, out, size, 5000);
     erase(out, size);
-    if (r) return r;
+    if (r) { c->transport_failed = 1; return r; }
     uint64_t end = now() + 10000;
     while (now() < end && !usb_cancelled) {
         r = usb_read(c->usb, in, sizeof(in), 250);
         if (r == LIBUSB_ERROR_TIMEOUT) continue;
-        if (r < 0) return r;
+        if (r < 0) { c->transport_failed = 1; return r; }
         for (int i = 0; i < r; i++) {
             if (gu_feed(&c->parser, in[i]) != 1) continue;
             const uint8_t *p = c->parser.bytes;
@@ -87,6 +88,7 @@ int gu_call(struct gu_client *c, uint32_t op, const void *data, uint32_t n)
             return (int)gu_get32(p + 12);
         }
     }
+    c->transport_failed = 1;
     fprintf(stderr, "Glaze USB op %u timed out\n", op); return -1;
 }
 int gu_hello(struct gu_client *c, struct usb_link *u)
@@ -96,6 +98,7 @@ int gu_hello(struct gu_client *c, struct usb_link *u)
     int r = gu_call(c, GU_HELLO, NULL, 0);
     if (r != 44 || gu_get32(c->frame + GU_HEADER) != GU_VERSION) return -1;
     const uint8_t *b = c->frame + GU_HEADER;
+    memcpy(c->build, b + 12, 32); c->build[32] = 0;
     c->caps = gu_get32(b + 4);
     fprintf(stderr, "runtime=Glaze build=%.32s free=%u KiB capabilities=0x%x\n", b + 12, gu_get32(b + 8) / 1024, gu_get32(b + 4));
     if (c->caps & GU_CAP_ENTROPY) {

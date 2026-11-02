@@ -10,10 +10,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 #define SIZE (1024u*32u*528u)
 static uint8_t device[SIZE],userspace[4096];
 static unsigned erases,programs,order[1024],completed;
-static int erase_failure,readback_failure,final_failure;
+static int erase_failure,readback_failure,final_failure,status_calls;
 static struct gz_bootinfo boot={.flags=GZ_BOOT_NAND_REPAIR};
 const struct gz_bootinfo *ram_boot=&boot;
 int copy_from_as(struct addrspace *as,void *out,uint32_t addr,uint32_t n)
@@ -28,6 +31,7 @@ int nand_erase_block(uint32_t block)
 int gu_call(struct gu_client *c,uint32_t op,const void *data,uint32_t n)
 {
     const uint8_t *b=data;
+    if(op==GU_INSTALL_STATUS) { assert(n==12);status_calls++;return -1; }
     if(op==GU_NAND_READ) {
         assert(n==8);unsigned page=gu_get32(b),count=gu_get32(b+4);
         assert(count && count<=7 && page+count<=32768);
@@ -50,8 +54,16 @@ static void digest(const void *data,size_t n,uint8_t out[32])
 { wc_Sha256 h;assert(!wc_InitSha256(&h));assert(!wc_Sha256Update(&h,data,(word32)n));assert(!wc_Sha256Final(&h,out));wc_Sha256Free(&h); }
 int main(void)
 {
+#ifdef _WIN32
+    installer_binary();
+    char dir[512],root[256],source_path[600],target_path[600],plan_path[600];
+    assert(GetTempPathA(sizeof(root),root));
+    snprintf(dir,sizeof(dir),"%sglaze-write-%lu-%llu",root,(unsigned long)GetCurrentProcessId(),(unsigned long long)GetTickCount64());
+    assert(!_mkdir(dir));snprintf(source_path,sizeof(source_path),"%s/source",dir);
+#else
     char dir[]="/tmp/glaze-write-test-XXXXXX",source_path[256],target_path[256],plan_path[256];
     assert(mkdtemp(dir));snprintf(source_path,sizeof(source_path),"%s/source",dir);
+#endif
     snprintf(target_path,sizeof(target_path),"%s/target",dir);snprintf(plan_path,sizeof(plan_path),"%s/plan",dir);
     uint8_t *source=malloc(SIZE),*target=malloc(SIZE);assert(source && target);
     memset(source,255,SIZE);source[20*32*528+517]=0;memcpy(target,source,SIZE);
@@ -60,10 +72,12 @@ int main(void)
     digest(source,SIZE,plan+8);digest(target,SIZE,plan+40);plan[72+20/8]|=1u<<(20%8);
     gu_put32(plan+200,~gu_crc(~0u,plan,200));
     write_file(source_path,source,SIZE);write_file(target_path,target,SIZE);write_file(plan_path,plan,sizeof(plan));
-    struct gu_client c={.caps=GU_CAP_NAND_REPAIR|GU_CAP_NAND_BACKUP};
+    struct gu_client c={.caps=GU_CAP_NAND_REPAIR|GU_CAP_NAND_BACKUP|GU_CAP_INSTALL_STATUS};
     memcpy(device,source,SIZE);
     assert(!gu_nand_apply(&c,source_path,target_path,plan_path,false,false));
     assert(completed==2 && order[0]==30 && order[1]==0 && !memcmp(device,target,SIZE));
+    assert(status_calls==2); /* Failed optional status never skips NAND validation. */
+    c.caps&=~GU_CAP_INSTALL_STATUS;
     assert(!memcmp(device+20*32*528,source+20*32*528,32*528));
     /* Same verified transaction path restores every original data/OOB byte. */
     digest(target,SIZE,plan+8);digest(source,SIZE,plan+40);

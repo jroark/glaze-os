@@ -76,7 +76,8 @@ class PhysicalNand(unittest.TestCase):
     def test_private_no_overwrite(self):
         out=Path(self.tmp.name)/'private'
         n.write_new(out,b'one')
-        self.assertEqual(os.stat(out).st_mode&0o777,0o600)
+        if os.name != 'nt':
+            self.assertEqual(os.stat(out).st_mode&0o777,0o600)
         with self.assertRaises(FileExistsError):n.write_new(out,b'two')
         self.assertEqual(out.read_bytes(),b'one')
 

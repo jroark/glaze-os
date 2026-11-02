@@ -4,7 +4,16 @@
 #include <glaze/usb_wire.h>
 #include <stdbool.h>
 #include <stdio.h>
-struct gu_client { struct usb_link *usb; uint32_t id, caps; struct gu_parser parser; uint8_t frame[GU_FRAME]; };
+struct gu_client {
+    struct usb_link *usb;
+    uint32_t id, caps;
+    struct gu_parser parser;
+    uint8_t frame[GU_FRAME];
+    char build[33];
+    int transport_failed;
+    /* Opt-in recovery for physical capture only. Never replay mutations. */
+    int (*recover_read)(struct gu_client *);
+};
 int gu_call(struct gu_client *, uint32_t op, const void *data, uint32_t len);
 int gu_hello(struct gu_client *, struct usb_link *);
 int gu_upload(struct gu_client *, const char *local, const char *remote);
