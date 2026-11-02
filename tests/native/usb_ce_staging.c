@@ -1,6 +1,9 @@
 /* Run the production CE staging planner against filesystem/space fixtures. */
 #include "../../tools/glaze-usb/client.c"
 #include <assert.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 static uint64_t available;
 static unsigned matching, checks, mkdirs, volume_checks;
 static int inspect_failure, allow_boot;
@@ -29,7 +32,14 @@ static void reset(uint64_t free_bytes,unsigned matches)
 {available=free_bytes;matching=matches;checks=mkdirs=volume_checks=0;inspect_failure=0;}
 int main(void)
 {
+#ifdef _WIN32
+    char dir[512],root[256],local[1024],folder[512];
+    assert(GetTempPathA(sizeof(root),root));
+    snprintf(dir,sizeof(dir),"%sglaze-ce-%lu-%llu",root,(unsigned long)GetCurrentProcessId(),(unsigned long long)GetTickCount64());
+    assert(!_mkdir(dir));
+#else
     char dir[]="/tmp/glaze-ce-staging-XXXXXX",local[1024],folder[512];assert(mkdtemp(dir));
+#endif
     const unsigned sizes[]={2048,8192,131072,4*1024*1024,32};
     struct ce_artifact files[5];
     for(unsigned i=0;i<5;i++) {

@@ -12,7 +12,17 @@ static uint8_t ram[65536], user[GU_SCREEN_BYTES + 16];
 static uint16_t framebuffer[GZ_FB_STRIDE * GZ_FB_HEIGHT];
 #define USB_FRAMEBUFFER framebuffer
 static uint32_t gate;
+#ifdef _WIN32
+/* Jump out of the mocked kernel reboot without UCRT exception unwinding
+ * across the fixture's kernel frames (RtlVirtualUnwind faults on Win64). */
+static intptr_t reboot_return[5];
+#define reboot_setjmp(b) __builtin_setjmp(b)
+#define reboot_longjmp(b) __builtin_longjmp(b,1)
+#else
 static jmp_buf reboot_return;
+#define reboot_setjmp(b) setjmp(b)
+#define reboot_longjmp(b) longjmp(b,1)
+#endif
 static unsigned rebooted;
 #define USB_READ(off) (usbf_handles(off) ? usbf_read(&model, off) : 0)
 #define USB_WRITE(off, v) do { if (usbf_handles(off)) usbf_write(&model, off, v); } while (0)
@@ -37,7 +47,7 @@ int usbnet_ctl(struct proc *p, uint32_t op, uint32_t b, uint32_t n)
 { net_calls++; return 456; }
 void usb_input_cancel(void) { input_cancels++; }
 bool hwdump_active(void) { return false; }  /* the HWDUMP=1 peek stays refused */
-void machine_reboot_ce(void) { rebooted++; longjmp(reboot_return, 1); }
+void machine_reboot_ce(void) { rebooted++; reboot_longjmp(reboot_return); }
 uint64_t time_us(void) { static uint64_t now; now += 100000; return now; }
 int usb_input_ctl(struct proc *p, uint32_t op, uint32_t b, uint32_t n)
 { (void)p; (void)op; (void)b; (void)n; return 123; }
@@ -110,7 +120,7 @@ int main(void)
     assert(sys_usb_ctl(&p, GZ_USB_REBOOT_CE, 0, 0) == GZ_ETIMEDOUT && !rebooted);
     assert(usbf_host_in(&model, answer, sizeof(answer)) == 24);
     usb_poll();
-    if (!setjmp(reboot_return)) { sys_usb_ctl(&p, GZ_USB_REBOOT_CE, 0, 0); assert(0); }
+    if (!reboot_setjmp(reboot_return)) { sys_usb_ctl(&p, GZ_USB_REBOOT_CE, 0, 0); assert(0); }
     assert(rebooted == 1);
     uint32_t old = generation; set_lines(0); assert(configured && generation != old);
     set_lines(3); assert(lines == 3);

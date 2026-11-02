@@ -62,7 +62,9 @@ static int install_status(struct gu_client *c,unsigned stage)
 {
     if(!(c->caps&GU_CAP_INSTALL_STATUS))return 0;
     uint8_t data[12]={0};gu_put32(data,stage);
-    return gu_call(c,GU_INSTALL_STATUS,data,sizeof(data));
+    if(gu_call(c,GU_INSTALL_STATUS,data,sizeof(data))<0)
+        fputs("Optional installer display update failed; continuing NAND checks\n",stderr);
+    return 0;
 }
 static int compare(struct gu_client *c,const uint8_t *expected,const char *phase,bool keep_fs)
 {

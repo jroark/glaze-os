@@ -113,7 +113,8 @@ int usb_lines(struct usb_link *l, int value)
     if (l->network) return 0;
     int r = libusb_control_transfer(l->dev, 0x21, 0x22, (uint16_t)value, 0, NULL, 0, 2000);
     if (r >= 0) l->lines_active = value;
-    if (l->trace) fprintf(stderr, "control lines=%d result=%d\n", value, r);
+    if (l->trace || r < 0) fprintf(stderr, "USB control lines=%d: %s (%d)\n", value,
+                                  r < 0 ? libusb_error_name(r) : "ok", r);
     if (l->trace && r >= 0) {
         uint8_t configuration = 0;
         int got = libusb_control_transfer(l->dev, 0x80, 8, 0, 0, &configuration, 1, 1000);
@@ -139,7 +140,7 @@ int usb_write(struct usb_link *l, const void *vp, size_t n, unsigned timeout)
         dump(l, "H>D", p, done);
         p += done; n -= (size_t)done;
         if (r) {
-            if (l->trace) fprintf(stderr, "bulk OUT: %s (%d bytes)\n", libusb_error_name(r), done);
+            fprintf(stderr, "USB bulk OUT: %s (%d bytes)\n", libusb_error_name(r), done);
             return r;
         }
         if (!done) return LIBUSB_ERROR_IO;
@@ -158,6 +159,6 @@ int usb_read(struct usb_link *l, void *p, size_t n, unsigned timeout)
     int done = 0;
     int r = libusb_bulk_transfer(l->dev, 0x81, p, (int)n, &done, timeout);
     dump(l, "D>H", p, done);
-    if (l->trace && r && r != LIBUSB_ERROR_TIMEOUT) fprintf(stderr, "bulk IN: %s (%d bytes)\n", libusb_error_name(r), done);
+    if (r && r != LIBUSB_ERROR_TIMEOUT) fprintf(stderr, "USB bulk IN: %s (%d bytes)\n", libusb_error_name(r), done);
     return done ? done : r ? r : 0;
 }
