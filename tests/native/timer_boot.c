@@ -30,6 +30,7 @@ void sched_timer_tick(uint64_t t) { (void)t; }
 void input_poll(void) {}
 void usb_poll(void) {}
 void net_irq(void) {}
+void bt_poll(void) {}
 void audio_irq(void) {}
 void buzzer_poll(void) {}
 void splash_tick(void) {}

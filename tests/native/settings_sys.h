@@ -3,6 +3,8 @@
 #define SETTINGS_TEST_SYS_H
 #define GLAZE_SYS_H
 #include <glaze/abi.h>
+#include <glaze/bluetooth.h>
+int gz_bt_card_info(struct bt_card_info *, uint32_t);
 uint32_t gz_time_ms(void);
 void gz_sleep_ms(uint32_t ms);
 int gz_rtc_get(struct gz_datetime *dt);

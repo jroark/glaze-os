@@ -13,6 +13,7 @@ Start with the [top-level README](../README.md) for building and running.
 - [USB development on the BE-300](hardware/USB.md)
 - [Networking through the USB cable](hardware/USB_NETWORK.md)
 - [Wi-Fi and network security](hardware/WIFI.md)
+- [CF Bluetooth discovery and serial](hardware/BLUETOOTH.md)
 - [WL54-CF wireless networking](hardware/WL54CF.md)
 
 ## Operating system

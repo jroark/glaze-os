@@ -3,6 +3,7 @@
 #include "client.h"
 #include "network.h"
 #include <glaze/debug_net.h>
+#include <glaze/bluetooth.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -94,6 +95,11 @@ static int usage(void)
           "                                raw NAND program/verify (repair boot only); --keep-filesystem\n"
           "                                leaves blocks 320-1003 unchecked and refuses to write them;\n"
           "                                --allow-mismatch plans from the device's current NAND, not SOURCE\n"
+          "  bt-connect ADDRESS [PIN [CHANNEL]]      connect an authenticated serial service\n"
+          "  bt-serial-status | bt-disconnect | bt-echo TEXT\n"
+          "  bt-status | bt-cancel          classic Bluetooth status/cancellation\n"
+          "  bt-scan [--start-only]         discover classic Bluetooth devices\n"
+          "  bt-info                       read-only CF Bluetooth identity and CIS\n"
           "  cf-info                       CF card geometry (read-only)\n"
           "  cf-read LBA COUNT OUTPUT       two-pass raw CF extent snapshot (read-only)\n"
           "  cf-format-recovery SECTORS GENERATION  erase CF filesystem; create recovery FAT16\n"
@@ -120,7 +126,10 @@ int main(int argc, char **argv)
     const char *cmd = argv[i++]; int left = argc - i;
     if (cf_only && strcmp(cmd,"boot") && strcmp(cmd,"ce-self-test")) return usage();
     if (!strcmp(cmd,"net-keygen")) return left==1 && !host && !device ? (debug_host_keygen(argv[i]) ? 1 : 0) : usage();
-    if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect") || !strcmp(cmd,"net-disable") || !strcmp(cmd,"cf-info") || !strcmp(cmd,"nand-status")) ? left != 0 :
+    if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect") || !strcmp(cmd,"net-disable") || !strcmp(cmd,"bt-serial-status") || !strcmp(cmd,"bt-disconnect") || !strcmp(cmd,"bt-status") || !strcmp(cmd,"bt-cancel") || !strcmp(cmd,"bt-info") || !strcmp(cmd,"cf-info") || !strcmp(cmd,"nand-status")) ? left != 0 :
+        !strcmp(cmd,"bt-connect") ? (left<1 || left>3) :
+        !strcmp(cmd,"bt-echo") ? left!=1 :
+        !strcmp(cmd,"bt-scan") ? (left>1 || (left==1 && strcmp(argv[i],"--start-only"))) :
         !strcmp(cmd,"cf-read") ? left != 3 :
         !strcmp(cmd,"peek") ? (left < 1 || left > 2) :
         !strcmp(cmd,"peek-dump") ? left != 3 :
@@ -313,6 +322,59 @@ int main(int argc, char **argv)
                            status,!!(status&0x40),!!(status&1),!!(status&0x80));
                     r=0;
                 } else r=-1;
+            }
+            else if (!strcmp(cmd,"bt-connect") || !strcmp(cmd,"bt-serial-status") || !strcmp(cmd,"bt-disconnect") || !strcmp(cmd,"bt-echo")) r=gu_bt_serial(&c,cmd,left,argv+i);
+            else if (!strcmp(cmd,"bt-status") || !strcmp(cmd,"bt-scan") || !strcmp(cmd,"bt-cancel")) {
+                r=-1;
+                if (!(c.caps & GU_CAP_BT_DISCOVERY)) fputs("Reload a build with Bluetooth discovery first.\n",stderr);
+                else {
+                    uint8_t request[4]; unsigned op=!strcmp(cmd,"bt-scan") ? BT_SCAN : !strcmp(cmd,"bt-cancel") ? BT_CANCEL : BT_STATUS;
+                    gu_put32(request,op);
+                    if (op!=BT_STATUS) r=gu_call(&c,GU_BT_DISCOVERY,request,4)==0 ? 0 : -1;
+                    if (op==BT_STATUS || (op==BT_SCAN && !r && !left)) {
+                        uint64_t end=monotonic_ms()+60000; uint32_t previous=~0u;
+                        for (;;) {
+                            gu_put32(request,BT_STATUS);
+                            int n=gu_call(&c,GU_BT_DISCOVERY,request,4);
+                            if (n<0 && (int32_t)gu_get32(c.frame+16)==GZ_EBUSY) { usleep(100000); if(monotonic_ms()<end)continue; }
+                            if (n<48) { r=-1; break; }
+                            const uint8_t *p=c.frame+GU_HEADER; unsigned count=gu_get32(p+12),state=gu_get32(p);
+                            if (count>BT_DEVICE_MAX || n!=48+(int)count*52 || state>BT_FAILED) { r=-1; break; }
+                            if (previous!=gu_get32(p+8) || op==BT_STATUS) {
+                                printf("Bluetooth: state=%u error=%d devices=%u address=%02x:%02x:%02x:%02x:%02x:%02x HCI=%u vendor=%u\n",
+                                    state,(int32_t)gu_get32(p+16),count,p[25],p[24],p[23],p[22],p[21],p[20],p[26],gu_get32(p+28));
+                                for(unsigned j=0;j<count;j++) {
+                                    const uint8_t *d=p+48+j*52;
+                                    printf("  %02x:%02x:%02x:%02x:%02x:%02x %.40s\n",d[5],d[4],d[3],d[2],d[1],d[0],d+12);
+                                }
+                                previous=gu_get32(p+8);
+                            }
+                            if (state!=BT_SCANNING || op==BT_STATUS) { r=state==BT_FAILED ? -1 : 0; break; }
+                            if (usb_cancelled || monotonic_ms()>=end) { gu_put32(request,BT_CANCEL); gu_call(&c,GU_BT_DISCOVERY,request,4); r=-1; break; }
+                            usleep(250000);
+                        }
+                    }
+                }
+            }
+            else if (!strcmp(cmd, "bt-info")) {
+                r = -1;
+                if (!(c.caps & GU_CAP_BT_CARD_INFO)) fputs("Reload a build with Bluetooth CIS inspection first.\n", stderr);
+                else if (gu_call(&c, GU_BT_CARD_INFO, NULL, 0) == 388) {
+                    const uint8_t *p = c.frame + GU_HEADER;
+                    unsigned length = gu_get32(p+32);
+                    if (gu_get32(p) == 1 && length <= 256) {
+                        printf("Bluetooth card: kind=%u generation=%u ID=%04x:%04x FUNCID=%u COR=%x index=%d\n",
+                            gu_get32(p+8),gu_get32(p+4),gu_get32(p+12),gu_get32(p+16),
+                            gu_get32(p+20),gu_get32(p+24),(int32_t)gu_get32(p+28));
+                        printf("VERS_1: %.96s\n", p+292);
+                        for (unsigned off=0; off<length; off++) {
+                            if (!(off%16)) printf("cis %02x:",off);
+                            printf(" %02x",p[36+off]);
+                            if (off%16==15 || off+1==length) putchar('\n');
+                        }
+                        r=0;
+                    }
+                }
             }
             else if (!strcmp(cmd, "cf-info")) { uint32_t sectors,generation; r=gu_cf_info(&c,&sectors,&generation); }
             else if (!strcmp(cmd, "cf-format-recovery")) {

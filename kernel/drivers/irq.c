@@ -94,7 +94,8 @@ void irq_dispatch_ip2(void)
          * removal. The next card's driver enables it. */
         if (pending & KJ_INT_CF) {
             net_irq();
-            if (net_up() &&
+            bt_poll();
+            if ((net_up() || bt_ready()) &&
                 PCMCIA_CARD_PRESENT())
                 KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
         }

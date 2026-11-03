@@ -12,6 +12,7 @@ process polling for it.
 | NE2000-compatible network card | `drivers/ne2000.ko` | Started after successful initialization |
 | XI-825 | `drivers/xi825.ko` | Started after successful initialization |
 | WL54-CF | `drivers/wl54cf.ko` | Started after successful initialization |
+| SMART/Brainboxes BCSP Bluetooth | `drivers/btuart.ko` | Not started; starts the separate `bluetooth` service |
 | Driver missing, invalid or initialization failed | None retained; socket remains reserved from ATA | Not started |
 
 Only the selected driver is loaded. NE2000 and WL54-CF allocate their shared
@@ -29,7 +30,7 @@ change converts the three optional network backends to modules.
 
 ## Driver format and build
 
-A normal `make` builds `out/drivers/{ne2000,xi825,wl54cf}.ko` and puts them in
+A normal `make` builds `out/drivers/{ne2000,xi825,wl54cf,btuart}.ko` and puts them in
 romfs. Their implementation files remain in `kernel/drivers/`; wrappers in
 `kernel/modules/` supply a versioned `glaze_driver` operation table. They are excluded
 from the linked kernel. Shipping the files in romfs does not instantiate their
@@ -69,7 +70,9 @@ kernel imports must be explicitly exported by the loader.
   {"name":"net", "path":"bin/net", "privileges":["network"],
    "requires":["network"], "after":["fs"]},
   {"name":"audio", "path":"bin/audio", "privileges":["audio"], "after":["fs"]},
-  {"name":"usb", "path":"bin/usb", "privileges":["usb","privileged"], "after":["fs"]}
+  {"name":"usb", "path":"bin/usb", "privileges":["usb","privileged"], "after":["fs"]},
+  {"name":"bluetooth", "path":"bin/bluetooth", "privileges":["bluetooth"],
+   "requires":["bluetooth"], "after":["fs"]}
 ]
 ```
 
@@ -80,8 +83,10 @@ the normal build includes server programs automatically.
 
 The catalog supports up to eight services. Names are limited to 15 ASCII
 letters/digits/underscores/hyphens, and paths to `bin/<program>` (47 bytes).
-`privileges` selects `flash`, `network`, `audio`, `usb` or `privileged` capabilities.
+`privileges` selects `flash`, `network`, `bluetooth`, `audio`, `usb` or `privileged` capabilities.
 `requires:["network"]` waits for a successfully initialized network driver.
+`requires:["bluetooth"]` waits for the matched UART module; its service owns
+BCSP/HCI and binds to its own socket generation. See [Bluetooth](../hardware/BLUETOOTH.md).
 `after` names live service dependencies: they start first, and their dependents
 stop first if they go away. Missing dependencies, cycles, duplicate names,
 unknown capabilities and invalid paths fail catalog generation. The kernel

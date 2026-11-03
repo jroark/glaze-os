@@ -12,7 +12,7 @@ def build(entries):
     names = [e['name'] for e in entries]
     if len(set(names)) != len(names):
         raise ValueError('duplicate service name')
-    caps = {'privileged': 1, 'flash': 2, 'network': 4, 'audio': 8, 'usb': 64}
+    caps = {'privileged': 1, 'flash': 2, 'network': 4, 'audio': 8, 'usb': 64, 'bluetooth': 128}
     result = []
     for e in entries:
         name, path = e['name'], e['path']
@@ -24,11 +24,15 @@ def build(entries):
         for cap in e.get('privileges', []):
             privileges |= caps[cap]
         required = e.get('requires', [])
-        if any(r != 'network' for r in required):
+        if any(r not in ('network', 'bluetooth') for r in required):
             raise ValueError('unknown hardware requirement')
-        policy = int('network' in required) | (2 if e.get('required', False) else 0)
+        policy = int('network' in required) | (2 if e.get('required', False) else 0) | (4 if 'bluetooth' in required else 0)
         if privileges & 4 and not policy & 1:
             raise ValueError('network privileges require a network dependency')
+        if privileges & 128 and not policy & 4:
+            raise ValueError('bluetooth privileges require a bluetooth dependency')
+        if policy & 1 and policy & 4:
+            raise ValueError('one socket cannot hold network and Bluetooth cards')
         after = sum(1 << names.index(n) for n in set(e.get('after', [])))
         result.append(struct.pack('<16s48sIII', name.encode(), path.encode(), privileges, policy, after))
     done = 0

@@ -37,7 +37,7 @@ static void fails(void)
 }
 int main(int argc, char **argv)
 {
-    assert(argc == 4);
+    assert(argc >= 2);
     for (int arg = 1; arg < argc; arg++) {
         FILE *f = fopen(argv[arg], "rb"); assert(f);
         fseek(f, 0, SEEK_END); rom.size = (uint32_t)ftell(f); rewind(f);

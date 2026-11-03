@@ -1,6 +1,7 @@
 /* Settings: network, sounds, wallpaper, date & time, passcode, touch, icon buttons, about. */
 
 #include <glaze/audio.h>
+#include <glaze/bluetooth.h>
 #include <glaze/builtin_apps.h>
 #include <glaze/debug_net.h>
 #include <glaze/fs.h>
@@ -21,14 +22,14 @@
 #include <stdio.h>
 #include <string.h>
 
-enum view { V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
+enum view { V_BLUETOOTH, V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
             V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD, V_BATTERY,
             V_SLEEP, V_SLEEP_MODE, V_ICONS, V_ICON_ACTION };
 
 #define ICON_CHOICES    64      /* what V_ICON_ACTION lists */
 
 enum {
-    R_NONE, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
+    R_NONE, R_BLUETOOTH, R_BT_SCAN, R_WALLPAPER, R_DATETIME, R_ABOUT, R_24H,
     R_NTP, R_ZONE, R_FIELD_DOWN, R_FIELD_UP = R_FIELD_DOWN + 8,
     R_WALL0 = R_FIELD_UP + 8, R_PREV_CANCEL = R_WALL0 + 8, R_PREV_SET, R_BACK,
     R_NETWORK, R_PING, R_PASSCODE, R_PIN_ON, R_PIN_OFF, R_PIN_CHANGE, R_PIN_CANCEL,
@@ -70,6 +71,8 @@ static char wifi_password[65];
 static int wifi_cursor;
 static bool wifi_show, wifi_editing;
 static bool ce_boot;
+static struct bt_status bluetooth_status;
+static int bluetooth_error;
 static const char *debug_message;
 static const char *reboot_msg;
 static struct ui_keyboard wifi_keyboard;
@@ -366,7 +369,7 @@ static void draw_root(gfx_surface *s)
     if (cell_visible(s))
         root_card = card_key(&st);
     if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
-    root_scroll.content_h = (11 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
+    root_scroll.content_h = (12 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
     root_scroll.view_h = UI_H - UI_NAV_H;
     if (!root_scroll.dragging && !root_scroll.animating)
         root_scroll.offset = MAX(0, MIN(root_scroll.offset, ui_scroll_max(&root_scroll)));
@@ -391,7 +394,8 @@ static void draw_root(gfx_surface *s)
     /* Last, so the rows above keep their places (tests/ui/t_*.txt tap them). */
     char level[16];
     cell(s, 2, "Battery", cell_visible(s) ? battery_summary(level, sizeof(level)) : NULL, true, R_BATTERY);
-    cell(s, 3, "Icon Buttons", NULL, true, R_ICONS);
+    cell(s, 2, "Icon Buttons", NULL, true, R_ICONS);
+    cell(s, 3, "Bluetooth", NULL, true, R_BLUETOOTH);
     if (ce_boot) {
         section_gap();
         cell(s, 0, "Reboot to Windows CE", NULL, true, R_REBOOT_CE);
@@ -399,6 +403,56 @@ static void draw_root(gfx_surface *s)
 }
 
 static gfx_rect back_rect;
+
+static void bluetooth_address(char out[18], const uint8_t address[6])
+{
+    snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", address[5], address[4],
+             address[3], address[2], address[1], address[0]);
+}
+static void draw_bluetooth(gfx_surface *s)
+{
+    struct bt_status next;
+    int error = bt_status(&next);
+    if (error != GZ_EBUSY) bluetooth_status = next;
+    struct bt_status *st = &bluetooth_status;
+    const char *states[] = {"No Card", "Initializing", "Ready", "Scanning", "Failed"};
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Bluetooth", "Settings", &back_rect, 0); add_hit(back_rect, R_BACK);
+    unsigned count = MIN(st->count, BT_DEVICE_MAX);
+    int problem = bluetooth_error ? bluetooth_error : st->error;
+    zone_scroll.content_h = (4 + 2 * count + (problem != 0)) * UI_ROW_H + 64 + count * 12;
+    zone_scroll.view_h = UI_H - UI_NAV_H;
+    zone_scroll.offset = MAX(0, MIN(zone_scroll.offset, ui_scroll_max(&zone_scroll)));
+    section_y = UI_NAV_H + 12 - zone_scroll.offset;
+    gfx_surface body = *s;
+    gfx_rect_intersect(s->clip, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), &body.clip); s = &body;
+    cell(s, 1, "Controller", st->state <= BT_FAILED ? states[st->state] : "Unavailable", false, 0);
+    char address[18], version[28]; bluetooth_address(address, st->address);
+    cell(s, 2, "Address", st->state >= BT_READY ? address : "--", false, 0);
+    static const char *versions[] = {"1.0b", "1.1", "1.2", "2.0", "2.1", "3.0", "4.0", "4.1", "4.2", "5.0"};
+    if (st->lmp_version < ARRAY_SIZE(versions)) snprintf(version, sizeof(version), "%s", versions[st->lmp_version]);
+    else snprintf(version, sizeof(version), "%u", st->lmp_version);
+    cell(s, 2, "Version", st->state >= BT_READY ? version : "--", false, 0);
+    struct bt_serial_status serial = {0};
+    bool serial_active = !bt_serial_status(&serial) && serial.state > BT_SERIAL_IDLE && serial.state < BT_SERIAL_FAILED;
+    bool enabled = !serial_active && (st->state == BT_READY || st->state == BT_SCANNING);
+    cell(s, 3, serial_active ? "Serial Connection Active" : st->state == BT_SCANNING ? "Cancel Scan" : "Scan Devices", NULL, enabled, enabled ? R_BT_SCAN : 0);
+    if (problem) {
+        section_gap(); snprintf(version, sizeof(version), "%d", problem);
+        cell(s, 0, "Bluetooth Error", version, false, 0);
+    }
+    for (unsigned i = 0; i < count; i++) {
+        section_gap(); bluetooth_address(address, st->devices[i].address);
+        cell(s, 1, st->devices[i].name[0] ? st->devices[i].name : "Unnamed Device", NULL, false, 0);
+        cell(s, 3, address, NULL, false, 0);
+    }
+    if (!count) gfx_text_center(s, 0, section_y + 16, UI_W, ui_font(FONT_R12),
+        st->state == BT_SCANNING ? "Searching for classic Bluetooth devices" :
+        st->state == BT_READY ? "Make nearby devices discoverable." :
+        st->state == BT_STARTING ? "Initializing Bluetooth controller" :
+        st->state == BT_FAILED ? "Controller unavailable. Retrying..." : "Insert a supported Bluetooth card.", UI_TEXT_DETAIL, 255);
+}
 
 static void draw_input_method(gfx_surface *s)
 {
@@ -1308,6 +1362,7 @@ static void draw_timeout(gfx_surface *s)
 static void draw_view(gfx_surface *s, enum view v)
 {
     switch (v) {
+    case V_BLUETOOTH: draw_bluetooth(s); break;
     case V_ROOT: draw_root(s); break;
     case V_WALLPAPER: draw_wallpaper(s); break;
     case V_PREVIEW: draw_preview(s); break;
@@ -1983,6 +2038,13 @@ static void activate(int id)
     case R_PIN_CHANGE:
         pin_start(id);
         return;
+    case R_BLUETOOTH:
+        bluetooth_error = 0; memset(&bluetooth_status, 0, sizeof(bluetooth_status));
+        ui_scroll_reset(&zone_scroll, 0, UI_H - UI_NAV_H);
+        go(V_BLUETOOTH, true); return;
+    case R_BT_SCAN:
+        bluetooth_error = bluetooth_status.state == BT_SCANNING ? bt_cancel() : bt_scan();
+        redraw(); return;
     case R_NETWORK:
         ping_result[0] = 0;
         go(V_NETWORK, true);
@@ -2122,7 +2184,7 @@ static int hit_test(int x, int y);
 /* Scroll and tap list views; leave navbar events to the normal handler. */
 static bool zone_touch(const struct gz_input_event *ev)
 {
-    if ((view != V_ZONE && view != V_WIFI && view != V_ROOT && view != V_ICON_ACTION) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
+    if ((view != V_BLUETOOTH && view != V_ZONE && view != V_WIFI && view != V_ROOT && view != V_ICON_ACTION) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
                            ev->type != GZ_EV_TOUCH_UP))
         return false;
     if (ev->type == GZ_EV_TOUCH_DOWN)
@@ -2160,7 +2222,7 @@ static bool zone_touch(const struct gz_input_event *ev)
 static int hit_test(int x, int y)
 {
     if (view == V_ROOT && y < UI_NAV_H) return R_NONE;
-    if (view == V_WIFI && y < UI_NAV_H) return gfx_rect_contains(back_rect, x, y) ? R_BACK : R_NONE;
+    if ((view == V_BLUETOOTH || view == V_WIFI) && y < UI_NAV_H) return gfx_rect_contains(back_rect, x, y) ? R_BACK : R_NONE;
     /* Later entries (buttons inside cells) take priority. */
     for (int i = nhits - 1; i >= 0; i--) {
         if (gfx_rect_contains(hits[i].r, x, y))
@@ -2179,16 +2241,17 @@ int main(void)
 
     for (;;) {
         struct gz_input_event ev;
-        int timeout = view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI || view == V_DEBUG ||
+        int timeout = view == V_BLUETOOTH || view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI || view == V_DEBUG ||
                       view == V_BATTERY ? 1000
                     : view == V_ROOT ? 2000 : -1;
         if (view == V_TOUCH_TEST)
             timeout = 250;
-        if ((view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION) && zone_scroll.animating)
+        if ((view == V_BLUETOOTH || view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION) && zone_scroll.animating)
             timeout = 16;
         if (view == V_ROOT && root_scroll.animating)
             timeout = 16;
         if (!ui_next_event(&ev, timeout)) {
+            if (view == V_BLUETOOTH) { ui_scroll_step(&zone_scroll); redraw(); continue; }
             if (view == V_TOUCH_TEST) {
                 touch_test_tick();
                 continue;
@@ -2212,7 +2275,7 @@ int main(void)
                 int rv = net_wifi_status(&wireless_status);
                 if (rv) { memset(&wireless_status, 0, sizeof(wireless_status)); wifi_error = rv; }
                 redraw_rect(zone_area());
-            } else if (view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION) {
+            } else if (view == V_BLUETOOTH || view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION) {
                 int old_offset = zone_scroll.offset;
                 ui_scroll_step(&zone_scroll);
                 if (zone_scroll.offset != old_offset)

@@ -118,6 +118,14 @@ void cf_debug(uint32_t out[8]);
 /* cf.c: CompactFlash ATA card for the file server. */
 void pcmcia_cold_init(bool force);
 void cf_init(void);
+void bt_insert(void);
+void bt_removed(void);
+void bt_poll(void);
+bool bt_ready(void);
+bool bt_present(void);
+uint32_t bt_generation(void);
+int sys_bt_io(struct proc *, uint32_t, uint32_t, uint32_t);
+int sys_bt_card_info(struct proc *, uint32_t, uint32_t);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);

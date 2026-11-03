@@ -38,6 +38,14 @@ $(OUT)/servers/%.o: servers/%.c
 
 # Bootstrap services are independent of the dynamic linker and file server.
 STATIC_PROGS := fs net
+# Keep the default NAND romfs within its fixed 4.75 MiB slot as Settings grows.
+PROG_CFLAGS_settings += -Os
+PROG_CFLAGS_bluetooth += -Os $(if $(BT_DEBUG),-DBT_DEBUG) $(if $(BT_SERIAL_DEBUG),-DBT_SERIAL_DEBUG)
+PROG_CFLAGS_usb += -Os
+PROG_CFLAGS_springboard += -Os
+PROG_CFLAGS_files += -Os
+$(OUT)/dyn/servers/bluetooth/main.o $(OUT)/dyn/servers/bluetooth/serial.o: FORCE
+$(OUT)/dyn/apps/settings/main.o $(patsubst %.c,$(OUT)/dyn/%.o,$(wildcard servers/bluetooth/*.c servers/usb/*.c servers/springboard/*.c apps/files/*.c)): mk/programs.mk
 
 define STATIC_template
 $(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/lib/crt0.o $(USER_LIBS) $$(PROG_STATIC_DEPS_$(notdir $(1))) lib/user.lds

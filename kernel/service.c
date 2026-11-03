@@ -18,20 +18,26 @@ static struct {
 } states[GZ_SERVICE_MAX];
 static uint32_t order[GZ_SERVICE_MAX];
 
+static uint32_t hardware_generation(const struct gz_service_spec *s)
+{
+    return s->policy & GZ_SERVICE_BLUETOOTH ? bt_generation() : net_generation();
+}
 static bool alive(unsigned i) { return proc_by_pid(states[i].pid) != NULL; }
 
 static void reconcile(void)
 {
     usbnet_collect();
-    uint32_t wanted = 0, healthy = 0, generation = net_generation();
+    uint32_t wanted = 0, healthy = 0;
     for (unsigned n = 0; n < manifest.count; n++) {
         unsigned i = order[n];
         const struct gz_service_spec *s = &manifest.entries[i];
         if (states[i].enabled && (!(s->policy & GZ_SERVICE_NETWORK) || net_up()) &&
+            (!(s->policy & GZ_SERVICE_BLUETOOTH) || bt_present()) &&
             (s->after & wanted) == s->after)
             wanted |= 1u << i;
         if ((wanted & (1u << i)) && alive(i) && (s->after & healthy) == s->after &&
-            (!(s->policy & GZ_SERVICE_NETWORK) || states[i].generation == generation))
+            (!(s->policy & (GZ_SERVICE_NETWORK | GZ_SERVICE_BLUETOOTH)) ||
+             states[i].generation == hardware_generation(s)))
             healthy |= 1u << i;
     }
     /* Stop dependents first, including a process for the previous card. */
@@ -55,12 +61,13 @@ static void reconcile(void)
             (s->after & running) == s->after) {
             struct proc *p = proc_spawn(s->path, 0, s->privileges);
             if (p) {
-                p->net_generation = generation;
+                p->net_generation = net_generation();
+                p->bt_generation = bt_generation();
                 states[i].pid = p->pid;
                 states[i].starts++;
                 states[i].retry = time_us() + 1000000u;
                 states[i].error = 0;
-                states[i].generation = generation;
+                states[i].generation = hardware_generation(s);
                 kprintf("service: started %s pid %d\n", s->name, p->pid);
             } else {
                 states[i].error = GZ_ENOMEM;
@@ -96,8 +103,9 @@ void services_init(void)
         struct gz_service_spec *s = &manifest.entries[i];
         if (!s->name[0] || !memchr(s->name, 0, sizeof(s->name)) ||
             !memchr(s->path, 0, sizeof(s->path)) || strncmp(s->path, "bin/", 4) ||
-            (s->privileges & ~(PROC_PRIVILEGED | PROC_FLASH | PROC_NET | PROC_AUDIO | PROC_USB)) ||
-            (s->policy & ~(GZ_SERVICE_NETWORK | GZ_SERVICE_REQUIRED)) || (s->after & ~all) ||
+            (s->privileges & ~(PROC_PRIVILEGED | PROC_FLASH | PROC_NET | PROC_AUDIO | PROC_USB | PROC_BLUETOOTH)) ||
+            (s->policy & ~(GZ_SERVICE_NETWORK | GZ_SERVICE_REQUIRED | GZ_SERVICE_BLUETOOTH)) || (s->after & ~all) ||
+            ((s->privileges & PROC_BLUETOOTH) && !(s->policy & GZ_SERVICE_BLUETOOTH)) ||
             ((s->privileges & PROC_NET) && !(s->policy & GZ_SERVICE_NETWORK)))
             panic("invalid service definition");
         for (unsigned j = 0; j < i; j++)

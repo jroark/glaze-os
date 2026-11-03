@@ -491,7 +491,7 @@ store-worker-test: $(O)/libwolfssl.a
 module-test: ../tests/native/module.c ../kernel/module.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/module-test ../tests/native/module.c
-	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko
+	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko ../out/drivers/btuart.ko
 
 .PHONY: service-test
 service-test: ../tests/native/service.c ../kernel/service.c
@@ -629,3 +629,28 @@ installer-ui-test: ../tests/native/installer_ui.c ../servers/springboard/install
 	../out/host/installer-ui-test
 .PHONY: installer-ui-test
 
+
+bluetooth-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth.c ../servers/bluetooth/bcsp.c ../servers/bluetooth/controller.c ../servers/bluetooth/serial.c -o ../out/host/bluetooth-test
+	../out/host/bluetooth-test
+.PHONY: bluetooth-test
+
+bluetooth-driver-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_driver.c -o ../out/host/bluetooth-driver-test
+	../out/host/bluetooth-driver-test
+.PHONY: bluetooth-driver-test
+
+bt-echo:
+	@mkdir -p ../out/host/GlazeBluetoothEcho.app/Contents/MacOS
+	clang -fobjc-arc -O2 -Wall -Wextra -framework Foundation -framework IOBluetooth ../tools/bt_echo/main.m -o ../out/host/GlazeBluetoothEcho.app/Contents/MacOS/GlazeBluetoothEcho
+	cp ../tools/bt_echo/Info.plist ../out/host/GlazeBluetoothEcho.app/Contents/Info.plist
+	codesign --force --sign - ../out/host/GlazeBluetoothEcho.app
+.PHONY: bt-echo
+
+bluetooth-serial-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_serial.c -o ../out/host/bluetooth-serial-test
+	../out/host/bluetooth-serial-test
+.PHONY: bluetooth-serial-test
