@@ -15,6 +15,8 @@ HARNESS = r'''
 #include <glaze/fs.h>
 #include <glaze/pkg.h>
 #include <glaze/ota.h>
+static size_t fixture_strlcpy(char *d,const char *s,size_t n) { size_t len=strlen(s);if(n){size_t copy=len<n-1?len:n-1;memcpy(d,s,copy);d[copy]=0;}return len; }
+#define strlcpy fixture_strlcpy
 #define main companion_main
 #define dlsym fixture_symbol
 #include "packages/maintenance/main.c"
@@ -23,6 +25,7 @@ static const char *scenario;
 static unsigned tick, request;
 int gz_ota_status(struct gz_ota_status *s) { memset(s,0,sizeof(*s)); s->flags=1; strcpy(s->version,"1.0"); return 0; }
 int gz_power_status(struct gz_power_status *s) { memset(s,0,sizeof(*s)); s->flags=GZ_POWER_AC; if(!strcmp(scenario,"low-power"))s->flags=0; return 0; }
+const void *gz_romfs_map(const char *p,uint32_t *size) { *size=1;return strcmp(p,"bin/calculator")?(const void *)1:NULL; }
 uint32_t gz_time_ms(void) { return tick++; }
 void gz_sleep_ms(uint32_t n) { tick+=n; }
 void ui_init(int n) { (void)n; }
@@ -31,6 +34,7 @@ int fs_statfs(struct fs_info *s) { memset(s,0,sizeof(*s)); s->total=6000000; ret
 int fs_read_file(const char *p,void *b,uint32_t n) {
     (void)p; char text[96];
     const char *action=request++ ? "quit" : (!strncmp(scenario,"ota",3) || !strcmp(scenario,"low-power") || !strcmp(scenario,"unsupported"))?"update":"install";
+    if(request==1 && !strncmp(scenario,"uninstall:",10))action=scenario;
     snprintf(text,sizeof(text),"0123456789abcdef0123456789abcdef %s",action);
     assert(strlen(text)<n);strcpy(b,text); return strlen(text);
 }
@@ -39,10 +43,10 @@ int fs_remove(const char *p) { (void)p;return 0; }
 int fs_rename(const char *a,const char *b) { (void)a;(void)b;return 0; }
 int pkg_list(const char *p,void (*fn)(const char *,const struct pkg_info *,void *),void *arg) { (void)p;(void)fn;(void)arg;return 0; }
 int pkg_read_info(const char *p,struct pkg_info *i) { (void)p;memset(i,0,sizeof(*i));strcpy(i->id,"test");strcpy(i->version,"1.1");return 0; }
-int pkg_find(const char *id,char *bundle) { (void)id;strcpy(bundle,!strcmp(scenario,"card")?"/Card/Applications/test.app":"/Applications/test.app"); return !strcmp(scenario,"new")?GZ_ENOENT:0; }
-int pkg_bundle_info(const char *p,struct pkg_info *i) { (void)p;memset(i,0,sizeof(*i));strcpy(i->version,!strcmp(scenario,"skip")?"1.2":"1.0");return 0; }
-int pkg_install(const char *p,const char *root,char *bundle) { (void)p;(void)bundle;printf("INSTALL:%s\n",root);return !strcmp(scenario,"full")?GZ_ENOSPC:0; }
-int pkg_uninstall(const char *p) { (void)p;return 0; }
+int pkg_find(const char *id,char bundle[PKG_BUNDLE_MAX]) { (void)id;strcpy(bundle,!strcmp(scenario,"card")?"/Card/Applications/test.app":"/Applications/test.app"); return !strcmp(scenario,"new")?GZ_ENOENT:0; }
+int pkg_bundle_info(const char *p,struct pkg_info *i) { (void)p;memset(i,0,sizeof(*i));strcpy(i->id,"test");strcpy(i->version,!strcmp(scenario,"skip")?"1.2":"1.0");return 0; }
+int pkg_install(const char *p,const char *root,char bundle[PKG_BUNDLE_MAX]) { (void)p;(void)bundle;printf("INSTALL:%s\n",root);return !strcmp(scenario,"full")?GZ_ENOSPC:0; }
+int pkg_uninstall(const char *p) { printf("REMOVE:%s\n",p);return 0; }
 static int begin_fixture(const char *p) { assert(!strcmp(p,"/Library/Updates/installer.gzu"));puts("BEGIN");return !strcmp(scenario,"ota-bad")?GZ_EINVAL:8192; }
 static int step_fixture(void) { puts("STEP");return 8192; }
 static int arm_fixture(void) { puts("ARM");fflush(stdout);exit(0); }
@@ -68,8 +72,10 @@ int gz_power_status(struct gz_power_status *);
 int gz_ota_status(struct gz_ota_status *);
 uint32_t gz_time_ms(void);
 void gz_sleep_ms(uint32_t);
+const void *gz_romfs_map(const char *,uint32_t *);
 ''')
-        (folder / 'glaze/ui.h').write_text('''#define SB_STATUS_GRAY 0
+        (folder / 'dlfcn.h').write_text('void *dlsym(void *, const char *);\n')
+        (folder / 'glaze/ui.h').write_text('''#include <glaze/sb.h>
 #define gfx_fill(...) ((void)0)
 #define ui_draw_navbar(...) ((void)0)
 #define gfx_text_center(a,b,c,d,e,message,f,g) ((void)(message))
@@ -122,6 +128,24 @@ int ui_next_event(struct gz_input_event *,int);
         self.assertLess(lines.index('BEGIN'), lines.index('STEP'))
         self.assertLess(lines.index('STEP'), lines.index('ARM'))
         self.assertEqual(replies[0]['phase'],'arming')
+
+    def test_inventory_reports_builtin_and_firmware_presence(self):
+        _, replies = self.run_case('new')
+        self.assertEqual(replies[0]['protocol'], 2)
+        self.assertIn('files', replies[0]['builtins'])
+        self.assertNotIn('calculator', replies[0]['builtins'])
+        self.assertTrue(replies[0]['wl54cf'])
+
+    def test_uninstall_validated_bundle(self):
+        lines, replies = self.run_case('uninstall:test')
+        self.assertIn('REMOVE:/Applications/test.app', lines)
+        self.assertEqual(replies[0]['code'], 0)
+
+    def test_uninstall_rejects_paths_and_system_ids(self):
+        for ident in ('files', 'settings', 'net', 'maintenance', '../test', '/Applications/test.app', 'Test'):
+            lines, replies = self.run_case('uninstall:' + ident)
+            self.assertLess(replies[0]['code'], 0)
+            self.assertNotIn('REMOVE:/Applications/test.app', lines)
 
 if __name__ == '__main__':
     unittest.main()
