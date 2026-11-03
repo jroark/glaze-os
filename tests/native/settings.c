@@ -7,7 +7,8 @@
 
 static uint32_t bluetooth_kind,bluetooth_serial_mock_state;
 static int bluetooth_mock_error, bluetooth_mock_state=-1;
-static unsigned bluetooth_mock_count, bluetooth_scans, bluetooth_cancels;
+static unsigned bluetooth_mock_count, bluetooth_scans, bluetooth_cancels, bluetooth_disconnects, bluetooth_connects;
+static int bluetooth_connect_error, bluetooth_disconnect_error;
 int gz_bt_card_info(struct bt_card_info *out, uint32_t size)
 {
     if (size != sizeof(*out)) return GZ_EINVAL;
@@ -26,7 +27,14 @@ int bt_status(struct bt_status *out)
     }
     return bluetooth_mock_error;
 }
-int bt_serial_status(struct bt_serial_status *out) { memset(out,0,sizeof(*out));out->state=bluetooth_serial_mock_state;return 0; }
+int bt_serial_status(struct bt_serial_status *out) { memset(out,0,sizeof(*out));out->state=bluetooth_serial_mock_state;out->id=9;out->peer[0]=0x93;out->encrypted=out->authenticated=out->state==BT_SERIAL_CONNECTED;return 0; }
+int bt_serial_disconnect_current(void) { bluetooth_disconnects++;if(!bluetooth_disconnect_error)bluetooth_serial_mock_state=BT_SERIAL_CLOSING;return bluetooth_disconnect_error; }
+int bt_serial_connect_channel(const uint8_t peer[6],const void *pin,unsigned n,unsigned channel,struct bt_serial_handle *handle)
+{
+    if(!n || n>16 || channel>30)return GZ_EINVAL;
+    bluetooth_connects++;if(bluetooth_connect_error)return bluetooth_connect_error;
+    handle->port=23;handle->id=10;bluetooth_serial_mock_state=BT_SERIAL_CONNECTING;return 0;
+}
 int bt_scan(void) { bluetooth_scans++; bluetooth_mock_state=BT_SCANNING; return 0; }
 int bt_cancel(void) { bluetooth_cancels++; bluetooth_mock_state=BT_READY; return 0; }
 struct ui_app ui;
@@ -650,12 +658,38 @@ int main(void)
     }
     bluetooth_mock_state=BT_READY;bluetooth_serial_mock_state=BT_SERIAL_CONNECTED;redraw();compare_full();
     require(gfx_rect_empty(hit_rect(R_BT_SCAN)),"Bluetooth scan enabled during serial connection");
+    zone_scroll.offset=0;redraw();compare_full();
+    require(!gfx_rect_empty(hit_rect(R_BT_DISCONNECT)),"Connected Bluetooth peer lacks Disconnect");
+    host_write_bmp("../out/host/settings-bluetooth-connected.bmp", &ui.surf);
+    activate(R_BT_DISCONNECT);
+    require(bluetooth_disconnects==1 && bluetooth_serial_mock_state==BT_SERIAL_CLOSING,"Disconnect did not close current session");
+    require(gfx_rect_empty(hit_rect(R_BT_DISCONNECT)),"Disconnect can be repeated while closing");
+    bluetooth_serial_mock_state=BT_SERIAL_PAIRING;redraw();
+    require(!gfx_rect_empty(hit_rect(R_BT_DISCONNECT)),"Pending connection cannot be cancelled");
+    bluetooth_disconnect_error=GZ_EDEAD;activate(R_BT_DISCONNECT);
+    require(bluetooth_error==GZ_EDEAD,"Disconnect failure was hidden");
+    bluetooth_disconnect_error=0;bluetooth_error=0;zone_scroll.offset=0;
     bluetooth_serial_mock_state=BT_SERIAL_IDLE;
     bluetooth_mock_state=BT_READY; redraw(); activate(R_BT_SCAN);
     require(bluetooth_scans==1 && bluetooth_status.state==BT_SCANNING,"Bluetooth scan did not start");
     activate(R_BT_SCAN); require(bluetooth_cancels==1 && bluetooth_status.state==BT_READY,"Bluetooth scan did not cancel");
     bluetooth_mock_count=BT_DEVICE_MAX; redraw(); compare_full();
     host_write_bmp("../out/host/settings-bluetooth.bmp", &ui.surf);
+    require(!gfx_rect_empty(hit_rect(R_BT_DEVICE0)),"Discovered device cannot be selected");
+    activate(R_BT_DEVICE0);require(view==V_BT_PAIR,"Device did not open pairing form");
+    redraw();compare_full();activate(R_BT_CONNECT);
+    require(bluetooth_error==GZ_EINVAL && !bluetooth_connects,"Empty PIN was accepted");
+    strcpy(bluetooth_pin,"123456");bluetooth_cursor=6;activate(R_BT_PIN);redraw();compare_full();
+    host_write_bmp("../out/host/settings-bluetooth-pin.bmp", &ui.surf);
+    activate(R_BT_DONE);activate(R_BT_CHANNEL_UP);require(bluetooth_channel==1,"Cannot select explicit RFCOMM channel");
+    bluetooth_connect_error=GZ_EBUSY;activate(R_BT_CONNECT);
+    require(view==V_BT_PAIR && bluetooth_error==GZ_EBUSY,"Connect failure was hidden");
+    bluetooth_connect_error=0;bluetooth_error=0;redraw();
+    host_write_bmp("../out/host/settings-bluetooth-pair.bmp", &ui.surf);
+    activate(R_BACK);require(!bluetooth_pin[0] && view==V_BLUETOOTH,"Back retained PIN or missed Bluetooth page");
+    activate(R_BT_DEVICE0);strcpy(bluetooth_pin,"123456");activate(R_BT_CONNECT);
+    require(view==V_BLUETOOTH && !bluetooth_pin[0] && bluetooth_serial_mock_state==BT_SERIAL_CONNECTING,"Serial connect did not clear PIN or show progress");
+    bluetooth_serial_mock_state=BT_SERIAL_IDLE;redraw();
     zone_scroll.offset=ui_scroll_max(&zone_scroll); require(zone_scroll.offset>0,"Bluetooth results cannot scroll");
     redraw(); compare_full(); require(!gfx_rect_empty(hit_rect(R_BACK)),"Bluetooth scrolling lost Back");
     bluetooth_mock_count=0; bluetooth_mock_state=-1; zone_scroll.offset=0;

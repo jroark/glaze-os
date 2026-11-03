@@ -82,7 +82,10 @@ struct sb_clock {
 
 struct sb_view {
     struct sb_clock clk;
-    bool card_mounted;         /* mounted CF storage or an initialized network card */
+    bool card_mounted;         /* mounted CF storage only */
+    unsigned network_kind;     /* GZ_NET_*, including the USB network tunnel */
+    bool network_connected;
+    bool bluetooth_present, bluetooth_connected;
     unsigned debugger;        /* GU_DEBUG_*; hidden when disconnected */
     int wallpaper;              /* index into sb_wallpapers */
     int knob_x;                 /* 0..KNOB_TRAVEL */
@@ -116,7 +119,9 @@ bool sb_has_program(const char *path);
 void sb_set_icon(int app, const gfx_image *img);
 void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt);
 void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool padlock);
-gfx_rect sb_card_icon_rect(const struct sb_view *v);
+enum { SB_ICON_NONE, SB_ICON_STORAGE, SB_ICON_NETWORK, SB_ICON_BLUETOOTH, SB_ICON_COUNT };
+bool sb_update_connectivity(struct sb_view *v);
+gfx_rect sb_status_icon_rect(const struct sb_view *v, unsigned icon);
 struct sb_card_details {
     char title[32];
     char lines[8][48];

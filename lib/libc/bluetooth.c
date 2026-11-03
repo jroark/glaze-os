@@ -72,3 +72,13 @@ int bt_serial_read(struct bt_serial_handle handle,void *p,unsigned n)
 }
 int bt_serial_disconnect(struct bt_serial_handle handle)
 {struct gz_msg m={{0}},r={{0}};m.w[1]=handle.id;return call_port(handle.port,BT_SERIAL_CLOSE,&m,&r);}
+int bt_serial_disconnect_current(void)
+{
+    int port=gz_port_lookup(BT_PORT_NAME);
+    struct gz_msg m={{0}},r={{0}};
+    int error=call_port(port,BT_SERIAL_STATUS,&m,&r);
+    if(error)return error;
+    struct bt_serial_status status;memcpy(&status,&r.w[1],sizeof(status));
+    if(status.state==BT_SERIAL_IDLE)return 0;
+    return bt_serial_disconnect((struct bt_serial_handle){port,status.id});
+}

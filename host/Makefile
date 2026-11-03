@@ -654,3 +654,15 @@ bluetooth-serial-test:
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_serial.c -o ../out/host/bluetooth-serial-test
 	../out/host/bluetooth-serial-test
 .PHONY: bluetooth-serial-test
+
+bluetooth-client-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_client.c -o ../out/host/bluetooth-client-test
+	../out/host/bluetooth-client-test
+.PHONY: bluetooth-client-test
+
+connectivity-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/connectivity.c hostres.c $(GFX) $(SB) -o ../out/host/connectivity-test
+	../out/host/connectivity-test
+.PHONY: connectivity-test

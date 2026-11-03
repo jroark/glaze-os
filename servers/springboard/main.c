@@ -14,6 +14,7 @@
 #include "power.h"
 
 #include <glaze/audio.h>
+#include <glaze/bluetooth.h>
 #include <glaze/fs.h>
 #include <glaze/pkg.h>
 #include <glaze/net.h>
@@ -150,14 +151,13 @@ static struct {
 } alert = { .app = -1, .pressed = -1 };
 static uint32_t down_ms, jiggle_next, card_poll_next;
 static uint32_t card_status_next;
-static bool network_card;
-static uint16_t network_kind;           /* GZ_NET_*, for the card details */
 static struct {
     bool open, touching, pressed;
+    unsigned icon;
     gfx_rect button;
     struct sb_card_details details;
 } card_dialog;
-static bool card_icon_touch;
+static unsigned card_icon_touch;
 
 /* Passcode entry. Wrong tries are counted until the right one, in RAM. */
 static char pin[UI_PASSCODE_LEN + 1];
@@ -256,19 +256,7 @@ bool sb_has_program(const char *path)
 
 static bool update_card_status(void)
 {
-    struct fs_stat st;
-    struct net_status net;
-
-    /* A network card can be inserted or pulled too (cf.c's pcmcia_poll);
-     * net_status is answered at once, without this process's session. */
-    /* USB networking does not occupy the card socket: keep an installed
-     * storage card's Files shortcut and card dialog available. */
-    network_card = net_status(&net) == 0 && net.state != NET_NO_CARD && net.kind != GZ_NET_USB;
-    network_kind = network_card ? net.kind : GZ_NET_NONE;
-    bool mounted = network_card || fs_stat("/Card", &st) == 0;
-    bool changed = mounted != view.card_mounted;
-
-    view.card_mounted = mounted;
+    bool changed = sb_update_connectivity(&view);
     card_status_next = now_ms() + CARD_POLL_MS;
     return changed;
 }
@@ -476,7 +464,25 @@ static void show_card_details(void)
     char (*line)[48] = d->lines;
 
     memset(d, 0, sizeof(*d));
-    if (network_card) {
+    if (card_dialog.icon == SB_ICON_BLUETOOTH) {
+        struct bt_status controller;
+        struct bt_serial_status serial;
+        strlcpy(d->title, "Bluetooth", sizeof(d->title));
+        int error = bt_status(&controller);
+        strlcpy(line[0], controller.state == BT_READY ? "Controller ready" : controller.state == BT_SCANNING ? "Scanning for devices" :
+                controller.state == BT_FAILED ? "Controller failed" : "Initializing controller", sizeof(line[0]));
+        if (!error) snprintf(line[1], sizeof(line[1]), "Address: %02X:%02X:%02X:%02X:%02X:%02X", controller.address[5], controller.address[4], controller.address[3], controller.address[2], controller.address[1], controller.address[0]);
+        else strlcpy(line[1], "Controller details unavailable", sizeof(line[1]));
+        d->num_lines = 3;
+        if (!bt_serial_status(&serial) && serial.state != BT_SERIAL_IDLE) {
+            static const char *const names[] = {"Disconnected", "Connecting", "Pairing", "Encrypting", "Finding serial service", "Opening serial port", "Connected", "Disconnecting", "Connection failed"};
+            strlcpy(line[2], serial.state < ARRAY_SIZE(names) ? names[serial.state] : "Unavailable", sizeof(line[2]));
+            snprintf(line[3], sizeof(line[3]), "Peer: %02X:%02X:%02X:%02X:%02X:%02X", serial.peer[5], serial.peer[4], serial.peer[3], serial.peer[2], serial.peer[1], serial.peer[0]);
+            strlcpy(line[4], serial.encrypted ? "Encrypted serial connection" : "Serial connection not encrypted", sizeof(line[4]));
+            d->num_lines = 6;
+        }
+        strlcpy(line[d->num_lines-1], "Manage in Settings > Bluetooth", sizeof(line[0]));
+    } else if (card_dialog.icon == SB_ICON_NETWORK) {
         struct net_status st;
         strlcpy(d->title, "Network Card", sizeof(d->title));
         if (net_status(&st) < 0) {
@@ -486,8 +492,8 @@ static void show_card_details(void)
             const char *status = st.state == NET_UP ? "Connected (DHCP)"
                                : st.state == NET_UP_STATIC ? "Connected (static)"
                                : st.state == NET_CONFIGURING ? "Configuring address..." : "Not connected";
-            strlcpy(line[0], network_kind == GZ_NET_XI825 ? "XI-825 Wi-Fi"
-                             : network_kind == GZ_NET_WL54CF ? "WL54-CF Wi-Fi" : "NE2000 Ethernet",
+            strlcpy(line[0], st.kind == GZ_NET_XI825 ? "XI-825 Wi-Fi"
+                             : st.kind == GZ_NET_WL54CF ? "WL54-CF Wi-Fi" : st.kind == GZ_NET_USB ? "USB Network" : "NE2000 Ethernet",
                     sizeof(line[0]));
             strlcpy(line[1], status, sizeof(line[1]));
             snprintf(line[2], sizeof(line[2]), "MAC: %02X:%02X:%02X:%02X:%02X:%02X",
@@ -556,18 +562,23 @@ static bool card_details_event(const struct gz_input_event *e)
         }
         return true;
     }
-    bool hit = gfx_rect_contains(sb_card_icon_rect(&view), e->x, e->y);
+    unsigned icon = SB_ICON_NONE;
+    for (unsigned i = SB_ICON_STORAGE; i < SB_ICON_COUNT; i++)
+        if (gfx_rect_contains(sb_status_icon_rect(&view, i), e->x, e->y)) { icon = i; break; }
+    bool hit = icon != SB_ICON_NONE && (!card_icon_touch || icon == card_icon_touch);
     bool stable = !anim.active && !touching && !dragging_knob && !alert.open &&
                   (state == ST_LOCK || state == ST_PASSCODE || state == ST_HOME ||
                    (state == ST_APP && !front_fullscreen()));
-    if (e->type == GZ_EV_TOUCH_DOWN && stable && view.card_mounted && hit)
-        card_icon_touch = true;
+    if (e->type == GZ_EV_TOUCH_DOWN && stable && hit)
+        card_icon_touch = icon;
     if (!card_icon_touch)
         return false;
     if (e->type == GZ_EV_TOUCH_UP) {
+        unsigned touched = card_icon_touch;
         card_icon_touch = false;
-        if (stable && view.card_mounted && hit) {
+        if (stable && hit) {
             audio_sound(AUDIO_SND_TAP);
+            card_dialog.icon = touched;
             show_card_details();
         }
     }
@@ -1813,7 +1824,8 @@ static void handle_input(void)
                 sb_hardicon_input(&icon_touch, e, 0, 0, &unused);
                 if (state == ST_APP) send_event(e);
                 idle.touch_down = idle.swallow_touch = false;
-                touching = dragging_knob = swiping = banner_touch = card_icon_touch = false;
+                touching = dragging_knob = swiping = banner_touch = false;
+                card_icon_touch = SB_ICON_NONE;
                 view.pressed = -1; view.knob_x = 0;
                 if (state == ST_LOCK) render_lock();
                 else if (state == ST_HOME) render_home();
@@ -2607,11 +2619,11 @@ int main(void)
         bool card_changed = false;
         if (!anim.active && (int)(now_ms() - card_status_next) >= 0)
             card_changed = update_card_status();
-        if (card_changed && card_dialog.open && view.card_mounted)
+        if (card_changed && card_dialog.open && !gfx_rect_empty(sb_status_icon_rect(&view, card_dialog.icon)))
             close_card_dialog();
-        if (card_changed && card_dialog.open && !view.card_mounted) {
+        if (card_changed && card_dialog.open && gfx_rect_empty(sb_status_icon_rect(&view, card_dialog.icon))) {
             struct sb_card_details *d = &card_dialog.details;
-            strlcpy(d->lines[0], "Card is no longer mounted.", sizeof(d->lines[0]));
+            strlcpy(d->lines[0], "Device removed or unavailable.", sizeof(d->lines[0]));
             d->num_lines = 1;
             card_dialog.touching = card_dialog.pressed = false;
             render_card_dialog();

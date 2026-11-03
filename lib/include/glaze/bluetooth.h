@@ -37,6 +37,9 @@ int bt_serial_status(struct bt_serial_status *);
 int bt_serial_write(struct bt_serial_handle,const void *,unsigned);
 int bt_serial_read(struct bt_serial_handle,void *,unsigned);
 int bt_serial_disconnect(struct bt_serial_handle);
+/* Close the session observed on one service port. A replacement session or
+ * restarted service cannot be closed through the captured identifier. */
+int bt_serial_disconnect_current(void);
 struct bt_device {
     uint8_t address[6], device_class[3], repetition;
     uint16_t clock_offset;

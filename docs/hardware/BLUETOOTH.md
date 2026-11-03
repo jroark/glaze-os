@@ -3,10 +3,14 @@
 Glaze supports controller initialization and classic Bluetooth discovery with
 the SMART/Brainboxes CF card carrying FCC ID NXXBL-565. Settings → Bluetooth
 shows controller status, address/version, Scan/Cancel, and up to 16 devices.
+Select a discovered device to connect its serial service with a 1–16 character
+PIN and either automatic SDP selection or an explicit channel. Active sessions
+show their peer, connection progress and security, with Disconnect or Cancel
+Connection available even for sessions opened over USB.
 Names are resolved sequentially after inquiry; unavailable names retain their
 addresses. The service also supports one outbound, legacy-PIN-authenticated,
 encrypted Serial Port Profile connection through the SDK and USB diagnostics.
-HID, file transfer, audio, BLE, persistent Glaze bonds and a serial Settings UI
+HID, file transfer, audio, BLE and persistent Glaze bonds
 are outside this version.
 
 ## Verified hardware
@@ -56,6 +60,16 @@ return an asynchronous, port-bound handle used by `bt_serial_write`,
 controller error, authentication/encryption, and byte counters. Reads/writes
 transfer up to 48 bytes per IPC request. There is one active serial session;
 discovery cannot interrupt it. Obsolete handles cannot target a restarted service.
+`bt_serial_disconnect_current` observes the current session and closes it using
+the same service port and session identifier, so Settings can manage another
+client's connection without closing a replacement session.
+
+The status bar reserves the CF card glyph for mounted storage. Separate Wi-Fi,
+wired-network and Bluetooth glyphs indicate their own transports; Bluetooth is
+blue while the serial connection is open and muted while the card is available.
+Each icon opens its own details, and USB networking can appear beside a card's
+storage or Bluetooth icon. Battery percentage and debugger status retain their
+own space.
 
 PINs and a single peer's link key are kept only in service RAM; changing peers
 clears the cached key. Restarting Glaze or the Bluetooth service loses the bond.
@@ -70,6 +84,9 @@ exercise SDP continuation, multiple-service selection, small ACL fragments,
 credit starvation/replenishment, repeated security events, malformed records,
 FIFO bounds, disconnect and failure recovery. See
 [the Mac echo helper](../../tools/bt_echo/README.md) for reproducible commands.
+The expanded Settings page was also tested on the BE-300: Disconnect closed a
+USB-opened, encrypted session, the Mac reported disconnection, and the service
+returned to Idle while the Bluetooth glyph changed from blue to muted.
 
 ## Driver and service
 
@@ -130,7 +147,7 @@ packet tracing in diagnostic builds; normal builds omit it.
 ## Validation
 
 ```sh
-make -C host bluetooth-test bluetooth-serial-test bluetooth-driver-test cf-boot-test settings-test \
+make -C host bluetooth-test bluetooth-serial-test bluetooth-driver-test bluetooth-client-test connectivity-test cf-boot-test settings-test \
     service-test net-driver-test boot-init-test
 python3 tests/services_catalog.py
 ./build.sh all glazeboot GB_APPS=all HWDUMP=1
@@ -140,7 +157,8 @@ Native tests cover recorded controller traffic, fragmented frames, CRC/checksum
 rejection, duplicates, sequence wrap, retransmissions, partial writes, link reset,
 HCI initialization, credit starvation, inquiry, deduplication/result caps, names,
 name timeout/cancel, inquiry cancel, module validation, copy faults, generations,
-removal/resume, service restart/dependencies, and Settings states/results/scrolling.
+removal/resume, service restart/dependencies, Settings pairing/disconnect/error
+handling and scrolling, and transport-specific icon presence/layout.
 The existing module-loader native harness additionally needs a host supporting
 its low 32-bit mappings; those mappings are unavailable on this Mac/container.
 The real BE-300 successfully loaded and executed the new module, and the
