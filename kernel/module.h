@@ -12,6 +12,18 @@ void module_unload(struct module *module);
 bool module_executable(const struct module *module, const void *p);
 bool module_contains(const struct module *module, const void *p, uint32_t size);
 
+#define BT_DRIVER_MAGIC 0x47425444u
+#define BT_DRIVER_ABI 1u
+struct bt_driver {
+    uint32_t magic, abi, size;
+    int (*init)(void);
+    void (*poll)(void);
+    void (*stop)(void);
+    int (*error)(void);
+    int (*read)(uint8_t *, uint32_t); /* peek: consume only after a successful user copy */
+    void (*consume)(uint32_t);
+    int (*write)(const uint8_t *, uint32_t);
+};
 #define NET_DRIVER_MAGIC 0x474e4452u
 #define NET_DRIVER_ABI 1u
 /* Built together with the kernel; these callbacks are not a userspace ABI. */

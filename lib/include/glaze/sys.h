@@ -106,6 +106,12 @@ static inline int gz_cf_info(struct gz_cf_info *info) { return GZ_SC1(SYS_CF_INF
 static inline int gz_cf_read(uint32_t lba, uint32_t count, void *buf) { return GZ_SC3(SYS_CF_READ, lba, count, buf); }
 static inline int gz_cf_write(uint32_t lba, uint32_t count, const void *buf) { return GZ_SC3(SYS_CF_WRITE, lba, count, buf); }
 
+static inline int gz_bt_io(uint32_t op, void *buffer, uint32_t size)
+{ return GZ_SC3(SYS_BT_IO, op, buffer, size); }
+struct bt_card_info;
+static inline int gz_bt_card_info(struct bt_card_info *info, uint32_t size)
+{ return GZ_SC2(SYS_BT_CARD_INFO, info, size); }
+
 /* Network server only (see servers/net). */
 static inline int gz_wifi_ctl(uint32_t op, void *buf) { return GZ_SC2(SYS_WIFI_CTL, op, buf); }
 static inline int gz_net_info(struct gz_netif_info *info) { return GZ_SC1(SYS_NET_INFO, info); }

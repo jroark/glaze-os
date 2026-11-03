@@ -40,6 +40,8 @@ static uint32_t source[17], girq_out;
 #include "../../kernel/drivers/irq.c"
 void input_irq(uint16_t bits) { (void)bits; }
 void net_irq(void) {}
+void bt_poll(void) {}
+bool bt_ready(void) { return false; }
 bool net_up(void) { return false; }
 void audio_irq(void) {}
 void kprintf(const char *s, ...) { (void)s; }

@@ -7,6 +7,7 @@
 #define GZ_SERVICE_PATH 48u
 #define GZ_SERVICE_NETWORK 1u
 #define GZ_SERVICE_REQUIRED 2u
+#define GZ_SERVICE_BLUETOOTH 4u
 #define GZ_SERVICES_MAGIC 0x475a5356u
 #define GZ_SERVICES_ABI 1u
 struct gz_service_spec {

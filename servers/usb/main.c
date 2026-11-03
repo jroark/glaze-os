@@ -1,5 +1,6 @@
 /* USB development service. All filesystem work runs in userspace. */
 #include <glaze/usb.h>
+#include <glaze/bluetooth.h>
 #include <glaze/nand_repair.h>
 #include <glaze/debug_net.h>
 #include "network.h"
@@ -15,6 +16,7 @@
 #include <string.h>
 
 _Static_assert(sizeof(struct gz_msg)==GD_CONFIG_BYTES,"pairing IPC record size");
+static struct bt_serial_handle bluetooth_serial;
 static struct gu_parser parser;
 static uint8_t output[GU_FRAME], payload[GU_PAYLOAD];
 static int upload = -1;
@@ -161,7 +163,7 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r = gz_sysinfo(&si); if (r) return r;
         gu_put32(payload, GU_VERSION);
         gu_put32(payload + 4, GU_CAP_FILES | GU_CAP_RUN | GU_CAP_LOGS | GU_CAP_RELOAD |
-                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ);
+                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ | GU_CAP_BT_CARD_INFO | GU_CAP_BT_DISCOVERY | GU_CAP_BT_SERIAL);
         if (!gz_nand_repair(GZ_NAND_REPAIR_AVAILABLE,NULL,0))
             gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_NAND_REPAIR);
         if (installer_session) gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_INSTALL_STATUS);
@@ -284,6 +286,74 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r=gz_nand_chip_status();
         if (r<0) return r;
         gu_put32(payload,(uint32_t)r); *out=4;
+        return 0;
+    }
+    case GU_BT_SERIAL: {
+        if(n<4)return GZ_EINVAL;
+        unsigned op=gu_get32(b);
+        if(op==BT_SERIAL_CONNECT){
+            if(n<12 || b[10]<1 || b[10]>16 || (n!=11u+b[10] && n!=12u+b[10]))return GZ_EINVAL;
+            unsigned channel=n==12u+b[10]?b[11+b[10]]:0;
+            return bt_serial_connect_channel(b+4,b+11,b[10],channel,&bluetooth_serial);
+        }
+        if(op==BT_SERIAL_STATUS){
+            if(n!=4)return GZ_EINVAL;
+            struct bt_serial_status status;int error=bt_serial_status(&status);if(error)return error;
+            uint32_t fields[]={status.state,status.id,(uint32_t)status.error,status.sent,status.received,status.available,status.authenticated,status.encrypted};
+            for(unsigned i=0;i<8;i++)gu_put32(payload+4*i,fields[i]);
+            memcpy(payload+32,status.peer,6);payload[38]=status.channel;payload[39]=status.hci_status;*out=40;return 0;
+        }
+        if(n<8 || gu_get32(b+4)!=bluetooth_serial.id)return GZ_EDEAD;
+        if(op==BT_SERIAL_CLOSE)return n==8?bt_serial_disconnect(bluetooth_serial):GZ_EINVAL;
+        if(op==BT_SERIAL_WRITE){
+            if(n<9 || n>200)return GZ_EINVAL;
+            unsigned sent=0;
+            while(sent<n-8){unsigned count=MIN(n-8-sent,48u);int r=bt_serial_write(bluetooth_serial,b+8+sent,count);
+                if(r<0){if(!sent)return r;break;}if(!r)break;sent+=(unsigned)r;}
+            gu_put32(payload,sent);*out=4;return 0;
+        }
+        if(op==BT_SERIAL_READ){
+            if(n!=12 || gu_get32(b+8)>192)return GZ_EINVAL;
+            unsigned count=gu_get32(b+8),received=0;
+            while(received<count){int r=bt_serial_read(bluetooth_serial,payload+received,MIN(count-received,48u));
+                if(r<0){if(!received)return r;break;}if(!r)break;received+=(unsigned)r;}
+            *out=received;return 0;
+        }
+        return GZ_EINVAL;
+    }
+    case GU_BT_DISCOVERY: {
+        if (n != 4) return GZ_EINVAL;
+        unsigned op = gu_get32(b);
+        if (op == BT_SCAN) return bt_scan();
+        if (op == BT_CANCEL) return bt_cancel();
+        if (op != BT_STATUS) return GZ_EINVAL;
+        struct bt_status status;
+        int r = bt_status(&status); if (r) return r;
+        gu_put32(payload, status.state); gu_put32(payload+4,status.generation);
+        gu_put32(payload+8,status.revision); gu_put32(payload+12,status.count);
+        gu_put32(payload+16,(uint32_t)status.error); memcpy(payload+20,status.address,6);
+        payload[26]=status.hci_version; payload[27]=status.lmp_version;
+        gu_put32(payload+28,status.manufacturer); gu_put32(payload+32,status.hci_revision);
+        gu_put32(payload+36,status.lmp_subversion); memcpy(payload+40,status.features,8);
+        for (unsigned i=0; i<status.count; i++) {
+            uint8_t *d=payload+48+i*52;
+            memcpy(d,status.devices[i].address,6); memcpy(d+6,status.devices[i].device_class,3);
+            d[9]=status.devices[i].repetition; d[10]=(uint8_t)status.devices[i].clock_offset;
+            d[11]=(uint8_t)(status.devices[i].clock_offset>>8); memcpy(d+12,status.devices[i].name,40);
+        }
+        *out=48+status.count*52; return 0;
+    }
+    case GU_BT_CARD_INFO: {
+        if (n) return GZ_EINVAL;
+        struct bt_card_info card;
+        int r = gz_bt_card_info(&card, sizeof(card));
+        if (r) return r;
+        uint32_t fields[] = {card.version, card.generation, card.kind, card.manufacturer,
+            card.product, card.function, card.cor, (uint32_t)card.config_index, card.cis_length};
+        for (unsigned i = 0; i < 9; i++) gu_put32(payload + 4*i, fields[i]);
+        memcpy(payload+36, card.cis, BT_CIS_BYTES);
+        memcpy(payload+36+BT_CIS_BYTES, card.identification, sizeof(card.identification));
+        *out = 36+BT_CIS_BYTES+sizeof(card.identification);
         return 0;
     }
     case GU_CF_INFO: {

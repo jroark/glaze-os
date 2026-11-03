@@ -95,6 +95,8 @@ enum {
     SYS_POWER_SLEEP,       /* privileged: GZ_SLEEP_* mode, alarm seconds (0 = none) */
     SYS_OTA_STATUS,        /* read-only: struct gz_ota_status, its size (glaze/ota.h) */
     SYS_OTA_STAGE,         /* PROC_FLASH: GZ_OTA_OP_*, three arguments (docs/os/OTA.md) */
+    SYS_BT_CARD_INFO,      /* read-only cached CIS evidence; buffer, size */
+    SYS_BT_IO,             /* PROC_BLUETOOTH: raw UART operation, buffer, size */
     SYS_COUNT
 };
 

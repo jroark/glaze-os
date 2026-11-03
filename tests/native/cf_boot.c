@@ -34,6 +34,8 @@ const struct gz_bootinfo *ram_boot;
 uint64_t time_us(void) { static uint64_t now; return now+=10000; }
 void kprintf(const char *format, ...) { (void)format; }
 void kputs(const char *s) { (void)s; }
+void bt_insert(void) {}
+void bt_removed(void) {}
 bool net_present(void) { return false; }
 bool net_insert(unsigned m, unsigned p) { (void)m; (void)p; return false; }
 void net_removed(void) {}
@@ -41,8 +43,50 @@ int copy_to_as(struct addrspace *as, uint32_t a, const void *p, uint32_t n)
 { (void)as; (void)a; (void)p; (void)n; return 0; }
 int copy_from_as(struct addrspace *as, void *p, uint32_t a, uint32_t n)
 { (void)as; (void)a; (void)p; (void)n; return 0; }
+static void bluetooth_card_tests(void)
+{
+    /* Physical card's tuples, including exact VERS_1 and COR at E0h. */
+    static const uint8_t tuples[] = {
+        0x15, 0x2b, 5, 0,
+        'B','r','a','i','n',' ','B','o','x','e','s',0,
+        'C','F','+',' ','B','l','u','e','t','o','o','t','h','_','C','a','r','d',',',' ','B','C','S','P',0,
+        'r','9',0,255,
+        0x20,4,0x60,1,0xa0,0xab,0x21,2,2,0,0x1a,5,1,3,0xe0,0,7,255
+    };
+    memset(attr, 255, sizeof(attr));
+    for (unsigned i = 0; i < sizeof(tuples); i++) attr[i*2] = tuples[i];
+    struct cis c; read_cis(&c); capture_card(&c);
+    assert(c.function == 2 && c.manufacturer == 0x160 && c.product == 0xaba0 && c.cor == 0xe0);
+    assert(card_info.kind == BT_CARD_BLUETOOTH && card_info.cis_length == sizeof(tuples));
+    assert(strstr(card_info.identification, "BCSP"));
+    uint32_t generation = card_info.generation;
+    struct proc user = {0};
+    assert(sys_bt_card_info(&user, 0, sizeof(card_info) - 1) == GZ_EINVAL);
+    assert(!sys_bt_card_info(&user, 0, sizeof(card_info)));
+    status = 0x2f9; socket_full = true;
+    memset(ata, 0x5a, sizeof(ata)); ctl = 0x77;
+    assert(!identify());
+    for (unsigned i = 0; i < sizeof(ata); i++) assert(ata[i] == 0x5a);
+    assert(ctl == 0x77);
+    /* Failed reads cannot let a reserved serial card fall into ATA. */
+    attr[0] = 255; assert(!identify());
+    status = PCMCIA_CD_MASK; probe();
+    assert(card_info.kind == BT_CARD_ABSENT && card_info.generation > generation);
+    assert(!card_info.cis_length && !card_info.identification[0]);
+    /* An unrelated serial card is not advertised as Bluetooth. */
+    c.manufacturer = 123; capture_card(&c); assert(card_info.kind == BT_CARD_SERIAL);
+    /* Malformed VERS_1 cannot overrun or falsely match the saved identity. */
+    attr[0] = 0x15; attr[2] = 255;
+    capture_card(&c); assert(!card_info.identification[0]);
+    capture_card(&c);
+    status = PCMCIA_CD_MASK; pcmcia_resume();
+    assert(card_info.kind == BT_CARD_ABSENT && !card_info.manufacturer && !card_info.cis_length);
+    memset(&card_info, 0, sizeof(card_info)); card_info.version = BT_CIS_VERSION;
+    socket_full = false;
+}
 int main(void)
 {
+    bluetooth_card_tests();
     REG16(0x0f000140)=0xa500; REG16(0x0f000144)=0x5a00;
     mock_a020=0xa5; a024=0x5a; a034=0xff; reset=4;
     socket_power_up();

@@ -12,24 +12,29 @@ static void irq_restore(uint32_t flags) {}
 static struct proc processes[64];
 static unsigned spawned, exited, usb_cancelled;
 static uint64_t clock_us;
-static bool connected, fail_spawn;
+static bool connected, fail_spawn, bluetooth_connected;
+static uint32_t bluetooth_generation;
 static uint32_t card_generation;
 static char control_name[16];
 static struct gz_service_snapshot observed;
 static struct gz_service_manifest catalog = {
-    GZ_SERVICES_MAGIC, GZ_SERVICES_ABI, 4,
+    GZ_SERVICES_MAGIC, GZ_SERVICES_ABI, 5,
     { {"fs", "bin/fs", PROC_FLASH, GZ_SERVICE_REQUIRED, 0},
       {"net", "bin/net", PROC_NET, GZ_SERVICE_NETWORK, 1},
       {"audio", "bin/audio", PROC_AUDIO, 0, 1},
-      {"usb", "bin/usb", PROC_USB | PROC_PRIVILEGED, 0, 1} }
+      {"usb", "bin/usb", PROC_USB | PROC_PRIVILEGED, 0, 1},
+      {"bluetooth", "bin/bluetooth", PROC_BLUETOOTH, GZ_SERVICE_BLUETOOTH, 1} }
 };
-static struct romfs_entry file = { .size = 12 + 4 * sizeof(struct gz_service_spec) };
+static struct romfs_entry file = { .size = 12 + 5 * sizeof(struct gz_service_spec) };
 const struct romfs_entry *romfs_lookup(const char *path) { return &file; }
 int romfs_read(const struct romfs_entry *f, uint32_t off, void *p, uint32_t n)
 { memcpy(p, (uint8_t *)&catalog + off, n); return 0; }
 void kprintf(const char *fmt, ...) {}
 void panic(const char *fmt, ...) { abort(); }
 uint64_t time_us(void) { return clock_us; }
+bool bt_present(void) { return bluetooth_connected; }
+bool bt_ready(void) { return false; }
+uint32_t bt_generation(void) { return bluetooth_generation; }
 bool net_up(void) { return connected; }
 uint32_t net_driver_kind(void) { return connected ? GZ_NET_NE2000 : 0; }
 uint32_t net_driver_pages(void) { return connected ? 6 : 0; }
@@ -110,6 +115,14 @@ int main(void)
     first=states[3].pid;unsigned before=usb_cancelled;
     proc_exit(proc_by_pid(first),-1);reconcile();
     assert(usb_cancelled==before+1); /* crashed USB service also closes its network link */
+    connected=false;
+    bluetooth_connected=true; bluetooth_generation++; clock_us+=1000000; reconcile();
+    int bt_pid=states[4].pid; assert(bt_pid && !states[1].pid);
+    assert(proc_by_pid(bt_pid)->flags==PROC_BLUETOOTH && proc_by_pid(bt_pid)->bt_generation==bluetooth_generation);
+    bluetooth_generation++; clock_us+=1000000; reconcile();
+    assert(!proc_by_pid(bt_pid) && states[4].pid && states[4].pid!=bt_pid);
+    bt_pid=states[4].pid; bluetooth_connected=false; reconcile();
+    assert(!states[4].pid && !proc_by_pid(bt_pid));
     puts("services: capabilities, absent hardware, start/stop, restart, backoff and dependency teardown PASS");
     return 0;
 }

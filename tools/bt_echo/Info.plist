@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.glaze.BluetoothEcho</string>
+<key>CFBundleName</key><string>Glaze Bluetooth Echo</string>
+<key>CFBundleExecutable</key><string>GlazeBluetoothEcho</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>Provide a temporary Bluetooth serial echo service for testing your BE-300.</string>
+</dict></plist>

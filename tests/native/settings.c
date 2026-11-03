@@ -5,6 +5,30 @@
 #include <stdlib.h>
 #include "hostres.h"
 
+static uint32_t bluetooth_kind,bluetooth_serial_mock_state;
+static int bluetooth_mock_error, bluetooth_mock_state=-1;
+static unsigned bluetooth_mock_count, bluetooth_scans, bluetooth_cancels;
+int gz_bt_card_info(struct bt_card_info *out, uint32_t size)
+{
+    if (size != sizeof(*out)) return GZ_EINVAL;
+    memset(out, 0, size); out->version = BT_CIS_VERSION; out->kind = bluetooth_kind;
+    out->manufacturer = 0x160; out->product = 0xaba0; return bluetooth_mock_error;
+}
+int bt_status(struct bt_status *out)
+{
+    memset(out,0,sizeof(*out));
+    out->state = bluetooth_mock_state>=0 ? (unsigned)bluetooth_mock_state : bluetooth_kind == BT_CARD_BLUETOOTH ? BT_READY : BT_ABSENT;
+    out->lmp_version=1; out->hci_version=1; out->manufacturer=10;
+    out->count=bluetooth_mock_count;
+    for(unsigned i=0;i<out->count;i++) {
+        out->devices[i].address[0]=(uint8_t)i;
+        if(i) snprintf(out->devices[i].name,BT_NAME_MAX,"Bluetooth device %u",i);
+    }
+    return bluetooth_mock_error;
+}
+int bt_serial_status(struct bt_serial_status *out) { memset(out,0,sizeof(*out));out->state=bluetooth_serial_mock_state;return 0; }
+int bt_scan(void) { bluetooth_scans++; bluetooth_mock_state=BT_SCANNING; return 0; }
+int bt_cancel(void) { bluetooth_cancels++; bluetooth_mock_state=BT_READY; return 0; }
 struct ui_app ui;
 static uint16_t screen[UI_W * UI_H], full[UI_W * UI_H];
 static uint32_t clock_ms;
@@ -612,9 +636,31 @@ static void reboot_tests(void)
 
 int main(void)
 {
+
     gfx_surface_init(&ui.surf, screen, UI_W, UI_H, UI_W);
     for (int i = 0; i < 3; i++)
         require(res_image(&walls[i], wall_names[i]), "wallpaper missing");
+    for (unsigned kind = BT_CARD_ABSENT; kind <= BT_CARD_BLUETOOTH; kind++) {
+        bluetooth_kind = kind; view = V_BLUETOOTH; redraw(); compare_full();
+        require(!gfx_rect_empty(hit_rect(R_BACK)), "Bluetooth page lacks Back");
+    }
+    for(unsigned state=BT_ABSENT; state<=BT_FAILED; state++) {
+        bluetooth_mock_state=(int)state; redraw(); compare_full();
+        require((!gfx_rect_empty(hit_rect(R_BT_SCAN)))==(state==BT_READY || state==BT_SCANNING), "Bluetooth scan enabled in invalid state");
+    }
+    bluetooth_mock_state=BT_READY;bluetooth_serial_mock_state=BT_SERIAL_CONNECTED;redraw();compare_full();
+    require(gfx_rect_empty(hit_rect(R_BT_SCAN)),"Bluetooth scan enabled during serial connection");
+    bluetooth_serial_mock_state=BT_SERIAL_IDLE;
+    bluetooth_mock_state=BT_READY; redraw(); activate(R_BT_SCAN);
+    require(bluetooth_scans==1 && bluetooth_status.state==BT_SCANNING,"Bluetooth scan did not start");
+    activate(R_BT_SCAN); require(bluetooth_cancels==1 && bluetooth_status.state==BT_READY,"Bluetooth scan did not cancel");
+    bluetooth_mock_count=BT_DEVICE_MAX; redraw(); compare_full();
+    host_write_bmp("../out/host/settings-bluetooth.bmp", &ui.surf);
+    zone_scroll.offset=ui_scroll_max(&zone_scroll); require(zone_scroll.offset>0,"Bluetooth results cannot scroll");
+    redraw(); compare_full(); require(!gfx_rect_empty(hit_rect(R_BACK)),"Bluetooth scrolling lost Back");
+    bluetooth_mock_count=0; bluetooth_mock_state=-1; zone_scroll.offset=0;
+    bluetooth_mock_error = GZ_EINVAL; redraw(); compare_full(); bluetooth_mock_error = 0;
+    view = V_ROOT;
     s_volume = 8;
     ui_scroll_reset(&zone_scroll, tz_count() * UI_ROW_H + 24, UI_H - UI_NAV_H);
     redraw();

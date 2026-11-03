@@ -168,6 +168,7 @@ struct proc {
     uint32_t stack_slots;           /* bitmap of thread stacks in use */
     uint64_t cpu_us;                /* accumulated scheduled time, all threads */
     bool frozen;                    /* GZ_PROC_SUSPENDED: runnable threads stay off the run queue */
+    uint32_t bt_generation;
     uint32_t net_generation;        /* PROC_NET is bound to one socket generation */
     int child_port;                 /* own port told GZ_NOTIFY_CHILD on a child's exit, or 0 */
 };
@@ -178,6 +179,7 @@ struct proc {
 #define PROC_AUDIO          0x8     /* wave output (kernel-granted, audio server) */
 #define PROC_APP            0x10    /* managed foreground/background app, may be ended */
 #define PROC_BACKGROUND     0x20    /* app is currently in the background (PRIO_LOW) */
+#define PROC_BLUETOOTH      0x80    /* card UART (kernel-granted Bluetooth service) */
 #define PROC_USB            0x40    /* USB transport/reload (kernel-granted) */
 
 extern struct thread *cur;

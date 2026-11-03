@@ -22,6 +22,7 @@
 #include "../drivers.h"
 #include "../proc.h"
 #include <glaze/bootinfo.h>
+#include <glaze/bluetooth.h>
 
 /* Taskfile registers (offsets from CF_ATA_BASE). */
 #define ATA_ERROR       1       /* read */
@@ -62,6 +63,7 @@
 #define TIMEOUT_US      2000000u    /* reset and spin-up can be slow */
 
 static struct gz_cf_info info;
+static struct bt_card_info card_info = { .version = BT_CIS_VERSION };
 static bool socket_full;         /* the socket status at the last probe */
 static bool booted;              /* cf_init has run: later insertions are hot */
 static uint16_t io_buf[GZ_CF_IO_MAX / 2];
@@ -199,6 +201,68 @@ static void read_cis(struct cis *c)
     }
 }
 
+/* Cache tuple evidence while attribute memory is mapped. Queries never
+ * reconfigure the socket, power-cycle a card, or touch UART/ATA registers.
+ * PC Card Standard: VERS_1 (15h), FUNCID serial (2), MANFID and CONFIG.
+ */
+static void capture_card(const struct cis *c)
+{
+    uint32_t generation = card_info.generation + 1;
+    memset(&card_info, 0, sizeof(card_info));
+    card_info.version = BT_CIS_VERSION;
+    card_info.generation = generation;
+    card_info.kind = c->function == 2 ? BT_CARD_SERIAL : BT_CARD_OTHER;
+    card_info.function = (uint32_t)c->function;
+    card_info.manufacturer = c->manufacturer;
+    card_info.product = c->product;
+    card_info.cor = c->cor;
+    card_info.config_index = c->index;
+    unsigned used = 0;
+    for (unsigned i = 0; i < CIS_LIMIT; i++)
+        card_info.cis[i] = CF_CIS(i);
+    for (unsigned i = 0; i < CIS_LIMIT;) {
+        unsigned code = card_info.cis[i++];
+        card_info.cis_length = i;
+        if (code == TPL_END) break;
+        if (code == TPL_NULL) continue;
+        if (i >= CIS_LIMIT) break;
+        unsigned len = card_info.cis[i++];
+        if (len == 255 || len > CIS_LIMIT - i) break;
+        if (code == 0x15 && len >= 2) {
+            for (unsigned j = i + 2; j < i + len && card_info.cis[j] != 255; j++) {
+                unsigned ch = card_info.cis[j];
+                if (used + 1 < sizeof(card_info.identification))
+                    card_info.identification[used++] = ch >= 32 && ch < 127 ? ch : ' ';
+            }
+        }
+        i += len;
+        card_info.cis_length = i;
+    }
+    /* Physical SMART card, captured over Glaze USB 2026-11-02:
+     * MANFID 0160:aba0, FUNCID serial, VERS_1 explicitly names BCSP.
+     * UART divisor 1/8E1 produces BCSP SYNC replies (BLUETOOTH.md).
+     * The matched card loads the UART module; BCSP/HCI run in userspace. */
+    if (c->function == 2 && c->manufacturer == 0x0160 && c->product == 0xaba0 &&
+        strstr(card_info.identification, "CF+ Bluetooth_Card, BCSP"))
+        card_info.kind = BT_CARD_BLUETOOTH;
+    if (card_info.kind == BT_CARD_BLUETOOTH) bt_insert();
+}
+
+static void forget_card(void)
+{
+    bt_removed();
+    uint32_t generation = card_info.generation + 1;
+    memset(&card_info, 0, sizeof(card_info));
+    card_info.version = BT_CIS_VERSION;
+    card_info.generation = generation;
+}
+
+int sys_bt_card_info(struct proc *p, uint32_t out, uint32_t size)
+{
+    if (size != sizeof(card_info)) return GZ_EINVAL;
+    return copy_to_as(&p->as, out, &card_info, sizeof(card_info));
+}
+
 bool pcmcia_node_id(uint8_t mac[6])
 {
     unsigned i = 0;
@@ -273,6 +337,8 @@ static bool identify(void)
 {
     int function = cis_function();
 
+    if (card_info.kind == BT_CARD_SERIAL || card_info.kind == BT_CARD_BLUETOOTH)
+        return false;
     if (!socket_full || (function >= 0 && function != FUNCID_FIXED))
         return false;
 
@@ -464,6 +530,7 @@ static void insert(void)
             delay_ms(10);
         }
         read_cis(&c);
+        capture_card(&c);
         if (c.function != FUNCID_FIXED && c.function != kind)
             log_cis();
         if (kind < 0)
@@ -477,6 +544,13 @@ static void insert(void)
             net_removed();
             kputs("cf: network card didn't come up, powering up again\n");
             continue;
+        }
+        /* Serial cards remain reserved pending a verified Bluetooth match.
+         * Avoid repeated resets and any ATA/network register probing. */
+        if (kind == 2) {
+            kprintf("cf: serial card %x:%x; UART/BCSP transport pending\n",
+                    c.manufacturer, c.product);
+            return;
         }
         /* Only storage gets ATA, whose waits stall the whole system; a card
          * whose CIS reads as nothing gets one try, the last. */
@@ -497,6 +571,8 @@ static void probe(void)
     probes++;
     socket_full = card_inserted();
     if (!socket_full) {
+        if (card_info.kind != BT_CARD_ABSENT)
+            forget_card();
         if (net_present()) {
             net_removed();
             kputs("cf: network card removed\n");
@@ -505,6 +581,9 @@ static void probe(void)
     } else if (!had && booted) {
         insert();
     } else if (!net_present()) {
+        struct cis c;
+        read_cis(&c);
+        capture_card(&c);
         info.present = identify();
     }
     if (info.present || was)
@@ -515,7 +594,7 @@ static void probe(void)
         removals++;
         kputs("cf: card removed\n");
     }
-    else if (socket_full && !net_present())
+    else if (socket_full && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
         kprintf("cf: card not ready (status %x)\n", CF_ATA(ATA_STATUS));
 }
 
@@ -557,9 +636,9 @@ void cf_init(void)
     if (!net_present() && card_inserted()) {
         PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
         probe();
-        if (!info.present && !net_present())
+        if (!info.present && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
             insert(); /* CE may have handed over an unpowered socket. */
-        if (!info.present && !net_present())
+        if (!info.present && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
             kputs("cf: card is not an ATA disk\n");
     }
     socket_full = card_inserted();      /* a network card found at boot too */
@@ -578,6 +657,7 @@ void pcmcia_resume(void)
         info.generation++;
         removals++;
     }
+    forget_card();
     socket_full = false;
     socket_bus_init();
     probe();
