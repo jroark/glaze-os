@@ -70,6 +70,8 @@ static uint16_t io_buf[GZ_CF_IO_MAX / 2];
 static int boot_cor = -1;        /* the COR Windows CE set, if it was readable */
 /* Socket history for HWDUMP=1 diagnostics (kernel/hwdump.c, cf_debug). */
 static uint32_t cold_status = ~0u, cold_inserts, inserts, probes, removals;
+static uint64_t cis_retry_at;
+static unsigned cis_retries;
 
 static bool wait_status(uint8_t mask, uint8_t want)
 {
@@ -104,6 +106,7 @@ static bool card_inserted(void)
 #define NET_IO_BASE     0x300u          /* NE_REG and the XI-825's window */
 
 struct cis {
+    bool readable;                      /* at least one recognized identity tuple */
     int function;                       /* -1: no FUNCID */
     unsigned manufacturer, product;
     uint32_t cor;                       /* attribute address, 0: none */
@@ -184,9 +187,13 @@ static void read_cis(struct cis *c)
         if (len == 0xFF || i + 2 + len > CIS_LIMIT)
             break;
         unsigned at = i + 2;
-        if (code == TPL_FUNCID && len >= 1)
+        if (code == 0x01 && len >= 1) c->readable = true; /* CISTPL_DEVICE */
+        if (code == 0x15 && len >= 2 && CF_CIS(at) >= 4 && CF_CIS(at) <= 5)
+            c->readable = true;          /* CISTPL_VERS_1 */
+        if (code == TPL_FUNCID && len >= 1) {
             c->function = CF_CIS(at);
-        else if (code == TPL_MANFID && len >= 4) {
+            if (c->function <= 8) c->readable = true;
+        } else if (code == TPL_MANFID && len >= 4) {
             c->manufacturer = CF_CIS(at) | (unsigned)CF_CIS(at + 1) << 8;
             c->product = CF_CIS(at + 2) | (unsigned)CF_CIS(at + 3) << 8;
         } else if (code == TPL_CONFIG && len >= 3) {
@@ -250,6 +257,7 @@ static void capture_card(const struct cis *c)
 
 static void forget_card(void)
 {
+    cis_retry_at = 0; cis_retries = 0;
     bt_removed();
     uint32_t generation = card_info.generation + 1;
     memset(&card_info, 0, sizeof(card_info));
@@ -512,18 +520,24 @@ static void log_cis(void)
 /* A card inserted after boot: power it, read its CIS, and bring up the
  * driver for it. Up to three power-ups: a card pushed in slowly may not
  * take the first. The emulator's cards ignore the COR. */
-static void insert(void)
+static void insert(bool power_up)
 {
     int kind = -1;              /* the FUNCID first read: retries follow it */
+    bool readable = false;
 
+    cis_retry_at = 0;
     inserts++;
     for (int attempt = 0; attempt < 3; attempt++) {
         struct cis c;
 
-        socket_power_up();
+        /* Deferred CIS reads must let the card finish starting. Repeating
+         * the reset here can keep a slow card permanently unreadable. */
+        if (power_up || attempt) socket_power_up();
+        /* CE's attribute/configuration access helper 0198BF98. */
+        PCMCIA_A020 = (PCMCIA_A020 & ~0x04u) | PCMCIA_A020_CONFIG;
         /* Some cards (a real WL54-CF) answer only some time after reset:
          * wait for the CIS's first tuple, CISTPL_DEVICE or a link target. */
-        for (uint64_t t0 = time_us(); time_us() - t0 < 1000000u;) {
+        for (uint64_t t0 = time_us(); (power_up || attempt) && time_us() - t0 < 1000000u;) {
             uint8_t first = CF_CIS(0);
             if (first != 0x00 && first != 0xFF)
                 break;
@@ -531,6 +545,14 @@ static void insert(void)
         }
         read_cis(&c);
         capture_card(&c);
+        /* A nonzero bus byte is not evidence of a readable CIS. The card
+         * may still be settling; never configure an unknown serial card
+         * as ATA based on stale/open-bus bytes. PC Card CIS tuple codes. */
+        if (!c.readable) {
+            kprintf("cf: unreadable CIS (%x), retrying\n", CF_CIS(0));
+            break; /* Yield to USB/UI before the deferred attempt. */
+        }
+        readable = true;
         if (c.function != FUNCID_FIXED && c.function != kind)
             log_cis();
         if (kind < 0)
@@ -562,6 +584,10 @@ static void insert(void)
         kprintf("cf: inserted card not ready (status %x), powering up again\n",
                 CF_ATA(ATA_STATUS));
     }
+    if (!readable && cis_retries && card_inserted()) {
+        cis_retries--;
+        cis_retry_at = time_us() + 500000u;
+    }
 }
 
 static void probe(void)
@@ -579,12 +605,13 @@ static void probe(void)
         }
         info.present = false;
     } else if (!had && booted) {
-        insert();
+        cis_retries = 20;
+        insert(true);
     } else if (!net_present()) {
         struct cis c;
         read_cis(&c);
         capture_card(&c);
-        info.present = identify();
+        info.present = c.readable && identify();
     }
     if (info.present || was)
         info.generation++;
@@ -612,7 +639,7 @@ void pcmcia_cold_init(bool force)
     socket_full = card_inserted(); /* identify() requires the presence latch */
     if (socket_full) {
         cold_inserts++;
-        insert();  /* Includes power/reset settling, CIS, COR and identify. */
+        insert(true);  /* Includes power/reset settling, CIS, COR and identify. */
     }
 }
 
@@ -631,13 +658,14 @@ void cf_debug(uint32_t out[8])
 
 void cf_init(void)
 {
+    cis_retries = 20;
     if (ram_boot && !net_present())
         note_boot_state();
     if (!net_present() && card_inserted()) {
         PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
         probe();
         if (!info.present && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
-            insert(); /* CE may have handed over an unpowered socket. */
+            insert(true); /* CE may have handed over an unpowered socket. */
         if (!info.present && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
             kputs("cf: card is not an ATA disk\n");
     }
@@ -667,6 +695,12 @@ void pcmcia_poll(void)
 {
     if (booted && card_inserted() != socket_full)
         probe();
+    else if (booted && socket_full && cis_retry_at && time_us() >= cis_retry_at) {
+        insert(false);
+        /* A delayed storage identification is an insertion too: the file
+         * server may already have observed the earlier absent generation. */
+        if (info.present) info.generation++;
+    }
 }
 
 static int check(struct proc *p, bool write)

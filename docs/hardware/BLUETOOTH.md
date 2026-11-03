@@ -37,10 +37,18 @@ remote name resolution, repeat scans and inquiry cancellation. The controller
 reported Bluetooth 1.1, CSR manufacturer ID 10 and revision `020dh`. Two nearby
 devices were discovered and their names resolved on the real hardware.
 
-Cold NAND boot, physical card swaps and hibernate/resume still need a hardware
-acceptance pass. The socket lifecycle paths have native regression coverage;
-physical validation so far used Glaze USB RAM reload from an existing Glaze
-session with the card inserted.
+Physical Bluetooth removal/reinsertion was verified on the BE-300: the old
+service stopped, a deferred CIS read recognized `0160:aba0`, the UART module
+loaded again, and the new service returned to Ready. Settings and the status
+icon recovered. Cold NAND boot, swaps between different card types, and
+hibernate/resume still need an acceptance pass with this recovery change.
+
+The card can briefly return nonzero open-bus bytes after insertion. The socket
+requires a recognized CIS tuple before attempting ATA identification, then
+retries unreadable CIS data at 500 ms intervals, for up to twenty deferred
+attempts. These reads do not reset the card again: repeated resets can prevent
+it from finishing startup. Removal cancels pending reads. A delayed storage
+identification also advances its generation so Files can mount it.
 
 ## Authenticated serial connections
 
