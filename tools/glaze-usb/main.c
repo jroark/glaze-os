@@ -95,6 +95,7 @@ static int usage(void)
           "                                raw NAND program/verify (repair boot only); --keep-filesystem\n"
           "                                leaves blocks 320-1003 unchecked and refuses to write them;\n"
           "                                --allow-mismatch plans from the device's current NAND, not SOURCE\n"
+          "  bt-audio-connect ADDRESS [PIN] | bt-audio-status | bt-audio-tone [MS] | bt-audio-disconnect\n"
           "  bt-connect ADDRESS [PIN [CHANNEL]]      connect an authenticated serial service\n"
           "  bt-serial-status | bt-disconnect | bt-echo TEXT\n"
           "  bt-status | bt-cancel          classic Bluetooth status/cancellation\n"
@@ -126,7 +127,9 @@ int main(int argc, char **argv)
     const char *cmd = argv[i++]; int left = argc - i;
     if (cf_only && strcmp(cmd,"boot") && strcmp(cmd,"ce-self-test")) return usage();
     if (!strcmp(cmd,"net-keygen")) return left==1 && !host && !device ? (debug_host_keygen(argv[i]) ? 1 : 0) : usage();
-    if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect") || !strcmp(cmd,"net-disable") || !strcmp(cmd,"bt-serial-status") || !strcmp(cmd,"bt-disconnect") || !strcmp(cmd,"bt-status") || !strcmp(cmd,"bt-cancel") || !strcmp(cmd,"bt-info") || !strcmp(cmd,"cf-info") || !strcmp(cmd,"nand-status")) ? left != 0 :
+    if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect") || !strcmp(cmd,"net-disable") || !strcmp(cmd,"bt-audio-status") || !strcmp(cmd,"bt-audio-disconnect") || !strcmp(cmd,"bt-serial-status") || !strcmp(cmd,"bt-disconnect") || !strcmp(cmd,"bt-status") || !strcmp(cmd,"bt-cancel") || !strcmp(cmd,"bt-info") || !strcmp(cmd,"cf-info") || !strcmp(cmd,"nand-status")) ? left != 0 :
+        !strcmp(cmd,"bt-audio-connect") ? (left<1 || left>2) :
+        !strcmp(cmd,"bt-audio-tone") ? left>1 :
         !strcmp(cmd,"bt-connect") ? (left<1 || left>3) :
         !strcmp(cmd,"bt-echo") ? left!=1 :
         !strcmp(cmd,"bt-scan") ? (left>1 || (left==1 && strcmp(argv[i],"--start-only"))) :
@@ -323,6 +326,7 @@ int main(int argc, char **argv)
                     r=0;
                 } else r=-1;
             }
+            else if (!strncmp(cmd,"bt-audio-",9)) r=gu_bt_audio(&c,cmd,left,argv+i);
             else if (!strcmp(cmd,"bt-connect") || !strcmp(cmd,"bt-serial-status") || !strcmp(cmd,"bt-disconnect") || !strcmp(cmd,"bt-echo")) r=gu_bt_serial(&c,cmd,left,argv+i);
             else if (!strcmp(cmd,"bt-status") || !strcmp(cmd,"bt-scan") || !strcmp(cmd,"bt-cancel")) {
                 r=-1;

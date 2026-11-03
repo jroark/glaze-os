@@ -7,12 +7,13 @@
 #include <stdio.h>
 #include <string.h>
 static bool storage;
-static unsigned net_kind, net_state, card_kind, serial_state;
+static unsigned net_kind, net_state, card_kind, serial_state,audio_state;
 static int serial_error;
 bool sb_has_program(const char *path) { return true; }
 int fs_stat(const char *path,struct fs_stat *st) { assert(!strcmp(path,"/Card"));return storage?0:GZ_ENOENT; }
 int net_status(struct net_status *st) { memset(st,0,sizeof(*st));st->kind=net_kind;st->state=net_state;return 0; }
 int gz_bt_card_info(struct bt_card_info *out,uint32_t n) { assert(n==sizeof(*out));memset(out,0,n);out->kind=card_kind;return 0; }
+int bt_audio_status(struct bt_audio_status *st){memset(st,0,sizeof(*st));st->state=audio_state;return 0;}
 int bt_serial_status(struct bt_serial_status *st) { memset(st,0,sizeof(*st));st->state=serial_state;return serial_error; }
 int main(void)
 {
@@ -33,6 +34,8 @@ int main(void)
     assert(sb_update_connectivity(&v) && v.bluetooth_connected);
     serial_error=GZ_ENOENT;
     assert(sb_update_connectivity(&v) && v.bluetooth_present && !v.bluetooth_connected);
+    audio_state=BT_AUDIO_STREAMING;assert(sb_update_connectivity(&v) && v.bluetooth_connected);
+    audio_state=BT_AUDIO_CLOSING;assert(sb_update_connectivity(&v) && !v.bluetooth_connected);
     serial_error=0;card_kind=BT_CARD_ABSENT;net_kind=GZ_NET_NONE;net_state=NET_NO_CARD;
     assert(sb_update_connectivity(&v) && !v.bluetooth_present && !v.network_kind);
 

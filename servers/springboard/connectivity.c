@@ -21,6 +21,8 @@ bool sb_update_connectivity(struct sb_view *v)
     struct bt_serial_status serial;
     bool bluetooth = !gz_bt_card_info(&card, sizeof(card)) && card.kind == BT_CARD_BLUETOOTH;
     bool paired = bluetooth && !bt_serial_status(&serial) && serial.state == BT_SERIAL_CONNECTED;
+    struct bt_audio_status audio;
+    if(bluetooth && !bt_audio_status(&audio) && audio.state==BT_AUDIO_STREAMING)paired=true;
     bool changed = mounted != v->card_mounted || kind != v->network_kind ||
                    connected != v->network_connected || bluetooth != v->bluetooth_present || paired != v->bluetooth_connected;
     v->card_mounted = mounted;
