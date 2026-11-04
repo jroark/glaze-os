@@ -24,6 +24,8 @@
 static FATFS fatfs[FF_VOLUMES];
 static struct gz_cf_info info;
 static bool known;          /* info holds a sample of the socket */
+static unsigned mount_attempts;
+static uint32_t retry_at;
 static int status[FF_VOLUMES] = { GZ_ENOENT, GZ_ENOENT };
 
 /* ---- FatFs disk interface (diskio.h): the card, and the NAND -------------- */
@@ -120,20 +122,32 @@ static int fat_err(FRESULT r)
 
 void card_check(void)
 {
-    struct gz_cf_info now;
+    struct gz_cf_info now = {0};
     char line[96];
 
     if (card_raw_info(&now) < 0)
         now.present = 0;
-    if (known && now.generation == info.generation && now.present == info.present)
-        return;
+    bool same = known && now.generation == info.generation && now.present == info.present;
+    if (same) {
+        /* Some SD-to-CF bridges identify before their media is readable.
+         * Retry failed mounts at most once a second, eight attempts per
+         * insertion. Never remount a working volume or touch its handles. */
+        if (!now.present || !status[CARD_DRIVE] || mount_attempts >= 8 ||
+            (int32_t)(card_now_ms() - retry_at) < 0)
+            return;
+    } else {
+        mount_attempts = 0;
+    }
     bool was = known && status[CARD_DRIVE] == 0;
     known = true;
     info = now;
     f_unmount("0:");
     status[CARD_DRIVE] = GZ_ENOENT;
-    if (info.present)
+    if (info.present) {
+        ++mount_attempts;
         status[CARD_DRIVE] = fat_err(f_mount(&fatfs[CARD_DRIVE], "0:", 1));
+        retry_at = card_now_ms() + 1000;
+    }
 
     if (status[CARD_DRIVE] == 0) {
         snprintf(line, sizeof(line), "fs: card mounted (%s, %u MB)",
