@@ -35,7 +35,7 @@ SIGNED = 448
 KERNEL_SLOT = mk_nand.ROMFS_OFFSET - mk_nand.KERNEL_OFFSET
 PAYLOAD_MAX = mk_nand.FS_OFFSET - mk_nand.KERNEL_OFFSET
 BLOCK = 16384
-SPL_MIN = 2                 # GZ_SPL_VERSION: the first SPL that applies updates
+SPL_MIN = 3                 # GZ_SPL_VERSION: fixes CRC-neutral kernel header updates
 DEFAULT_KEY = Path.home() / ".config/glaze/ota-ed25519.pem"
 CANDIDATES = ["openssl", "/opt/homebrew/bin/openssl", "/usr/local/opt/openssl@3/bin/openssl",
               "/opt/homebrew/opt/openssl@3/bin/openssl"]

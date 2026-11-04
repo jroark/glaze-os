@@ -124,7 +124,7 @@ static const char *network_error(int e)
 {
     switch (e) {
     case WE_NETDOWN:
-        return "Connect an Ethernet card, then Retry.";
+        return "Connect to a network, then Retry.";
     case WE_DNS:
         return "Store not found. Check your connection.";
     case WE_TIMEOUT:

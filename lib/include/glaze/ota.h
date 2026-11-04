@@ -124,7 +124,7 @@ _Static_assert(sizeof(struct gz_ota_journal) == GZ_OTA_JOURNAL_PAGES * 512, "jou
  * or an SPL before OTA support leaves none (magic absent: version 0). */
 #define GZ_SPL_INFO_PA          0xE800u
 #define GZ_SPL_INFO_MAGIC       0x49535A47u     /* "GZSI" */
-#define GZ_SPL_VERSION          2u
+#define GZ_SPL_VERSION          3u       /* compares the kernel header beyond its CRC residue */
 #define GZ_SPL_F_OTA            (1u << 0)       /* applies journals */
 
 enum {
