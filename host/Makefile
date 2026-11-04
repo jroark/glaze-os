@@ -688,3 +688,8 @@ bluetooth-uart-test:
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_uart.c -o ../out/host/bluetooth-uart-test
 	../out/host/bluetooth-uart-test
 .PHONY: bluetooth-uart-test
+
+wifi-retry-test: ../tests/native/wifi_retry.c ../servers/net/wifi_retry.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/wifi_retry.c -o ../out/host/wifi-retry-test
+	../out/host/wifi-retry-test
+.PHONY: wifi-retry-test

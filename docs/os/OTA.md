@@ -110,6 +110,14 @@ that USB installed, so a later USB update needs a fresh two-pass snapshot as
 `--installed-image`. Legacy data-only emulator images (`out/glaze.bin`) have
 no reserve pool and report OTA as unsupported.
 
+New updates require SPL 3. SPL 2 could skip a changed kernel header when the
+rest of its 16 KiB block stayed the same: the header's own CRC makes its full
+512-byte CRC residue constant, hiding version, build and image-CRC changes
+from the block comparison. A version change later in the kernel could then
+leave the old header describing the new image, causing boot error 4. SPL 3
+also compares the header bytes before skipping its block. Existing SPL 2
+devices need the USB bootloader update; OTA never replaces the SPL itself.
+
 ## Release key
 
 `tools/mkota.py keygen` makes the release key once:
@@ -150,6 +158,8 @@ file, uploads `os/glaze-V.gzu` as an immutable asset, and replaces
   - an install, with the file system untouched;
   - a failing block moving to the reserve pool;
   - a damaged staged file rejected before any write;
+  - changed kernel headers with identical block CRCs, both with unchanged
+    kernel contents and with a change later in the kernel;
   - torn journals;
   - about 120 power cuts across the install's 8000 flash operations, some
     with a second cut while resuming.
@@ -162,6 +172,14 @@ file, uploads `os/glaze-V.gzu` as an immutable asset, and replaces
 - `make -C host boot-init-test` covers the SPL's hibernate checks with the
   new record fields. `out/host/fstest` covers `ftl.c`, whose read-only build
   shares its code.
+
+Physical validation (2026-11-04): a BE-300 with SPL 3 downloaded signed
+Glaze 1.0.3 over a WL54-CF, installed it and booted successfully. The old
+and new header blocks both had CRC `e935566c`, exercising the SPL 2 defect.
+The SPL reported APPLIED with three blocks written; Wi-Fi reconnected,
+the filesystem reported no failed ECC reads, and a persistence test file
+survived. The initial failed SPL 2 update was repaired through a CF RAM
+boot, changing only the stale kernel-header block and three SPL blocks.
 
 ## Limits and next steps
 
