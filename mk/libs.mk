@@ -9,6 +9,10 @@ $(OUT)/lib/libc/entropy_jent.o: USER_CFLAGS += -O0 -Ithird_party/jitterentropy
 $(OUT)/pic/libc/entropy_jent.o: PIC_CFLAGS += -O0 -Ithird_party/jitterentropy
 LIBGFX_SRCS := $(wildcard lib/gfx/*.c)
 LIBUI_SRCS := $(wildcard lib/ui/*.c)
+# Control/layout code favors ROM size; recognizer and graphics loops keep -O2.
+UI_SIZE_SRCS := $(filter-out lib/ui/handwriting.c lib/ui/recognize.c,$(LIBUI_SRCS))
+$(patsubst lib/%.c,$(OUT)/pic/%.o,$(UI_SIZE_SRCS)) $(addprefix $(OUT)/pic/libc/,bluetooth.o audio.o fs.o net.o): PIC_CFLAGS += -Os
+$(patsubst lib/%.c,$(OUT)/pic/%.o,$(UI_SIZE_SRCS)) $(addprefix $(OUT)/pic/libc/,bluetooth.o audio.o fs.o net.o): mk/libs.mk
 
 $(OUT)/lib/%.o: lib/%.c
 	@mkdir -p $(dir $@)

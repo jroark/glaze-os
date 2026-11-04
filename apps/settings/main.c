@@ -50,7 +50,7 @@ enum {
     R_SLEEP_PICK0, R_SLEEP_PICK_LAST = R_SLEEP_PICK0 + 2,
     R_ICONS, R_ICON0, R_ICON_APPS = R_ICON0 + HARDICON_COUNT,
     R_ICONACT0, R_ICONACT_LAST = R_ICONACT0 + ICON_CHOICES - 1,
-    R_BT_DISCONNECT, R_BT_PIN, R_BT_DONE, R_BT_CONNECT, R_BT_CHANNEL_DOWN, R_BT_CHANNEL_UP,
+    R_BT_DISCONNECT, R_BT_PIN, R_BT_DONE, R_BT_CONNECT, R_BT_CHANNEL_DOWN, R_BT_CHANNEL_UP, R_BT_PROFILE, R_BT_AUDIO_DISCONNECT, R_BT_TONE,
     R_BT_DEVICE0,
 };
 
@@ -79,7 +79,7 @@ static struct bt_device bluetooth_peer;
 static char bluetooth_pin[17];
 static int bluetooth_cursor;
 static unsigned bluetooth_channel;
-static bool bluetooth_editing;
+static bool bluetooth_editing, bluetooth_audio;
 static struct ui_keyboard bluetooth_keyboard;
 static const char *debug_message;
 static const char *reboot_msg;
@@ -421,7 +421,7 @@ static const char *bluetooth_error_text(int error)
 {
     switch(error) {
     case GZ_EBUSY: return "Wait for the current operation.";
-    case GZ_ENOENT: return "Serial service not found.";
+    case GZ_ENOENT: return "Requested service not found.";
     case GZ_EPERM: return "Pairing or encryption failed.";
     case GZ_ETIMEDOUT: return "Connection timed out. Try again.";
     case GZ_ECONNREFUSED: return "The device refused the connection.";
@@ -445,16 +445,30 @@ static void draw_bluetooth(gfx_surface *s)
     unsigned count = MIN(st->count, BT_DEVICE_MAX);
     struct bt_serial_status serial = {0};
     bool have_serial = !bt_serial_status(&serial);
-    bool active = have_serial && bluetooth_active(&serial);
+    struct bt_audio_status audio = {0};
+    bool audio_session = !bt_audio_status(&audio) && audio.state != BT_AUDIO_IDLE;
+    bool active = (have_serial && bluetooth_active(&serial)) || (audio_session && audio.state < BT_AUDIO_FAILED);
     bool session = have_serial && serial.state != BT_SERIAL_IDLE;
-    int problem = bluetooth_error ? bluetooth_error : serial.error ? serial.error : st->error;
-    zone_scroll.content_h = (4 + 2 * count + (problem != 0) + (session ? 4 : 0)) * UI_ROW_H + 64 + count * 12 + (session ? 12 : 0);
+    int problem = bluetooth_error ? bluetooth_error : audio.error ? audio.error : serial.error ? serial.error : st->error;
+    zone_scroll.content_h = (4 + 2 * count + (problem != 0) + (session ? 4 : 0) + (audio_session ? 5 : 0)) * UI_ROW_H + 64 + count * 12 + (session ? 12 : 0);
     zone_scroll.view_h = UI_H - UI_NAV_H;
     zone_scroll.offset = MAX(0, MIN(zone_scroll.offset, ui_scroll_max(&zone_scroll)));
     section_y = UI_NAV_H + 12 - zone_scroll.offset;
     gfx_surface body = *s;
     gfx_rect_intersect(s->clip, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), &body.clip); s = &body;
     char address[18], version[28];
+    if(audio_session){
+        static const char *const names[]={"Disconnected","Connecting","Finding Audio Service","Connected","Disconnecting","Connection Failed"};
+        cell(s,1,"Audio",audio.state<ARRAY_SIZE(names)?names[audio.state]:"Unavailable",false,0);
+        bluetooth_address(address,audio.peer);cell(s,2,"Peer",address,false,0);
+        if(audio.rate)snprintf(version,sizeof(version),"SBC %u Hz",audio.rate);else strlcpy(version,"Negotiating",sizeof(version));
+        cell(s,2,"Format",version,false,0);
+        bool streaming=audio.state==BT_AUDIO_STREAMING;
+        cell(s,2,"Play Test Tone",NULL,streaming,streaming?R_BT_TONE:0);
+        bool closing=audio.state==BT_AUDIO_CLOSING;
+        cell(s,3,closing?"Disconnecting...":audio.state==BT_AUDIO_FAILED?"Clear Error":streaming?"Disconnect":"Cancel Connection",NULL,!closing,closing?0:R_BT_AUDIO_DISCONNECT);
+        section_gap();
+    }
     if (session) {
         static const char *const names[] = {"Disconnected", "Connecting", "Pairing", "Encrypting", "Finding Serial Service", "Opening Serial Port", "Connected", "Disconnecting", "Connection Failed"};
         cell(s, 1, "Serial", serial.state < ARRAY_SIZE(names) ? names[serial.state] : "Unavailable", false, 0);
@@ -485,7 +499,7 @@ static void draw_bluetooth(gfx_surface *s)
         cell(s, 1, st->devices[i].name[0] ? st->devices[i].name : "Unnamed Device", NULL, connect, connect ? R_BT_DEVICE0 + (int)i : 0);
         cell(s, 3, address, NULL, false, 0);
     }
-    if (!count && !session) gfx_text_center(s, 0, section_y + 16, UI_W, ui_font(FONT_R12),
+    if (!count && !session && !audio_session) gfx_text_center(s, 0, section_y + 16, UI_W, ui_font(FONT_R12),
         st->state == BT_SCANNING ? "Searching for classic Bluetooth devices" :
         st->state == BT_READY ? "Make nearby devices discoverable." :
         st->state == BT_STARTING ? "Initializing Bluetooth controller" :
@@ -496,7 +510,7 @@ static void draw_bluetooth_pair(gfx_surface *s)
 {
     nhits = 0;
     ui_draw_pinstripes(s, gfx_r(0, 0, UI_W, UI_H));
-    ui_draw_navbar(s, "Connect Serial", "Bluetooth", &back_rect, 0); add_hit(back_rect, R_BACK);
+    ui_draw_navbar(s, "Connect Device", "Bluetooth", &back_rect, 0); add_hit(back_rect, R_BACK);
     gfx_surface clipped = *s;
     gfx_rect_intersect(s->clip, gfx_r(12, 44, 216, 22), &clipped.clip);
     gfx_text(&clipped, 12, 47, ui_font(FONT_B13), bluetooth_peer.name[0] ? bluetooth_peer.name : "Bluetooth Device", UI_TEXT, 255);
@@ -518,17 +532,20 @@ static void draw_bluetooth_pair(gfx_surface *s)
         ui_draw_button(s, button, "Done", pressed == R_BT_DONE); add_hit(button, R_BT_DONE);
         if (ui_keyboard_height()) ui_draw_keyboard(s, &bluetooth_keyboard, UI_H - ui_keyboard_height());
     } else {
+        ui_draw_button(s, button, bluetooth_audio ? "Profile: Audio (A2DP)" : "Profile: Serial", pressed == R_BT_PROFILE);add_hit(button,R_BT_PROFILE);
         char channel[32];
         if (bluetooth_channel) snprintf(channel, sizeof(channel), "Serial channel: %u", bluetooth_channel);
         else strlcpy(channel, "Serial channel: Auto", sizeof(channel));
-        gfx_text(s, 12, 135, ui_font(FONT_R12), channel, UI_TEXT, 255);
-        button = gfx_r(169, 128, 28, 26); ui_draw_button(s, button, "-", pressed == R_BT_CHANNEL_DOWN); add_hit(button, R_BT_CHANNEL_DOWN);
+        if(!bluetooth_audio){
+        gfx_text(s, 12, 171, ui_font(FONT_R12), channel, UI_TEXT, 255);
+        button = gfx_r(169, 164, 28, 26); ui_draw_button(s, button, "-", pressed == R_BT_CHANNEL_DOWN); add_hit(button, R_BT_CHANNEL_DOWN);
         button.x = 202; ui_draw_button(s, button, "+", pressed == R_BT_CHANNEL_UP); add_hit(button, R_BT_CHANNEL_UP);
-        button = gfx_r(10, 171, 220, 30);
+        }
+        button = gfx_r(10, 207, 220, 30);
         ui_draw_button(s, button, "Connect", pressed == R_BT_CONNECT); add_hit(button, R_BT_CONNECT);
-        if (bluetooth_error) gfx_text_center(s, 0, 212, UI_W, ui_font(FONT_R11), bluetooth_error_text(bluetooth_error), UI_TEXT_DETAIL, 255);
-        gfx_text_center(s, 0, 244, UI_W, ui_font(FONT_R11), "Use the same PIN on the other device.", UI_TEXT_DETAIL, 255);
-        gfx_text_center(s, 0, 264, UI_W, ui_font(FONT_R11), "Pair again after restarting Glaze.", UI_TEXT_DETAIL, 255);
+        if (bluetooth_error) gfx_text_center(s, 0, 244, UI_W, ui_font(FONT_R11), bluetooth_error_text(bluetooth_error), UI_TEXT_DETAIL, 255);
+        gfx_text_center(s, 0, 264, UI_W, ui_font(FONT_R11), "Use the pairing PIN for your device.", UI_TEXT_DETAIL, 255);
+
     }
 }
 
@@ -1847,11 +1864,12 @@ static void activate(int id)
         }
         if (id == R_BT_PIN) bluetooth_editing = true;
         else if (id == R_BT_DONE) bluetooth_editing = false;
+        else if (id == R_BT_PROFILE) bluetooth_audio = !bluetooth_audio;
         else if (id == R_BT_CHANNEL_DOWN && bluetooth_channel) bluetooth_channel--;
         else if (id == R_BT_CHANNEL_UP && bluetooth_channel < 30) bluetooth_channel++;
         else if (id == R_BT_CONNECT) {
             struct bt_serial_handle handle;
-            bluetooth_error = bt_serial_connect_channel(bluetooth_peer.address, bluetooth_pin, strlen(bluetooth_pin), bluetooth_channel, &handle);
+            bluetooth_error = bluetooth_audio ? bt_audio_connect(bluetooth_peer.address, bluetooth_pin, strlen(bluetooth_pin), &handle) : bt_serial_connect_channel(bluetooth_peer.address, bluetooth_pin, strlen(bluetooth_pin), bluetooth_channel, &handle);
             if (!bluetooth_error) {
                 memset(bluetooth_pin, 0, sizeof(bluetooth_pin)); bluetooth_editing = false;
                 ui_scroll_reset(&zone_scroll, 0, UI_H - UI_NAV_H); go(V_BLUETOOTH, false);
@@ -1864,8 +1882,12 @@ static void activate(int id)
         struct bt_serial_status serial;
         if (index >= bluetooth_status.count || bluetooth_status.state != BT_READY ||
             bt_serial_status(&serial) || bluetooth_active(&serial)) return;
+        struct bt_audio_status audio;
+        if(!bt_audio_status(&audio) && audio.state>BT_AUDIO_IDLE && audio.state<BT_AUDIO_FAILED)return;
         bluetooth_peer = bluetooth_status.devices[index];
+        bluetooth_audio = (bluetooth_peer.device_class[1]&0x1f)==4;
         memset(bluetooth_pin, 0, sizeof(bluetooth_pin)); bluetooth_cursor = 0;
+        if(bluetooth_audio){strlcpy(bluetooth_pin,"0000",sizeof(bluetooth_pin));bluetooth_cursor=4;}
         bluetooth_channel = 0; bluetooth_error = 0; bluetooth_editing = false;
         ui_keyboard_edit_init(&bluetooth_keyboard, UI_EDIT_SECRET); go(V_BT_PAIR, true); return;
     }
@@ -2153,6 +2175,10 @@ static void activate(int id)
     case R_BT_SCAN:
         bluetooth_error = bluetooth_status.state == BT_SCANNING ? bt_cancel() : bt_scan();
         redraw(); return;
+    case R_BT_AUDIO_DISCONNECT:
+        bluetooth_error=bt_audio_disconnect_current();redraw();return;
+    case R_BT_TONE:
+        bluetooth_error=bt_audio_tone(1000);redraw();return;
     case R_BT_DISCONNECT:
         bluetooth_error = bt_serial_disconnect_current(); redraw(); return;
     case R_NETWORK:

@@ -474,6 +474,12 @@ static void show_card_details(void)
         if (!error) snprintf(line[1], sizeof(line[1]), "Address: %02X:%02X:%02X:%02X:%02X:%02X", controller.address[5], controller.address[4], controller.address[3], controller.address[2], controller.address[1], controller.address[0]);
         else strlcpy(line[1], "Controller details unavailable", sizeof(line[1]));
         d->num_lines = 3;
+        struct bt_audio_status audio;
+        if(!bt_audio_status(&audio) && audio.state!=BT_AUDIO_IDLE){
+            strlcpy(line[2],audio.state==BT_AUDIO_STREAMING?"Audio connected":audio.state==BT_AUDIO_FAILED?"Audio connection failed":"Audio connecting",sizeof(line[2]));
+            snprintf(line[3],sizeof(line[3]),"SBC %u Hz, %u channel(s)",audio.rate,audio.channels);
+            strlcpy(line[4],audio.encrypted?"Encrypted audio connection":"Pairing audio device",sizeof(line[4]));d->num_lines=6;
+        }
         if (!bt_serial_status(&serial) && serial.state != BT_SERIAL_IDLE) {
             static const char *const names[] = {"Disconnected", "Connecting", "Pairing", "Encrypting", "Finding serial service", "Opening serial port", "Connected", "Disconnecting", "Connection failed"};
             strlcpy(line[2], serial.state < ARRAY_SIZE(names) ? names[serial.state] : "Unavailable", sizeof(line[2]));

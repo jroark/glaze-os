@@ -5,7 +5,8 @@
 #include <stdlib.h>
 #include "hostres.h"
 
-static uint32_t bluetooth_kind,bluetooth_serial_mock_state;
+static uint32_t bluetooth_kind,bluetooth_serial_mock_state,bluetooth_audio_mock_state;
+static unsigned audio_connects,audio_disconnects,audio_tones;
 static int bluetooth_mock_error, bluetooth_mock_state=-1;
 static unsigned bluetooth_mock_count, bluetooth_scans, bluetooth_cancels, bluetooth_disconnects, bluetooth_connects;
 static int bluetooth_connect_error, bluetooth_disconnect_error;
@@ -27,6 +28,10 @@ int bt_status(struct bt_status *out)
     }
     return bluetooth_mock_error;
 }
+int bt_audio_status(struct bt_audio_status *st){memset(st,0,sizeof(*st));st->state=bluetooth_audio_mock_state;st->id=11;st->rate=44100;st->channels=2;return 0;}
+int bt_audio_disconnect_current(void){audio_disconnects++;bluetooth_audio_mock_state=BT_AUDIO_CLOSING;return 0;}
+int bt_audio_tone(unsigned ms){audio_tones++;return 0;}
+int bt_audio_connect(const uint8_t *p,const void *pin,unsigned n,struct bt_serial_handle *h){if(!n || n>16)return GZ_EINVAL;audio_connects++;bluetooth_audio_mock_state=BT_AUDIO_CONNECTING;return 0;}
 int bt_serial_status(struct bt_serial_status *out) { memset(out,0,sizeof(*out));out->state=bluetooth_serial_mock_state;out->id=9;out->peer[0]=0x93;out->encrypted=out->authenticated=out->state==BT_SERIAL_CONNECTED;return 0; }
 int bt_serial_disconnect_current(void) { bluetooth_disconnects++;if(!bluetooth_disconnect_error)bluetooth_serial_mock_state=BT_SERIAL_CLOSING;return bluetooth_disconnect_error; }
 int bt_serial_connect_channel(const uint8_t peer[6],const void *pin,unsigned n,unsigned channel,struct bt_serial_handle *handle)
@@ -690,6 +695,16 @@ int main(void)
     activate(R_BT_DEVICE0);strcpy(bluetooth_pin,"123456");activate(R_BT_CONNECT);
     require(view==V_BLUETOOTH && !bluetooth_pin[0] && bluetooth_serial_mock_state==BT_SERIAL_CONNECTING,"Serial connect did not clear PIN or show progress");
     bluetooth_serial_mock_state=BT_SERIAL_IDLE;redraw();
+    activate(R_BT_DEVICE0);activate(R_BT_PROFILE);require(bluetooth_audio,"Cannot select A2DP");
+    strcpy(bluetooth_pin,"0000");activate(R_BT_CONNECT);
+    require(audio_connects==1 && view==V_BLUETOOTH && !bluetooth_pin[0],"Audio connect did not clear PIN or show progress");
+    zone_scroll.offset=0;bluetooth_audio_mock_state=BT_AUDIO_STREAMING;redraw();compare_full();
+    require(!gfx_rect_empty(hit_rect(R_BT_AUDIO_DISCONNECT)) && !gfx_rect_empty(hit_rect(R_BT_TONE)),"Audio controls missing");
+    require(gfx_rect_empty(hit_rect(R_BT_SCAN)),"Scan enabled during audio playback");
+    host_write_bmp("../out/host/settings-bluetooth-audio.bmp",&ui.surf);
+    activate(R_BT_TONE);require(audio_tones==1,"Test tone not dispatched");
+    activate(R_BT_AUDIO_DISCONNECT);require(audio_disconnects==1,"Audio disconnect not dispatched");
+    bluetooth_audio_mock_state=BT_AUDIO_IDLE;redraw();
     zone_scroll.offset=ui_scroll_max(&zone_scroll); require(zone_scroll.offset>0,"Bluetooth results cannot scroll");
     redraw(); compare_full(); require(!gfx_rect_empty(hit_rect(R_BACK)),"Bluetooth scrolling lost Back");
     bluetooth_mock_count=0; bluetooth_mock_state=-1; zone_scroll.offset=0;
