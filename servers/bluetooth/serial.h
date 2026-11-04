@@ -1,4 +1,4 @@
-/* One outbound, authenticated classic SPP session; bounded protocol storage. */
+/* Shared classic security/L2CAP transport with an outbound SPP profile. */
 #ifndef GLAZE_BT_SERIAL_H
 #define GLAZE_BT_SERIAL_H
 #include <glaze/bluetooth.h>
@@ -13,9 +13,15 @@ struct bt_serial {
     uint16_t handle,acl_mtu;
     uint8_t peer[6],pin[16],pin_length,key[16],key_peer[6];
     bool key_valid,closing,command_sent,remote_paused,credit_flow;
+    /* Optional profile hooks share security, SDP, and basic L2CAP with SPP. */
+    void *profile;
+    void (*profile_ready)(void *,unsigned);
+    void (*profile_data)(void *,unsigned,const uint8_t *,unsigned);
+    void (*profile_sdp)(void *,const uint8_t *,unsigned);
+    uint16_t service_uuid;
     unsigned stage,security_opcode,security_length;
     uint8_t security[23];
-    struct bt_channel channels[2];
+    struct bt_channel channels[4];
     uint8_t signal_id,sdp_id,dlci,tx_credits,rx_credits;
     uint16_t rf_mtu;
     struct { uint16_t length; uint8_t bytes[260]; } queue[8];
@@ -34,4 +40,7 @@ bool bt_serial_opcode(unsigned);
 int bt_serial_close(struct bt_serial *);
 int bt_serial_tx(struct bt_serial *,const uint8_t *,unsigned);
 int bt_serial_rx(struct bt_serial *,uint8_t *,unsigned);
+void bt_l2_open(struct bt_serial *,unsigned,unsigned);
+int bt_l2_send(struct bt_serial *,unsigned,const uint8_t *,unsigned);
+void bt_l2_fail(struct bt_serial *,int);
 #endif

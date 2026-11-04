@@ -71,3 +71,40 @@ int gu_bt_serial(struct gu_client *c,const char *cmd,int argc,char **argv)
     if(received!=length || memcmp(echo,argv[0],length)){fputs("Serial echo mismatch or timeout.\n",stderr);return -1;}
     printf("Serial echo verified: %u bytes\n",length);return 0;
 }
+
+static int audio_status(struct gu_client *c)
+{
+    uint8_t request[4];gu_put32(request,BT_AUDIO_STATUS);
+    if(gu_call(c,GU_BT_AUDIO,request,4)!=56)return -1;
+    const uint8_t *p=c->frame+GU_HEADER;
+    printf("Audio: state=%u id=%u error=%d rate=%u channels=%u bitpool=%u packets=%u frames=%u queued=%u underruns=%u authenticated=%u encrypted=%u hci=%02x\n",
+           gu_get32(p),gu_get32(p+4),(int32_t)gu_get32(p+8),gu_get32(p+12),gu_get32(p+16),gu_get32(p+20),gu_get32(p+24),gu_get32(p+28),gu_get32(p+32),gu_get32(p+36),gu_get32(p+40),gu_get32(p+44),p[54]);
+    fflush(stdout);return (int)gu_get32(p);
+}
+int gu_bt_audio(struct gu_client *c,const char *cmd,int argc,char **argv)
+{
+    if(!(c->caps&GU_CAP_BT_AUDIO)){fputs("Reload a build with Bluetooth audio support.\n",stderr);return -1;}
+    uint8_t request[32]={0};
+    if(!strcmp(cmd,"bt-audio-status"))return audio_status(c)<0?-1:0;
+    if(!strcmp(cmd,"bt-audio-disconnect")){gu_put32(request,BT_AUDIO_CLOSE);return gu_call(c,GU_BT_AUDIO,request,4);}
+    if(!strcmp(cmd,"bt-audio-tone")){
+        unsigned ms=1000;if(argc){char *end;unsigned long n=strtoul(argv[0],&end,10);if(!*argv[0] || *end || n>3000)return -1;ms=(unsigned)n;}
+        gu_put32(request,BT_AUDIO_TONE);gu_put32(request+4,ms);return gu_call(c,GU_BT_AUDIO,request,8);
+    }
+    if(strcmp(cmd,"bt-audio-connect"))return -1;
+    unsigned address[6];char tail;
+    if(strlen(argv[0])!=17 || sscanf(argv[0],"%2x:%2x:%2x:%2x:%2x:%2x%c",address,address+1,address+2,address+3,address+4,address+5,&tail)!=6)return -1;
+    const char *pin=argc>1?argv[1]:"0000";size_t n=strlen(pin);if(!n || n>16)return -1;
+    gu_put32(request,BT_AUDIO_CONNECT);for(unsigned i=0;i<6;i++)request[4+i]=(uint8_t)address[5-i];request[10]=(uint8_t)n;memcpy(request+11,pin,n);
+    int error=gu_call(c,GU_BT_AUDIO,request,11+(unsigned)n);memset(request,0,sizeof(request));if(error)return -1;
+    uint64_t end=millis()+100000;int previous=-1;
+    while(!usb_cancelled && millis()<end){
+        uint8_t req[4];gu_put32(req,BT_AUDIO_STATUS);if(gu_call(c,GU_BT_AUDIO,req,4)!=56)return -1;
+        const uint8_t *p=c->frame+GU_HEADER;int state=(int)gu_get32(p);
+        if(state!=previous){state=audio_status(c);previous=state;}
+        if(state==BT_AUDIO_STREAMING)return 0;
+        if(state<=BT_AUDIO_IDLE || state>=BT_AUDIO_FAILED)return -1;
+        usleep(250000);
+    }
+    gu_put32(request,BT_AUDIO_CLOSE);gu_call(c,GU_BT_AUDIO,request,4);return -1;
+}

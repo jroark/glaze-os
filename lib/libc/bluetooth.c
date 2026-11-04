@@ -72,3 +72,73 @@ int bt_serial_read(struct bt_serial_handle handle,void *p,unsigned n)
 }
 int bt_serial_disconnect(struct bt_serial_handle handle)
 {struct gz_msg m={{0}},r={{0}};m.w[1]=handle.id;return call_port(handle.port,BT_SERIAL_CLOSE,&m,&r);}
+int bt_serial_disconnect_current(void)
+{
+    int port=gz_port_lookup(BT_PORT_NAME);
+    struct gz_msg m={{0}},r={{0}};
+    int error=call_port(port,BT_SERIAL_STATUS,&m,&r);
+    if(error)return error;
+    struct bt_serial_status status;memcpy(&status,&r.w[1],sizeof(status));
+    if(status.state==BT_SERIAL_IDLE)return 0;
+    return bt_serial_disconnect((struct bt_serial_handle){port,status.id});
+}
+
+int bt_audio_connect(const uint8_t peer[6],const void *pin,unsigned n,struct bt_serial_handle *out)
+{
+    if(!peer || !pin || !out || !n || n>16)return GZ_EINVAL;
+    struct gz_msg m={{0}},r={{0}};uint8_t *p=(uint8_t *)&m.w[1];
+    memcpy(p,peer,6);p[6]=(uint8_t)n;memcpy(p+7,pin,n);
+    int port=gz_port_lookup(BT_PORT_NAME),error=call_port(port,BT_AUDIO_CONNECT,&m,&r);
+    memset(&m,0,sizeof(m));if(!error){out->port=port;out->id=r.w[1];}return error;
+}
+int bt_audio_status(struct bt_audio_status *out)
+{
+    if(!out)return GZ_EINVAL;
+    struct gz_msg m={{0}},r={{0}};int error=call(BT_AUDIO_STATUS,&m,&r);
+    memset(out,0,sizeof(*out));if(!error)memcpy(out,&r.w[1],sizeof(*out));return error;
+}
+int bt_audio_disconnect_current(void)
+{
+    int port=gz_port_lookup(BT_PORT_NAME);struct gz_msg m={{0}},r={{0}};
+    int error=call_port(port,BT_AUDIO_STATUS,&m,&r);if(error)return error;
+    struct bt_audio_status st;memcpy(&st,&r.w[1],sizeof(st));if(st.state==BT_AUDIO_IDLE)return 0;
+    m.w[1]=st.id;return call_port(port,BT_AUDIO_CLOSE,&m,&r);
+}
+int bt_audio_tone(unsigned ms)
+{
+    int port=gz_port_lookup(BT_PORT_NAME);struct gz_msg m={{0}},r={{0}};
+    int error=call_port(port,BT_AUDIO_STATUS,&m,&r);if(error)return error;
+    struct bt_audio_status st;memcpy(&st,&r.w[1],sizeof(st));m.w[1]=st.id;m.w[2]=ms;
+    return call_port(port,BT_AUDIO_TONE,&m,&r);
+}
+static int audio_stream_call(struct bt_audio_stream *s,unsigned op,unsigned n)
+{
+    struct gz_msg m={{0}},r={{0}};m.w[1]=s->id;m.w[2]=s->token;m.w[3]=n;
+    return call_port(s->port,op,&m,&r);
+}
+int bt_audio_stream_open(struct bt_audio_stream *s)
+{
+    if(!s)return GZ_EINVAL;
+    memset(s,0,sizeof(*s));s->port=gz_port_lookup(BT_PORT_NAME);
+    struct gz_msg m={{0}},r={{0}};int error=call_port(s->port,BT_AUDIO_STATUS,&m,&r);if(error)return error;
+    struct bt_audio_status st;memcpy(&st,&r.w[1],sizeof(st));if(st.state!=BT_AUDIO_STREAMING)return GZ_ENOTCONN;
+    s->id=st.id;m.w[1]=s->id;m.w[2]=(uint32_t)gz_getpid();
+    error=call_port(s->port,BT_AUDIO_ATTACH,&m,&r);if(error)return error;
+    s->shm=(int)r.w[1];s->token=r.w[2];s->buffer=gz_shm_map(s->shm);
+    if(!s->buffer){audio_stream_call(s,BT_AUDIO_DETACH,0);return GZ_ENOMEM;}return 0;
+}
+int bt_audio_stream_write(struct bt_audio_stream *s,const void *p,unsigned n)
+{
+    if(!s || !s->buffer || (n&&!p))return GZ_EINVAL;
+    n=MIN(n,BT_AUDIO_BUF_SIZE);if(n && p!=s->buffer)memcpy(s->buffer,p,n);
+    return audio_stream_call(s,BT_AUDIO_WRITE,n);
+}
+int bt_audio_stream_play(struct bt_audio_stream *s,bool play)
+{return s && s->buffer?audio_stream_call(s,play?BT_AUDIO_PLAY:BT_AUDIO_PAUSE,0):GZ_EINVAL;}
+int bt_audio_stream_flush(struct bt_audio_stream *s)
+{return s && s->buffer?audio_stream_call(s,BT_AUDIO_FLUSH,0):GZ_EINVAL;}
+void bt_audio_stream_close(struct bt_audio_stream *s)
+{
+    if(!s || !s->buffer)return;
+    audio_stream_call(s,BT_AUDIO_DETACH,0);gz_shm_unmap(s->buffer);memset(s,0,sizeof(*s));
+}
