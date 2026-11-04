@@ -84,6 +84,14 @@ $(OUT)/lib/libjerry.a: $(JERRY_OBJS)
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
+# The same soft-float builtins alone, for Videos (pl_mpeg's timestamps). A
+# static link gets the 64-bit shifts from libc.a (lib/libc/bitops.c), which
+# libc.so doesn't export.
+SOFTFP_SRCS := $(wildcard third_party/compiler-rt/*.c)
+$(OUT)/lib/libsoftfp.a: $(patsubst %.c,$(OUT)/%.o,$(filter-out %/ashldi3.c %/lshrdi3.c,$(SOFTFP_SRCS)))
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
 
 $(FSSTACK_OBJS): TP_INC := $(FS_INC)
 $(NETSTACK_OBJS): TP_INC := $(NET_INC)
@@ -114,7 +122,7 @@ $(OUT)/servers/fs/%.o: USER_CFLAGS += $(FS_INC)
 $(OUT)/servers/net/%.o: USER_CFLAGS += $(NET_INC)
 $(OUT)/servers/audio/%.o: USER_CFLAGS += $(HELIX_INC) -Iapps/browser $(WOLFSSL_INC)
 $(OUT)/apps/browser/%.o: USER_CFLAGS += -Ithird_party/stb $(WOLFSSL_INC) $(JERRY_INC)
-$(OUT)/apps/video/%.o: USER_CFLAGS += -Ithird_party/stb
+$(OUT)/apps/video/%.o: USER_CFLAGS += -Ithird_party/stb -Ithird_party/pl_mpeg
 
 # Per-program additions for dynamic links: compile flags, link inputs (built
 # first) and libraries.
@@ -135,7 +143,7 @@ PROG_LDLIBS_usb := -l:libwolfssl.so.1
 $(OUT)/servers/usb/%.o: USER_CFLAGS += $(WOLFSSL_INC)
 
 PROG_CFLAGS_browser := -Ithird_party/stb $(WOLFSSL_INC) $(JERRY_INC)
-PROG_CFLAGS_video := -Ithird_party/stb
+PROG_CFLAGS_video := -Ithird_party/stb -Ithird_party/pl_mpeg
 PROG_EXTRA_audio := apps/browser/conn.c apps/browser/tls.c apps/browser/url.c
 PROG_CFLAGS_audio := $(HELIX_INC) -Iapps/browser $(WOLFSSL_INC)
 # CE entry points have a uniform twelve-word C signature, but original callers
@@ -145,8 +153,9 @@ PROG_CFLAGS_wince := -fno-optimize-sibling-calls
 $(OUT)/apps/wince/%.o: USER_CFLAGS += -fno-optimize-sibling-calls
 $(patsubst %.c,$(OUT)/%.o,$(wildcard apps/wince/*.c)) \
 $(patsubst %.c,$(OUT)/dyn/%.o,$(wildcard apps/wince/*.c)): Makefile mk/programs.mk
-PROG_DEPS_video := $(OUT)/shared/libmedia.so.1
-PROG_LDLIBS_video := -l:libmedia.so.1
+PROG_DEPS_video := $(OUT)/shared/libmedia.so.1 $(OUT)/pic/libsoftfp.a
+PROG_LDLIBS_video := -l:libmedia.so.1 $(OUT)/pic/libsoftfp.a
+PROG_STATIC_DEPS_video := $(OUT)/lib/libsoftfp.a
 PROG_DEPS_audio := $(OUT)/pic/libhelix.a $(OUT)/shared/libwolfssl.so.1 $(OUT)/shared/libmedia.so.1
 PROG_LDLIBS_audio := $(OUT)/pic/libhelix.a -l:libwolfssl.so.1 -l:libmedia.so.1
 PROG_DEPS_browser := $(OUT)/shared/libwolfssl.so.1 $(OUT)/pic/libjerry.a

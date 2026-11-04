@@ -1,6 +1,7 @@
 /*
  * libmedia: integer-only audio and container code shared by the audio
- * server, the Video app and the host test (out/host/mediatest). MP3 decoding is
+ * server, the Video app and the host test (out/host/mediatest). MP2 is a
+ * fixed-point port of pl_mpeg's decoder (mp2.c). MP3 decoding is
  * the vendored Helix decoder (third_party/helix-mp3, pub/mp3dec.h); JPEG
  * frames go through stb_image in the app.
  *
@@ -87,6 +88,39 @@ struct media_mp3_info {
 int media_mp3_probe(media_read_fn rd, void *ctx, uint32_t file_size, struct media_mp3_info *mi);
 /* File offset near `ms` into the stream; resynchronize to a frame there. */
 uint32_t media_mp3_seek_offset(const struct media_mp3_info *mi, uint32_t ms);
+
+/* ---- MPEG audio Layer II ----------------------------------------------------- */
+
+/* MPEG-1 (32/44.1/48 kHz) and MPEG-2 LSF (16/22.05/24 kHz) Layer II, as
+ * carried in MPEG-1 program streams. */
+#define MEDIA_MP2_FRAME_SAMPLES 1152    /* per channel, every frame */
+
+struct media_mp2_info {
+    uint32_t rate;
+    uint16_t bitrate;                   /* kbit/s */
+    uint16_t frame_len;                 /* bytes, header included */
+    uint8_t channels;                   /* 1, or 2 for stereo, joint and dual */
+    uint8_t lsf, mode, mode_ext, crc;
+    uint8_t bitrate_index, rate_index;
+};
+
+/* Parses the 4-byte header at `p`; 0, or -1 if it isn't a Layer II header. */
+int media_mp2_header(const uint8_t *p, uint32_t len, struct media_mp2_info *h);
+
+struct media_mp2 {
+    const void *allocation[2][32];
+    uint8_t scale_factor_info[2][32];
+    int32_t scale_factor[2][32][3];
+    int32_t sample[2][32][3];
+    int32_t V[2][1024];
+    int v_pos;
+};
+
+void media_mp2_init(struct media_mp2 *d);
+/* Decodes the whole frame at `frame` (at least its header's frame_len
+ * bytes) to MEDIA_MP2_FRAME_SAMPLES interleaved S16 frames of its channel
+ * count; returns that count or -1. */
+int media_mp2_decode(struct media_mp2 *d, const uint8_t *frame, uint32_t len, int16_t *out);
 
 /* ---- AVI ----------------------------------------------------------------- */
 

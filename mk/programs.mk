@@ -147,6 +147,10 @@ $(OUT)/pic/libjerry.a: $(JERRY_PIC_OBJS)
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
+$(OUT)/pic/libsoftfp.a: $(patsubst %.c,$(OUT)/pic/%.o,$(SOFTFP_SRCS))
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
 
 $(OUT)/ldso/%.o: lib/ldso/%.c
 	@mkdir -p $(dir $@)

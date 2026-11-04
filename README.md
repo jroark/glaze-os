@@ -133,7 +133,7 @@ Romfs holds only the OS. Everything else lives in the file system:
 | Path | Contents |
 | --- | --- |
 | `/Documents`, `/Pictures` | The user's files. Photos shows the GZI pictures in `/Pictures`. |
-| `/Music`, `/Movies` | Songs (MP3, WAV) for Music and videos (Motion-JPEG AVI) for Videos |
+| `/Music`, `/Movies` | Songs (MP3, WAV) for Music and videos (MPEG-1, Motion-JPEG AVI) for Videos |
 | `/Library/Preferences` | Settings, one file per key (`lib/include/glaze/prefs.h`: `pref_get`, `pref_put`) |
 | `/Library/Notes` | Notes: an `index` file and one `<id>.txt` per note |
 | `/Library/Caches` | Data apps can rebuild, such as Photos' thumbnails |
@@ -314,6 +314,20 @@ converts other rates to the nearest one.
   ```sh
   ffmpeg -i in.mp4 -vf scale=192:-2 -r 10 -c:v mjpeg -q:v 12 -pix_fmt yuvj420p \
       -ar 22050 -ac 1 -c:a adpcm_ima_wav out.avi
+  ```
+
+  It also plays MPEG-1 program streams (`.mpg`, `.mpeg`) with MPEG audio
+  Layer II sound, decoded by pl_mpeg (`apps/video/mpeg.c`) and libmedia's
+  fixed-point MP2 decoder. MPEG-1 packs far more picture into the same
+  flash bandwidth. Frames decode in order, so a late player drops B frames
+  and draws only the frames that are due, and pausing or seeking restarts
+  from the intra frame before the point. In the emulator, 320x240 at 25 fps
+  and about 370 kbit/s draws about 21 frames a second. Keep the total under
+  about 400 kbit/s, and the size near the 240-pixel-wide screen:
+
+  ```sh
+  ffmpeg -i in.mp4 -vf scale=240:-2 -r 25 -c:v mpeg1video -b:v 300k -maxrate 400k \
+      -bufsize 400k -bf 2 -g 15 -ar 22050 -ac 1 -c:a mp2 -b:a 64k -f mpeg out.mpg
   ```
 
 `out/host/mediatest` decodes files with the same code natively, and
