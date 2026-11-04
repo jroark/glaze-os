@@ -341,6 +341,30 @@ static void identify_string(char *out, int words_at, int nwords)
     out[n] = 0;
 }
 
+/* OnSpec 02b6:0003 (VERS_1 1.06), captured on a BE-300: IDENTIFY
+ * presents each byte in the low lane of a word even though READ SECTORS
+ * obeys SET FEATURES 01h. ATA-4 8.12 still defines the resulting words;
+ * normalize this adapter's transport before interpreting them. */
+static bool identify_low_lane(unsigned manufacturer, unsigned product)
+{
+    if (manufacturer != 0x02b6 || product != 0x0003 ||
+        io_buf[0] != 0x8a || io_buf[1] != 0x84)
+        return false;
+    for (unsigned i = 0; i < 256; ++i)
+        if (io_buf[i] & 0xff00) return false;
+    return true;
+}
+
+static void identify_pack_low_lane(void)
+{
+    /* The adapter completes the command after the usual 512 bus bytes:
+     * only ATA words 0..127 are available, including all LBA28 fields.
+     * Do not invent values for the unavailable optional upper words. */
+    for (unsigned i = 0; i < 128; ++i)
+        io_buf[i] = io_buf[2*i] | (uint16_t)io_buf[2*i+1] << 8;
+    memset(io_buf + 128, 0, 128 * sizeof(io_buf[0]));
+}
+
 static bool identify(void)
 {
     int function = cis_function();
@@ -370,6 +394,10 @@ static bool identify(void)
     if (!wait_status(ST_DRQ | ST_ERR, ST_DRQ))
         return false;
     read_sector(io_buf);
+    if (identify_low_lane(card_info.manufacturer, card_info.product)) {
+        identify_pack_low_lane();
+        kputs("cf: normalized OnSpec IDENTIFY low-byte lanes\n");
+    }
     /* Words 60-61: user-addressable LBA sectors (ATA-4 8.12). */
     info.sectors = io_buf[60] | (uint32_t)io_buf[61] << 16;
     identify_string(info.model, 27, 20);

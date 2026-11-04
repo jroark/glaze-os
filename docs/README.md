@@ -15,6 +15,7 @@ Start with the [top-level README](../README.md) for building and running.
 - [Wi-Fi and network security](hardware/WIFI.md)
 - [CF Bluetooth discovery and serial](hardware/BLUETOOTH.md)
 - [WL54-CF wireless networking](hardware/WL54CF.md)
+- [Eye-Fi SDHC storage through an SD-to-CF adapter](hardware/EYEFI.md)
 
 ## Operating system
 

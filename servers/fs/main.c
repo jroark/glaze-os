@@ -87,6 +87,8 @@ int card_raw_info(struct gz_cf_info *info)
     return gz_cf_info(info);
 }
 
+uint32_t card_now_ms(void) { return gz_time_ms(); }
+
 int card_raw_read(uint32_t lba, uint32_t count, void *buf)
 {
     return gz_cf_read(lba, count, buf);
