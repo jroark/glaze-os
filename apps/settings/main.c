@@ -9,7 +9,6 @@
 #include <glaze/display.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
-#include <glaze/dialup.h>
 #include <glaze/notify.h>
 #include <glaze/ntp.h>
 #include <glaze/passcode.h>
@@ -25,7 +24,7 @@
 
 enum view { V_BLUETOOTH, V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
             V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD, V_BATTERY,
-            V_SLEEP, V_SLEEP_MODE, V_ICONS, V_ICON_ACTION, V_DIALUP };
+            V_SLEEP, V_SLEEP_MODE, V_ICONS, V_ICON_ACTION, V_DIALUP, V_DIALUP_EDIT, V_BT_PAIR };
 
 #define ICON_CHOICES    64      /* what V_ICON_ACTION lists */
 
@@ -51,7 +50,10 @@ enum {
     R_SLEEP_PICK0, R_SLEEP_PICK_LAST = R_SLEEP_PICK0 + 2,
     R_ICONS, R_ICON0, R_ICON_APPS = R_ICON0 + HARDICON_COUNT,
     R_ICONACT0, R_ICONACT_LAST = R_ICONACT0 + ICON_CHOICES - 1,
-    R_DIALUP, R_DIALUP_FIELD0, R_DIALUP_DONE = R_DIALUP_FIELD0 + 3, R_DIALUP_CONNECT, R_DIALUP_FORGET,
+    R_DIALUP, R_DIAL_TOGGLE, R_DIAL_PULSE, R_DIAL_FIELD0, R_DIAL_FIELD_LAST = R_DIAL_FIELD0 + 3,
+    R_DIAL_DONE,
+    R_BT_DISCONNECT, R_BT_PIN, R_BT_DONE, R_BT_CONNECT, R_BT_CHANNEL_DOWN, R_BT_CHANNEL_UP, R_BT_PROFILE, R_BT_AUDIO_DISCONNECT, R_BT_TONE,
+    R_BT_DEVICE0,
 };
 
 struct hit {
@@ -67,12 +69,12 @@ static int preview_wall;
 static char ping_result[24];
 static struct wifi_status wireless_status;
 static bool wifi_available;
-/* Dial-up (glaze/dialup.h): a modem card's number, user and password. */
-static bool dialup_available;
-static struct dialup_status dialup_status;
-static struct dialup_config dialup_entry;
-static int dialup_field = -1;           /* the field being edited, or -1 */
-static int dialup_cursor, dialup_error;
+static bool modem_available;            /* a CF modem: Settings > Dial-up */
+static struct net_dial_status dial_status;
+static struct net_dial_config dial_config;
+static bool dial_loaded, dial_password_edited;
+static int dial_error, dial_field, dial_cursor;
+static char dial_text[NET_DIAL_USER_MAX];
 static int wifi_error;
 static struct wifi_credentials wifi_entry;
 static char wifi_password[65];
@@ -81,6 +83,12 @@ static bool wifi_show, wifi_editing;
 static bool ce_boot;
 static struct bt_status bluetooth_status;
 static int bluetooth_error;
+static struct bt_device bluetooth_peer;
+static char bluetooth_pin[17];
+static int bluetooth_cursor;
+static unsigned bluetooth_channel;
+static bool bluetooth_editing, bluetooth_audio;
+static struct ui_keyboard bluetooth_keyboard;
 static const char *debug_message;
 static const char *reboot_msg;
 static struct ui_keyboard wifi_keyboard;
@@ -114,46 +122,9 @@ static uint32_t card_key(struct net_status *st)
         st->state = NET_NO_CARD;
     }
     wifi_available = st->state != NET_NO_CARD && (st->kind == GZ_NET_XI825 || st->kind == GZ_NET_WL54CF || st->kind == GZ_NET_HERMES);
-    dialup_available = st->state != NET_NO_CARD && st->kind == GZ_NET_MODEM;
+    modem_available = st->state != NET_NO_CARD && st->kind == GZ_NET_MODEM;
     return st->state | (uint32_t)st->kind << 8;
 }
-static const char *dialup_name(uint32_t state)
-{
-    switch (state) {
-    case DIALUP_IDLE: return "Not connected";
-    case DIALUP_INITIALIZING: return "Starting modem" GFX_CH_ELLIPSIS;
-    case DIALUP_DIALING: return "Dialing" GFX_CH_ELLIPSIS;
-    case DIALUP_NEGOTIATING: return "Logging in" GFX_CH_ELLIPSIS;
-    case DIALUP_CONNECTED: return "Connected";
-    case DIALUP_HANGING_UP: return "Hanging up" GFX_CH_ELLIPSIS;
-    case DIALUP_FAILED: return "Connection failed";
-    default: return "No Modem";
-    }
-}
-static const char *dialup_error_text(int error)
-{
-    switch (error) {
-    case DIALUP_ENOMODEM: return "The modem doesn't answer";
-    case DIALUP_EBUSY: return "The line is busy";
-    case DIALUP_ENOCARRIER: return "No carrier (line dropped)";
-    case DIALUP_ENODIALTONE: return "No dial tone";
-    case DIALUP_ENOANSWER: return "No answer";
-    case DIALUP_EAUTH: return "Login refused. Check password.";
-    case DIALUP_EPPP: return "PPP negotiation failed";
-    case GZ_EINVAL: return "Check the phone number";
-    default: return "Dial-up request failed";
-    }
-}
-static char *dialup_text(int field)
-{
-    return field == 0 ? dialup_entry.number : field == 1 ? dialup_entry.user : dialup_entry.password;
-}
-static size_t dialup_size(int field)
-{
-    return field == 0 ? sizeof(dialup_entry.number) : field == 1 ? sizeof(dialup_entry.user)
-                                                                 : sizeof(dialup_entry.password);
-}
-static int dialup_flags(int field) { return field == 2 ? UI_EDIT_SECRET : 0; }
 static const char *wifi_name(uint32_t state)
 {
     switch (state) {
@@ -390,7 +361,7 @@ static const char *net_state_name(uint32_t state)
     case NET_UP:            return "Connected";
     case NET_UP_STATIC:     return "Connected (static)";
     case NET_DISCONNECTED:  return "Disconnected";
-    case NET_ASSOCIATING:   return "Joining Wi-Fi" GFX_CH_ELLIPSIS;
+    case NET_ASSOCIATING:   return "Joining" GFX_CH_ELLIPSIS;
     default:                return "No Card";
     }
 }
@@ -404,6 +375,134 @@ static bool cell_visible(const gfx_surface *s)
 
 static const char *battery_summary(char *buf, size_t cap);
 
+static gfx_rect back_rect;
+static void go(enum view v, bool forward);
+
+static const char *dial_state_name(const struct net_dial_status *st)
+{
+    switch (st->state) {
+    case NET_DIAL_STARTING:     return "Starting" GFX_CH_ELLIPSIS;
+    case NET_DIAL_DIALING:      return "Dialing" GFX_CH_ELLIPSIS;
+    case NET_DIAL_NEGOTIATING:  return "Logging in" GFX_CH_ELLIPSIS;
+    case NET_DIAL_UP:           return "Connected";
+    case NET_DIAL_HANGING_UP:   return "Hanging up" GFX_CH_ELLIPSIS;
+    default:                    return "Not connected";
+    }
+}
+
+static const char *dial_error_text(int error)
+{
+    switch (error) {
+    case NET_DIAL_E_NONE:        return NULL;
+    case NET_DIAL_E_NO_REPLY:    return "The modem didn't answer.";
+    case NET_DIAL_E_MODEM:       return "The modem refused a command. Check the init string.";
+    case NET_DIAL_E_NO_DIALTONE: return "No dial tone. Is the phone line connected?";
+    case NET_DIAL_E_BUSY:        return "The line is busy.";
+    case NET_DIAL_E_NO_ANSWER:   return "No answer.";
+    case NET_DIAL_E_NO_CARRIER:  return "No carrier: the call didn't connect or was dropped.";
+    case NET_DIAL_E_TIMEOUT:     return "The call timed out.";
+    case NET_DIAL_E_AUTH:        return "The user name or password was refused.";
+    case NET_DIAL_E_PPP:         return "Couldn't set up the connection (PPP).";
+    case NET_DIAL_E_UNSUPPORTED: return "Dial-up isn't included in this build of Glaze.";
+    case GZ_EINVAL:              return "Enter a phone number using digits, , * # and -.";
+    default:                     return "Dial-up error.";
+    }
+}
+
+static const char *const dial_field_names[4] = { "Phone Number", "User Name", "Password", "Init String" };
+
+static char *dial_field_value(int field)
+{
+    return field == 0 ? dial_config.number : field == 1 ? dial_config.user
+         : field == 2 ? dial_config.password : dial_config.init;
+}
+
+static unsigned dial_field_size(int field)
+{
+    return field == 0 ? sizeof(dial_config.number) : field == 1 ? sizeof(dial_config.user)
+         : field == 2 ? sizeof(dial_config.password) : sizeof(dial_config.init);
+}
+
+static void draw_dialup(gfx_surface *s)
+{
+    nhits = 0;
+    if (!dial_loaded) {
+        memset(&dial_config, 0, sizeof(dial_config));
+        net_dial_config(&dial_config);
+        dial_loaded = true; dial_password_edited = false;
+    }
+    if (net_dial_status(&dial_status) < 0) memset(&dial_status, 0, sizeof(dial_status));
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Dial-up", "Settings", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    const struct net_dial_status *st = &dial_status;
+    char status[40];
+    if (st->state == NET_DIAL_UP && st->rate)
+        snprintf(status, sizeof(status), "Connected, %u.%u kbps", (unsigned)st->rate / 1000,
+                 (unsigned)st->rate % 1000 / 100);
+    else strlcpy(status, dial_state_name(st), sizeof(status));
+    cell(s, 1, "Status", status, false, 0);
+    bool idle = st->state == NET_DIAL_IDLE;
+    cell(s, 3, idle ? "Connect" : st->state == NET_DIAL_UP ? "Hang Up" : "Cancel", NULL,
+         st->state != NET_DIAL_HANGING_UP, st->state != NET_DIAL_HANGING_UP ? R_DIAL_TOGGLE : 0);
+    section_gap();
+    for (int i = 0; i < 4; i++) {
+        const char *value = dial_field_value(i);
+        if (i == 2) value = dial_config.password[0] ? GFX_CH_BULLET GFX_CH_BULLET GFX_CH_BULLET GFX_CH_BULLET
+                          : dial_config.has_password && !dial_password_edited ? "Saved" : "";
+        cell(s, i == 0 ? 1 : 2, dial_field_names[i], value, idle, idle ? R_DIAL_FIELD0 + i : 0);
+    }
+    cell(s, 3, "Dialing", dial_config.pulse ? "Pulse" : "Tone", idle, idle ? R_DIAL_PULSE : 0);
+    const char *note = dial_error_text(dial_error ? dial_error : st->error);
+    char info[48];
+    if (!note && st->modem[0]) { snprintf(info, sizeof(info), "Modem: %s", st->modem); note = info; }
+    if (!note && idle) note = "Settings are saved when you connect.";
+    if (note) {
+        const gfx_font *f = ui_font(FONT_R12);
+        int starts[4], lines = ui_wrap(f, note, UI_W - 32, starts, 3);
+        for (int i = 0; i < lines; i++) {
+            int end = i + 1 < lines ? starts[i + 1] : (int)strlen(note);
+            gfx_text_n(s, 16, section_y + 6 + i * f->line_height, f, note + starts[i],
+                       end - starts[i], UI_TEXT_DETAIL, 255);
+        }
+    }
+}
+
+static void draw_dialup_edit(gfx_surface *s)
+{
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, 0, UI_W, UI_H));
+    ui_draw_navbar(s, dial_field_names[dial_field], "Dial-up", &back_rect, 0); add_hit(back_rect, R_BACK);
+    gfx_rect field = gfx_r(10, 44, 220, 29);
+    gfx_round_rect(s, field, 5, 0xFFFFFF, 255);
+    gfx_surface clipped = *s; gfx_rect_intersect(s->clip, gfx_r(16, 46, 207, 25), &clipped.clip);
+    char shown[NET_DIAL_USER_MAX]; unsigned n = strlen(dial_text);
+    if (dial_field == 2) { memset(shown, '*', n); shown[n] = 0; }
+    else memcpy(shown, dial_text, n + 1);
+    int x = 17;
+    if (n) x -= MAX(0, gfx_text_width(ui_font(FONT_R12), shown) - 202);
+    gfx_text(&clipped, x, 52, ui_font(FONT_R12), n ? shown : dial_field_names[dial_field],
+             n ? UI_TEXT : UI_TEXT_DETAIL, 255);
+    shown[MIN((unsigned)dial_cursor, n)] = 0;
+    int caret = n ? x + gfx_text_width(ui_font(FONT_R12), shown) : 17;
+    gfx_line(&clipped, caret, 50, caret, 65, UI_TEXT, 255);
+    memset(shown, 0, sizeof(shown));
+    gfx_rect done = gfx_r(10, 81, 220, 24);
+    ui_draw_button(s, done, "Done", pressed == R_DIAL_DONE); add_hit(done, R_DIAL_DONE);
+    if (ui_keyboard_height()) ui_draw_keyboard(s, &wifi_keyboard, UI_H - ui_keyboard_height());
+}
+
+static void dial_edit_finish(bool keep)
+{
+    if (keep) {
+        strlcpy(dial_field_value(dial_field), dial_text, dial_field_size(dial_field));
+        if (dial_field == 2) dial_password_edited = true;
+    }
+    memset(dial_text, 0, sizeof(dial_text));
+    go(V_DIALUP, false);
+}
+
 static void draw_root(gfx_surface *s)
 {
     nhits = 0;
@@ -415,9 +514,9 @@ static void draw_root(gfx_surface *s)
     if (cell_visible(s))
         root_card = card_key(&st);
     if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
-    if (dialup_available && cell_visible(s) && net_dialup_status(&dialup_status))
-        memset(&dialup_status, 0, sizeof(dialup_status));
-    root_scroll.content_h = (12 + wifi_available + dialup_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
+    if (modem_available && cell_visible(s) && net_dial_status(&dial_status) < 0)
+        memset(&dial_status, 0, sizeof(dial_status));
+    root_scroll.content_h = (12 + (wifi_available || modem_available) + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
     root_scroll.view_h = UI_H - UI_NAV_H;
     if (!root_scroll.dragging && !root_scroll.animating)
         root_scroll.offset = MAX(0, MIN(root_scroll.offset, ui_scroll_max(&root_scroll)));
@@ -425,9 +524,10 @@ static void draw_root(gfx_surface *s)
     gfx_surface body = *s;
     gfx_rect_intersect(s->clip, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), &body.clip);
     s = &body;
-    cell(s, wifi_available || dialup_available ? 1 : 0, "Network", net_state_name(st.state), true, R_NETWORK);
+    bool second = wifi_available || modem_available;
+    cell(s, second ? 1 : 0, "Network", net_state_name(st.state), true, R_NETWORK);
     if (wifi_available) cell(s, 3, "Wi-Fi", wifi_name(wireless_status.state), true, R_WIFI);
-    if (dialup_available) cell(s, 3, "Dial-up", dialup_name(dialup_status.state), true, R_DIALUP);
+    if (modem_available) cell(s, 3, "Dial-up", dial_state_name(&dial_status), true, R_DIALUP);
     section_gap();
     cell(s, 1, "Sounds", NULL, true, R_SOUNDS);
     cell(s, 2, "Display", NULL, true, R_DISPLAY);
@@ -458,6 +558,21 @@ static void bluetooth_address(char out[18], const uint8_t address[6])
     snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", address[5], address[4],
              address[3], address[2], address[1], address[0]);
 }
+static const char *bluetooth_error_text(int error)
+{
+    switch(error) {
+    case GZ_EBUSY: return "Wait for the current operation.";
+    case GZ_ENOENT: return "Requested service not found.";
+    case GZ_EPERM: return "Pairing or encryption failed.";
+    case GZ_ETIMEDOUT: return "Connection timed out. Try again.";
+    case GZ_ECONNREFUSED: return "The device refused the connection.";
+    case GZ_EDEAD: return "Connection changed. Try again.";
+    case GZ_EINVAL: return "Enter a PIN of 1 to 16 characters.";
+    default: return "Bluetooth unavailable. Try again.";
+    }
+}
+static bool bluetooth_active(const struct bt_serial_status *serial)
+{ return serial->state > BT_SERIAL_IDLE && serial->state < BT_SERIAL_FAILED; }
 static void draw_bluetooth(gfx_surface *s)
 {
     struct bt_status next;
@@ -469,38 +584,110 @@ static void draw_bluetooth(gfx_surface *s)
     ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
     ui_draw_navbar(s, "Bluetooth", "Settings", &back_rect, 0); add_hit(back_rect, R_BACK);
     unsigned count = MIN(st->count, BT_DEVICE_MAX);
-    int problem = bluetooth_error ? bluetooth_error : st->error;
-    zone_scroll.content_h = (4 + 2 * count + (problem != 0)) * UI_ROW_H + 64 + count * 12;
+    struct bt_serial_status serial = {0};
+    bool have_serial = !bt_serial_status(&serial);
+    struct bt_audio_status audio = {0};
+    bool audio_session = !bt_audio_status(&audio) && audio.state != BT_AUDIO_IDLE;
+    bool active = (have_serial && bluetooth_active(&serial)) || (audio_session && audio.state < BT_AUDIO_FAILED);
+    bool session = have_serial && serial.state != BT_SERIAL_IDLE;
+    int problem = bluetooth_error ? bluetooth_error : audio.error ? audio.error : serial.error ? serial.error : st->error;
+    zone_scroll.content_h = (4 + 2 * count + (problem != 0) + (session ? 4 : 0) + (audio_session ? 5 : 0)) * UI_ROW_H + 64 + count * 12 + (session ? 12 : 0);
     zone_scroll.view_h = UI_H - UI_NAV_H;
     zone_scroll.offset = MAX(0, MIN(zone_scroll.offset, ui_scroll_max(&zone_scroll)));
     section_y = UI_NAV_H + 12 - zone_scroll.offset;
     gfx_surface body = *s;
     gfx_rect_intersect(s->clip, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), &body.clip); s = &body;
+    char address[18], version[28];
+    if(audio_session){
+        static const char *const names[]={"Disconnected","Connecting","Finding Audio Service","Connected","Disconnecting","Connection Failed"};
+        cell(s,1,"Audio",audio.state<ARRAY_SIZE(names)?names[audio.state]:"Unavailable",false,0);
+        bluetooth_address(address,audio.peer);cell(s,2,"Peer",address,false,0);
+        if(audio.rate)snprintf(version,sizeof(version),"SBC %u Hz",audio.rate);else strlcpy(version,"Negotiating",sizeof(version));
+        cell(s,2,"Format",version,false,0);
+        bool streaming=audio.state==BT_AUDIO_STREAMING;
+        cell(s,2,"Play Test Tone",NULL,streaming,streaming?R_BT_TONE:0);
+        bool closing=audio.state==BT_AUDIO_CLOSING;
+        cell(s,3,closing?"Disconnecting...":audio.state==BT_AUDIO_FAILED?"Clear Error":streaming?"Disconnect":"Cancel Connection",NULL,!closing,closing?0:R_BT_AUDIO_DISCONNECT);
+        section_gap();
+    }
+    if (session) {
+        static const char *const names[] = {"Disconnected", "Connecting", "Pairing", "Encrypting", "Finding Serial Service", "Opening Serial Port", "Connected", "Disconnecting", "Connection Failed"};
+        cell(s, 1, "Serial", serial.state < ARRAY_SIZE(names) ? names[serial.state] : "Unavailable", false, 0);
+        bluetooth_address(address, serial.peer);
+        cell(s, 2, "Peer", address, false, 0);
+        cell(s, 2, "Security", serial.encrypted ? "Encrypted" : serial.authenticated ? "Authenticated" : "Pending", false, 0);
+        bool closing = serial.state == BT_SERIAL_CLOSING;
+        cell(s, 3, closing ? "Disconnecting..." : serial.state == BT_SERIAL_FAILED ? "Clear Error" : serial.state == BT_SERIAL_CONNECTED ? "Disconnect" : "Cancel Connection", NULL,
+             !closing, closing ? 0 : R_BT_DISCONNECT);
+    }
+    if (session) section_gap();
     cell(s, 1, "Controller", st->state <= BT_FAILED ? states[st->state] : "Unavailable", false, 0);
-    char address[18], version[28]; bluetooth_address(address, st->address);
+    bluetooth_address(address, st->address);
     cell(s, 2, "Address", st->state >= BT_READY ? address : "--", false, 0);
     static const char *versions[] = {"1.0b", "1.1", "1.2", "2.0", "2.1", "3.0", "4.0", "4.1", "4.2", "5.0"};
     if (st->lmp_version < ARRAY_SIZE(versions)) snprintf(version, sizeof(version), "%s", versions[st->lmp_version]);
     else snprintf(version, sizeof(version), "%u", st->lmp_version);
     cell(s, 2, "Version", st->state >= BT_READY ? version : "--", false, 0);
-    struct bt_serial_status serial = {0};
-    bool serial_active = !bt_serial_status(&serial) && serial.state > BT_SERIAL_IDLE && serial.state < BT_SERIAL_FAILED;
-    bool enabled = !serial_active && (st->state == BT_READY || st->state == BT_SCANNING);
-    cell(s, 3, serial_active ? "Serial Connection Active" : st->state == BT_SCANNING ? "Cancel Scan" : "Scan Devices", NULL, enabled, enabled ? R_BT_SCAN : 0);
+    bool enabled = !active && (st->state == BT_READY || st->state == BT_SCANNING);
+    cell(s, 3, st->state == BT_SCANNING ? "Cancel Scan" : "Scan Devices", NULL, enabled, enabled ? R_BT_SCAN : 0);
     if (problem) {
-        section_gap(); snprintf(version, sizeof(version), "%d", problem);
-        cell(s, 0, "Bluetooth Error", version, false, 0);
+        section_gap();
+        cell(s, 0, bluetooth_error_text(problem), NULL, false, 0);
     }
     for (unsigned i = 0; i < count; i++) {
         section_gap(); bluetooth_address(address, st->devices[i].address);
-        cell(s, 1, st->devices[i].name[0] ? st->devices[i].name : "Unnamed Device", NULL, false, 0);
+        bool connect = !active && st->state == BT_READY;
+        cell(s, 1, st->devices[i].name[0] ? st->devices[i].name : "Unnamed Device", NULL, connect, connect ? R_BT_DEVICE0 + (int)i : 0);
         cell(s, 3, address, NULL, false, 0);
     }
-    if (!count) gfx_text_center(s, 0, section_y + 16, UI_W, ui_font(FONT_R12),
+    if (!count && !session && !audio_session) gfx_text_center(s, 0, section_y + 16, UI_W, ui_font(FONT_R12),
         st->state == BT_SCANNING ? "Searching for classic Bluetooth devices" :
         st->state == BT_READY ? "Make nearby devices discoverable." :
         st->state == BT_STARTING ? "Initializing Bluetooth controller" :
         st->state == BT_FAILED ? "Controller unavailable. Retrying..." : "Insert a supported Bluetooth card.", UI_TEXT_DETAIL, 255);
+}
+
+static void draw_bluetooth_pair(gfx_surface *s)
+{
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, 0, UI_W, UI_H));
+    ui_draw_navbar(s, "Connect Device", "Bluetooth", &back_rect, 0); add_hit(back_rect, R_BACK);
+    gfx_surface clipped = *s;
+    gfx_rect_intersect(s->clip, gfx_r(12, 44, 216, 22), &clipped.clip);
+    gfx_text(&clipped, 12, 47, ui_font(FONT_B13), bluetooth_peer.name[0] ? bluetooth_peer.name : "Bluetooth Device", UI_TEXT, 255);
+    char address[18]; bluetooth_address(address, bluetooth_peer.address);
+    gfx_text(s, 12, 69, ui_font(FONT_R12), address, UI_TEXT_DETAIL, 255);
+    gfx_rect field = gfx_r(10, 90, 220, 29);
+    gfx_round_rect(s, field, 5, 0xFFFFFF, 255);
+    char hidden[17]; unsigned n = strlen(bluetooth_pin);
+    memset(hidden, '*', n); hidden[n] = 0;
+    gfx_text(s, 17, 98, ui_font(FONT_R12), n ? hidden : "Pairing PIN (1-16 characters)", n ? UI_TEXT : UI_TEXT_DETAIL, 255);
+    if (bluetooth_editing) {
+        hidden[MIN((unsigned)bluetooth_cursor, n)] = 0;
+        int x = 17 + gfx_text_width(ui_font(FONT_R12), hidden);
+        gfx_line(s, x, 96, x, 111, UI_TEXT, 255);
+    }
+    add_hit(field, R_BT_PIN);
+    gfx_rect button = gfx_r(10, 128, 220, 26);
+    if (bluetooth_editing) {
+        ui_draw_button(s, button, "Done", pressed == R_BT_DONE); add_hit(button, R_BT_DONE);
+        if (ui_keyboard_height()) ui_draw_keyboard(s, &bluetooth_keyboard, UI_H - ui_keyboard_height());
+    } else {
+        ui_draw_button(s, button, bluetooth_audio ? "Profile: Audio (A2DP)" : "Profile: Serial", pressed == R_BT_PROFILE);add_hit(button,R_BT_PROFILE);
+        char channel[32];
+        if (bluetooth_channel) snprintf(channel, sizeof(channel), "Serial channel: %u", bluetooth_channel);
+        else strlcpy(channel, "Serial channel: Auto", sizeof(channel));
+        if(!bluetooth_audio){
+        gfx_text(s, 12, 171, ui_font(FONT_R12), channel, UI_TEXT, 255);
+        button = gfx_r(169, 164, 28, 26); ui_draw_button(s, button, "-", pressed == R_BT_CHANNEL_DOWN); add_hit(button, R_BT_CHANNEL_DOWN);
+        button.x = 202; ui_draw_button(s, button, "+", pressed == R_BT_CHANNEL_UP); add_hit(button, R_BT_CHANNEL_UP);
+        }
+        button = gfx_r(10, 207, 220, 30);
+        ui_draw_button(s, button, "Connect", pressed == R_BT_CONNECT); add_hit(button, R_BT_CONNECT);
+        if (bluetooth_error) gfx_text_center(s, 0, 244, UI_W, ui_font(FONT_R11), bluetooth_error_text(bluetooth_error), UI_TEXT_DETAIL, 255);
+        gfx_text_center(s, 0, 264, UI_W, ui_font(FONT_R11), "Use the pairing PIN for your device.", UI_TEXT_DETAIL, 255);
+
+    }
 }
 
 static void draw_input_method(gfx_surface *s)
@@ -1268,87 +1455,6 @@ static void draw_wifi_credentials(gfx_surface *s)
     }
 }
 
-static void draw_dialup(gfx_surface *s)
-{
-    static const char *const labels[3] = {"Phone Number", "User Name", "Password"};
-    nhits = 0;
-    ui_draw_pinstripes(s, gfx_r(0, 0, UI_W, UI_H));
-    if (dialup_field >= 0) {
-        /* Editing one field: the Wi-Fi key page's layout. */
-        ui_draw_navbar(s, labels[dialup_field], "Dial-up", &back_rect, 0); add_hit(back_rect, R_BACK);
-        const char *value = dialup_text(dialup_field);
-        char shown[DIALUP_USER_MAX + 1];
-        unsigned n = (unsigned)strlen(value);
-        if (dialup_field == 2) { memset(shown, '*', n); shown[n] = 0; }
-        else memcpy(shown, value, n + 1);
-        gfx_rect field = gfx_r(10, 66, 220, 29);
-        gfx_round_rect(s, field, 5, 0xFFFFFF, 255);
-        gfx_surface clipped = *s; gfx_rect_intersect(s->clip, gfx_r(16, 68, 207, 25), &clipped.clip);
-        int x = 17;
-        if (n) x -= MAX(0, gfx_text_width(ui_font(FONT_R12), shown) - 202);
-        gfx_text(&clipped, x, 74, ui_font(FONT_R12), n ? shown : labels[dialup_field],
-                 n ? UI_TEXT : UI_TEXT_DETAIL, 255);
-        shown[MIN((unsigned)dialup_cursor, n)] = 0;
-        int caret = n ? x + gfx_text_width(ui_font(FONT_R12), shown) : 17;
-        gfx_line(&clipped, caret, 72, caret, 87, UI_TEXT, 255);
-        memset(shown, 0, sizeof(shown));
-        wifi_button(s, 103, "Done", R_DIALUP_DONE);
-        if (ui_keyboard_height()) ui_draw_keyboard(s, &wifi_keyboard, UI_H - ui_keyboard_height());
-        return;
-    }
-    const struct dialup_status *st = &dialup_status;
-    int err = dialup_error ? dialup_error : st->state == DIALUP_FAILED ? st->error : 0;
-    /* Scrolls like the Wi-Fi list: connection details push it past the screen. */
-    gfx_rect area = zone_area();
-    gfx_surface whole = *s;
-    gfx_rect_intersect(s->clip, area, &whole.clip);
-    s = &whole;
-    zone_scroll.content_h = 12 + 6 * UI_ROW_H + 4 * 14 + 12 + (err ? 14 + UI_ROW_H : 0) +
-                            (st->state == DIALUP_CONNECTED ? 14 + 3 * UI_ROW_H : 0);
-    zone_scroll.view_h = UI_H - UI_NAV_H;
-    if (!zone_scroll.dragging && !zone_scroll.animating)
-        zone_scroll.offset = MAX(0, MIN(zone_scroll.offset, ui_scroll_max(&zone_scroll)));
-    section_y = UI_NAV_H + 12 - zone_scroll.offset;
-    cell(s, 1, "Status", dialup_name(st->state), false, 0);
-    /* The card's VERS_1 strings are long: the name alone, as its own row. */
-    char modem[sizeof(st->modem)];
-    strlcpy(modem, st->modem[0] ? st->modem : "Modem", sizeof(modem));
-    for (size_t n = strlen(modem); n && modem[n - 1] == ' '; n--) modem[n - 1] = 0;
-    cell(s, 3, modem, NULL, false, 0);
-    section_gap();
-    for (int i = 0; i < 3; i++) {
-        const char *value = dialup_text(i);
-        char masked[DIALUP_PASSWORD_MAX + 1];
-        if (i == 2) {
-            unsigned n = (unsigned)strlen(value);
-            memset(masked, '*', n); masked[n] = 0;
-            value = n ? masked : st->configured && dialup_entry.user[0] ? "Saved" : "";
-        }
-        cell(s, i == 0 ? 1 : i == 2 ? 3 : 2, labels[i], value, true, R_DIALUP_FIELD0 + i);
-    }
-    section_gap();
-    bool active = st->state != DIALUP_IDLE && st->state != DIALUP_FAILED;
-    cell(s, 0, active ? "Hang Up" : "Connect", NULL, active || dialup_entry.number[0],
-         active || dialup_entry.number[0] ? R_DIALUP_CONNECT : 0);
-    if (err) {
-        section_gap();
-        cell(s, 0, dialup_error_text(err), NULL, false, 0);
-    }
-    if (st->state == DIALUP_CONNECTED) {
-        char addr[16], dns[16], speed[16];
-        section_gap();
-        snprintf(speed, sizeof(speed), "%u bps", (unsigned)st->connect_speed);
-        cell(s, 1, "Speed", st->connect_speed ? speed : "", false, 0);
-        cell(s, 2, "IP Address", net_ntoa(st->addr, addr), false, 0);
-        cell(s, 3, "DNS", net_ntoa(st->dns, dns), false, 0);
-    }
-    section_gap();
-    cell(s, 0, "Forget Settings", NULL, st->configured, st->configured ? R_DIALUP_FORGET : 0);
-    gfx_surface top = whole;
-    top.clip = gfx_r(0, 0, UI_W, UI_H);
-    ui_draw_navbar(&top, "Dial-up", "Settings", &back_rect, 0); add_hit(back_rect, R_BACK);
-}
-
 static gfx_rect pin_area(void)
 {
     return gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
@@ -1493,6 +1599,7 @@ static void draw_view(gfx_surface *s, enum view v)
 {
     switch (v) {
     case V_BLUETOOTH: draw_bluetooth(s); break;
+    case V_BT_PAIR: draw_bluetooth_pair(s); break;
     case V_ROOT: draw_root(s); break;
     case V_WALLPAPER: draw_wallpaper(s); break;
     case V_PREVIEW: draw_preview(s); break;
@@ -1506,6 +1613,8 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_INPUT_METHOD: draw_input_method(s); break;
     case V_WIFI: draw_wifi(s); break;
     case V_WIFI_CREDENTIALS: draw_wifi_credentials(s); break;
+    case V_DIALUP: draw_dialup(s); break;
+    case V_DIALUP_EDIT: draw_dialup_edit(s); break;
     case V_PASSCODE: draw_passcode(s); break;
     case V_PIN: draw_pin(s); break;
     case V_SOUNDS: draw_sounds(s); break;
@@ -1519,7 +1628,6 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_ICONS: draw_icons(s); break;
     case V_ICON_ACTION: draw_icon_action(s); break;
     case V_REBOOT: draw_reboot(s); break;
-    case V_DIALUP: draw_dialup(s); break;
     }
 }
 
@@ -1892,48 +2000,66 @@ static void pin_key(int k)
 
 static void activate(int id)
 {
+    if (view == V_DIALUP_EDIT) {
+        if (id == R_BACK || id == R_DIAL_DONE) dial_edit_finish(id == R_DIAL_DONE);
+        return;
+    }
     if (id == R_DIALUP) {
-        dialup_error = net_dialup_status(&dialup_status);
-        memset(&dialup_entry, 0, sizeof(dialup_entry));
-        if (net_dialup_config(&dialup_entry))
-            memset(&dialup_entry, 0, sizeof(dialup_entry));
-        dialup_field = -1;
-        ui_scroll_reset(&zone_scroll, 0, UI_H - UI_NAV_H);
+        dial_error = 0; dial_loaded = false;
         go(V_DIALUP, true);
         return;
     }
-    if (view == V_DIALUP) {
-        if (id == R_BACK && dialup_field >= 0) { dialup_field = -1; return; }
+    if (view == V_DIALUP && id >= R_DIAL_FIELD0 && id <= R_DIAL_FIELD_LAST) {
+        dial_field = id - R_DIAL_FIELD0;
+        strlcpy(dial_text, dial_field_value(dial_field), sizeof(dial_text));
+        dial_cursor = (int)strlen(dial_text);
+        ui_keyboard_edit_init(&wifi_keyboard, dial_field == 2 ? UI_EDIT_SECRET : 0);
+        go(V_DIALUP_EDIT, true);
+        return;
+    }
+    if (view == V_DIALUP && id == R_DIAL_PULSE) { dial_config.pulse = !dial_config.pulse; return; }
+    if (view == V_DIALUP && id == R_DIAL_TOGGLE) {
+        if (dial_status.state != NET_DIAL_IDLE) { dial_error = net_hangup(); return; }
+        struct net_dial_config c = dial_config;
+        c.keep_password = c.has_password && !dial_password_edited;
+        dial_error = net_dial(&c);
+        memset(&c, 0, sizeof(c));
+        if (!dial_error) { net_dial_status(&dial_status); dial_loaded = false; }
+        return;
+    }
+    if (view == V_BT_PAIR) {
         if (id == R_BACK) {
-            memset(&dialup_entry, 0, sizeof(dialup_entry));
-            go(V_ROOT, false);
-            return;
+            memset(bluetooth_pin, 0, sizeof(bluetooth_pin)); bluetooth_editing = false;
+            go(V_BLUETOOTH, false); return;
         }
-        if (id >= R_DIALUP_FIELD0 && id < R_DIALUP_FIELD0 + 3) {
-            dialup_field = id - R_DIALUP_FIELD0;
-            dialup_cursor = (int)strlen(dialup_text(dialup_field));
-            ui_keyboard_edit_init(&wifi_keyboard, dialup_flags(dialup_field));
-            return;
-        }
-        if (id == R_DIALUP_DONE) { dialup_field = -1; return; }
-        if (id == R_DIALUP_CONNECT) {
-            bool active = dialup_status.state != DIALUP_IDLE && dialup_status.state != DIALUP_FAILED;
-            if (active) {
-                dialup_error = net_dialup_disconnect();
-            } else {
-                dialup_entry.version = DIALUP_VERSION;
-                dialup_error = net_dialup_connect(&dialup_entry);
-                memset(dialup_entry.password, 0, sizeof(dialup_entry.password));
+        if (id == R_BT_PIN) bluetooth_editing = true;
+        else if (id == R_BT_DONE) bluetooth_editing = false;
+        else if (id == R_BT_PROFILE) bluetooth_audio = !bluetooth_audio;
+        else if (id == R_BT_CHANNEL_DOWN && bluetooth_channel) bluetooth_channel--;
+        else if (id == R_BT_CHANNEL_UP && bluetooth_channel < 30) bluetooth_channel++;
+        else if (id == R_BT_CONNECT) {
+            struct bt_serial_handle handle;
+            bluetooth_error = bluetooth_audio ? bt_audio_connect(bluetooth_peer.address, bluetooth_pin, strlen(bluetooth_pin), &handle) : bt_serial_connect_channel(bluetooth_peer.address, bluetooth_pin, strlen(bluetooth_pin), bluetooth_channel, &handle);
+            if (!bluetooth_error) {
+                memset(bluetooth_pin, 0, sizeof(bluetooth_pin)); bluetooth_editing = false;
+                ui_scroll_reset(&zone_scroll, 0, UI_H - UI_NAV_H); go(V_BLUETOOTH, false);
             }
-            net_dialup_status(&dialup_status);
-            return;
         }
-        if (id == R_DIALUP_FORGET) {
-            dialup_error = net_dialup_forget();
-            memset(&dialup_entry, 0, sizeof(dialup_entry));
-            net_dialup_status(&dialup_status);
-            return;
-        }
+        return;
+    }
+    if (view == V_BLUETOOTH && id >= R_BT_DEVICE0 && id < R_BT_DEVICE0 + (int)BT_DEVICE_MAX) {
+        unsigned index = id - R_BT_DEVICE0;
+        struct bt_serial_status serial;
+        if (index >= bluetooth_status.count || bluetooth_status.state != BT_READY ||
+            bt_serial_status(&serial) || bluetooth_active(&serial)) return;
+        struct bt_audio_status audio;
+        if(!bt_audio_status(&audio) && audio.state>BT_AUDIO_IDLE && audio.state<BT_AUDIO_FAILED)return;
+        bluetooth_peer = bluetooth_status.devices[index];
+        bluetooth_audio = (bluetooth_peer.device_class[1]&0x1f)==4;
+        memset(bluetooth_pin, 0, sizeof(bluetooth_pin)); bluetooth_cursor = 0;
+        if(bluetooth_audio){strlcpy(bluetooth_pin,"0000",sizeof(bluetooth_pin));bluetooth_cursor=4;}
+        bluetooth_channel = 0; bluetooth_error = 0; bluetooth_editing = false;
+        ui_keyboard_edit_init(&bluetooth_keyboard, UI_EDIT_SECRET); go(V_BT_PAIR, true); return;
     }
     if (id == R_WIFI) {
         wifi_error = net_wifi_status(&wireless_status);
@@ -2047,6 +2173,9 @@ static void activate(int id)
         return;
     }
     if (id == R_BACK || id == R_PIN_CANCEL) {
+        if (view == V_DIALUP) {
+            memset(&dial_config, 0, sizeof(dial_config)); dial_loaded = false;
+        }
         go(view == V_PREVIEW ? V_WALLPAPER : view == V_PIN ? V_PASSCODE : view == V_TONE ? V_SOUNDS
            : view == V_ZONE ? V_DATETIME : (view == V_WALLPAPER || view == V_TIMEOUT) ? V_DISPLAY
            : view == V_SLEEP ? V_BATTERY : view == V_SLEEP_MODE ? V_SLEEP
@@ -2219,6 +2348,12 @@ static void activate(int id)
     case R_BT_SCAN:
         bluetooth_error = bluetooth_status.state == BT_SCANNING ? bt_cancel() : bt_scan();
         redraw(); return;
+    case R_BT_AUDIO_DISCONNECT:
+        bluetooth_error=bt_audio_disconnect_current();redraw();return;
+    case R_BT_TONE:
+        bluetooth_error=bt_audio_tone(1000);redraw();return;
+    case R_BT_DISCONNECT:
+        bluetooth_error = bt_serial_disconnect_current(); redraw(); return;
     case R_NETWORK:
         ping_result[0] = 0;
         go(V_NETWORK, true);
@@ -2358,8 +2493,7 @@ static int hit_test(int x, int y);
 /* Scroll and tap list views; leave navbar events to the normal handler. */
 static bool zone_touch(const struct gz_input_event *ev)
 {
-    if ((view != V_BLUETOOTH && view != V_ZONE && view != V_WIFI && view != V_ROOT && view != V_ICON_ACTION &&
-         (view != V_DIALUP || dialup_field >= 0)) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
+    if ((view != V_BLUETOOTH && view != V_ZONE && view != V_WIFI && view != V_ROOT && view != V_ICON_ACTION) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
                            ev->type != GZ_EV_TOUCH_UP))
         return false;
     if (ev->type == GZ_EV_TOUCH_DOWN)
@@ -2382,10 +2516,6 @@ static bool zone_touch(const struct gz_input_event *ev)
             activate(id);
             if (view == V_WIFI) {
                 redraw_rect(zone_area());
-                return true;
-            }
-            if (view == V_DIALUP) {     /* a field opens its editor: all of it */
-                redraw();
                 return true;
             }
             if (view != V_ZONE && view != V_ROOT) return true;
@@ -2420,13 +2550,12 @@ int main(void)
 
     for (;;) {
         struct gz_input_event ev;
-        int timeout = view == V_BLUETOOTH || view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI || view == V_DEBUG ||
-                      view == V_BATTERY || view == V_DIALUP ? 1000
+        int timeout = view == V_DIALUP || view == V_BLUETOOTH || view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI || view == V_DEBUG ||
+                      view == V_BATTERY ? 1000
                     : view == V_ROOT ? 2000 : -1;
         if (view == V_TOUCH_TEST)
             timeout = 250;
-        if ((view == V_BLUETOOTH || view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION || view == V_DIALUP) &&
-            zone_scroll.animating)
+        if ((view == V_BLUETOOTH || view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION) && zone_scroll.animating)
             timeout = 16;
         if (view == V_ROOT && root_scroll.animating)
             timeout = 16;
@@ -2442,23 +2571,6 @@ int main(void)
                 struct net_status st;
                 if (card_key(&st) != root_card || root_scroll.offset != old_offset)
                     redraw();       /* a card came or went: rows change */
-                continue;
-            }
-            if (view == V_DIALUP) {
-                struct net_status st;
-                card_key(&st);
-                if (!dialup_available) {    /* the modem was pulled */
-                    dialup_field = -1;
-                    memset(&dialup_entry, 0, sizeof(dialup_entry));
-                    view = V_ROOT;
-                    redraw();
-                    continue;
-                }
-                if (dialup_field < 0) {
-                    ui_scroll_step(&zone_scroll);
-                    if (net_dialup_status(&dialup_status)) memset(&dialup_status, 0, sizeof(dialup_status));
-                    redraw();
-                }
                 continue;
             }
             if (view == V_WIFI && !zone_scroll.animating) {
@@ -2500,38 +2612,45 @@ int main(void)
             redraw();
             continue;
         }
-        if (view == V_DIALUP && dialup_field >= 0) {
+        if (view == V_DIALUP_EDIT) {
+            unsigned flags = dial_field == 2 ? UI_EDIT_SECRET : 0, size = dial_field_size(dial_field);
             bool changed = false;
-            char *text = dialup_text(dialup_field);
-            size_t size = dialup_size(dialup_field);
-            int flags = dialup_flags(dialup_field);
-            if (ui_edit_event(text, size, &dialup_cursor, &ev, flags)) { redraw(); continue; }
+            if (ui_edit_event(dial_text, size, &dial_cursor, &ev, flags)) { redraw(); continue; }
             if (ui_keyboard_height() && ev.y >= UI_H - ui_keyboard_height() &&
                 (ev.type == GZ_EV_TOUCH_DOWN || ev.type == GZ_EV_TOUCH_MOVE || ev.type == GZ_EV_TOUCH_UP)) {
                 int ch = ui_keyboard_event(&wifi_keyboard, &ev, UI_H - ui_keyboard_height(), &changed);
-                if (ch == '\n') dialup_field = -1;
-                else if (ch) {
+                if (ch == '\n') { dial_edit_finish(true); continue; }
+                if (ch) {
                     struct gz_input_event key = {0};
                     key.type = ch == '\b' ? GZ_EV_KEY_DOWN : GZ_EV_TEXT;
                     key.code = ch == '\b' ? GZ_KEY_BACKSPACE : ch;
-                    ui_edit_event(text, size, &dialup_cursor, &key, flags);
+                    ui_edit_event(dial_text, size, &dial_cursor, &key, flags);
                 }
                 if (ch || changed) redraw();
                 continue;
             }
         }
-        if (view == V_WIFI_CREDENTIALS && wifi_editing) {
+        if (view == V_BT_PAIR && ev.type == GZ_EV_APP_DEACTIVATE) {
+            memset(bluetooth_pin, 0, sizeof(bluetooth_pin)); bluetooth_editing = false;
+            redraw(); continue;
+        }
+        if ((view == V_WIFI_CREDENTIALS && wifi_editing) || (view == V_BT_PAIR && bluetooth_editing)) {
+            bool bt = view == V_BT_PAIR;
+            char *text = bt ? bluetooth_pin : wifi_password;
+            unsigned capacity = bt ? sizeof(bluetooth_pin) : sizeof(wifi_password);
+            int *cursor = bt ? &bluetooth_cursor : &wifi_cursor;
+            struct ui_keyboard *keyboard = bt ? &bluetooth_keyboard : &wifi_keyboard;
             bool changed = false;
-            if (ui_edit_event(wifi_password, sizeof(wifi_password), &wifi_cursor, &ev, UI_EDIT_SECRET)) { redraw(); continue; }
+            if (ui_edit_event(text, capacity, cursor, &ev, UI_EDIT_SECRET)) { redraw(); continue; }
             if (ui_keyboard_height() && ev.y >= UI_H - ui_keyboard_height() &&
                 (ev.type == GZ_EV_TOUCH_DOWN || ev.type == GZ_EV_TOUCH_MOVE || ev.type == GZ_EV_TOUCH_UP)) {
-                int ch = ui_keyboard_event(&wifi_keyboard, &ev, UI_H-ui_keyboard_height(), &changed);
-                if (ch == '\n') wifi_editing = false;
+                int ch = ui_keyboard_event(keyboard, &ev, UI_H-ui_keyboard_height(), &changed);
+                if (ch == '\n') { if (bt) bluetooth_editing = false; else wifi_editing = false; }
                 else if (ch) {
                     struct gz_input_event key = {0};
                     key.type = ch == '\b' ? GZ_EV_KEY_DOWN : GZ_EV_TEXT;
                     key.code = ch == '\b' ? GZ_KEY_BACKSPACE : ch;
-                    ui_edit_event(wifi_password, sizeof(wifi_password), &wifi_cursor, &key, UI_EDIT_SECRET);
+                    ui_edit_event(text, capacity, cursor, &key, UI_EDIT_SECRET);
                 }
                 if (ch || changed) redraw();
                 continue;

@@ -1,401 +1,341 @@
 /*
- * Dial-up networking: a Hayes-compatible PC Card modem (GZ_NET_MODEM, the
- * kernel's kernel/drivers/modem.c) dialled with AT commands, then lwIP's
- * PPP over serial (PPPoS) with PAP or CHAP-MD5, the peer's address and DNS.
+ * Dial-up over a CF modem: the Hayes dialer (hayes.c) and lwIP's PPP over
+ * serial on the kernel's modem UART (gz_modem_io, kernel/modem.c).
  *
- * The kernel moves the serial byte stream through SYS_NET_SEND/RECV and
- * takes the modem-line operations (DTR, status) through SYS_WIFI_CTL
- * (glaze/modem.h). The main thread runs the dialer from net_if_poll: it
- * writes commands, splits the modem's replies into result lines (ITU-T
- * V.250 result codes), and after CONNECT feeds every byte to pppos_input
- * under the tcpip core lock. lwIP's link status callback runs in the tcpip
- * thread and only records the outcome for the main thread.
- *
- * The configuration (glaze/dialup.h) is the net.dialup preference; with
- * reconnect set the server dials when the modem appears, and again after
- * the line drops, with the same backoff as Wi-Fi (2 s up to 30 s).
+ * The main thread reads the modem when the kernel says bytes are waiting
+ * (GZ_NOTIFY_NET) and at least once a second: while dialing they go to the
+ * dialer, once connected to pppos_input_tcpip. lwIP's tcpip thread writes
+ * PPP frames back through output(). The modem drops the call when DTR goes
+ * low (AT&D2); DCD, once it has been seen up, reports a lost carrier.
  */
 #include <glaze/sys.h>
 #include <glaze/modem.h>
-#include <glaze/dialup.h>
 #include <glaze/prefs.h>
-#include <glaze/fs.h>
 #include <string.h>
+#include "server.h"
+
+#if !GLAZE_MODEM
+/* A build without PPP (MODEM=0, mk/libs.mk): the modem is reported, and
+ * dialing explains itself, so Settings can say why. */
+static bool modem_ok;
+int net_modem_init(int port)
+{
+    (void)port;
+    if (gz_modem_io(MODEM_IO_STATUS, NULL, 0) < 0) return GZ_ENOENT;
+    modem_ok = true;
+    net_log("modem: present, but this build has no PPP (MODEM=1)\n");
+    return 0;
+}
+bool net_modem_present(void) { return modem_ok; }
+void net_modem_poll(void) {}
+int net_modem_request(uint32_t op, void *buf)
+{
+    if (op == NET_DIAL_STATUS) {
+        struct net_dial_status *st = buf;
+        memset(st, 0, sizeof(*st));
+        st->error = NET_DIAL_E_UNSUPPORTED;
+        return 0;
+    }
+    if (op == NET_DIAL_CONFIG) { memset(buf, 0, sizeof(struct net_dial_config)); return 0; }
+    if (op == NET_DIAL) memset(buf, 0, sizeof(struct net_dial_config));
+    return op == NET_HANGUP ? 0 : GZ_ENOENT;
+}
+int net_modem_state(void) { return NET_DISCONNECTED; }
+void net_modem_status(struct net_status *st)
+{
+    memset(st, 0, sizeof(*st));
+    st->state = NET_DISCONNECTED;
+    st->kind = GZ_NET_MODEM;
+}
+#else
 
 #include "lwip/tcpip.h"
 #include "lwip/netif.h"
 #include "lwip/dns.h"
 #include "netif/ppp/pppos.h"
-#include "server.h"
-#include "modem.h"
+#include "hayes.h"
 
-#define RESET_MS        3000u   /* ATZ answers */
-#define COMMAND_MS      3000u
-#define DIAL_MS         90000u  /* ATD to CONNECT: dialling, training */
-#define PPP_MS          45000u  /* CONNECT to IPCP up */
-#define HANGUP_MS       1200u   /* DTR held low */
-#define RETRY_MIN_MS    2000u
-#define RETRY_MAX_MS    30000u
+#define DIAL_PREF       "net.dialup"
+#define HANGUP_MS       1500u   /* DTR low: longer than the modem's S25 (50 ms) */
+#define CLOSE_MS        3000u   /* LCP terminate before dropping DTR anyway */
+#define WRITE_WAIT_MS   2000u
 
-enum { STEP_NONE, STEP_RESET, STEP_INIT, STEP_DIAL };
+static ppp_pcb *pcb;
+static struct netif pppif;
+static struct hayes dialer;
+static struct net_dial_config saved;     /* ppp_set_auth keeps pointers into it */
+static volatile int dial_state = NET_DIAL_IDLE;
+static volatile int dial_error, ppp_ended;
+static uint32_t hangup_at, dtr_at, up_since, rx_bytes;
+static bool dtr_dropped, dtr_raised;
+static volatile uint32_t tx_bytes;
+static bool carrier_seen, modem_ok;
+static char info[32];
 
-static struct dialup_config config;
-static struct dialup_status status;
-static struct modem_status lines;
-static struct netif ppp_if;
-static ppp_pcb *ppp;
-static volatile int ppp_result = -1;    /* PPPERR_*, from the tcpip thread */
-static volatile bool ppp_up_flag;
-static bool attached, have_config;
-static int step;
-static uint32_t step_started, retry_at, retry_delay = RETRY_MIN_MS;
-static char line[96];
-static unsigned line_len;
-static uint8_t io[1024];
-
-static void set_state(unsigned s, int error)
+/* The dialer's commands and replies, without the CRs. Dial strings carry
+ * no credentials (PAP/CHAP run inside PPP). */
+static void trace(char direction, const char *text)
 {
-    status.state = s;
-    status.error = error;
-    net_if_set_state(s == DIALUP_CONNECTED ? NET_UP :
-                     s == DIALUP_IDLE || s == DIALUP_FAILED ? NET_DISCONNECTED : NET_ASSOCIATING);
+    char line[96];
+    unsigned n = 0;
+    for (const char *p = text; *p && n + 1 < sizeof(line); p++)
+        if (*p != '\r') line[n++] = *p;
+    line[n] = 0;
+    if (n) net_log("modem: %c %s\n", direction, line);
 }
 
-static int write_all(const void *data, uint32_t len)
+static int modem_write(const void *p, uint32_t n)
 {
-    const uint8_t *p = data;
-    uint32_t start = gz_time_ms();
-    while (len) {
-        int n = gz_net_send(p, len);
-        if (n < 0) return n;
-        if (n == 0) {
-            if (gz_time_ms() - start > 2000u) return GZ_ETIMEDOUT;
-            gz_sleep_ms(5);
-            continue;
-        }
-        p += n;
-        len -= (uint32_t)n;
+    const uint8_t *d = p;
+    uint32_t done = 0, t0 = gz_time_ms();
+    while (done < n) {
+        uint32_t chunk = n - done < MODEM_IO_MAX ? n - done : MODEM_IO_MAX;
+        int rv = gz_modem_io(MODEM_IO_WRITE, (void *)(d + done), chunk);
+        if (rv == GZ_EBUSY && gz_time_ms() - t0 < WRITE_WAIT_MS) { gz_sleep_ms(5); continue; }
+        if (rv <= 0) break;
+        done += (uint32_t)rv;
     }
-    return 0;
+    return (int)done;
 }
 
-static void command(const char *text, int next)
+/* tcpip thread: a PPP frame, HDLC-escaped by pppos. */
+static u32_t output(ppp_pcb *p, const void *data, u32_t len, void *ctx)
 {
-    write_all(text, (uint32_t)strlen(text));
-    write_all("\r", 1);
-    step = next;
-    step_started = gz_time_ms();
-    line_len = 0;
+    (void)p; (void)ctx;
+    int n = modem_write(data, len);
+    tx_bytes += (uint32_t)n;
+    return (u32_t)n;
 }
 
-/* PPPoS output, in the tcpip thread. */
-static u32_t ppp_output(ppp_pcb *pcb, const void *data, u32_t len, void *ctx)
+/* tcpip thread: the PPP link's progress. */
+static void link_status(ppp_pcb *p, int err, void *ctx)
 {
-    (void)pcb; (void)ctx;
-    return write_all(data, len) ? 0 : len;
-}
-
-static void ppp_status(ppp_pcb *pcb, int err, void *ctx)
-{
-    (void)pcb; (void)ctx;
-    if (err == PPPERR_NONE) ppp_up_flag = true;
-    else { ppp_up_flag = false; ppp_result = err; }
-}
-
-static void hang_up(void)
-{
-    gz_wifi_ctl(MODEM_DTR, (void *)0);
-    gz_sleep_ms(HANGUP_MS);
-    gz_wifi_ctl(MODEM_DTR, (void *)1);
-    step = STEP_NONE;
-    line_len = 0;
-}
-
-static void stop_ppp(bool carrier_lost)
-{
-    if (!ppp) return;
-    LOCK_TCPIP_CORE();
-    ppp_close(ppp, carrier_lost);
-    UNLOCK_TCPIP_CORE();
-    /* ppp_close with nocarrier finishes at once; otherwise LCP terminate
-     * takes a few seconds at most. */
-    for (unsigned i = 0; i < 100 && ppp_result < 0; i++) gz_sleep_ms(50);
-    LOCK_TCPIP_CORE();
-    ppp_free(ppp);
-    ppp = NULL;
-    dns_setserver(0, IP_ADDR_ANY);
-    UNLOCK_TCPIP_CORE();
-    ppp_up_flag = false;
-}
-
-static void fail(int error, const char *why)
-{
-    net_log("dialup: %s (%d)\n", why, error);
-    stop_ppp(true);
-    status.state = DIALUP_HANGING_UP;
-    hang_up();
-    set_state(DIALUP_FAILED, error);
-    memset(&status.addr, 0, 3 * sizeof(status.addr));
-    /* No redial after a refused login or with no line plugged in: neither
-     * gets better by itself (a real USR/Megahertz modem with no line
-     * answered NO DIALTONE every 2-30 s). Busy, no answer and a dropped
-     * line do. */
-    if (config.reconnect && error != DIALUP_EAUTH && error != DIALUP_ENODIALTONE) {
-        retry_at = gz_time_ms() + retry_delay;
-        retry_delay = retry_delay * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : retry_delay * 2;
+    (void)p; (void)ctx;
+    if (err == PPPERR_NONE) {
+        char a[16], g[16], d[16];
+        up_since = gz_time_ms();
+        dial_state = NET_DIAL_UP;
+        net_log("modem: PPP up, address %s, peer %s, dns %s\n",
+                net_ntoa(ip4_addr_get_u32(netif_ip4_addr(&pppif)), a),
+                net_ntoa(ip4_addr_get_u32(netif_ip4_gw(&pppif)), g),
+                net_ntoa(ip4_addr_get_u32(ip_2_ip4(dns_getserver(0))), d));
+        return;
     }
+    if (!dial_error && err != PPPERR_USER)
+        dial_error = err == PPPERR_AUTHFAIL ? NET_DIAL_E_AUTH
+                   : err == PPPERR_CONNECT ? NET_DIAL_E_NO_CARRIER : NET_DIAL_E_PPP;
+    net_log("modem: PPP ended (%d)\n", err);
+    ppp_ended = 1;
 }
 
-static void dial(void)
+/* Starts dropping the call: PPP first if it's running, then DTR. */
+static void hang_up(int error)
 {
-    if (!attached || !config.number[0]) return;
-    stop_ppp(true);
-    retry_at = 0;
-    memset(&status.addr, 0, 3 * sizeof(status.addr));
-    status.connect_speed = 0;
-    status.response[0] = 0;
-    memcpy(status.number, config.number, sizeof(status.number));
-    set_state(DIALUP_INITIALIZING, 0);
-    gz_wifi_ctl(MODEM_DTR, (void *)1);
-    net_log("dialup: dialling %s\n", config.number);
-    command("ATZ", STEP_RESET);
+    if (dial_state == NET_DIAL_IDLE || dial_state == NET_DIAL_HANGING_UP) return;
+    if (error && !dial_error) dial_error = error;
+    bool ppp = dial_state == NET_DIAL_NEGOTIATING || dial_state == NET_DIAL_UP;
+    dial_state = NET_DIAL_HANGING_UP;
+    hangup_at = gz_time_ms();
+    dtr_dropped = dtr_raised = false;
+    if (ppp && !ppp_ended) {
+        LOCK_TCPIP_CORE();
+        /* Without a carrier there is no one to send LCP Terminate to. */
+        ppp_close(pcb, error == NET_DIAL_E_NO_CARRIER);
+        UNLOCK_TCPIP_CORE();
+    } else ppp_ended = 1;
 }
 
 static void start_ppp(void)
 {
     LOCK_TCPIP_CORE();
-    ppp_result = -1;
-    ppp_up_flag = false;
-    ppp = pppos_create(&ppp_if, ppp_output, ppp_status, NULL);
-    if (ppp) {
-        ppp_set_default(ppp);
-        ppp_set_usepeerdns(ppp, 1);
-        if (config.user[0])
-            ppp_set_auth(ppp, PPPAUTHTYPE_ANY, config.user, config.password);
-        netif_set_hostname(&ppp_if, "be300");
-        if (ppp_connect(ppp, 0) != ERR_OK) { ppp_free(ppp); ppp = NULL; }
-    }
+    ppp_set_auth(pcb, saved.user[0] ? PPPAUTHTYPE_ANY : PPPAUTHTYPE_NONE, saved.user, saved.password);
+    ppp_set_usepeerdns(pcb, 1);
+    ppp_set_default(pcb);
+    ppp_connect(pcb, 0);
     UNLOCK_TCPIP_CORE();
-    if (!ppp) { fail(GZ_ENOMEM, "PPP couldn't start"); return; }
-    set_state(DIALUP_NEGOTIATING, 0);
-    step = STEP_NONE;
-    step_started = gz_time_ms();
+    ppp_ended = 0;
+    carrier_seen = false;
 }
 
-/* A result line from the modem while in command mode. */
-static void result(const char *text)
+int net_modem_init(int port)
 {
-    if (!text[0]) return;
-    strlcpy(status.response, text, sizeof(status.response));
-    if (!strcmp(text, "ATZ") || !strncmp(text, "AT", 2)) return;   /* echo */
-    if (!strcmp(text, "OK")) {
-        if (step == STEP_RESET) {
-            command(config.init[0] ? config.init : DIALUP_DEFAULT_INIT, STEP_INIT);
-        } else if (step == STEP_INIT) {
-            char cmd[DIALUP_NUMBER_MAX + 8];
-            strlcpy(cmd, config.pulse ? "ATDP" : "ATDT", sizeof(cmd));
-            strlcat(cmd, config.number, sizeof(cmd));
-            set_state(DIALUP_DIALING, 0);
-            command(cmd, STEP_DIAL);
-        }
-        return;
-    }
-    if (!strncmp(text, "CONNECT", 7)) {
-        unsigned speed = 0;
-        for (const char *p = text + 7; *p == ' ' || (*p >= '0' && *p <= '9'); p++)
-            if (*p != ' ') speed = speed * 10 + (unsigned)(*p - '0');
-        status.connect_speed = speed;
-        net_log("dialup: %s\n", text);
-        start_ppp();
-        return;
-    }
-    if (!strcmp(text, "BUSY")) fail(DIALUP_EBUSY, "line busy");
-    else if (!strcmp(text, "NO CARRIER")) fail(DIALUP_ENOCARRIER, "no carrier");
-    else if (!strcmp(text, "NO DIALTONE") || !strcmp(text, "NO DIAL TONE"))
-        fail(DIALUP_ENODIALTONE, "no dial tone");
-    else if (!strcmp(text, "NO ANSWER")) fail(DIALUP_ENOANSWER, "no answer");
-    else if (!strcmp(text, "ERROR")) fail(GZ_EIO, step == STEP_INIT ? "init string refused" : "modem error");
+    int msr = gz_modem_io(MODEM_IO_STATUS, NULL, 0);
+    if (msr < 0) return msr;
+    LOCK_TCPIP_CORE();
+    pcb = pppos_create(&pppif, output, link_status, NULL);
+    if (pcb) netif_set_hostname(&pppif, "be300");
+    UNLOCK_TCPIP_CORE();
+    if (!pcb) return GZ_ENOMEM;
+    uint8_t record[sizeof(saved) + 1];
+    int len = pref_get(DIAL_PREF, record, sizeof(record));
+    if (len == (int)sizeof(saved)) memcpy(&saved, record, sizeof(saved));
+    if (net_dial_config_validate(&saved)) memset(&saved, 0, sizeof(saved));
+    memset(record, 0, sizeof(record));
+    gz_modem_io(MODEM_IO_BIND, NULL, (uint32_t)port);
+    gz_modem_io(MODEM_IO_LINES, NULL, MODEM_DTR | MODEM_RTS);
+    dialer.trace = trace;
+    modem_ok = true;
+    net_log("modem: ready, dialing on request (DCD %s)\n", msr & MODEM_MSR_DCD ? "up" : "down");
+    return 0;
 }
 
-static void command_bytes(const uint8_t *p, int n)
-{
-    for (int i = 0; i < n; i++) {
-        char c = (char)p[i];
-        if (c == '\r' || c == '\n') {
-            line[line_len] = 0;
-            if (line_len) result(line);
-            line_len = 0;
-            if (status.state == DIALUP_NEGOTIATING) {
-                /* CONNECT handed the line to PPP: the rest is PPP. */
-                LOCK_TCPIP_CORE();
-                pppos_input(ppp, p + i + 1, n - i - 1);
-                UNLOCK_TCPIP_CORE();
-                return;
-            }
-        } else if (line_len + 1 < sizeof(line) && c >= ' ') {
-            line[line_len++] = c;
-        }
-    }
-}
+bool net_modem_present(void) { return modem_ok; }
 
-static bool load_config(void)
+void net_modem_poll(void)
 {
-    struct dialup_config c;
-    if (pref_get(DIALUP_PREF, &c, sizeof(c)) != sizeof(c) || c.version != DIALUP_VERSION)
-        return false;
-    c.number[DIALUP_NUMBER_MAX] = c.user[DIALUP_USER_MAX] = 0;
-    c.password[DIALUP_PASSWORD_MAX] = c.init[DIALUP_INIT_MAX] = 0;
-    config = c;
-    memset(&c, 0, sizeof(c));
-    return true;
-}
-
-static int save_config(void)
-{
-    int rv = fs_write_file(PREFS_DIR "/" DIALUP_PREF, &config, sizeof(config));
-    return rv == sizeof(config) ? 0 : rv < 0 ? rv : GZ_EIO;
-}
-
-void modem_attach(void)
-{
-    attached = true;
-    memset(&status, 0, sizeof(status));
-    if (gz_wifi_ctl(MODEM_STATUS, &lines) == 0)
-        memcpy(status.modem, lines.identification, sizeof(status.modem));
-    status.modem[sizeof(status.modem) - 1] = 0;
-    have_config = load_config();
-    status.configured = have_config;
-    retry_delay = RETRY_MIN_MS;
-    set_state(DIALUP_IDLE, 0);
-    net_log("dialup: modem \"%s\" ready\n", status.modem);
-    if (have_config && config.reconnect) dial();
-}
-
-void modem_detach(void)
-{
-    stop_ppp(true);
-    attached = false;
-    step = STEP_NONE;
-    memset(&status, 0, sizeof(status));
-    memset(&config, 0, sizeof(config));
-    net_log("dialup: modem removed\n");
-}
-
-void modem_poll(void)
-{
-    if (!attached) return;
-    int n;
-    while ((n = gz_net_recv(io, sizeof(io))) > 0) {
-        if (status.state == DIALUP_NEGOTIATING || status.state == DIALUP_CONNECTED) {
-            LOCK_TCPIP_CORE();
-            pppos_input(ppp, io, n);
-            UNLOCK_TCPIP_CORE();
-        } else {
-            command_bytes(io, n);
-        }
-    }
-    gz_wifi_ctl(MODEM_STATUS, &lines);
-    status.msr = lines.msr;
+    if (!modem_ok) return;
     uint32_t now = gz_time_ms();
-    if (status.state == DIALUP_NEGOTIATING && ppp_up_flag) {
-        LOCK_TCPIP_CORE();
-        status.addr = ip4_addr_get_u32(netif_ip4_addr(&ppp_if));
-        status.peer = ip4_addr_get_u32(netif_ip4_gw(&ppp_if));
-        status.dns = ip4_addr_get_u32(ip_2_ip4(dns_getserver(0)));
-        UNLOCK_TCPIP_CORE();
-        retry_delay = RETRY_MIN_MS;
-        set_state(DIALUP_CONNECTED, 0);
-        char a[16], d[16];
-        net_log("dialup: PPP up, address %s, dns %s\n", net_ntoa(status.addr, a), net_ntoa(status.dns, d));
+    uint8_t buf[MODEM_IO_MAX];
+    int n;
+    while ((n = gz_modem_io(MODEM_IO_READ, buf, sizeof(buf))) > 0) {
+        unsigned used = 0;
+        if (dial_state == NET_DIAL_STARTING || dial_state == NET_DIAL_DIALING) {
+            used = hayes_input(&dialer, buf, (unsigned)n, now);
+            /* A failed attempt is handled below, with the timeouts. */
+            if (dialer.state == NET_DIAL_NEGOTIATING) {
+                dial_state = NET_DIAL_NEGOTIATING;
+                strlcpy(info, dialer.info, sizeof(info));
+                net_log("modem: CONNECT %u\n", (unsigned)dialer.rate);
+                start_ppp();
+            }
+        }
+        /* While hanging up too: the peer's Terminate-Ack ends PPP. */
+        bool ppp_running = dial_state == NET_DIAL_NEGOTIATING || dial_state == NET_DIAL_UP ||
+                           (dial_state == NET_DIAL_HANGING_UP && !ppp_ended);
+        if (used < (unsigned)n && ppp_running) {
+            rx_bytes += (unsigned)n - used;
+            pppos_input_tcpip(pcb, buf + used, n - (int)used);
+        }
     }
-    if ((status.state == DIALUP_NEGOTIATING || status.state == DIALUP_CONNECTED) && ppp_result >= 0) {
-        int err = ppp_result;
-        fail(err == PPPERR_AUTHFAIL ? DIALUP_EAUTH : err == PPPERR_CONNECT ? DIALUP_ENOCARRIER : DIALUP_EPPP,
-             "PPP ended");
-    } else if (status.state == DIALUP_CONNECTED && !(lines.msr & MODEM_DCD)) {
-        /* The default init string's &C1 makes DCD follow the carrier. */
-        fail(DIALUP_ENOCARRIER, "carrier lost");
-    } else if (status.state == DIALUP_NEGOTIATING && now - step_started > PPP_MS) {
-        fail(DIALUP_EPPP, "PPP negotiation timed out");
-    } else if (step == STEP_RESET && now - step_started > RESET_MS) {
-        fail(DIALUP_ENOMODEM, "modem doesn't answer AT");
-    } else if (step == STEP_INIT && now - step_started > COMMAND_MS) {
-        fail(DIALUP_ENOMODEM, "modem doesn't answer the init string");
-    } else if (step == STEP_DIAL && now - step_started > DIAL_MS) {
-        fail(DIALUP_ENOANSWER, "no connection");
+    if (n == GZ_EDEAD || n == GZ_ENOENT) {
+        /* The card was pulled; the kernel restarts the server for the next one. */
+        modem_ok = false;
+        dial_state = NET_DIAL_IDLE;
+        dial_error = NET_DIAL_E_NO_CARRIER;
+        return;
     }
-    if (retry_at && (int32_t)(now - retry_at) >= 0 && status.state == DIALUP_FAILED) {
-        retry_at = 0;
-        dial();
+    if (dial_state == NET_DIAL_STARTING || dial_state == NET_DIAL_DIALING) {
+        const char *cmd = hayes_command(&dialer);
+        if (cmd) modem_write(cmd, strlen(cmd));
+        hayes_tick(&dialer, now);
+        if (dialer.state == NET_DIAL_IDLE) {
+            net_log("modem: dialing failed (%d)\n", dialer.error);
+            dial_state = NET_DIAL_DIALING;   /* hang_up's guard: a call may be half made */
+            hang_up(dialer.error);
+        } else dial_state = dialer.state;
+    }
+    if (dial_state == NET_DIAL_NEGOTIATING || dial_state == NET_DIAL_UP) {
+        int msr = gz_modem_io(MODEM_IO_STATUS, NULL, 0);
+        if (msr >= 0 && (msr & MODEM_MSR_DCD)) carrier_seen = true;
+        else if (msr >= 0 && carrier_seen) {
+            net_log("modem: carrier lost\n");
+            hang_up(NET_DIAL_E_NO_CARRIER);
+        }
+        if (ppp_ended && dial_state != NET_DIAL_HANGING_UP) hang_up(0);
+    }
+    if (dial_state == NET_DIAL_HANGING_UP) {
+        /* Drop DTR once PPP has said goodbye, or anyway after CLOSE_MS;
+         * PPP itself may take its Terminate-Request retries to finish, and
+         * the next call waits for it (lwIP needs the session dead). */
+        if (!dtr_dropped && (ppp_ended || now - hangup_at >= CLOSE_MS)) {
+            gz_modem_io(MODEM_IO_LINES, NULL, MODEM_RTS);
+            dtr_dropped = true;
+            dtr_at = now;
+        } else if (dtr_dropped && !dtr_raised && now - dtr_at >= HANGUP_MS) {
+            gz_modem_io(MODEM_IO_LINES, NULL, MODEM_DTR | MODEM_RTS);
+            dtr_raised = true;
+        }
+        if (dtr_raised && ppp_ended) {
+            dial_state = NET_DIAL_IDLE;
+            net_log("modem: hung up\n");
+        }
     }
 }
 
-int modem_request(int op, void *buf)
+int net_modem_request(uint32_t op, void *buf)
 {
-    if (!attached) return GZ_ENOENT;
+    if (!modem_ok) return GZ_ENOENT;
     switch (op) {
-    case NET_DIALUP_STATUS:
-        status.configured = have_config;
-        memcpy(buf, &status, sizeof(status));
-        return 0;
-    case NET_DIALUP_CONFIG: {
-        struct dialup_config *out = buf;
-        if (!have_config) return GZ_ENOENT;
-        *out = config;
-        memset(out->password, 0, sizeof(out->password));
+    case NET_DIAL: {
+        struct net_dial_config next = *(struct net_dial_config *)buf;
+        memset(buf, 0, sizeof(next));
+        int rv = net_dial_config_validate(&next);
+        if (!rv && dial_state != NET_DIAL_IDLE) rv = GZ_EBUSY;
+        if (!rv && !next.number[0]) {
+            if (!saved.number[0]) rv = GZ_EINVAL;
+            else next = saved;
+        } else if (!rv && next.keep_password) {
+            memcpy(next.password, saved.password, sizeof(next.password));
+        }
+        if (rv) { memset(&next, 0, sizeof(next)); return rv; }
+        next.has_password = next.keep_password = 0;
+        rv = pref_put(DIAL_PREF, &next, sizeof(next));
+        if (rv < 0) net_log("modem: settings not saved (%d)\n", rv);
+        saved = next;
+        memset(&next, 0, sizeof(next));
+        dial_error = NET_DIAL_E_NONE;
+        hayes_start(&dialer, &saved, gz_time_ms());
+        dial_state = dialer.state;
+        net_log("modem: dialing\n");
         return 0;
     }
-    case NET_DIALUP_CONNECT: {
-        struct dialup_config *in = buf;
-        in->number[DIALUP_NUMBER_MAX] = in->user[DIALUP_USER_MAX] = 0;
-        in->password[DIALUP_PASSWORD_MAX] = in->init[DIALUP_INIT_MAX] = 0;
-        if (in->version != DIALUP_VERSION || !in->number[0]) return GZ_EINVAL;
-        for (const char *p = in->number; *p; p++)
-            if (!strchr("0123456789,*#WPwp ", *p)) return GZ_EINVAL;
-        for (const char *p = in->init; *p; p++)
-            if (*p < ' ' || *p > '~') return GZ_EINVAL;
-        bool keep_password = !in->password[0] && have_config && !strcmp(in->user, config.user);
-        char password[DIALUP_PASSWORD_MAX + 1];
-        memcpy(password, config.password, sizeof(password));
-        config = *in;
-        if (keep_password) memcpy(config.password, password, sizeof(password));
-        memset(password, 0, sizeof(password));
-        memset(in->password, 0, sizeof(in->password));
-        config.reconnect = 1;
-        int rv = save_config();
-        if (rv) return rv;
-        have_config = true;
-        retry_delay = RETRY_MIN_MS;
-        dial();
+    case NET_HANGUP:
+        hang_up(0);
+        return 0;
+    case NET_DIAL_STATUS: {
+        struct net_dial_status *st = buf;
+        memset(st, 0, sizeof(*st));
+        st->state = (uint32_t)dial_state;
+        st->error = dial_error;
+        st->rate = dialer.rate;
+        st->rx_bytes = rx_bytes;
+        st->tx_bytes = tx_bytes;
+        strlcpy(st->modem, info[0] ? info : dialer.info, sizeof(st->modem));
+        if (dial_state == NET_DIAL_UP) {
+            st->online_ms = gz_time_ms() - up_since;
+            LOCK_TCPIP_CORE();
+            st->addr = ip4_addr_get_u32(netif_ip4_addr(&pppif));
+            st->peer = ip4_addr_get_u32(netif_ip4_gw(&pppif));
+            st->dns = ip4_addr_get_u32(ip_2_ip4(dns_getserver(0)));
+            UNLOCK_TCPIP_CORE();
+        }
         return 0;
     }
-    case NET_DIALUP_DISCONNECT:
-    case NET_DIALUP_FORGET:
-        config.reconnect = 0;
-        retry_at = 0;
-        if (status.state != DIALUP_IDLE) {
-            stop_ppp(false);
-            status.state = DIALUP_HANGING_UP;
-            hang_up();
-        }
-        memset(&status.addr, 0, 3 * sizeof(status.addr));
-        set_state(DIALUP_IDLE, 0);
-        if (op == NET_DIALUP_FORGET) {
-            memset(&config, 0, sizeof(config));
-            have_config = false;
-            int rv = pref_delete(DIALUP_PREF);
-            return rv == GZ_ENOENT ? 0 : rv;
-        }
-        return have_config ? save_config() : 0;
+    case NET_DIAL_CONFIG: {
+        struct net_dial_config *c = buf;
+        *c = saved;
+        memset(c->password, 0, sizeof(c->password));
+        c->has_password = saved.password[0] != 0;
+        return 0;
+    }
     }
     return GZ_EINVAL;
 }
 
-void modem_fill_status(struct net_status *st)
+int net_modem_state(void)
 {
-    if (status.state != DIALUP_CONNECTED) return;
-    st->addr = status.addr;
-    st->mask = 0xFFFFFFFFu;
-    st->gateway = status.peer;
-    st->dns = status.dns;
+    switch (dial_state) {
+    case NET_DIAL_STARTING: case NET_DIAL_DIALING: case NET_DIAL_NEGOTIATING:
+        return NET_ASSOCIATING;
+    case NET_DIAL_UP:
+        return NET_UP;
+    default:
+        return NET_DISCONNECTED;
+    }
 }
+
+void net_modem_status(struct net_status *st)
+{
+    memset(st, 0, sizeof(*st));
+    st->state = (uint32_t)net_modem_state();
+    st->kind = GZ_NET_MODEM;
+    if (dial_state == NET_DIAL_UP) {
+        LOCK_TCPIP_CORE();
+        st->addr = ip4_addr_get_u32(netif_ip4_addr(&pppif));
+        st->mask = ip4_addr_get_u32(netif_ip4_netmask(&pppif));
+        st->gateway = ip4_addr_get_u32(netif_ip4_gw(&pppif));
+        st->dns = ip4_addr_get_u32(ip_2_ip4(dns_getserver(0)));
+        UNLOCK_TCPIP_CORE();
+    }
+}
+#endif

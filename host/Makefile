@@ -275,7 +275,7 @@ settings-test: ../tests/native/settings.c ../tests/native/settings_sys.h ../apps
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/settings_sys.h \
 	    -o ../out/host/settings-test ../tests/native/settings.c hostres.c $(GFX) \
-	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/hardicon.c ../lib/libc/wifi.c ../lib/ui/input.c $(KEYBOARD)
+	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/ui/text.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/hardicon.c ../lib/libc/wifi.c ../lib/ui/input.c $(KEYBOARD)
 	../out/host/settings-test
 .PHONY: settings-test
 
@@ -491,7 +491,7 @@ store-worker-test: $(O)/libwolfssl.a
 module-test: ../tests/native/module.c ../kernel/module.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/module-test ../tests/native/module.c
-	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko ../out/drivers/btuart.ko ../out/drivers/3c589.ko ../out/drivers/hermes.ko ../out/drivers/modem.ko
+	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko ../out/drivers/cfuart.ko ../out/drivers/3c589.ko ../out/drivers/hermes.ko
 
 .PHONY: service-test
 service-test: ../tests/native/service.c ../kernel/service.c
@@ -660,3 +660,54 @@ bluetooth-serial-test:
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_serial.c -o ../out/host/bluetooth-serial-test
 	../out/host/bluetooth-serial-test
 .PHONY: bluetooth-serial-test
+
+modem-chat-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/modem_chat.c ../servers/net/hayes.c ../lib/libc/net_dial.c -o ../out/host/modem-chat-test
+	../out/host/modem-chat-test
+.PHONY: modem-chat-test
+
+modem-driver-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/modem_driver.c -o ../out/host/modem-driver-test
+	../out/host/modem-driver-test
+.PHONY: modem-driver-test
+
+bluetooth-client-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_client.c -o ../out/host/bluetooth-client-test
+	../out/host/bluetooth-client-test
+.PHONY: bluetooth-client-test
+
+connectivity-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/connectivity.c hostres.c $(GFX) $(SB) -o ../out/host/connectivity-test
+	../out/host/connectivity-test
+.PHONY: connectivity-test
+
+SBC := $(wildcard ../third_party/sbc/srce/*.c)
+bluetooth-audio-test:
+	$(CC) $(CFLAGS) -I../third_party/sbc/include -fsanitize=address,undefined -fno-sanitize=shift \
+	    ../tests/native/bluetooth_audio.c ../servers/bluetooth/serial.c ../servers/bluetooth/source_sdp.c $(SBC) -o ../out/host/bluetooth-audio-test
+	../out/host/bluetooth-audio-test ../out/host/bluetooth-tone.sbc
+.PHONY: bluetooth-audio-test
+
+audio-output-test:
+	$(CC) $(CFLAGS) -include ../tests/native/audio_output_sys.h -fsanitize=address,undefined ../tests/native/audio_output.c -o ../out/host/audio-output-test
+	../out/host/audio-output-test
+.PHONY: audio-output-test
+
+bluetooth-source-sdp-test:
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_source_sdp.c -o ../out/host/bluetooth-source-sdp-test
+	../out/host/bluetooth-source-sdp-test
+.PHONY: bluetooth-source-sdp-test
+
+bluetooth-uart-test:
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_uart.c -o ../out/host/bluetooth-uart-test
+	../out/host/bluetooth-uart-test
+.PHONY: bluetooth-uart-test
+
+wifi-retry-test: ../tests/native/wifi_retry.c ../servers/net/wifi_retry.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/wifi_retry.c -o ../out/host/wifi-retry-test
+	../out/host/wifi-retry-test
+.PHONY: wifi-retry-test

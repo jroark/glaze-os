@@ -1,24 +1,27 @@
 #!/usr/bin/env python3
-"""A minimal PPP server for dial-up tests: the be300 emulator's --modem
-HOST:PORT connects here after ATD (be300 src/hw/modem.c).
+"""A minimal PPP peer (an ISP's access server) for the emulated CF modem.
 
-It speaks PPP in HDLC-like framing (RFC 1662), LCP (RFC 1661), PAP
-(RFC 1334) or CHAP-MD5 (RFC 1994) and IPCP with DNS addresses (RFC 1332,
-RFC 1877). It gives the guest 10.64.0.2, is itself 10.64.0.1, answers ICMP
-echo for any address and DNS A queries (localhost -> 127.0.0.1, anything
-else NXDOMAIN). It is not a router: other IP traffic is dropped.
+The be300 emulator's --cf-modem tcp:127.0.0.1:PORT connects a dialed call to
+this listener. It speaks PPP in HDLC-like framing (RFC 1662): LCP (RFC 1661)
+with optional PAP (RFC 1334), IPCP (RFC 1332) assigning 10.64.0.2 with this
+peer as router and DNS server (RFC 1877), and answers ICMP echo requests and
+DNS A queries (every name is 10.64.0.1). No root, no pppd and no kernel PPP
+support are needed. Each call is one TCP connection.
 
-  tests/ppp_peer.py [--port 5555] [--auth pap|chap] [--user glaze --password secret]
+    tests/ppp_peer.py [--port 5640] [--user glaze --password ktest]
 """
 import argparse
-import hashlib
-import os
 import socket
 import struct
 import sys
 
-PEER, GUEST, DNS = bytes([10, 64, 0, 1]), bytes([10, 64, 0, 2]), bytes([10, 64, 0, 1])
-LCP, PAP, CHAP, IPCP, IP = 0xC021, 0xC023, 0xC223, 0x8021, 0x0021
+LOCAL = bytes([10, 64, 0, 1])
+REMOTE = bytes([10, 64, 0, 2])
+LCP, PAP, IPCP, IP = 0xC021, 0xC023, 0x8021, 0x0021
+
+
+def log(*args):
+    print("ppp_peer:", *args, flush=True)
 
 
 def fcs16(data):
@@ -30,249 +33,227 @@ def fcs16(data):
     return fcs ^ 0xFFFF
 
 
-def log(*a):
-    print('ppp-peer:', *a, flush=True)
+def frame(protocol, payload):
+    body = bytes([0xFF, 0x03]) + struct.pack(">H", protocol) + payload
+    body += struct.pack("<H", fcs16(body))
+    out = bytearray([0x7E])
+    for b in body:
+        # Escape the flag, the escape and every control character (the
+        # default ACCM; the peer may ask for less, but more is always fine).
+        if b < 0x20 or b in (0x7D, 0x7E):
+            out += bytes([0x7D, b ^ 0x20])
+        else:
+            out.append(b)
+    out.append(0x7E)
+    return bytes(out)
 
 
-class Peer:
-    def __init__(self, conn, args):
-        self.conn, self.args = conn, args
-        self.buf, self.ident = bytearray(), 1
-        self.lcp_acked = self.lcp_ours_acked = False
-        self.authed = False
-        self.ipcp_started = False
-        self.challenge = b''
+def checksum(data):
+    if len(data) & 1:
+        data += b"\0"
+    s = sum(struct.unpack("!%dH" % (len(data) // 2), data))
+    while s >> 16:
+        s = (s & 0xFFFF) + (s >> 16)
+    return ~s & 0xFFFF
 
-    # ---- framing -------------------------------------------------------
-    def send(self, proto, payload):
-        body = b'\xff\x03' + struct.pack('>H', proto) + payload
-        body += struct.pack('<H', fcs16(body))
-        out = bytearray(b'\x7e')
-        for b in body:
-            # Escape flag, escape and every control character (default ACCM).
-            if b in (0x7E, 0x7D) or b < 0x20:
-                out += bytes([0x7D, b ^ 0x20])
-            else:
-                out.append(b)
-        out.append(0x7E)
-        self.conn.sendall(bytes(out))
 
-    def frames(self, data):
-        for b in data:
-            if b == 0x7E:
-                if len(self.buf) >= 4:
-                    yield bytes(self.buf)
-                self.buf.clear()
-                self.escape = False
-            elif b == 0x7D:
-                self.escape = True
-            else:
-                self.buf.append(b ^ 0x20 if getattr(self, 'escape', False) else b)
-                self.escape = False
+def options(data):
+    i = 0
+    while i + 2 <= len(data):
+        kind, length = data[i], data[i + 1]
+        if length < 2 or i + length > len(data):
+            return
+        yield kind, data[i + 2:i + length]
+        i += length
 
-    def control(self, proto, code, ident, data=b''):
-        self.send(proto, struct.pack('>BBH', code, ident, 4 + len(data)) + data)
+
+def pack_options(opts):
+    return b"".join(bytes([k, len(v) + 2]) + v for k, v in opts)
+
+
+class Call:
+    def __init__(self, conn, user, password):
+        self.conn, self.user, self.password = conn, user, password
+        self.ident = 0
+        self.lcp_up = self.lcp_acked = False
+        self.authed = user is None
+        self.ipcp_acked = self.ipcp_peer_acked = False
+        self.announced = False
+
+    def send(self, protocol, payload):
+        self.conn.sendall(frame(protocol, payload))
+
+    def control(self, protocol, code, ident, data=b""):
+        self.send(protocol, struct.pack(">BBH", code, ident, len(data) + 4) + data)
 
     def next_id(self):
         self.ident = (self.ident + 1) & 0xFF
         return self.ident
 
-    # ---- LCP -----------------------------------------------------------
-    def lcp_request(self):
-        opts = struct.pack('>BBI', 5, 6, 0x5A5A1234)        # magic number
-        if self.args.auth == 'pap':
-            opts += struct.pack('>BBH', 3, 4, PAP)
-        elif self.args.auth == 'chap':
-            opts += struct.pack('>BBHB', 3, 5, CHAP, 5)        # MD5
-        self.control(LCP, 1, self.next_id(), opts)
+    def start(self):
+        opts = [(5, struct.pack(">I", 0x47A5E300))]
+        if self.user is not None:
+            opts.append((3, struct.pack(">H", PAP)))
+        self.control(LCP, 1, self.next_id(), pack_options(opts))
 
-    def options(self, data):
-        i = 0
-        while i + 2 <= len(data):
-            t, n = data[i], data[i + 1]
-            if n < 2 or i + n > len(data):
-                return
-            yield t, data[i:i + n]
-            i += n
+    def start_ipcp(self):
+        if self.lcp_up and self.authed:
+            self.control(IPCP, 1, self.next_id(), pack_options([(3, LOCAL)]))
 
     def lcp(self, code, ident, data):
-        if code == 1:                                         # Configure-Request
-            reject = b''.join(o for t, o in self.options(data) if t not in (1, 2, 5))
-            if reject:
-                self.control(LCP, 4, ident, reject)
+        if code == 1:                       # Configure-Request: take it as offered
+            rejected = [(k, v) for k, v in options(data) if k not in (1, 2, 5, 7, 8)]
+            if rejected:
+                self.control(LCP, 4, ident, pack_options(rejected))
                 return
             self.control(LCP, 2, ident, data)
             self.lcp_acked = True
-            if not self.lcp_ours_acked:
-                self.lcp_request()
-        elif code == 2:                                       # Configure-Ack
-            self.lcp_ours_acked = True
+        elif code == 2:                     # our request acknowledged
+            self.lcp_up = True
+            log("LCP up")
+            self.start_ipcp()
         elif code in (3, 4):
-            log('guest refused our LCP options', code)
-            self.lcp_request()
-        elif code == 5:                                       # Terminate-Request
+            log("LCP options refused; retrying without them")
+            self.control(LCP, 1, self.next_id(), pack_options([(5, struct.pack(">I", 0x47A5E301))]))
+        elif code == 5:
+            log("LCP terminate")
             self.control(LCP, 6, ident)
-            log('guest terminated the link')
-        elif code == 9:                                       # Echo-Request
-            self.control(LCP, 10, ident, struct.pack('>I', 0x5A5A1234) + data[4:])
-        if self.lcp_acked and self.lcp_ours_acked and not self.authed:
-            if self.args.auth == 'none':
-                self.authed = True
-            elif self.args.auth == 'chap' and not self.challenge:
-                self.challenge = os.urandom(16)
-                self.control(CHAP, 1, self.next_id(), bytes([16]) + self.challenge + b'peer')
+        elif code == 9:                     # Echo-Request
+            self.control(LCP, 10, ident, struct.pack(">I", 0x47A5E300) + data[4:])
 
     def pap(self, code, ident, data):
-        if code != 1 or not data:
+        if code != 1:
             return
         n = data[0]
-        user, rest = data[1:1 + n], data[1 + n:]
-        password = rest[1:1 + rest[0]] if rest else b''
-        ok = user == self.args.user.encode() and password == self.args.password.encode()
-        log('PAP', user.decode(errors='replace'), 'accepted' if ok else 'refused')
-        self.control(PAP, 2 if ok else 3, ident, b'\x00')
-        self.authed = ok
+        user = data[1:1 + n].decode(errors="replace")
+        password = data[2 + n:2 + n + data[1 + n]].decode(errors="replace")
+        ok = self.user is None or (user == self.user and password == self.password)
+        log("PAP %s for %r" % ("accepted" if ok else "refused", user))
+        self.control(PAP, 2 if ok else 3, ident, b"\0")
+        if ok:
+            self.authed = True
+            self.start_ipcp()
 
-    def chap(self, code, ident, data):
-        if code != 2 or not data:
-            return
-        value = data[1:1 + data[0]]
-        want = hashlib.md5(bytes([ident]) + self.args.password.encode() + self.challenge).digest()
-        ok = value == want
-        log('CHAP-MD5', 'accepted' if ok else 'refused')
-        self.control(CHAP, 3 if ok else 4, ident)
-        self.authed = ok
-
-    # ---- IPCP ----------------------------------------------------------
     def ipcp(self, code, ident, data):
-        if not self.authed:
-            return
-        if not self.ipcp_started:
-            self.ipcp_started = True
-            self.control(IPCP, 1, self.next_id(), struct.pack('>BB', 3, 6) + PEER)
         if code == 1:
-            reject, nak = b'', b''
-            for t, o in self.options(data):
-                if t == 3 and o[2:] != GUEST:
-                    nak += bytes([3, 6]) + GUEST
-                elif t == 129 and o[2:] != DNS:
-                    nak += bytes([129, 6]) + DNS
-                elif t == 131 and o[2:] != DNS:
-                    nak += bytes([131, 6]) + DNS
-                elif t not in (3, 129, 131):
-                    reject += o
-            if reject:
-                self.control(IPCP, 4, ident, reject)
-            elif nak:
-                self.control(IPCP, 3, ident, nak)
+            rejected, naks = [], []
+            for k, v in options(data):
+                if k == 3:
+                    if v != REMOTE:
+                        naks.append((3, REMOTE))
+                elif k == 129:
+                    if v != LOCAL:
+                        naks.append((129, LOCAL))
+                else:
+                    rejected.append((k, v))     # VJ compression, secondary DNS, ...
+            if rejected:
+                self.control(IPCP, 4, ident, pack_options(rejected))
+            elif naks:
+                self.control(IPCP, 3, ident, pack_options(naks))
             else:
                 self.control(IPCP, 2, ident, data)
-                log('IPCP up: guest', '.'.join(map(str, GUEST)))
+                self.ipcp_peer_acked = True
+        elif code == 2:
+            self.ipcp_acked = True
+        elif code == 5:
+            self.control(IPCP, 6, ident)
+        if self.ipcp_acked and self.ipcp_peer_acked and not self.announced:
+            self.announced = True
+            log("IPCP up: peer %s, us %s" % (socket.inet_ntoa(REMOTE), socket.inet_ntoa(LOCAL)))
 
-    # ---- IP --------------------------------------------------------------
-    @staticmethod
-    def checksum(data):
-        if len(data) & 1:
-            data += b'\0'
-        s = sum(struct.unpack('>%dH' % (len(data) // 2), data))
-        while s >> 16:
-            s = (s & 0xFFFF) + (s >> 16)
-        return ~s & 0xFFFF
-
-    def ip_reply(self, src, dst, proto, payload):
-        hdr = struct.pack('>BBHHHBBH4s4s', 0x45, 0, 20 + len(payload), 0, 0, 64, proto, 0, src, dst)
-        hdr = hdr[:10] + struct.pack('>H', self.checksum(hdr)) + hdr[12:]
-        self.send(IP, hdr + payload)
-
-    def ip(self, pkt):
-        if len(pkt) < 20 or pkt[0] >> 4 != 4:
+    def ip(self, packet):
+        if len(packet) < 20 or packet[0] >> 4 != 4:
             return
-        hl = (pkt[0] & 15) * 4
-        proto, src, dst, body = pkt[9], pkt[12:16], pkt[16:20], pkt[hl:]
-        if proto == 1 and body[:1] == b'\x08':                # ICMP echo request
-            reply = b'\x00\x00\x00\x00' + body[4:]
-            reply = reply[:2] + struct.pack('>H', self.checksum(reply)) + reply[4:]
-            self.ip_reply(dst, src, 1, reply)
-        elif proto == 17 and len(body) >= 8 and struct.unpack('>H', body[2:4])[0] == 53:
-            sport = struct.unpack('>H', body[0:2])[0]
-            answer = self.dns(body[8:])
-            if answer:
-                udp = struct.pack('>HHHH', 53, sport, 8 + len(answer), 0) + answer
-                self.ip_reply(dst, src, 17, udp)
+        ihl = (packet[0] & 15) * 4
+        proto, src, dst = packet[9], packet[12:16], packet[16:20]
+        body = packet[ihl:]
+        if proto == 1 and body[:1] == b"\x08":          # ICMP echo request
+            reply = b"\x00\x00\x00\x00" + body[4:]
+            reply = reply[:2] + struct.pack("!H", checksum(reply)) + reply[4:]
+            log("ping from %s" % socket.inet_ntoa(src))
+            self.send_ip(1, dst, src, reply)
+        elif proto == 17 and len(body) >= 8 and struct.unpack("!H", body[2:4])[0] == 53:
+            sport = struct.unpack("!H", body[0:2])[0]
+            query = body[8:]
+            end = 12
+            while end < len(query) and query[end]:
+                end += query[end] + 1
+            question = query[12:end + 5]
+            answer = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + LOCAL
+            dns = query[:2] + b"\x81\x80" + struct.pack("!HHHH", 1, 1, 0, 0) + question + answer
+            udp = struct.pack("!HHHH", 53, sport, 8 + len(dns), 0) + dns
+            log("DNS query answered")
+            self.send_ip(17, dst, src, udp)
 
-    def dns(self, q):
-        if len(q) < 12:
-            return None
-        i, labels = 12, []
-        while i < len(q) and q[i]:
-            labels.append(q[i + 1:i + 1 + q[i]].decode(errors='replace'))
-            i += 1 + q[i]
-        question = q[12:i + 5]
-        name = '.'.join(labels).lower()
-        qtype = struct.unpack('>H', q[i + 1:i + 3])[0] if i + 3 <= len(q) else 0
-        log('DNS', name, qtype)
-        if name == 'localhost' and qtype == 1:
-            return (q[:2] + struct.pack('>HHHHH', 0x8180, 1, 1, 0, 0) + question +
-                    struct.pack('>HHHIH', 0xC00C, 1, 1, 60, 4) + bytes([127, 0, 0, 1]))
-        return q[:2] + struct.pack('>HHHHH', 0x8183, 1, 0, 0, 0) + question
+    def send_ip(self, proto, src, dst, payload):
+        header = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(payload), 0, 0, 64, proto, 0, src, dst)
+        header = header[:10] + struct.pack("!H", checksum(header)) + header[12:]
+        self.send(IP, header + payload)
 
-    # ---- dispatch -------------------------------------------------------
-    def frame(self, f):
-        if len(f) < 6 or fcs16(f[:-2]) != struct.unpack('<H', f[-2:])[0]:
-            log('bad frame', f.hex())
+    def packet(self, data):
+        if len(data) < 4 or fcs16(data[:-2]) != struct.unpack("<H", data[-2:])[0]:
             return
-        f = f[:-2]
-        if f[:2] == b'\xff\x03':
-            f = f[2:]
-        proto = struct.unpack('>H', f[:2])[0]
-        data = f[2:]
-        if proto == IP:
+        data = data[:-2]
+        if data[:2] == b"\xff\x03":
+            data = data[2:]
+        if data[0] & 1:                     # compressed protocol field
+            protocol, data = data[0], data[1:]
+        else:
+            protocol, data = struct.unpack(">H", data[:2])[0], data[2:]
+        if protocol in (LCP, PAP, IPCP):
+            if len(data) < 4:
+                return
+            code, ident, length = struct.unpack(">BBH", data[:4])
+            body = data[4:length]
+            {LCP: self.lcp, PAP: self.pap, IPCP: self.ipcp}[protocol](code, ident, body)
+        elif protocol == IP:
             self.ip(data)
-            return
-        if len(data) < 4:
-            return
-        code, ident, length = struct.unpack('>BBH', data[:4])
-        body = data[4:length]
-        handler = {LCP: self.lcp, PAP: self.pap, CHAP: self.chap, IPCP: self.ipcp}.get(proto)
-        if handler:
-            handler(code, ident, body)
-        elif self.lcp_acked:
-            self.control(LCP, 8, self.next_id(), struct.pack('>H', proto) + data[:64])
+        else:                               # IPv6CP, CCP, ...: Protocol-Reject
+            self.control(LCP, 8, self.next_id(), struct.pack(">H", protocol) + data)
 
     def run(self):
+        self.start()
+        buf, escape = bytearray(), False
         while True:
-            data = self.conn.recv(4096)
-            if not data:
-                log('guest hung up')
+            chunk = self.conn.recv(4096)
+            if not chunk:
                 return
-            for f in self.frames(data):
-                self.frame(f)
+            for b in chunk:
+                if b == 0x7E:
+                    if buf:
+                        self.packet(bytes(buf))
+                    buf, escape = bytearray(), False
+                elif b == 0x7D:
+                    escape = True
+                else:
+                    buf.append(b ^ 0x20 if escape else b)
+                    escape = False
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--port', type=int, default=5555)
-    parser.add_argument('--auth', choices=('pap', 'chap', 'none'), default='pap')
-    parser.add_argument('--user', default='glaze')
-    parser.add_argument('--password', default='secret')
-    parser.add_argument('--once', action='store_true', help='exit after the first call')
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--port", type=int, default=5640)
+    ap.add_argument("--user", help="require PAP with this user name")
+    ap.add_argument("--password", default="")
+    ap.add_argument("--calls", type=int, default=0, help="exit after this many calls (0: forever)")
+    args = ap.parse_args()
     server = socket.socket()
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('127.0.0.1', args.port))
+    server.bind(("127.0.0.1", args.port))
     server.listen(1)
-    log('listening on', args.port, 'auth', args.auth)
-    while True:
+    log("listening on 127.0.0.1:%d" % args.port)
+    calls = 0
+    while not args.calls or calls < args.calls:
         conn, _ = server.accept()
-        log('call connected')
+        calls += 1
+        log("call %d connected" % calls)
         try:
-            Peer(conn, args).run()
+            Call(conn, args.user, args.password).run()
         except (ConnectionError, OSError) as e:
-            log('call ended:', e)
+            log("call ended: %s" % e)
         conn.close()
-        if args.once:
-            return 0
+        log("call %d hung up" % calls)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

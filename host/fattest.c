@@ -22,6 +22,9 @@
 static FILE *img;
 static struct gz_cf_info card;
 static int failures;
+static uint32_t test_ms;
+static unsigned zero_reads, raw_reads;
+uint32_t card_now_ms(void) { return test_ms; }
 
 #define CHECK(cond, what) do { \
     if (cond) printf("fattest: PASS %s\n", what); \
@@ -36,6 +39,8 @@ int card_raw_info(struct gz_cf_info *info)
 
 int card_raw_read(uint32_t lba, uint32_t count, void *buf)
 {
+    ++raw_reads;
+    if (zero_reads) { memset(buf, 0, count * GZ_CF_SECTOR); return 0; }
     if (!card.present || count > GZ_CF_IO_MAX / GZ_CF_SECTOR || lba + count > card.sectors)
         return GZ_EINVAL;
     fseek(img, (long)lba * GZ_CF_SECTOR, SEEK_SET);
@@ -231,7 +236,25 @@ int main(int argc, char **argv)
 
     card_check();
     CHECK(card_status() == GZ_ENOENT && card_stat("", &st) == GZ_ENOENT, "no card");
+    zero_reads = 1;
     insert(true);
+    CHECK(card_status() == GZ_ECORRUPT, "not-ready bridge initially returns blank sectors");
+    unsigned reads_before = raw_reads;
+    test_ms = 999; card_check();
+    CHECK(raw_reads == reads_before, "mount retries are rate limited");
+    for (unsigned attempt = 1; attempt < 8; ++attempt) {
+        test_ms = attempt * 1000; card_check();
+    }
+    reads_before = raw_reads; zero_reads = 0;
+    test_ms += 1000; card_check();
+    CHECK(raw_reads == reads_before && card_status() == GZ_ECORRUPT,
+          "mount retries stop after eight attempts");
+    insert(false);
+    zero_reads = 1; insert(true);
+    zero_reads = 0; test_ms += 999; reads_before = raw_reads; card_check();
+    CHECK(raw_reads == reads_before, "new insertion restarts retry delay");
+    ++test_ms; card_check();
+    CHECK(card_status() == 0, "delayed bridge mounts on retry without reinsertion");
     CHECK(card_status() == 0, "mount");
     CHECK(card_path("/Card") && !*card_path("/Card") && !strcmp(card_path("/Card/a/b"), "/a/b") &&
           !card_path("/Cards") && !card_path("/Documents"), "card_path");

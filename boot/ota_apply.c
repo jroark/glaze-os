@@ -288,6 +288,11 @@ static bool current_matches(uint32_t logical, uint32_t b)
     for (uint32_t p = 0; p < PPB; p++) {
         if (nand_boot_read(map, boot_raw, NULL, logical * PPB + p, page_buf, true))
             return false;
+        /* A valid header including its own CRC has a constant CRC residue.
+         * Version/build/image-CRC changes can leave this block's CRC equal
+         * even though the header must be replaced (physical BE-300 OTA). */
+        if (b == 0 && p == 0 && memcmp(page_buf, &new_kernel, sizeof(new_kernel)))
+            return false;
         crc = ota_crc32(crc, page_buf, PAGE);
     }
     return crc == journal.block_crc[b];

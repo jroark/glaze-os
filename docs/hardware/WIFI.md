@@ -32,6 +32,10 @@ The last explicit choice and its credentials are saved in
 `/Library/Preferences/net.wifi` and reconnected at boot. Disconnect disables
 automatic connection while retaining that record. Forget Network disconnects
 and deletes it, including after a failed connection or explicit disconnect.
+After a transient link loss, the network server retries the saved network
+with a delay increasing from 2 to 30 seconds. It waits for an in-flight
+association and stops retrying after a PSK authentication failure, explicit
+Disconnect, or Forget Network. A successful connection resets the delay.
 Only one network is remembered. Preferences use the existing local filesystem;
 they are not encrypted at rest. Legacy version-1 open-network preferences are
 migrated to version 2. Credentials never appear in status replies or logs.
@@ -79,7 +83,7 @@ Use the matching be300 security worktree for model tests:
 
 ```sh
 make -C host net-driver-test settings-test xi825-test wl54cf-driver-test \
-  wifi-supplicant-test BE300_SOURCE=/path/to/be300-security
+  wifi-supplicant-test wifi-retry-test BE300_SOURCE=/path/to/be300-security
 ```
 
 The supplicant test uses an independent OpenSSL authenticator and published

@@ -12,7 +12,8 @@ static void irq_restore(uint32_t flags) {}
 static struct proc processes[64];
 static unsigned spawned, exited, usb_cancelled;
 static uint64_t clock_us;
-static bool connected, fail_spawn, bluetooth_connected;
+static bool connected, fail_spawn, bluetooth_connected, modem_connected;
+static uint32_t modem_gen;
 static uint32_t bluetooth_generation;
 static uint32_t card_generation;
 static char control_name[16];
@@ -36,6 +37,8 @@ bool bt_present(void) { return bluetooth_connected; }
 bool bt_ready(void) { return false; }
 uint32_t bt_generation(void) { return bluetooth_generation; }
 bool net_up(void) { return connected; }
+bool modem_present(void) { return modem_connected; }
+uint32_t modem_generation(void) { return modem_gen; }
 uint32_t net_driver_kind(void) { return connected ? GZ_NET_NE2000 : 0; }
 uint32_t net_driver_pages(void) { return connected ? 6 : 0; }
 uint32_t net_generation(void) { return card_generation; }
@@ -123,6 +126,15 @@ int main(void)
     assert(!proc_by_pid(bt_pid) && states[4].pid && states[4].pid!=bt_pid);
     bt_pid=states[4].pid; bluetooth_connected=false; reconcile();
     assert(!states[4].pid && !proc_by_pid(bt_pid));
-    puts("services: capabilities, absent hardware, start/stop, restart, backoff and dependency teardown PASS");
+    /* A modem card starts the network service on its own, as GZ_NET_MODEM. */
+    modem_connected = true; modem_gen++; clock_us += 1000000; reconcile();
+    int net_pid = states[1].pid; assert(net_pid);
+    assert(proc_by_pid(net_pid)->modem_generation == modem_gen);
+    assert(!sys_services(&user, 1, sizeof(observed)) && observed.network_kind == GZ_NET_MODEM);
+    modem_gen++; clock_us += 1000000; reconcile();   /* a modem swap restarts it */
+    assert(!proc_by_pid(net_pid) && states[1].pid && states[1].pid != net_pid);
+    net_pid = states[1].pid; modem_connected = false; modem_gen++; reconcile();
+    assert(!states[1].pid && !proc_by_pid(net_pid));
+    puts("services: capabilities, absent hardware, modem, start/stop, restart, backoff and dependency teardown PASS");
     return 0;
 }

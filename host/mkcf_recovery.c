@@ -9,6 +9,7 @@
 static FILE *image;
 static struct gz_cf_info card={.present=1,.generation=1,.model="Offline recovery fixture"};
 int card_raw_info(struct gz_cf_info *out) { *out=card;return 0; }
+uint32_t card_now_ms(void) { return 0; }
 int card_raw_read(uint32_t lba,uint32_t count,void *out)
 {
     if (!count || count>8 || lba>=card.sectors || count>card.sectors-lba) return GZ_EINVAL;

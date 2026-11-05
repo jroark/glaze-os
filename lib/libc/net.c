@@ -2,7 +2,6 @@
 
 #include <glaze/net.h>
 #include <glaze/wifi.h>
-#include <glaze/dialup.h>
 #include <glaze/sys.h>
 #include <glaze/thread.h>
 #include <stdio.h>
@@ -411,36 +410,36 @@ int net_wifi_forget(void)
     return call(NET_WIFI_FORGET, 0, 0, 0, 0, NULL);
 }
 
-/* Dial-up over a modem card (glaze/dialup.h). */
-int net_dialup_status(struct dialup_status *status)
+int net_dial(const struct net_dial_config *config)
 {
     CONTROL_LOCKED();
-    int rv = call(NET_DIALUP_STATUS, 0, 0, 0, 0, NULL);
-    if (!rv) memcpy(status, buf, sizeof(*status));
-    return rv;
-}
-int net_dialup_config(struct dialup_config *config)
-{
-    CONTROL_LOCKED();
-    int rv = call(NET_DIALUP_CONFIG, 0, 0, 0, 0, NULL);
-    if (!rv) memcpy(config, buf, sizeof(*config));
-    return rv;
-}
-int net_dialup_connect(const struct dialup_config *config)
-{
-    CONTROL_LOCKED();
-    int rv = connect();
-    if (rv) return rv;
+    struct net_dial_config empty = {0};
+    if (!config) config = &empty;
+    int rv = net_dial_config_validate(config);
+    if (rv || (rv = connect())) return rv;
     memcpy(buf, config, sizeof(*config));
-    rv = call(NET_DIALUP_CONNECT, 0, 0, 0, 0, NULL);
+    rv = call(NET_DIAL, 0, 0, 0, 0, NULL);
     memset(buf, 0, sizeof(*config));
     return rv;
 }
-int net_dialup_disconnect(void)
+int net_hangup(void)
 {
-    CONTROL_LOCKED(); return call(NET_DIALUP_DISCONNECT, 0, 0, 0, 0, NULL);
+    CONTROL_LOCKED(); return call(NET_HANGUP, 0, 0, 0, 0, NULL);
 }
-int net_dialup_forget(void)
+int net_dial_status(struct net_dial_status *status)
 {
-    CONTROL_LOCKED(); return call(NET_DIALUP_FORGET, 0, 0, 0, 0, NULL);
+    CONTROL_LOCKED();
+    int rv = call(NET_DIAL_STATUS, 0, 0, 0, 0, NULL);
+    if (!rv) { memcpy(status, buf, sizeof(*status)); status->modem[sizeof(status->modem) - 1] = 0; }
+    return rv;
+}
+int net_dial_config(struct net_dial_config *config)
+{
+    CONTROL_LOCKED();
+    int rv = call(NET_DIAL_CONFIG, 0, 0, 0, 0, NULL);
+    if (!rv) {
+        memcpy(config, buf, sizeof(*config));
+        if (net_dial_config_validate(config)) { memset(config, 0, sizeof(*config)); rv = GZ_ECORRUPT; }
+    }
+    return rv;
 }

@@ -98,6 +98,7 @@ enum {
     SYS_BT_CARD_INFO,      /* read-only cached CIS evidence; buffer, size */
     SYS_BT_IO,             /* PROC_BLUETOOTH: raw UART operation, buffer, size */
     SYS_CAM_PROBE,         /* PROC_USB, VEO_PROBE=1 kernels: op, arg, buffer, size (glaze/veo.h) */
+    SYS_MODEM_IO,          /* PROC_NET: CF modem UART operation, buffer, size (glaze/modem.h) */
     SYS_COUNT
 };
 
@@ -313,8 +314,8 @@ struct gz_flash_info {
 /* SYS_NET_*: raw Ethernet frames for the network server (PROC_NET). */
 #define GZ_ETH_FRAME_MAX    1514    /* without the CRC */
 
-enum { GZ_NET_NONE, GZ_NET_NE2000, GZ_NET_XI825, GZ_NET_WL54CF, GZ_NET_USB,
-       GZ_NET_3C589, GZ_NET_HERMES, GZ_NET_MODEM };
+enum { GZ_NET_NONE, GZ_NET_NE2000, GZ_NET_XI825, GZ_NET_WL54CF, GZ_NET_USB, GZ_NET_MODEM,
+       GZ_NET_3C589, GZ_NET_HERMES };
 
 struct gz_netif_info {
     uint32_t present;           /* a network card initialized successfully */

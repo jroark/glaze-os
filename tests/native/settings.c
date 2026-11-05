@@ -5,9 +5,11 @@
 #include <stdlib.h>
 #include "hostres.h"
 
-static uint32_t bluetooth_kind,bluetooth_serial_mock_state;
+static uint32_t bluetooth_kind,bluetooth_serial_mock_state,bluetooth_audio_mock_state;
+static unsigned audio_connects,audio_disconnects,audio_tones;
 static int bluetooth_mock_error, bluetooth_mock_state=-1;
-static unsigned bluetooth_mock_count, bluetooth_scans, bluetooth_cancels;
+static unsigned bluetooth_mock_count, bluetooth_scans, bluetooth_cancels, bluetooth_disconnects, bluetooth_connects;
+static int bluetooth_connect_error, bluetooth_disconnect_error;
 int gz_bt_card_info(struct bt_card_info *out, uint32_t size)
 {
     if (size != sizeof(*out)) return GZ_EINVAL;
@@ -26,7 +28,18 @@ int bt_status(struct bt_status *out)
     }
     return bluetooth_mock_error;
 }
-int bt_serial_status(struct bt_serial_status *out) { memset(out,0,sizeof(*out));out->state=bluetooth_serial_mock_state;return 0; }
+int bt_audio_status(struct bt_audio_status *st){memset(st,0,sizeof(*st));st->state=bluetooth_audio_mock_state;st->id=11;st->rate=44100;st->channels=2;return 0;}
+int bt_audio_disconnect_current(void){audio_disconnects++;bluetooth_audio_mock_state=BT_AUDIO_CLOSING;return 0;}
+int bt_audio_tone(unsigned ms){audio_tones++;return 0;}
+int bt_audio_connect(const uint8_t *p,const void *pin,unsigned n,struct bt_serial_handle *h){if(!n || n>16)return GZ_EINVAL;audio_connects++;bluetooth_audio_mock_state=BT_AUDIO_CONNECTING;return 0;}
+int bt_serial_status(struct bt_serial_status *out) { memset(out,0,sizeof(*out));out->state=bluetooth_serial_mock_state;out->id=9;out->peer[0]=0x93;out->encrypted=out->authenticated=out->state==BT_SERIAL_CONNECTED;return 0; }
+int bt_serial_disconnect_current(void) { bluetooth_disconnects++;if(!bluetooth_disconnect_error)bluetooth_serial_mock_state=BT_SERIAL_CLOSING;return bluetooth_disconnect_error; }
+int bt_serial_connect_channel(const uint8_t peer[6],const void *pin,unsigned n,unsigned channel,struct bt_serial_handle *handle)
+{
+    if(!n || n>16 || channel>30)return GZ_EINVAL;
+    bluetooth_connects++;if(bluetooth_connect_error)return bluetooth_connect_error;
+    handle->port=23;handle->id=10;bluetooth_serial_mock_state=BT_SERIAL_CONNECTING;return 0;
+}
 int bt_scan(void) { bluetooth_scans++; bluetooth_mock_state=BT_SCANNING; return 0; }
 int bt_cancel(void) { bluetooth_cancels++; bluetooth_mock_state=BT_READY; return 0; }
 struct ui_app ui;
@@ -224,6 +237,18 @@ int net_status(struct net_status *st)
     st->state = test_net_state;
     return 0;
 }
+static struct net_dial_status test_dial;
+static struct net_dial_config test_dial_saved, test_dial_sent;
+static int test_dials, test_hangups;
+int net_dial(const struct net_dial_config *c)
+{
+    test_dials++; test_dial_sent = *c;
+    test_dial.state = NET_DIAL_STARTING;
+    return 0;
+}
+int net_hangup(void) { test_hangups++; test_dial.state = NET_DIAL_HANGING_UP; return 0; }
+int net_dial_status(struct net_dial_status *st) { *st = test_dial; return 0; }
+int net_dial_config(struct net_dial_config *c) { *c = test_dial_saved; return 0; }
 static struct wifi_status test_wifi;
 static int test_wifi_error = GZ_ENOENT;
 static int test_wifi_connects, test_wifi_disconnects, test_wifi_scans;
@@ -236,11 +261,6 @@ int net_wifi_connect(const void *ssid, uint32_t length)
     return test_wifi_error;
 }
 int net_wifi_forget(void) { test_wifi.state = WIFI_DISCONNECTED; return 0; }
-int net_dialup_status(struct dialup_status *st) { memset(st, 0, sizeof(*st)); return 0; }
-int net_dialup_config(struct dialup_config *c) { (void)c; return GZ_ENOENT; }
-int net_dialup_connect(const struct dialup_config *c) { (void)c; return 0; }
-int net_dialup_disconnect(void) { return 0; }
-int net_dialup_forget(void) { return 0; }
 int net_wifi_connect_secure(const struct wifi_credentials *c) { test_wifi_connects++; return test_wifi_error; }
 int net_wifi_disconnect(void)
 {
@@ -639,6 +659,55 @@ static void reboot_tests(void)
     require(gfx_rect_empty(hit_rect(R_REBOOT_CE)), "NAND reboot row returned after scrolling");
 }
 
+/* Settings > Dial-up with a CF modem: the row, editing, Connect keeping the
+ * saved password, the status line and Hang Up. */
+static void dialup_tests(void)
+{
+    test_net_kind = GZ_NET_MODEM; test_net_state = NET_DISCONNECTED;
+    memset(&test_dial, 0, sizeof(test_dial));
+    memset(&test_dial_saved, 0, sizeof(test_dial_saved));
+    strcpy(test_dial_saved.number, "5550100"); strcpy(test_dial_saved.user, "me");
+    test_dial_saved.has_password = 1;
+    view = V_ROOT; load(); redraw(); compare_full();
+    require(modem_available && !gfx_rect_empty(hit_rect(R_DIALUP)), "modem must show the Dial-up row");
+    host_write_bmp("../out/host/settings-dialup-root.bmp", &ui.surf);
+    activate(R_DIALUP);
+    require(view == V_DIALUP, "Dial-up page");
+    redraw(); compare_full();
+    require(!strcmp(dial_config.number, "5550100") && dial_config.has_password, "saved dial settings loaded");
+    host_write_bmp("../out/host/settings-dialup.bmp", &ui.surf);
+    activate(R_DIAL_FIELD0 + 1);
+    require(view == V_DIALUP_EDIT && !strcmp(dial_text, "me"), "edit user name");
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-dialup-edit.bmp", &ui.surf);
+    strcpy(dial_text, "glaze"); activate(R_DIAL_DONE);
+    require(view == V_DIALUP && !strcmp(dial_config.user, "glaze"), "edited user name kept");
+    activate(R_DIAL_PULSE);
+    require(dial_config.pulse, "pulse dialing toggle");
+    redraw(); activate(R_DIAL_TOGGLE);
+    require(test_dials == 1 && test_dial_sent.keep_password && !strcmp(test_dial_sent.user, "glaze") &&
+            test_dial_sent.pulse && !test_dial_sent.password[0], "connect keeps the saved password");
+    test_dial.state = NET_DIAL_UP; test_dial.rate = 52000; strcpy(test_dial.modem, "L27-01");
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-dialup-online.bmp", &ui.surf);
+    require(gfx_rect_empty(hit_rect(R_DIAL_FIELD0)), "fields locked while online");
+    activate(R_DIAL_TOGGLE);
+    require(test_hangups == 1, "hang up");
+    test_dial.state = NET_DIAL_IDLE; test_dial.error = NET_DIAL_E_NO_DIALTONE;
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-dialup-error.bmp", &ui.surf);
+    /* A new password replaces the saved one. */
+    activate(R_DIAL_FIELD0 + 2);
+    require(view == V_DIALUP_EDIT, "edit password");
+    strcpy(dial_text, "secret"); activate(R_DIAL_DONE);
+    activate(R_DIAL_TOGGLE);
+    require(test_dials == 2 && !test_dial_sent.keep_password && !strcmp(test_dial_sent.password, "secret"),
+            "a typed password is sent");
+    activate(R_BACK);
+    require(view == V_ROOT && !dial_config.password[0], "leaving Dial-up forgets the typed password");
+    test_net_kind = test_net_state = 0; load();
+}
+
 int main(void)
 {
 
@@ -655,12 +724,48 @@ int main(void)
     }
     bluetooth_mock_state=BT_READY;bluetooth_serial_mock_state=BT_SERIAL_CONNECTED;redraw();compare_full();
     require(gfx_rect_empty(hit_rect(R_BT_SCAN)),"Bluetooth scan enabled during serial connection");
+    zone_scroll.offset=0;redraw();compare_full();
+    require(!gfx_rect_empty(hit_rect(R_BT_DISCONNECT)),"Connected Bluetooth peer lacks Disconnect");
+    host_write_bmp("../out/host/settings-bluetooth-connected.bmp", &ui.surf);
+    activate(R_BT_DISCONNECT);
+    require(bluetooth_disconnects==1 && bluetooth_serial_mock_state==BT_SERIAL_CLOSING,"Disconnect did not close current session");
+    require(gfx_rect_empty(hit_rect(R_BT_DISCONNECT)),"Disconnect can be repeated while closing");
+    bluetooth_serial_mock_state=BT_SERIAL_PAIRING;redraw();
+    require(!gfx_rect_empty(hit_rect(R_BT_DISCONNECT)),"Pending connection cannot be cancelled");
+    bluetooth_disconnect_error=GZ_EDEAD;activate(R_BT_DISCONNECT);
+    require(bluetooth_error==GZ_EDEAD,"Disconnect failure was hidden");
+    bluetooth_disconnect_error=0;bluetooth_error=0;zone_scroll.offset=0;
     bluetooth_serial_mock_state=BT_SERIAL_IDLE;
     bluetooth_mock_state=BT_READY; redraw(); activate(R_BT_SCAN);
     require(bluetooth_scans==1 && bluetooth_status.state==BT_SCANNING,"Bluetooth scan did not start");
     activate(R_BT_SCAN); require(bluetooth_cancels==1 && bluetooth_status.state==BT_READY,"Bluetooth scan did not cancel");
     bluetooth_mock_count=BT_DEVICE_MAX; redraw(); compare_full();
     host_write_bmp("../out/host/settings-bluetooth.bmp", &ui.surf);
+    require(!gfx_rect_empty(hit_rect(R_BT_DEVICE0)),"Discovered device cannot be selected");
+    activate(R_BT_DEVICE0);require(view==V_BT_PAIR,"Device did not open pairing form");
+    redraw();compare_full();activate(R_BT_CONNECT);
+    require(bluetooth_error==GZ_EINVAL && !bluetooth_connects,"Empty PIN was accepted");
+    strcpy(bluetooth_pin,"123456");bluetooth_cursor=6;activate(R_BT_PIN);redraw();compare_full();
+    host_write_bmp("../out/host/settings-bluetooth-pin.bmp", &ui.surf);
+    activate(R_BT_DONE);activate(R_BT_CHANNEL_UP);require(bluetooth_channel==1,"Cannot select explicit RFCOMM channel");
+    bluetooth_connect_error=GZ_EBUSY;activate(R_BT_CONNECT);
+    require(view==V_BT_PAIR && bluetooth_error==GZ_EBUSY,"Connect failure was hidden");
+    bluetooth_connect_error=0;bluetooth_error=0;redraw();
+    host_write_bmp("../out/host/settings-bluetooth-pair.bmp", &ui.surf);
+    activate(R_BACK);require(!bluetooth_pin[0] && view==V_BLUETOOTH,"Back retained PIN or missed Bluetooth page");
+    activate(R_BT_DEVICE0);strcpy(bluetooth_pin,"123456");activate(R_BT_CONNECT);
+    require(view==V_BLUETOOTH && !bluetooth_pin[0] && bluetooth_serial_mock_state==BT_SERIAL_CONNECTING,"Serial connect did not clear PIN or show progress");
+    bluetooth_serial_mock_state=BT_SERIAL_IDLE;redraw();
+    activate(R_BT_DEVICE0);activate(R_BT_PROFILE);require(bluetooth_audio,"Cannot select A2DP");
+    strcpy(bluetooth_pin,"0000");activate(R_BT_CONNECT);
+    require(audio_connects==1 && view==V_BLUETOOTH && !bluetooth_pin[0],"Audio connect did not clear PIN or show progress");
+    zone_scroll.offset=0;bluetooth_audio_mock_state=BT_AUDIO_STREAMING;redraw();compare_full();
+    require(!gfx_rect_empty(hit_rect(R_BT_AUDIO_DISCONNECT)) && !gfx_rect_empty(hit_rect(R_BT_TONE)),"Audio controls missing");
+    require(gfx_rect_empty(hit_rect(R_BT_SCAN)),"Scan enabled during audio playback");
+    host_write_bmp("../out/host/settings-bluetooth-audio.bmp",&ui.surf);
+    activate(R_BT_TONE);require(audio_tones==1,"Test tone not dispatched");
+    activate(R_BT_AUDIO_DISCONNECT);require(audio_disconnects==1,"Audio disconnect not dispatched");
+    bluetooth_audio_mock_state=BT_AUDIO_IDLE;redraw();
     zone_scroll.offset=ui_scroll_max(&zone_scroll); require(zone_scroll.offset>0,"Bluetooth results cannot scroll");
     redraw(); compare_full(); require(!gfx_rect_empty(hit_rect(R_BACK)),"Bluetooth scrolling lost Back");
     bluetooth_mock_count=0; bluetooth_mock_state=-1; zone_scroll.offset=0;
@@ -799,6 +904,7 @@ int main(void)
     require(view == V_ROOT, "Wi-Fi back navigation");
     test_wifi_error = GZ_ENOENT;
     wifi_available = false;
+    dialup_tests();
     calibration_tests();
     icon_tests();
     display_tests();

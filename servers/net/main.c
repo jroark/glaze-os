@@ -26,7 +26,6 @@
 #include "lwip/inet_chksum.h"
 #include "lwip/prot/ip4.h"
 #include "server.h"
-#include "modem.h"
 
 #define MAX_SESSIONS    16
 #define MAX_SOCKETS     24
@@ -653,8 +652,8 @@ static int handle(const struct gz_msg *m, struct gz_msg *r, int token)
     }
     if (op >= NET_WIFI_STATUS && op <= NET_WIFI_FORGET)
         return net_if_wifi(op - NET_WIFI_STATUS, sessions[sess].buf);
-    if (op >= NET_DIALUP_STATUS && op <= NET_DIALUP_CONFIG)
-        return modem_request((int)op, sessions[sess].buf);
+    if (op >= NET_DIAL && op <= NET_DIAL_CONFIG)
+        return net_modem_request(op, sessions[sess].buf);
     /* Closing a descriptor remains valid while the interface is down. */
     if (op == NET_CLOSE) {
         struct sock *s = sock_get(sess, m->w[2]);

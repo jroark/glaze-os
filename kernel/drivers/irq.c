@@ -95,7 +95,8 @@ void irq_dispatch_ip2(void)
         if (pending & KJ_INT_CF) {
             net_irq();
             bt_poll();
-            if ((net_up() || bt_ready()) &&
+            modem_poll();
+            if ((net_up() || bt_ready() || modem_ready()) &&
                 PCMCIA_CARD_PRESENT())
                 KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
         }

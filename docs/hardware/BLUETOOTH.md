@@ -1,13 +1,66 @@
-# CF Bluetooth discovery and serial
+# CF Bluetooth discovery, serial and audio
 
 Glaze supports controller initialization and classic Bluetooth discovery with
 the SMART/Brainboxes CF card carrying FCC ID NXXBL-565. Settings → Bluetooth
 shows controller status, address/version, Scan/Cancel, and up to 16 devices.
+Select a discovered device to connect its serial service with a 1–16 character
+PIN and either automatic SDP selection or an explicit channel. Active sessions
+show their peer, connection progress and security, with Disconnect or Cancel
+Connection available even for sessions opened over USB.
 Names are resolved sequentially after inquiry; unavailable names retain their
 addresses. The service also supports one outbound, legacy-PIN-authenticated,
 encrypted Serial Port Profile connection through the SDK and USB diagnostics.
-HID, file transfer, audio, BLE, persistent Glaze bonds and a serial Settings UI
-are outside this version.
+HID, file transfer, BLE and persistent Glaze bonds are outside this version.
+
+## Audio output
+
+Select **Profile: Audio (A2DP)** when connecting a speaker. Audio/video-class
+peers default to this profile and the common legacy PIN `0000`; change the PIN
+if your speaker requires another. The Audio section shows connection progress,
+negotiated format, **Play Test Tone**, and **Disconnect**. The status icon turns
+blue when an audio or serial connection is established.
+
+The source implements encrypted legacy pairing, AudioSink SDP discovery,
+AVDTP Discover/GetCapabilities/SetConfiguration/Open/Start, and RTP/SBC transport.
+A bounded local AudioSource SDP server answers the speakers’ reverse queries
+(service search, filtered attributes, continuation and a separate incoming channel).
+Endpoint selection skips busy/unsupported endpoints. Signaling fragmentation,
+peer close/suspend/abort, transaction timeouts and controller/card loss are
+bounded. A single shared security/L2CAP engine handles audio and SPP, with one
+profile/peer at a time. SBC is the Apache-licensed fixed-point Bluedroid encoder
+pinned in `third_party/sbc/UPSTREAM.md`.
+
+Connect the speaker before starting playback. Music, radio and PCM clients of
+the audio server use the negotiated 44.1/48 kHz, mono/stereo format through the
+existing resampler. The initial codec uses 16 blocks, 8 subbands and a conservative
+bitpool for the unmeasured card UART capacity; this prioritizes transport bring-up
+over fidelity. System sounds stay on the BE-300. Disconnect/card loss pauses
+file playback; resuming configures the available output again. Remote AVRCP
+buttons/volume, microphones and phone-call audio are not implemented.
+
+The PCM producer uses a service-created 8 KiB shared buffer and a bounded 32 KiB
+queue. Media honors the master volume through one Q15 gain stage.
+Decoded input is retained across conversion-buffer fills when low-rate sources
+require substantial upsampling. Session/producer identifiers reject stale handles; one producer owns the
+stream, and a dead producer is detached. Pause preserves queued PCM, while seek,
+stop and card removal release it. Playback clocks count PCM frames consumed by
+the encoder and exclude filler silence; remote speaker latency is not measured,
+so A/V synchronization remains approximate.
+
+```sh
+out/host/glaze-usb bt-audio-connect 0c:ae:bd:2a:15:5e 0000
+out/host/glaze-usb bt-audio-status
+out/host/glaze-usb bt-audio-tone 1000
+out/host/glaze-usb bt-audio-disconnect
+```
+
+The CLI defaults to `0000` if no PIN is given; PINs are never logged. A test tone
+is limited to three seconds and cannot interrupt an attached PCM producer.
+`GU_BT_AUDIO` and its capability are appended to the existing wire protocol.
+Audio status encodes twelve little-endian words, a six-byte peer address, an HCI
+status byte and one reserved byte (56 bytes total). Existing serial messages and
+SDK structures retain their layout. The `bt_audio_*` SDK API is declared in
+`glaze/bluetooth.h`.
 
 ## Verified hardware
 
@@ -33,10 +86,18 @@ remote name resolution, repeat scans and inquiry cancellation. The controller
 reported Bluetooth 1.1, CSR manufacturer ID 10 and revision `020dh`. Two nearby
 devices were discovered and their names resolved on the real hardware.
 
-Cold NAND boot, physical card swaps and hibernate/resume still need a hardware
-acceptance pass. The socket lifecycle paths have native regression coverage;
-physical validation so far used Glaze USB RAM reload from an existing Glaze
-session with the card inserted.
+Physical Bluetooth removal/reinsertion was verified on the BE-300: the old
+service stopped, a deferred CIS read recognized `0160:aba0`, the UART module
+loaded again, and the new service returned to Ready. Settings and the status
+icon recovered. Cold NAND boot, swaps between different card types, and
+hibernate/resume still need an acceptance pass with this recovery change.
+
+The card can briefly return nonzero open-bus bytes after insertion. The socket
+requires a recognized CIS tuple before attempting ATA identification, then
+retries unreadable CIS data at 500 ms intervals, for up to twenty deferred
+attempts. These reads do not reset the card again: repeated resets can prevent
+it from finishing startup. Removal cancels pending reads. A delayed storage
+identification also advances its generation so Files can mount it.
 
 ## Authenticated serial connections
 
@@ -56,6 +117,16 @@ return an asynchronous, port-bound handle used by `bt_serial_write`,
 controller error, authentication/encryption, and byte counters. Reads/writes
 transfer up to 48 bytes per IPC request. There is one active serial session;
 discovery cannot interrupt it. Obsolete handles cannot target a restarted service.
+`bt_serial_disconnect_current` observes the current session and closes it using
+the same service port and session identifier, so Settings can manage another
+client's connection without closing a replacement session.
+
+The status bar reserves the CF card glyph for mounted storage. Separate Wi-Fi,
+wired-network and Bluetooth glyphs indicate their own transports; Bluetooth is
+blue while the serial connection is open and muted while the card is available.
+Each icon opens its own details, and USB networking can appear beside a card's
+storage or Bluetooth icon. Battery percentage and debugger status retain their
+own space.
 
 PINs and a single peer's link key are kept only in service RAM; changing peers
 clears the cached key. Restarting Glaze or the Bluetooth service loses the bond.
@@ -70,10 +141,15 @@ exercise SDP continuation, multiple-service selection, small ACL fragments,
 credit starvation/replenishment, repeated security events, malformed records,
 FIFO bounds, disconnect and failure recovery. See
 [the Mac echo helper](../../tools/bt_echo/README.md) for reproducible commands.
+The expanded Settings page was also tested on the BE-300: Disconnect closed a
+USB-opened, encrypted session, the Mac reported disconnection, and the service
+returned to Idle while the Bluetooth glyph changed from blue to muted.
 
 ## Driver and service
 
-Only the exact MANFID/FUNCID/VERS_1 match loads `drivers/btuart.ko`; other serial
+Only the exact MANFID/FUNCID/VERS_1 match loads `drivers/cfuart.ko` with the
+verified configuration above (the module is shared with data modems,
+[MODEM.md](MODEM.md)); other serial
 cards remain candidates and never receive ATA or network probes. The module
 owns bounded RX/TX rings and services RX, line-status and THRE interrupts through
 the existing PCMCIA cascade, with timer polling as a fallback. UART errors stop
@@ -127,10 +203,34 @@ uses a 48-byte explicit header followed by 52 bytes per device. These formats
 do not transmit native structure layouts. `BT_DEBUG=1` enables bounded UART
 packet tracing in diagnostic builds; normal builds omit it.
 
+## Sustained UART transfer
+
+The UART driver detects working FIFOs from IIR bits 6/7 and fills the standard
+16-byte minimum after THRE reports an empty FIFO, with a one-byte fallback.
+IIR is acknowledged before servicing TX. A trailing IIR read can consume a
+fresh THRE interrupt and leave queued bytes waiting for another poll. Sending
+only one byte per observed empty FIFO also wastes its capacity. Both issues
+were exposed by sustained SBC traffic after short discovery/SPP traffic worked.
+The physical card reports a functioning 16-byte FIFO.
+
+The register semantics follow TI TL16C550C SLLS177I, “FIFO interrupt mode
+operation”: THRE means the FIFO is empty and an IIR read acknowledges its
+interrupt. See the [TI datasheet](https://www.ti.com/lit/ds/symlink/tl16c550c.pdf).
+`bluetooth-uart-test` models the FIFO-empty transition and a fast-draining UART,
+plus single-byte fallback, ordering, ring backpressure, receive, removal and
+line faults.
+
+Both the Edifier R1280DB and JBL Flip 2 completed encrypted A2DP setup on the
+physical BE-300, and the user confirmed hearing their test tones. The JBL also
+played a three-second WAV clearly through Music. The service counted all
+132,300 PCM frames, kept its clock fixed during pause, and resumed without
+losing queued frames. The UART fix sustained more than 16,000 SBC packets
+without controller errors. Tests used a RAM image with NAND left read-only.
+
 ## Validation
 
 ```sh
-make -C host bluetooth-test bluetooth-serial-test bluetooth-driver-test cf-boot-test settings-test \
+make -C host bluetooth-audio-test bluetooth-source-sdp-test bluetooth-uart-test audio-output-test audio-volume-test bluetooth-test bluetooth-serial-test bluetooth-driver-test bluetooth-client-test connectivity-test cf-boot-test settings-test \
     service-test net-driver-test boot-init-test
 python3 tests/services_catalog.py
 ./build.sh all glazeboot GB_APPS=all HWDUMP=1
@@ -140,16 +240,31 @@ Native tests cover recorded controller traffic, fragmented frames, CRC/checksum
 rejection, duplicates, sequence wrap, retransmissions, partial writes, link reset,
 HCI initialization, credit starvation, inquiry, deduplication/result caps, names,
 name timeout/cancel, inquiry cancel, module validation, copy faults, generations,
-removal/resume, service restart/dependencies, and Settings states/results/scrolling.
+removal/resume, service restart/dependencies, Settings pairing/disconnect/error
+handling and scrolling, and transport-specific icon presence/layout.
 The existing module-loader native harness additionally needs a host supporting
 its low 32-bit mappings; those mappings are unavailable on this Mac/container.
 The real BE-300 successfully loaded and executed the new module, and the
 separate transport-boundary tests cover its descriptor validation and rollback.
 
-Settings, Bluetooth, USB, SpringBoard and Files compile with `-Os` to preserve the fixed
-4.75 MiB ROM archive limit without removing default apps.
+UI applications, audio-service glue, UI controls and selected IPC clients compile
+with `-Os` to preserve the fixed 4.75 MiB ROM archive limit without removing
+built-in apps. Shared graphics/media libraries, the handwriting recognizer and
+Helix retain their separate optimization flags.
+
+`bluetooth-audio-test` exercises an encrypted synthetic sink, continued SDP,
+endpoint selection, reverse AudioSource queries, AVDTP negotiation, RTP sequencing/timestamps, PCM clock,
+priming/backpressure and teardown. It writes `out/host/bluetooth-tone.sbc` for
+independent decoder checks. A temporary PyAV/FFmpeg decoder verified a 440 Hz
+tone with bounded amplitude followed by silence. `audio-output-test` checks
+local/Bluetooth selection, negotiated rates/channels, pause/resume, stale
+sessions, backpressure and preservation of the last valid clock on unplug.
+`bluetooth-source-sdp-test` checks fixed wire vectors, filtered service records,
+continuation under MTU/byte-count limits and malformed requests.
 
 References:
+- [Bluetooth A2DP specification](https://www.bluetooth.com/specifications/specs/advanced-audio-distribution-profile-1-0/)
+- [Edifier R1280DB manual](https://new-edifier-us-oss.edifier.com/files/20241120/8005e65e9af53427ab89ca6d4261e832.pdf)
 - [Brainboxes BL-565](https://www.brainboxes.com/product/discontinued/bl-565)
 - [Linux BCSP implementation](https://github.com/torvalds/linux/blob/v6.1/drivers/bluetooth/hci_bcsp.c)
 - [Bluetooth Core, HCI functional specification](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host-controller-interface/host-controller-interface-functional-specification.html)

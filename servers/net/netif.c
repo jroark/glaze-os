@@ -33,7 +33,7 @@
 #include "netif/ethernet.h"
 #include "server.h"
 #include "wifi_supplicant.h"
-#include "modem.h"
+#include "wifi_retry.h"
 #include "utils/includes.h"
 #include "utils/common.h"
 #include "crypto/sha256.h"
@@ -48,9 +48,9 @@ static uint32_t dhcp_started, card_checked;
 static int bound_port;
 static bool added;          /* netif_add has run (once, for the first card) */
 static bool wireless, associated;
-static bool dialup;         /* a modem card: PPP, no Ethernet interface (modem.c) */
 static struct wifi_preference saved;
 static int auth_error, auth_failure;
+static struct wifi_retry retry = {.delay = WIFI_RETRY_MIN_MS};
 static void seed_from_card(void);
 static int connect_network(const struct wifi_credentials *c);
 static int save_choice(const struct wifi_preference *choice)
@@ -137,14 +137,6 @@ static void tcpip_ready(void *arg)
 /* Brings the interface up on the card the kernel reports in info. */
 static int attach(void)
 {
-    dialup = info.kind == GZ_NET_MODEM;
-    if (dialup) {
-        wireless = associated = false;
-        state = NET_DISCONNECTED;
-        gz_net_bind(bound_port);
-        modem_attach();
-        return 0;
-    }
     LOCK_TCPIP_CORE();
     if (!added) {
         if (!netif_add(&nif, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4, NULL, nif_init,
@@ -159,6 +151,7 @@ static int attach(void)
         memcpy(nif.hwaddr, info.mac, ETH_HWADDR_LEN);
     }
     wireless = info.kind == GZ_NET_XI825 || info.kind == GZ_NET_WL54CF || info.kind == GZ_NET_HERMES;
+    wifi_retry_reset(&retry);
     associated = false;
     netif_set_up(&nif);
     if (info.kind == GZ_NET_USB) {
@@ -197,13 +190,7 @@ static int attach(void)
 /* The card was pulled: no lease to release, just forget the link. */
 static void detach(void)
 {
-    if (dialup) {
-        modem_detach();
-        dialup = false;
-        state = NET_NO_CARD;
-        net_log("net: modem removed\n");
-        return;
-    }
+    wifi_retry_reset(&retry);
     wifi_supplicant_stop();
     auth_error = auth_failure = 0;
     LOCK_TCPIP_CORE();
@@ -231,6 +218,9 @@ int net_if_init(int port)
     card_checked = gz_time_ms();
     seed_from_card();
     if (gz_net_info(&info) < 0 || !info.present) {
+        /* The kernel starts the server for a modem card too. */
+        if (net_modem_init(port) == 0)
+            return 0;
         net_log("net: no network card\n");
         return GZ_ENETDOWN;
     }
@@ -409,6 +399,7 @@ int net_if_wifi(uint32_t op, void *buf)
         int rv = pref_delete(WIFI_PREF);
         if (rv && rv != GZ_ENOENT) return rv;
         forced_memzero(&saved, sizeof(saved));
+        wifi_retry_reset(&retry);
         wifi_supplicant_stop(); auth_error = auth_failure = 0;
         rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL); wifi_link(); return rv;
     }
@@ -429,6 +420,7 @@ int net_if_wifi(uint32_t op, void *buf)
     int rv = save_choice(&next);
     if (!rv) {
         saved = next;
+        wifi_retry_reset(&retry);
         if (op == WIFI_DISCONNECT) {
             wifi_supplicant_stop(); auth_error = auth_failure = 0;
             rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL);
@@ -438,10 +430,22 @@ int net_if_wifi(uint32_t op, void *buf)
     wifi_link(); return rv;
 }
 
+static void retry_saved_network(void *ctx)
+{
+    (void)ctx;
+    int rv = connect_network(&saved.credentials);
+    net_log("wifi: retry saved network %d\n", rv);
+}
+
 void net_if_poll(void)
 {
     int n;
     uint32_t now = gz_time_ms();
+
+    if (net_modem_present()) {
+        net_modem_poll();
+        return;
+    }
 
     if (now - card_checked >= CARD_CHECK_MS) {
         card_checked = now;
@@ -465,10 +469,6 @@ void net_if_poll(void)
     }
     if (state == NET_NO_CARD)
         return;
-    if (dialup) {
-        modem_poll();
-        return;
-    }
     wifi_supplicant_poll();
     if (auth_failure) {
         auth_error = auth_failure; auth_failure = 0;
@@ -502,20 +502,20 @@ void net_if_poll(void)
         }
         UNLOCK_TCPIP_CORE();
     }
-}
-
-void net_if_set_state(int s)
-{
-    state = s;
+    wifi_retry_poll(&retry, gz_time_ms(), wireless && saved.reconnect,
+                    associated, state == NET_ASSOCIATING, auth_error || auth_failure,
+                    retry_saved_network, NULL);
 }
 
 int net_if_state(void)
 {
+    if (net_modem_present()) return net_modem_state();
     return state;
 }
 
 void net_if_status(struct net_status *st)
 {
+    if (net_modem_present()) { net_modem_status(st); return; }
     memset(st, 0, sizeof(*st));
     st->state = (uint32_t)state;
     gz_net_info(&info);
@@ -524,10 +524,6 @@ void net_if_status(struct net_status *st)
     st->rx_frames = info.rx_frames;
     st->tx_frames = info.tx_frames;
     st->rx_dropped = info.rx_dropped;
-    if (dialup) {
-        modem_fill_status(st);
-        return;
-    }
     if (state == NET_UP || state == NET_UP_STATIC) {
         LOCK_TCPIP_CORE();
         st->addr = ip4_addr_get_u32(netif_ip4_addr(&nif));

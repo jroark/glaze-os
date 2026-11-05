@@ -4,13 +4,15 @@ A PCMCIA jacket with its own supply plugs into the BE-300's CF socket and
 takes 16-bit PC Cards. Its cards are on a second socket controller, which
 Windows CE calls socket 1 (see "Socket 1" below). Glaze has drivers for
 three kinds of card, all working on a real BE-300 through the jacket
-(2026-11-05):
+(2026-11-05). The 3c589 and Hermes modules are in romfs with `PCCARDS=1`,
+the default for GlazeBoot builds; a NAND image needs `PCCARDS=1
+NAND_DROP=wince` for room. Dial-up needs `MODEM=1` likewise.
 
 | Card | CIS identity | Driver | Emulator |
 | --- | --- | --- | --- |
 | 3Com EtherLink III (3c589) | MANFID 0101:0589, FUNCID 6 | `drivers/3c589.ko` (`kernel/drivers/3c589.c`) | `--3c589` |
 | Lucent/Agere WaveLAN/IEEE, Orinoco (Hermes) | MANFID 0156:0002, FUNCID 6 | `drivers/hermes.ko` (`xi825.c` with `XI825_HERMES`) | `--hermes` |
-| Modems and other serial cards | FUNCID 2 (not the Bluetooth card) | `drivers/modem.ko` (`kernel/drivers/modem.c`) | `--modem HOST:PORT` |
+| Modems | FUNCID 2 with a modem FUNCE | `drivers/cfuart.ko` through `kernel/modem.c` ([MODEM.md](MODEM.md)) | `--cf-modem` (a CF modem) |
 
 Other network cards from 3Com, Xircom, Megahertz and Lucent are not NE2000
 clones: `net.c` reserves the socket for them and logs `net: unsupported
@@ -55,7 +57,12 @@ Linux orinoco (`hermes_rid.h`, `hw.c`, `scan.c`):
   key in 0xFCB1, authentication in 0xFC21, enable in 0xFC20.
 
 Open and WEP networks only, as for the XI-825 (see [WIFI.md](WIFI.md)).
-The emulator's `--hermes` puts its XI-825 model in an Agere firmware mode.
+The emulator's `--hermes` puts its XI-825 model in an Agere firmware mode,
+with a real Orinoco's CIS; `--hermes-firmware 6.4` models the older
+firmware (no 0xFCB2, scan results only for an empty desired SSID).
+With that firmware the driver turns the port off again once a scan it
+enabled the port for is over, so the card doesn't join an open network
+by itself, and an empty scan frame completes the scan.
 
 On a real BE-300: an Orinoco Gold (station firmware 8.72.1) and a WaveLAN
 Gold (6.4.1), both VERS_1 "Lucent Technologies" "WaveLAN/IEEE", identify,
@@ -64,43 +71,19 @@ tested on hardware: it needs an open or WEP network.
 
 ## Modems and dial-up
 
-`cf.c` picks the CFTABLE entry whose I/O range is a COM port (0x3F8, 0x2F8,
-0x3E8, 0x2E8), else one decoding only address lines (placed at 0x3F8). It
-writes the COR (level interrupts) and loads `modem.ko` as network kind
-`GZ_NET_MODEM` (`pcmcia_modem_config`). The driver is a 16550A at 57600
-baud, 8N1, with FIFOs. The PCMCIA interrupt and the 100 Hz tick drain its
-receive FIFO into an 8 KiB ring, and RTS drops while the ring is nearly full.
-SYS_NET_SEND/RECV carry its byte stream, and SYS_WIFI_CTL takes
-`MODEM_STATUS`, `MODEM_DTR` and `MODEM_BAUD` (`glaze/modem.h`), for
-`bin/net` only.
-
-The network server (`servers/net/modem.c`) dials with AT commands: `ATZ`,
-the init string (default `ATE0V1&C1&D2`), then `ATDT`/`ATDP` and the number.
-It reads V.250 result codes. After `CONNECT` it runs lwIP's PPPoS with PAP or
-CHAP-MD5 and takes the peer's address and DNS servers. It hangs up by
-dropping DTR, and treats DCD loss as a dropped line. Settings → Dial-up
-edits the number, user name and password (`glaze/dialup.h`, saved in
-`/Library/Preferences/net.dialup`) and connects. With a saved configuration
-the server redials when the modem appears and after a dropped line, backing
-off from 2 to 30 s, but not after a refused login or "no dial tone".
-
-Test without a phone line through the emulator and `tests/ppp_peer.py`, a
-small PPP server (PAP or CHAP, 10.64.0.2 for the guest, ping and DNS
-answers):
-
-```sh
-python3 tests/ppp_peer.py --port 5555 [--auth chap] &
-./build.sh INIT=bin/ktest NAND_DROP=wince
-be300 --nand out/glaze.bin --rtc-host-time --modem 127.0.0.1:5555
-```
-
-ktest dials `5551212` as `glaze`/`secret` and runs its network cases over
-PPP. `tests/ui/t_dialup.txt` drives Settings → Dial-up the same way.
+A modem in the jacket uses the CF modem support ([MODEM.md](MODEM.md)):
+`capture_card` gives a serial card whose FUNCE names a modem, with an entry
+decoding COM1, to `kernel/modem.c`, which loads `drivers/cfuart.ko`. The
+UART module writes the COR and finds its registers through the socket's
+windows (`pcmcia_attr_base`, `pcmcia_io_base`), so the same path serves
+both sockets. The network server's Hayes dialer and PPP, and Settings →
+Dial-up, are unchanged.
 
 On a real BE-300, a USR/Megahertz XJ/CC1560 56k modem (MANFID 0102:002F,
-CFTABLE entries for the four COM ranges) is configured at 0x3F8, passes the
-16550A check, and answers the dialer: with no phone line it reports `NO
-DIALTONE`. A PPP connection over a real line is not yet tested.
+VERS_1 "U.S. Robotics" "XJ/CC1560 Megahertz 56kbps Modem", CFTABLE entries
+for the four COM ranges, CONFIG at 0x300) was found and answered the
+dialer with `NO DIALTONE` with no line, using an earlier driver on this
+branch; a PPP call over a real line is not yet tested.
 
 ## Socket 1
 
@@ -139,6 +122,15 @@ attribute window. Removing a card cuts its supply, so the next card is
 powered and reset afresh. pcmcia.dll's own control and reset helpers are
 never called directly, so that card order comes from the CF socket's trace
 and the values CE left.
+
+The emulator models socket 1 with `--jacket` (be300 `src/hw/jacket.c`):
+the controller, the detect and power-good bits, per-card status and both
+windows, from these captures. Test the cold power-up path with
+
+```sh
+./build.sh INIT=bin/ktest NAND_DROP=wince PCCARDS=1
+be300 --nand out/glaze.bin --rtc-host-time --jacket --3c589   # or --ne2000, --hermes
+```
 
 Interrupts from socket 1 aren't routed yet: its drivers run from the 100 Hz
 tick. ATA cards in the jacket aren't supported (only the CF socket's ATA

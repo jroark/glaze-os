@@ -269,6 +269,7 @@ void syscall_dispatch(struct trapframe *tf)
     case SYS_BT_IO: rv = sys_bt_io(cur->proc, a0, a1, a2); break;
     case SYS_BT_CARD_INFO: rv = sys_bt_card_info(cur->proc, a0, a1); break;
     case SYS_CAM_PROBE: rv = sys_cam_probe(cur->proc, a0, a1, a2, a3); break;
+    case SYS_MODEM_IO: rv = sys_modem_io(cur->proc, a0, a1, a2); break;
     case SYS_CF_INFO:       rv = sys_cf_info(cur->proc, a0); break;
     case SYS_CF_READ:       rv = sys_cf_read(cur->proc, a0, a1, a2); break;
     case SYS_CF_WRITE:      rv = sys_cf_write(cur->proc, a0, a1, a2); break;

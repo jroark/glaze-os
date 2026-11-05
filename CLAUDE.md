@@ -18,6 +18,10 @@ make glazeboot                    # GlazeBoot's GCC parts, booting Glaze from RA
 make glazeboot-exe                # the GlazeBoot.exe loader, natively with ../be300-dev (BE300_DEV)
 make -C host glazeboot-test       # its page hand-over plan on random layouts
 make -C host nand-ecc-test        # Windows CE's NAND ECC (kernel/drivers/nand_ecc.c), natively
+make -C host modem-chat-test modem-driver-test  # the CF modem's Hayes dialer and kernel UART
+make -j8 MODEM=1 NAND_DROP=wince  # dial-up PPP in a NAND image (GlazeBoot builds have it by default)
+make -j8 PCCARDS=1 NAND_DROP=wince  # PCMCIA jacket drivers (3c589, Hermes) in a NAND image (likewise)
+tests/run_modem.sh                # dial-up end to end: be300 --cf-modem and tests/ppp_peer.py
 tests/run_ramboot.sh 90 INIT=bin/ktest  # RAM boot through GlazeBoot's trampoline in the emulator
 tests/run_ceboot.sh 90            # GlazeBoot from a CF card under the emulator's stock Windows CE
 ```
@@ -30,7 +34,7 @@ package validation and included library source rebuilds. SDK build rules,
 templates and CLI live in `sdk/`; the exporter is `tools/mksdk.py`.
 See `docs/dev/SDK.md`. Keep packaged SDKs and generated apps under ignored output.
 
-`main.o`, `input.o` and `romfs.img` are always rebuilt because `INIT`, `BUILD_ID` and `INPUT_SCRIPT` are baked into them. Every directory under `apps/` and `servers/` becomes a program, `bin/<dirname>` in romfs, with no Makefile edit, except the optional `ldtest*` and `ldmem` test apps, and `ktest`/`ktest_pong`, which go in only when `INIT=bin/ktest`. romfs is nearly full (its slot ends at 0x500000), which is why wolfSSL is built `-Os`; `NAND_DROP=<apps>` leaves apps out of a NAND image's romfs (`NAND_DROP=wince` makes room for `WL54CF=1`'s firmware, and for `INIT=bin/ktest`). Assets in `assets/gen/` are checked in; they are regenerated only on macOS with `swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures`. The system sounds in `assets/sounds/` (romfs `sounds/`) are checked in too, synthesized by `tools/mksounds.py assets/sounds`.
+`main.o`, `input.o` and `romfs.img` are always rebuilt because `INIT`, `BUILD_ID` and `INPUT_SCRIPT` are baked into them. Every directory under `apps/` and `servers/` becomes a program, `bin/<dirname>` in romfs, with no Makefile edit, except the optional `ldtest*` and `ldmem` test apps, and `ktest`/`ktest_pong`, which go in only when `INIT=bin/ktest`. romfs is nearly full (its slot ends at 0x500000), which is why wolfSSL and the lwIP stack are built `-Os` and dial-up PPP (`MODEM=1`, `docs/hardware/MODEM.md`) and the PCMCIA jacket's drivers (`PCCARDS=1`, `docs/hardware/PCCARDS.md`) are opt-in; `NAND_DROP=<apps>` leaves apps out of a NAND image's romfs (`NAND_DROP=wince` makes room for `WL54CF=1`'s firmware, and for `INIT=bin/ktest`). Assets in `assets/gen/` are checked in; they are regenerated only on macOS with `swift tools/mkassets.swift assets/gen assets/fonts userdata/Pictures`. The system sounds in `assets/sounds/` (romfs `sounds/`) are checked in too, synthesized by `tools/mksounds.py assets/sounds`.
 
 Romfs is for the OS and built-in apps only. User files, settings and app data belong in the file system: `userdata/` is the factory volume, which `mkfsimg` (`out/buildtools/mkfsimg`, built with `HOSTCC`, default `cc`; `make -C host mkfsimg` builds a native copy in `out/host`) formats into `out/fs.img` and `tools/mk_nand.py --fs-image` places at 0x500000. Don't name files in `userdata/` with spaces, since make lists them.
 
@@ -76,7 +80,7 @@ working in that directory:
 | `kernel/` | boot, flash layout, romfs paging, scheduling, IPC, processes, threads, drivers, CompactFlash, buzzer, battery and power off, OTA |
 | `servers/springboard/` | input, the SpringBoard and app protocol, multitasking, passcode, home screen, notifications, hard icons, clipboard, time |
 | `servers/fs/` | littlefs and Dhara, ECC, packages, volume layout, `/Card` |
-| `servers/net/` | lwIP server and BSD sockets |
+| `servers/net/` | lwIP server and BSD sockets, dial-up PPP |
 | `servers/usb/` | network debugging, USB networking, screen mirroring |
 | `servers/audio/` | wave output, player and stream modes, system sounds, libmedia |
 | `lib/` | libgfx, libui, handwriting, dynamic linking |

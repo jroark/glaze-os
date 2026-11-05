@@ -20,7 +20,8 @@ static uint32_t order[GZ_SERVICE_MAX];
 
 static uint32_t hardware_generation(const struct gz_service_spec *s)
 {
-    return s->policy & GZ_SERVICE_BLUETOOTH ? bt_generation() : net_generation();
+    /* A network service belongs to one NIC or one modem card: either swap restarts it. */
+    return s->policy & GZ_SERVICE_BLUETOOTH ? bt_generation() : net_generation() + modem_generation();
 }
 static bool alive(unsigned i) { return proc_by_pid(states[i].pid) != NULL; }
 
@@ -31,7 +32,7 @@ static void reconcile(void)
     for (unsigned n = 0; n < manifest.count; n++) {
         unsigned i = order[n];
         const struct gz_service_spec *s = &manifest.entries[i];
-        if (states[i].enabled && (!(s->policy & GZ_SERVICE_NETWORK) || net_up()) &&
+        if (states[i].enabled && (!(s->policy & GZ_SERVICE_NETWORK) || net_up() || modem_present()) &&
             (!(s->policy & GZ_SERVICE_BLUETOOTH) || bt_present()) &&
             (s->after & wanted) == s->after)
             wanted |= 1u << i;
@@ -63,6 +64,7 @@ static void reconcile(void)
             if (p) {
                 p->net_generation = net_generation();
                 p->bt_generation = bt_generation();
+                p->modem_generation = modem_generation();
                 states[i].pid = p->pid;
                 states[i].starts++;
                 states[i].retry = time_us() + 1000000u;
@@ -130,7 +132,7 @@ int sys_services(struct proc *p, uint32_t output, uint32_t size)
     struct gz_service_snapshot snapshot = {0};
     if (size != sizeof(snapshot)) return GZ_EINVAL;
     snapshot.count = manifest.count;
-    snapshot.network_kind = net_driver_kind();
+    snapshot.network_kind = modem_present() ? GZ_NET_MODEM : net_driver_kind();
     snapshot.driver_pages = net_driver_pages();
     snapshot.generation = net_generation();
     for (unsigned i = 0; i < manifest.count; i++) {

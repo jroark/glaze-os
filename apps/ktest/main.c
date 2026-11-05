@@ -9,7 +9,6 @@
 #include <glaze/fs.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
-#include <glaze/dialup.h>
 #include <glaze/notify.h>
 #include <glaze/ntp.h>
 #include <glaze/pkg.h>
@@ -951,6 +950,68 @@ static void net_status_waiter(void *arg)
     gz_sem_post(p->done);
 }
 
+/* Dial-up through a CF modem (--cf-modem tcp:127.0.0.1:PORT in the emulator,
+ * answered by tests/ppp_peer.py --user glaze --password ktest). */
+static int dial_wait(struct net_dial_status *ds, bool up, int seconds)
+{
+    for (int i = 0; i < seconds * 10; i++) {
+        if (net_dial_status(ds) < 0) return -1;
+        if (up ? ds->state == NET_DIAL_UP : ds->state == NET_DIAL_IDLE) return 0;
+        if (up && ds->state == NET_DIAL_IDLE) return -1;
+        gz_sleep_ms(100);
+    }
+    return -1;
+}
+
+static void test_modem(void)
+{
+    struct net_status st;
+    struct net_dial_status ds;
+    struct net_dial_config c = { .number = "555-0100", .user = "glaze", .password = "wrong" };
+    char a[16];
+
+    if (net_status(&st) < 0 || st.kind != GZ_NET_MODEM) {
+        int rv = net_dial(&c);
+        CHECK(rv == GZ_ENOENT || rv == GZ_ENETDOWN, "dial-up refused without a modem");
+        printf("ktest: SKIP modem (no CF modem; boot the emulator with --cf-modem and tests/ppp_peer.py)\n");
+        return;
+    }
+    CHECK(st.state == NET_DISCONNECTED && !st.addr, "modem idle before dialing");
+    if (net_dial_status(&ds) == 0 && ds.error == NET_DIAL_E_UNSUPPORTED) {
+        CHECK(net_dial(&c) == GZ_ENOENT, "dial refused by a build without PPP");
+        printf("ktest: SKIP modem (built without MODEM=1)\n");
+        return;
+    }
+    struct net_dial_config bad = { .number = "123;ATH" };
+    CHECK(net_dial(&bad) == GZ_EINVAL, "dial string injection refused");
+    struct net_dial_config current;
+    if (net_dial_config(&current) == 0 && !current.number[0])
+        CHECK(net_dial(NULL) == GZ_EINVAL, "dial without a saved number");
+    CHECK(net_dial(&c) == 0, "dial starts");
+    CHECK(dial_wait(&ds, false, 120) == 0 && ds.error == NET_DIAL_E_AUTH, "wrong password refused (PAP)");
+    strcpy(c.password, "ktest");
+    CHECK(net_dial(&c) == 0, "dial again");
+    CHECK(net_dial(&c) == GZ_EBUSY, "second dial while dialing");
+    CHECK(dial_wait(&ds, true, 120) == 0, "PPP up");
+    printf("ktest: modem %s, CONNECT %u, address %s\n", ds.modem, (unsigned)ds.rate, net_ntoa(ds.addr, a));
+    CHECK(ds.rate == 52000 && !strcmp(ds.modem, "L27-01"), "modem rate and identity");
+    CHECK(ds.addr == NET_IP(10, 64, 0, 2) && ds.peer == NET_IP(10, 64, 0, 1) && ds.dns == NET_IP(10, 64, 0, 1),
+          "IPCP address, peer and DNS");
+    CHECK(net_status(&st) == 0 && st.state == NET_UP && st.kind == GZ_NET_MODEM && st.addr == ds.addr,
+          "net status online through the modem");
+    CHECK(net_ping(NET_IP(10, 64, 0, 1), 5000) >= 0, "ping the PPP peer");
+    uint32_t addr = 0;
+    CHECK(net_resolve("isp.test", &addr, 10000) == 0 && addr == NET_IP(10, 64, 0, 1), "DNS through the peer");
+    struct net_dial_config saved;
+    CHECK(net_dial_config(&saved) == 0 && !strcmp(saved.number, "555-0100") && !strcmp(saved.user, "glaze") &&
+          saved.has_password && !saved.password[0], "dial settings saved, password not returned");
+    CHECK(net_hangup() == 0 && dial_wait(&ds, false, 30) == 0 && ds.error == NET_DIAL_E_NONE, "hang up");
+    CHECK(net_status(&st) == 0 && st.state == NET_DISCONNECTED && !st.addr, "offline after hanging up");
+    /* The saved settings, password included, dial again. */
+    CHECK(net_dial(NULL) == 0 && dial_wait(&ds, true, 120) == 0, "redial with saved settings");
+    CHECK(net_hangup() == 0 && dial_wait(&ds, false, 30) == 0, "hang up again");
+}
+
 static void test_net(void)
 {
     static uint8_t frame[64], data[20000], back[20000];
@@ -987,31 +1048,14 @@ static void test_net(void)
               "wifi rejects invalid SSID lengths");
         CHECK(net_wifi_connect_secure(&provisioned.credentials) == 0, "wifi association starts");
     } else CHECK(net_wifi_scan() == (st.state == NET_NO_CARD ? GZ_ENETDOWN : GZ_ENOENT), "wifi unavailable without wireless card");
+    if (card == GZ_NET_MODEM) {
+        printf("ktest: SKIP network (CF modem: see the modem cases)\n");
+        return;
+    }
     if (st.state == NET_NO_CARD) {
         printf("ktest: SKIP network (no network card; boot with --ne2000, --xi825 or --wl54cf)\n");
         CHECK(net_socket(NET_TCP) == GZ_ENETDOWN, "net down without a card");
         return;
-    }
-    if (st.kind == GZ_NET_MODEM) {
-        /* be300 --modem 127.0.0.1:5555 with tests/ppp_peer.py (PAP, glaze/secret). */
-        struct dialup_status ds;
-        CHECK(net_dialup_status(&ds) == 0 && (ds.state == DIALUP_IDLE || ds.state == DIALUP_FAILED),
-              "dialup idle with a modem");
-        printf("ktest: dialup modem \"%s\"\n", ds.modem);
-        struct dialup_config bad = { .version = DIALUP_VERSION };
-        strlcpy(bad.number, "555-1212x", sizeof(bad.number));
-        CHECK(net_dialup_connect(&bad) == GZ_EINVAL, "dialup rejects a bad number");
-        struct dialup_config cfg = { .version = DIALUP_VERSION };
-        strlcpy(cfg.number, "5551212", sizeof(cfg.number));
-        strlcpy(cfg.user, "glaze", sizeof(cfg.user));
-        strlcpy(cfg.password, "secret", sizeof(cfg.password));
-        CHECK(net_dialup_connect(&cfg) == 0, "dialup dials");
-        CHECK(net_wait_up(60000) == 0, "dialup PPP up");
-        CHECK(net_dialup_status(&ds) == 0 && ds.state == DIALUP_CONNECTED && ds.addr == NET_IP(10, 64, 0, 2) &&
-              ds.dns == NET_IP(10, 64, 0, 1) && ds.connect_speed == 57600, "dialup address and DNS from the peer");
-        struct dialup_config saved;
-        CHECK(net_dialup_config(&saved) == 0 && !strcmp(saved.number, "5551212") && !saved.password[0] &&
-              saved.reconnect, "dialup saved without exposing the password");
     }
     CHECK(net_wait_up(15000) == 0 && net_status(&st) == 0 && st.addr, "net address");
     if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF || st.kind == GZ_NET_HERMES) {
@@ -1124,6 +1168,8 @@ static void test_net(void)
         struct wifi_preference choice;
         CHECK(pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && !choice.reconnect,
               "wifi explicit disconnect disables reconnect");
+        /* The XI-825 starts associating and times out; the WL54-CF scans for
+         * the network first and refuses one that isn't there. */
         /* The XI-825 and Hermes start associating and time out; the WL54-CF
          * scans for the network first and refuses one that isn't there. */
         if (card == GZ_NET_XI825 || card == GZ_NET_HERMES) {
@@ -1372,6 +1418,7 @@ int main(void)
     test_time();
     test_audio();
     test_sounds();
+    test_modem();
     test_net();
     test_ota();
 

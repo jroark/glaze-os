@@ -6,7 +6,7 @@ KCRYPTO_INC := -Ithird_party/wolfssl -Ikernel/crypto -DWOLFSSL_USER_SETTINGS
 KCRYPTO_SRCS := $(addprefix third_party/wolfssl/wolfcrypt/src/,ed25519.c ge_low_mem.c fe_low_mem.c sha512.c sha256.c)
 KCRYPTO_OBJS := $(patsubst third_party/%.c,$(OUT)/kernel/crypto/%.o,$(KCRYPTO_SRCS))
 
-KERNEL_SRCS := $(filter-out $(foreach d,$(DRIVER_NAMES),kernel/drivers/$(d).c),$(wildcard kernel/*.c kernel/*.S kernel/drivers/*.c))
+KERNEL_SRCS := $(filter-out $(foreach d,$(DRIVER_NAMES) $(PCCARD_DRIVERS),kernel/drivers/$(d).c),$(wildcard kernel/*.c kernel/*.S kernel/drivers/*.c))
 KERNEL_OBJS := $(patsubst %,$(OUT)/%.o,$(basename $(KERNEL_SRCS))) $(OUT)/kernel/string.o $(OUT)/kernel/divdi3.o \
     $(OUT)/kernel/bitops.o $(KCRYPTO_OBJS)
 KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -Ikernel -MMD \

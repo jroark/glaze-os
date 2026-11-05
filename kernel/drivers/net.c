@@ -100,7 +100,7 @@ static void free_queue(void)
     tx_buf = NULL;
 }
 
-static void select_card(unsigned manufacturer, unsigned product, bool serial)
+static void select_card(unsigned manufacturer, unsigned product)
 {
     if (claimed) net_removed();
     claimed = true;
@@ -108,9 +108,7 @@ static void select_card(unsigned manufacturer, unsigned product, bool serial)
     head = tail = 0;
     memset(&info, 0, sizeof(info));
     const char *path;
-    if (serial) {
-        kind = GZ_NET_MODEM; path = "drivers/modem.ko";     /* cf.c chose its UART */
-    } else if (manufacturer == 0xd601 && product == 5) {
+    if (manufacturer == 0xd601 && product == 5) {
         kind = GZ_NET_XI825; path = "drivers/xi825.ko";
     } else if (manufacturer == 0x02df && product == 0x8103) {
         kind = GZ_NET_WL54CF; path = "drivers/wl54cf.ko";
@@ -150,7 +148,7 @@ static void select_card(unsigned manufacturer, unsigned product, bool serial)
         if (callbacks[i] && !module_executable(&image, callbacks[i])) {
             error = GZ_ECORRUPT; goto failed;
         }
-    if (kind != GZ_NET_XI825 && kind != GZ_NET_HERMES && kind != GZ_NET_MODEM) {
+    if (kind != GZ_NET_XI825 && kind != GZ_NET_HERMES) {
         queue = page_alloc_n(QUEUE_PAGES);
         if (!queue) { error = GZ_ENOMEM; goto failed; }
         tx_buf = (uint8_t *)queue + QUEUE_LEN * sizeof(*queue);
@@ -202,20 +200,14 @@ void net_init(void)
     }
     /* Never probe a storage card's registers with NIC writes. */
     if (function == 6)
-        select_card(manufacturer, product, false);
+        select_card(manufacturer, product);
 }
 
 bool net_insert(unsigned manufacturer, unsigned product)
 {
-    select_card(manufacturer, product, false);
+    select_card(manufacturer, product);
     /* The socket power-up caller needs the card's result, even if USB
      * independently supplies a working network connection. */
-    return online && driver && driver->present();
-}
-
-bool net_insert_modem(void)
-{
-    select_card(0, 0, true);
     return online && driver && driver->present();
 }
 

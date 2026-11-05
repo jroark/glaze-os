@@ -130,6 +130,14 @@ bool cf_card_is_veo(void);
 bool cf_card_is_icsi_camera(void);
 void cf_probe_hold(void);
 int sys_cam_probe(struct proc *, uint32_t, uint32_t, uint32_t, uint32_t);
+/* modem.c: a CF data modem's UART, for the network server (PROC_NET). */
+void modem_insert(uint32_t cor_address, unsigned config_index);
+void modem_removed(void);
+void modem_poll(void);
+bool modem_ready(void);
+bool modem_present(void);
+uint32_t modem_generation(void);
+int sys_modem_io(struct proc *, uint32_t, uint32_t, uint32_t);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);
@@ -165,25 +173,7 @@ int usbnet_send(struct proc *p, uint32_t buf, uint32_t len);
 int usbnet_recv(struct proc *p, uint32_t buf, uint32_t max);
 int usbnet_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
 bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up */
-bool net_insert_modem(void);    /* a serial card: the modem driver (modem.c) */
 void net_removed(void);
-/* A serial card's configuration, chosen from its CIS by cf.c. */
-struct modem_config {
-    uint32_t port;              /* I/O base of its 16550 */
-    uint32_t cor_address;       /* attribute address of its COR, 0: none */
-    uint8_t cor;                /* the value written there */
-    char identification[48];
-};
-const struct modem_config *pcmcia_modem_config(void);
-bool modem_init(void);          /* modem.c, as drivers/modem.ko */
-void modem_irq(void);
-bool modem_present(void);
-void modem_removed(void);
-int modem_info(struct proc *p, uint32_t out);
-int modem_bind(struct proc *p, int port);
-int modem_send(struct proc *p, uint32_t buf, uint32_t len);
-int modem_recv(struct proc *p, uint32_t buf, uint32_t max);
-int modem_control(struct proc *p, uint32_t op, uint32_t arg);
 void net_set_mac(const uint8_t mac[6]);
 void net_receive(const uint8_t *frame, uint32_t len);
 void net_rx_drop(void);

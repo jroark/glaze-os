@@ -20,7 +20,18 @@ endif
 
 # Optional card drivers are independent relocatable kernel images. Only the
 # CIS-selected image is read into RAM; the dispatcher stays in the kernel.
-DRIVER_NAMES := ne2000 xi825 wl54cf btuart 3c589 hermes modem
+DRIVER_NAMES := ne2000 xi825 wl54cf cfuart
+# PC Cards in the PCMCIA jacket (docs/hardware/PCCARDS.md): the 3c589 and
+# Hermes drivers. The NAND romfs has no room for them beside the default
+# apps, so, like MODEM (mk/libs.mk), GlazeBoot builds default to them and
+# NAND images need PCCARDS=1 NAND_DROP=wince. Without them a jacket card is
+# identified and its socket reserved.
+PCCARDS ?= $(if $(filter glazeboot,$(MAKECMDGOALS)),1,0)
+# Never linked into the kernel (mk/kernel.mk), built in or not.
+PCCARD_DRIVERS := 3c589 hermes
+ifeq ($(PCCARDS),1)
+DRIVER_NAMES += $(PCCARD_DRIVERS)
+endif
 DRIVER_FILES := $(foreach d,$(DRIVER_NAMES),$(OUT)/drivers/$(d).ko)
 $(OUT)/kmod/%.o: kernel/modules/%.c
 	@mkdir -p $(dir $@)

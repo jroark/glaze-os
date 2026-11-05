@@ -12,7 +12,8 @@ process polling for it.
 | NE2000-compatible network card | `drivers/ne2000.ko` | Started after successful initialization |
 | XI-825 | `drivers/xi825.ko` | Started after successful initialization |
 | WL54-CF | `drivers/wl54cf.ko` | Started after successful initialization |
-| SMART/Brainboxes BCSP Bluetooth | `drivers/btuart.ko` | Not started; starts the separate `bluetooth` service |
+| SMART/Brainboxes BCSP Bluetooth | `drivers/cfuart.ko` | Not started; starts the separate `bluetooth` service |
+| Serial card whose FUNCE names a modem (Rockwell RC56LD) | `drivers/cfuart.ko` | Started; dials on request (`MODEM=1` builds, [MODEM.md](../hardware/MODEM.md)) |
 | Driver missing, invalid or initialization failed | None retained; socket remains reserved from ATA | Not started |
 
 Only the selected driver is loaded. NE2000 and WL54-CF allocate their shared
@@ -30,7 +31,7 @@ change converts the three optional network backends to modules.
 
 ## Driver format and build
 
-A normal `make` builds `out/drivers/{ne2000,xi825,wl54cf,btuart}.ko` and puts them in
+A normal `make` builds `out/drivers/{ne2000,xi825,wl54cf,cfuart}.ko` and puts them in
 romfs. Their implementation files remain in `kernel/drivers/`; wrappers in
 `kernel/modules/` supply a versioned `glaze_driver` operation table. They are excluded
 from the linked kernel. Shipping the files in romfs does not instantiate their

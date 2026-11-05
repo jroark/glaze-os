@@ -421,7 +421,10 @@ static void os_install(const char *path)
     }
     if (rv >= 0) {
         printf("appstore: Glaze OS %s verified; resetting to install\n", os.version);
+        os_update = false;
+        update_badge();
         rv = fs_ota_arm();
+        os_check();             /* restore the offer if arming failed */
     }
     os_verifying = false;
     strlcpy(message, os_error(rv), sizeof(message));
@@ -622,6 +625,7 @@ int main(void)
         snprintf(ota_note, sizeof(ota_note), "Glaze OS %.15s is installed.", ota.last_version);
     else if (ota.last_result == GZ_OTA_REJECTED)
         snprintf(ota_note, sizeof(ota_note), "Glaze OS %.15s could not be installed.", ota.last_version);
+    os_check();                 /* discard a persisted pre-update OS badge even offline */
     redraw();
     worker_ok = store_worker_start();
     if (worker_ok) {

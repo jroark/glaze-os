@@ -144,11 +144,48 @@ static void draw_card(gfx_surface *s, int x, int y, uint32_t fg)
         gfx_fill(s, gfx_r(x + 2 + i * 2, y + 8, 1, 2), 0x637080);
 }
 
-gfx_rect sb_card_icon_rect(const struct sb_view *v)
+static bool status_icon_visible(const struct sb_view *v, unsigned icon)
 {
+    return icon == SB_ICON_STORAGE ? v->card_mounted : icon == SB_ICON_NETWORK ? v->network_kind != GZ_NET_NONE :
+           icon == SB_ICON_BLUETOOTH && v->bluetooth_present;
+}
+
+gfx_rect sb_status_icon_rect(const struct sb_view *v, unsigned icon)
+{
+    if (!status_icon_visible(v, icon)) return gfx_r(0, 0, 0, 0);
     char pct[8];
     int left = battery_left(v, ui_font(FONT_B10), pct, sizeof(pct));
-    return gfx_r(left - 22, 0, 22, SB_STATUS_H);
+    for (unsigned i = SB_ICON_STORAGE; i <= icon; i++)
+        if (status_icon_visible(v, i)) left -= 16;
+    return gfx_r(left - 1, 0, 16, SB_STATUS_H);
+}
+
+static void draw_wifi(gfx_surface *s, int x, int y, uint32_t fg)
+{
+    static const uint16_t rows[] = {0x03f0,0x0c0c,0x1002,0x01e0,0x0618,0x0804,0x00c0,0x0120,0,0x0080,0x0080};
+    for (unsigned r = 0; r < ARRAY_SIZE(rows); r++)
+        for (unsigned c = 0; c < 13; c++)
+            if (rows[r] & (1u << c)) gfx_fill(s, gfx_r(x+c, y+r, 1, 1), fg);
+}
+
+static void draw_network(gfx_surface *s, int x, int y, uint32_t fg)
+{
+    gfx_fill(s, gfx_r(x+4, y, 5, 4), fg);
+    gfx_fill(s, gfx_r(x+6, y+4, 1, 3), fg);
+    gfx_fill(s, gfx_r(x+2, y+6, 9, 1), fg);
+    gfx_fill(s, gfx_r(x+2, y+7, 1, 1), fg);
+    gfx_fill(s, gfx_r(x+10, y+7, 1, 1), fg);
+    gfx_fill(s, gfx_r(x, y+8, 5, 3), fg);
+    gfx_fill(s, gfx_r(x+8, y+8, 5, 3), fg);
+}
+
+static void draw_bluetooth(gfx_surface *s, int x, int y, uint32_t fg)
+{
+    gfx_line(s, x+6, y, x+6, y+10, fg, 255);
+    gfx_line(s, x+6, y, x+10, y+3, fg, 255);
+    gfx_line(s, x+10, y+3, x+2, y+8, fg, 255);
+    gfx_line(s, x+2, y+2, x+10, y+7, fg, 255);
+    gfx_line(s, x+10, y+7, x+6, y+10, fg, 255);
 }
 
 gfx_rect sb_draw_card_details(gfx_surface *s, const struct sb_card_details *d, bool pressed)
@@ -203,16 +240,36 @@ void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool pad
             for (int i = 0; i < 4; i++) gfx_fill(s, gfx_r(73 + i, 4 + i, 1, 7 - i * 2), 0xFFFFFF);
         } else gfx_fill(s, gfx_r(74, 6, 2, 2), 0xFFFFFF);
     }
-    if (padlock)
-        draw_padlock(s, SCREEN_W / 2, 3, fg);
-    else
-        gfx_text_center(s, 0, 2, SCREEN_W, f, v->clk.status, fg, 255);
     char pct[8];
     int left = battery_left(v, f, pct, sizeof(pct));
+    int icons_left = left;
+    for (unsigned icon = SB_ICON_STORAGE; icon < SB_ICON_COUNT; icon++) {
+        gfx_rect r = sb_status_icon_rect(v, icon);
+        if (gfx_rect_empty(r)) continue;
+        icons_left = MIN(icons_left, r.x);
+        uint32_t color = fg;
+        if (icon == SB_ICON_NETWORK && !v->network_connected)
+            color = style == SB_STATUS_GRAY ? 0x637080 : 0xA4ACB7;
+        if (icon == SB_ICON_BLUETOOTH)
+            color = v->bluetooth_connected ? (style == SB_STATUS_GRAY ? 0x1261BC : 0x68BAFF) :
+                    style == SB_STATUS_GRAY ? 0x637080 : 0xA4ACB7;
+        if (icon == SB_ICON_STORAGE) draw_card(s, r.x+1, 3, color);
+        else if (icon == SB_ICON_BLUETOOTH) draw_bluetooth(s, r.x+1, 2, color);
+        else if (v->network_kind == GZ_NET_XI825 || v->network_kind == GZ_NET_WL54CF || v->network_kind == GZ_NET_HERMES) draw_wifi(s, r.x+1, 2, color);
+        else draw_network(s, r.x+1, 2, color);
+    }
+    if (padlock)
+        draw_padlock(s, SCREEN_W / 2, 3, fg);
+    else {
+        int width = gfx_text_width(f, v->clk.status);
+        int min_x = v->debugger & GU_DEBUG_CONNECTED ? 83 : 48;
+        int x = MAX(min_x, MIN((SCREEN_W-width)/2, icons_left-width-3));
+        gfx_surface clock = *s;
+        gfx_rect_intersect(s->clip, gfx_r(min_x, 0, MAX(0, icons_left-min_x-2), SB_STATUS_H), &clock.clip);
+        gfx_text(&clock, x, 2, f, v->clk.status, fg, 255);
+    }
     if (pct[0])
         gfx_text(s, left, 2, f, pct, fg, 255);
-    if (v->card_mounted)
-        draw_card(s, left - 17, 3, fg);
     draw_battery(s, BATTERY_X, 3, fg, &v->power);
 }
 

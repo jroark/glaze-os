@@ -54,9 +54,12 @@ enum {
     NET_NAME,           /* w2 = socket, w3 = 0 local / 1 peer -> w1 = address, w2 = port */
     NET_WIFI_STATUS, NET_WIFI_SCAN, NET_WIFI_CONNECT, NET_WIFI_DISCONNECT,
     NET_WIFI_CONNECT_SECURE, NET_WIFI_FORGET,
-    /* Dial-up (glaze/dialup.h), with a modem card: buf holds the structures. */
-    NET_DIALUP_STATUS, NET_DIALUP_CONNECT, NET_DIALUP_DISCONNECT, NET_DIALUP_FORGET,
-    NET_DIALUP_CONFIG,
+    /* Dial-up over a CF modem (GZ_NET_MODEM). buf: struct net_dial_config,
+     * saved by the server; an empty number dials the saved one. */
+    NET_DIAL,
+    NET_HANGUP,
+    NET_DIAL_STATUS,    /* -> buf: struct net_dial_status */
+    NET_DIAL_CONFIG,    /* -> buf: the saved struct net_dial_config, password blank */
 };
 
 #define NET_MSG_DONTWAIT    0x1     /* send: queue what fits, GZ_ETIMEDOUT if nothing */
@@ -103,6 +106,52 @@ struct net_status {
     uint32_t rx_frames, tx_frames, rx_dropped;
 };
 
+/* Dial-up. With a modem the net_status state is NET_DISCONNECTED while
+ * idle, NET_ASSOCIATING while dialing and negotiating, and NET_UP online. */
+enum {
+    NET_DIAL_IDLE,
+    NET_DIAL_STARTING,      /* resetting and setting up the modem */
+    NET_DIAL_DIALING,       /* ATD sent, waiting for CONNECT */
+    NET_DIAL_NEGOTIATING,   /* carrier up, PPP LCP/authentication/IPCP */
+    NET_DIAL_UP,
+    NET_DIAL_HANGING_UP,
+};
+enum {
+    NET_DIAL_E_NONE,
+    NET_DIAL_E_NO_REPLY,    /* the modem didn't answer AT */
+    NET_DIAL_E_MODEM,       /* ERROR to a setup command (check the init string) */
+    NET_DIAL_E_NO_DIALTONE,
+    NET_DIAL_E_BUSY,
+    NET_DIAL_E_NO_ANSWER,
+    NET_DIAL_E_NO_CARRIER,  /* no connection, or the line dropped */
+    NET_DIAL_E_TIMEOUT,
+    NET_DIAL_E_AUTH,        /* PAP/CHAP refused the user name or password */
+    NET_DIAL_E_PPP,         /* PPP negotiation failed */
+    NET_DIAL_E_UNSUPPORTED, /* this build has no PPP (MODEM=1); NET_DIAL gives GZ_ENOENT */
+};
+#define NET_DIAL_NUMBER_MAX 40
+#define NET_DIAL_USER_MAX   64
+#define NET_DIAL_INIT_MAX   40
+struct net_dial_config {
+    char number[NET_DIAL_NUMBER_MAX];   /* digits and , W * # P T ( ) - space */
+    char user[NET_DIAL_USER_MAX];
+    char password[NET_DIAL_USER_MAX];
+    char init[NET_DIAL_INIT_MAX];       /* extra AT commands, e.g. "M0" or "AT&F1" */
+    uint8_t pulse;                      /* ATDP instead of ATDT */
+    uint8_t has_password;               /* NET_DIAL_CONFIG: a password is saved */
+    uint8_t keep_password;              /* NET_DIAL: keep the saved password */
+    uint8_t reserved;
+};
+struct net_dial_status {
+    uint32_t state;         /* NET_DIAL_* */
+    int32_t error;          /* NET_DIAL_E_* of the last attempt */
+    uint32_t rate;          /* CONNECT rate in bit/s, 0 if not given */
+    uint32_t online_ms;     /* time since PPP came up */
+    uint32_t addr, peer, dns;
+    uint32_t rx_bytes, tx_bytes;
+    char modem[32];         /* the modem's ATI3 answer */
+};
+
 /* ---- client API (libc) --------------------------------------------------- */
 
 int net_status(struct net_status *st);
@@ -129,6 +178,15 @@ int net_poll(struct net_pollfd *fds, int n, int timeout_ms);
 int net_sockopt(int s, int opt, int value);
 int net_shutdown(int s, int how);
 int net_name(int s, bool peer, uint32_t *addr, uint16_t *port);
+
+/* Dial-up; GZ_ENOENT without a modem. NULL config dials the saved one. */
+int net_dial(const struct net_dial_config *config);
+int net_hangup(void);
+int net_dial_status(struct net_dial_status *status);
+int net_dial_config(struct net_dial_config *config);
+/* 0 if every field is terminated and the number and init string are safe
+ * to send to the modem, else GZ_EINVAL. */
+int net_dial_config_validate(const struct net_dial_config *config);
 
 /* "a.b.c.d" into out (at least 16 bytes); returns out. */
 char *net_ntoa(uint32_t addr, char *out);
