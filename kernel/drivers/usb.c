@@ -116,14 +116,15 @@ void usb_poll(void)
              * The host drains EP3 before issuing this vendor request. */
             diagnostic = b[2] + 1; pending_lines = lines; status_pending = true;
         } else if (b[0] == 0x40 && b[1] == 0x5a && b[2] >= 2 && b[2] <= 4 &&
-                   (b[3] >> 6) < 3 && !b[6] && !b[7] && hwdump_active()) {
+                   !b[6] && !b[7] && hwdump_active()) {
             /* HWDUMP=1 bring-up only: read (2) or write the word loaded by
              * 0x5b, 32-bit (3) or 16-bit (4), in RAM, the companion or the
-             * VR4131 (wValue high bits 7-6), word index in wValue bits 5-0
-             * and wIndex. Lets a cold boot be examined and changed while
-             * nothing else works; a gated companion unit still hangs the
-             * bus, so the host must only touch live addresses. */
-            static const uint32_t base[] = { 0xA0000000u, 0xAA000000u, 0xAF000000u };
+             * VR4131, or the PCMCIA jacket's socket controller and windows
+             * at 0x0B000000 (wValue high bits 7-6), word index in wValue
+             * bits 5-0 and wIndex. Lets a cold boot be examined and changed
+             * while nothing else works; a gated companion unit still hangs
+             * the bus, so the host must only touch live addresses. */
+            static const uint32_t base[] = { 0xA0000000u, 0xAA000000u, 0xAF000000u, 0xAB000000u };
             peek_addr = base[b[3] >> 6] + ((uint32_t)(b[3] & 0x3F) << 18 | b[5] << 10 | b[4] << 2);
             diagnostic = b[2] + 1; pending_lines = lines; status_pending = true;
         } else if (b[0] == 0x40 && b[1] == 0x5b && !b[6] && !b[7] && hwdump_active()) {

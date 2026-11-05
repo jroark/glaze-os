@@ -149,6 +149,44 @@ static bool card_inserted(void)
     return pcmcia_card_present();
 }
 
+/* GIRQ0 source 6, socket 1's interrupt (hw.h): clear the socket's cause
+ * and any other jacket events, as the OAL does before the card's ISR runs,
+ * so the source can be enabled again. Called from the interrupt handler. */
+void pcmcia1_irq_ack(void)
+{
+    uint32_t other = PCMCIA1_EVENTS & PCMCIA1_EVENT_OTHER;
+    if (other)
+        PCMCIA1_EVENT_ACK = other;
+    if (socket != 1 || !(PCMCIA1_BUS & PCMCIA1_BUS_ON))
+        return;
+    if (PCMCIA1_IRQ_SUMMARY & PCMCIA1_IRQ_SOCKET)
+        (void)PCMCIA1_CAUSE;
+}
+
+/* From the tick: with a driver running for the jacket's card, route its
+ * interrupt to GIRQ0 source 6 as the OAL does (0x8007B088, 0x800A9420):
+ * only the socket's interrupt unmasked at 0x0A001B58, the socket's
+ * enable at 0x0B000208, then the source. The handler masks the source
+ * while it runs and enables it again (irq.c). */
+static bool socket1_irq_armed;
+void pcmcia1_irq_arm(bool driver_up)
+{
+    if (socket != 1 || !driver_up || !(PCMCIA1_BUS & PCMCIA1_BUS_ON)) {
+        socket1_irq_armed = false;
+        return;
+    }
+    if (socket1_irq_armed)
+        return;
+    socket1_irq_armed = true;
+    PCMCIA1_EVENT_ACK = PCMCIA1_EVENT_OTHER;
+    PCMCIA1_EVENT_MASK = PCMCIA1_EVENT_IRQ;
+    PCMCIA1_IRQ_ENABLE = 1;
+    (void)PCMCIA1_CAUSE;
+    KJ_SRC_JACKET = 0x30u;              /* clear its status, as the OAL does */
+    KJ_SRC_JACKET = KJ_SRC_MODE | KJ_SRC_ENABLE;
+    kputs("cf: socket 1 interrupt on GIRQ0 source 6\n");
+}
+
 /*
  * What the card information structure says (PC Card spec, "Card
  * Information Structure"): FUNCID, MANFID, CONFIG's configuration register
@@ -632,7 +670,7 @@ static void socket_power_up(void)
  * Socket 1's power-up, from pcmcia.dll (be300-modules 74_pcmcia.dll, base
  * 0x01980000), whose socket 1 helpers address these registers:
  * - 0x0198C83C: GPIO 5 on (0x0198C784, then 30 ms), 0x0A001B04 = 0,
- *   0x0A001B00 bit 0; 0x0198B46C: up to 10 x 2 ms for power good
+ *   0x0A001B00 bit 0; 0x0198B46C: up to 10 x 2 ms for the socket's interrupt line
  *   (0x0A001B50 bit 3), 0x0B00011C = 1, then 0x0B000140 = 1, 30 ms,
  *   0x0B000130 = 1, 50 ms, and timings by 0x0B000508 bit 8;
  * - 0x0198CDDC: 0x0B000128 = 1; 0x0198ADA8: 0x0B00014C = 0, 554 = 1,

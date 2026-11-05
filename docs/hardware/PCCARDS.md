@@ -100,7 +100,7 @@ a BE-300 with an AmbiCom AMB8610 NE2000 that CE drove (its
 | 0x0A001008 bit 3 | socket empty | 0x4 | 0xC |
 | 0x0A00104C bit 6 | socket empty | 0x0C | 0x48 |
 | 0x0A001B00 bit 0 | controller bus power | 1 | 0 |
-| 0x0A001B50 bit 3 | power good | | |
+| 0x0A001B50 bit 3 | the socket's interrupt (GIRQ0 source 6) | | |
 | 0x0B000100, 0x0B000010 | controller identity | 0x641, 0x7402 | 0 |
 | 0x0B000500, 504, 508 | CTRL, RESET, STATUS (like A000-A008) | 0xB, 4, 0x2F9 | 0 |
 | 0x0B000520, 524 | like A020/A024 (bit 3: configuration window) | 0x78, 0x40 | 0 |
@@ -124,7 +124,7 @@ never called directly, so that card order comes from the CF socket's trace
 and the values CE left.
 
 The emulator models socket 1 with `--jacket` (be300 `src/hw/jacket.c`):
-the controller, the detect and power-good bits, per-card status and both
+the controller, the detect bits, the interrupt (source 6), per-card status and both
 windows, from these captures. Test the cold power-up path with
 
 ```sh
@@ -132,10 +132,37 @@ windows, from these captures. Test the cold power-up path with
 be300 --nand out/glaze.bin --rtc-host-time --jacket --3c589   # or --ne2000, --hermes
 ```
 
-Interrupts from socket 1 aren't routed yet: its drivers run from the 100 Hz
-tick. ATA cards in the jacket aren't supported (only the CF socket's ATA
-ports are used).
+### Socket 1's interrupt
+
+Traced on a BE-300 with a 3c589 interrupting (VeoTest, `glaze-usb peek`
+at 0x0B000000) and in nk.exe's OAL (handler 0x800AB2A4/0x800AB394, enables
+0x8007B088 and 0x800A9420):
+
+```
+card IREQ -> 0x0B00053C bit 0   socket 1's cause (read clears; 0x22: card change)
+          -> 0x0B000200 bit 1   the controller's summary
+             (0x0B000208 = 1)   its enable
+          -> 0x0A001B50 bit 3   companion jacket events (mask 0x0A001B58 = 8;
+                                bits 0-2 other events, acknowledged at 0x0A001B54)
+          -> GIRQ0 source 6     enable 0x0A000028
+```
+
+0x0A001B50 bit 2 reads set all the time, so the mask must be 8 before the
+source is enabled, as the OAL sets it. Source 2 (cause 0x0A001040) is a
+different path: pin detectors at 0x0A001044 (bit 0), 0x0A00104C (bit 2,
+the jacket's card detect) and 0x0A001054 (bit 4), each cleared with 0x30
+and armed with 3 (bit 6 is the level).
+
+Glaze arms source 6 from the tick once a jacket card's driver runs
+(`pcmcia1_irq_arm`); `irq.c` masks it while serving the card, clears the
+cause (`pcmcia1_irq_ack`) and enables it again. With the tick's polling
+of socket 1 turned off, a 3c589 took a DHCP lease on interrupts alone.
+The tick still polls as a backup, as for the CF socket.
+
+ATA cards in the jacket aren't supported (only the CF socket's ATA ports
+are used).
 
 Don't read 0x0A00D000 from Glaze with only a jacket card in: a HWDUMP
 `peek` there crashed Glaze, and the device restarted into CE. `glaze-usb
-peek` refuses 0x0B000000 addresses.
+peek` and `poke` reach socket 1's controller and windows at 0x0B000000 on
+HWDUMP=1 kernels; the controller reads 0 while its bus is off.

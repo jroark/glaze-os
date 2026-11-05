@@ -210,7 +210,7 @@
  * NE2000 in the jacket, 2026-11-05):
  * - 0x0A001008 bit 3 reads 1 with the jacket's socket empty;
  * - 0x0A001B00 bit 0 powers the controller's bus (with GPIO 5, as for the CF
- *   socket); 0x0A001B50 bit 3 then reports power good;
+ *   socket); 0x0A001B50 bit 3 is then the socket's interrupt line (below);
  * - 0x0B000100 and 0x0B000010 identify the controller (0x641, 0x7402) once it
  *   is powered, and read 0 while it is off;
  * - 0x0B000500 is a socket block laid out like 0x0A00A000 (CTRL 0xB and
@@ -228,6 +228,25 @@
 #define PCMCIA1_CHIP_ID     0x7402u
 #define PCMCIA1_ID          REG32(0x0B000100u)
 #define PCMCIA1_ID_VALUE    0x641u
+/* Socket 1's interrupt (traced on a BE-300 with a 3c589 interrupting, and
+ * nk.exe's OAL): the card's IREQ latches bit 0 of the socket's cause
+ * 0x0B00053C (cleared by reading; 0x22 is a card change, as at the CF
+ * socket's 0x0A00A03C), which shows as bit 1 of 0x0B000200; with
+ * 0x0B000208 = 1 that raises bit 3 of the companion's 0x0A001B50 (bits
+ * 0-2 are other jacket events, acknowledged at 0x0A001B54; 0x0A001B58
+ * masks them, 8 as the OAL sets it at 0x8007B088), which is GIRQ0 source
+ * 6. The OAL's handler is 0x800AB2A4/0x800AB394. */
+#define PCMCIA1_IRQ_SUMMARY REG32(0x0B000200u)
+#define PCMCIA1_IRQ_SOCKET  0x02u
+#define PCMCIA1_IRQ_ENABLE  REG32(0x0B000208u)
+#define PCMCIA1_CAUSE       REG32(0x0B00053Cu)
+#define PCMCIA1_EVENTS      REG32(0x0A001B50u)
+#define PCMCIA1_EVENT_ACK   REG32(0x0A001B54u)
+#define PCMCIA1_EVENT_MASK  REG32(0x0A001B58u)
+#define PCMCIA1_EVENT_IRQ   0x08u       /* the socket's interrupt */
+#define PCMCIA1_EVENT_OTHER 0x07u
+#define KJ_SRC_JACKET       KJ_GIRQ0_EN(6)
+#define KJ_INT_JACKET       (1u << 6)
 #define PCMCIA1_CTRL        REG32(0x0B000500u)
 #define PCMCIA1_STATUS      REG32(0x0B000508u)
 #define PCMCIA1_A520        REG32(0x0B000520u)
