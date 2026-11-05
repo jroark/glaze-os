@@ -214,6 +214,9 @@ int net_if_init(int port)
     card_checked = gz_time_ms();
     seed_from_card();
     if (gz_net_info(&info) < 0 || !info.present) {
+        /* The kernel starts the server for a modem card too. */
+        if (net_modem_init(port) == 0)
+            return 0;
         net_log("net: no network card\n");
         return GZ_ENETDOWN;
     }
@@ -426,6 +429,11 @@ void net_if_poll(void)
     int n;
     uint32_t now = gz_time_ms();
 
+    if (net_modem_present()) {
+        net_modem_poll();
+        return;
+    }
+
     if (now - card_checked >= CARD_CHECK_MS) {
         card_checked = now;
         if (wireless && state==NET_DISCONNECTED && !saved.reconnect) {
@@ -485,11 +493,13 @@ void net_if_poll(void)
 
 int net_if_state(void)
 {
+    if (net_modem_present()) return net_modem_state();
     return state;
 }
 
 void net_if_status(struct net_status *st)
 {
+    if (net_modem_present()) { net_modem_status(st); return; }
     memset(st, 0, sizeof(*st));
     st->state = (uint32_t)state;
     gz_net_info(&info);

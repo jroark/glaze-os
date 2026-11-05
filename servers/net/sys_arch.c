@@ -40,6 +40,12 @@ u32_t sys_now(void)
     return gz_time_ms();
 }
 
+/* PPP mixes it into its magic-number seed (netif/ppp/magic.c). */
+u32_t sys_jiffies(void)
+{
+    return sys_now();
+}
+
 sys_prot_t sys_arch_protect(void)
 {
     gz_mutex_lock(&protect_lock);

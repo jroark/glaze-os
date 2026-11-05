@@ -126,6 +126,14 @@ bool bt_present(void);
 uint32_t bt_generation(void);
 int sys_bt_io(struct proc *, uint32_t, uint32_t, uint32_t);
 int sys_bt_card_info(struct proc *, uint32_t, uint32_t);
+/* modem.c: a CF data modem's UART, for the network server (PROC_NET). */
+void modem_insert(uint32_t cor_address, unsigned config_index);
+void modem_removed(void);
+void modem_poll(void);
+bool modem_ready(void);
+bool modem_present(void);
+uint32_t modem_generation(void);
+int sys_modem_io(struct proc *, uint32_t, uint32_t, uint32_t);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);

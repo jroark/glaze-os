@@ -14,6 +14,7 @@ Start with the [top-level README](../README.md) for building and running.
 - [Networking through the USB cable](hardware/USB_NETWORK.md)
 - [Wi-Fi and network security](hardware/WIFI.md)
 - [CF Bluetooth discovery and serial](hardware/BLUETOOTH.md)
+- [CF dial-up modem](hardware/MODEM.md)
 - [WL54-CF wireless networking](hardware/WL54CF.md)
 
 ## Operating system

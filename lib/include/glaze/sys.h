@@ -108,6 +108,9 @@ static inline int gz_cf_write(uint32_t lba, uint32_t count, const void *buf) { r
 
 static inline int gz_bt_io(uint32_t op, void *buffer, uint32_t size)
 { return GZ_SC3(SYS_BT_IO, op, buffer, size); }
+/* Network server only: the CF modem's UART (glaze/modem.h). */
+static inline int gz_modem_io(uint32_t op, void *buffer, uint32_t size)
+{ return GZ_SC3(SYS_MODEM_IO, op, buffer, size); }
 struct bt_card_info;
 static inline int gz_bt_card_info(struct bt_card_info *info, uint32_t size)
 { return GZ_SC2(SYS_BT_CARD_INFO, info, size); }

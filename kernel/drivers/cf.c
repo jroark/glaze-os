@@ -101,6 +101,9 @@ static bool card_inserted(void)
 #define TPL_CONFIG      0x1A
 #define TPL_CFTABLE     0x1B
 #define FUNCID_NETWORK  0x06
+#define FUNCID_SERIAL   0x02
+#define TPL_FUNCE       0x22
+#define UART_IO_BASE    0x3F8u          /* COM1, where cfuart.ko looks */
 #define NET_IO_BASE     0x300u          /* NE_REG and the XI-825's window */
 
 struct cis {
@@ -108,6 +111,8 @@ struct cis {
     unsigned manufacturer, product;
     uint32_t cor;                       /* attribute address, 0: none */
     int index, io_index;                /* default entry; one decoding 0x300 */
+    int uart_index;                     /* an entry decoding UART_IO_BASE */
+    bool modem;                         /* serial FUNCE names a modem function */
 };
 
 /* A CFTABLE_ENTRY's index and whether it can decode NET_IO_BASE: a range
@@ -147,6 +152,8 @@ static void cis_entry(unsigned at, unsigned len, struct cis *c)
         return;
     uint8_t io = NEXT();
     bool decodes = !(io & 0x80) && (io & 0x1F) >= 5;
+    /* Eight registers: three address lines and the window picks the base. */
+    bool uart = !(io & 0x80) && (io & 0x1F) >= 3;
     if (io & 0x80) {
         uint8_t r = NEXT();
         unsigned asz = (r >> 4) & 3, lsz = (r >> 6) & 3;
@@ -159,10 +166,13 @@ static void cis_entry(unsigned at, unsigned len, struct cis *c)
             for (unsigned b = 0; b < lsz; b++)
                 (void)NEXT();
             decodes = decodes || base == NET_IO_BASE;
+            uart = uart || base == UART_IO_BASE;
         }
     }
     if (decodes && c->io_index < 0)
         c->io_index = index;
+    if (uart && c->uart_index < 0)
+        c->uart_index = index;
 #undef NEXT
 }
 
@@ -171,7 +181,7 @@ static void read_cis(struct cis *c)
     unsigned i = 0;
 
     memset(c, 0, sizeof(*c));
-    c->function = c->index = c->io_index = -1;
+    c->function = c->index = c->io_index = c->uart_index = -1;
     for (int n = 0; n < 64 && i + 2 < CIS_LIMIT; n++) {
         uint8_t code = CF_CIS(i);
         if (code == TPL_END)
@@ -196,6 +206,13 @@ static void read_cis(struct cis *c)
                 c->cor |= (uint32_t)CF_CIS(at + 2 + b) << (8 * b);
         } else if (code == TPL_CFTABLE && len >= 1) {
             cis_entry(at, len, c);
+        } else if (code == TPL_FUNCE && len >= 1 && c->function == FUNCID_SERIAL) {
+            /* PC Card Standard, serial-port function extensions: the low
+             * nibble of TPLFE_TYPE is 1 (modem), 2 (data modem) or 5 (data
+             * modem capabilities) on a modem; 0 is the plain UART. */
+            unsigned type = CF_CIS(at) & 0x0F;
+            if (type == 1 || type == 2 || type == 5)
+                c->modem = true;
         }
         i = at + len;
     }
@@ -245,12 +262,25 @@ static void capture_card(const struct cis *c)
     if (c->function == 2 && c->manufacturer == 0x0160 && c->product == 0xaba0 &&
         strstr(card_info.identification, "CF+ Bluetooth_Card, BCSP"))
         card_info.kind = BT_CARD_BLUETOOTH;
+    /* Modems: any serial card whose FUNCE names a modem and that has an
+     * entry decoding COM1 (verified card: Rockwell RC56LD, MODEM.md). */
+    else if (c->function == FUNCID_SERIAL && c->modem && c->cor && c->uart_index >= 0)
+        card_info.kind = BT_CARD_MODEM;
     if (card_info.kind == BT_CARD_BLUETOOTH) bt_insert();
+    if (card_info.kind == BT_CARD_MODEM) modem_insert(c->cor, (unsigned)c->uart_index);
+}
+
+/* A serial card owns the socket: never ATA-probe or reset it. */
+static bool serial_card(void)
+{
+    return card_info.kind == BT_CARD_SERIAL || card_info.kind == BT_CARD_BLUETOOTH ||
+           card_info.kind == BT_CARD_MODEM;
 }
 
 static void forget_card(void)
 {
     bt_removed();
+    modem_removed();
     uint32_t generation = card_info.generation + 1;
     memset(&card_info, 0, sizeof(card_info));
     card_info.version = BT_CIS_VERSION;
@@ -337,7 +367,7 @@ static bool identify(void)
 {
     int function = cis_function();
 
-    if (card_info.kind == BT_CARD_SERIAL || card_info.kind == BT_CARD_BLUETOOTH)
+    if (serial_card())
         return false;
     if (!socket_full || (function >= 0 && function != FUNCID_FIXED))
         return false;
@@ -547,9 +577,9 @@ static void insert(void)
         }
         /* Serial cards remain reserved pending a verified Bluetooth match.
          * Avoid repeated resets and any ATA/network register probing. */
-        if (kind == 2) {
-            kprintf("cf: serial card %x:%x; UART/BCSP transport pending\n",
-                    c.manufacturer, c.product);
+        if (kind == FUNCID_SERIAL) {
+            if (card_info.kind == BT_CARD_SERIAL)
+                kprintf("cf: serial card %x:%x has no driver\n", c.manufacturer, c.product);
             return;
         }
         /* Only storage gets ATA, whose waits stall the whole system; a card
@@ -594,7 +624,7 @@ static void probe(void)
         removals++;
         kputs("cf: card removed\n");
     }
-    else if (socket_full && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
+    else if (socket_full && !net_present() && !serial_card())
         kprintf("cf: card not ready (status %x)\n", CF_ATA(ATA_STATUS));
 }
 
@@ -636,9 +666,9 @@ void cf_init(void)
     if (!net_present() && card_inserted()) {
         PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
         probe();
-        if (!info.present && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
+        if (!info.present && !net_present() && !serial_card())
             insert(); /* CE may have handed over an unpowered socket. */
-        if (!info.present && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
+        if (!info.present && !net_present() && !serial_card())
             kputs("cf: card is not an ATA disk\n");
     }
     socket_full = card_inserted();      /* a network card found at boot too */

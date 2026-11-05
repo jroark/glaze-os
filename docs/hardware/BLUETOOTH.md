@@ -73,7 +73,9 @@ FIFO bounds, disconnect and failure recovery. See
 
 ## Driver and service
 
-Only the exact MANFID/FUNCID/VERS_1 match loads `drivers/btuart.ko`; other serial
+Only the exact MANFID/FUNCID/VERS_1 match loads `drivers/cfuart.ko` with the
+verified configuration above (the module is shared with data modems,
+[MODEM.md](MODEM.md)); other serial
 cards remain candidates and never receive ATA or network probes. The module
 owns bounded RX/TX rings and services RX, line-status and THRE interrupts through
 the existing PCMCIA cascade, with timer polling as a fallback. UART errors stop

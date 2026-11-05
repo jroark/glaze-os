@@ -13,7 +13,7 @@ Vendored projects (local changes are listed below):
 | `wolfssl/` | [wolfSSL](https://github.com/wolfSSL/wolfssl) TLS 1.2/1.3 client: `src/`, `wolfcrypt/src/` and the `wolfssl/` headers they include; also `ed25519.c` and `ge_low_mem.c` for the kernel's OTA signature check (`kernel/crypto/user_settings.h`) | v5.9.4-stable (`3c5eead44904`) | GPLv3, `wolfssl/COPYING` and `wolfssl/LICENSING` |
 | `puff/` | [puff](https://github.com/madler/zlib/tree/develop/contrib/puff), zlib's small inflater, for the SPL's OTA install (`boot/ota_apply.c`) | 2.3, from zlib v1.3.1 | zlib license, top of `puff/puff.h` |
 | `hostap/` | [wpa_supplicant](https://w1.fi/wpa_supplicant/) PSK-only WPA/RSN core and internal crypto; port details in `hostap/UPSTREAM.md` | 2.11 | BSD-3-Clause; `hostap/COPYING` |
-| `lwip/` | [lwIP](https://github.com/lwip-tcpip/lwip) TCP/IP stack: IPv4 core, Ethernet, and the netconn and sockets APIs (`src/api`) | 2.2.1 (`STABLE-2_2_1_RELEASE`, `77dcd25a7250`) | BSD-3-Clause, `lwip/COPYING` |
+| `lwip/` | [lwIP](https://github.com/lwip-tcpip/lwip) TCP/IP stack: IPv4 core, Ethernet, the netconn and sockets APIs (`src/api`), and PPP over serial (`src/netif/ppp`, with its MD5 from `polarssl/`) for `MODEM=1` builds | 2.2.1 (`STABLE-2_2_1_RELEASE`, `77dcd25a7250`) | BSD-3-Clause, `lwip/COPYING` |
 
 The emulator cores moved to glaze-emulators with their packages. One exception
 to "unmodified": Helix's `real/assembly.h` has no portable C
@@ -24,6 +24,13 @@ versions of `MULSHIFT32`, `MADD64`, `CLZ` and friends (marked "Glaze").
 listed at its top. wolfSSL's configuration is Glaze's
 `apps/browser/tls/user_settings.h` (`-DWOLFSSL_USER_SETTINGS`). wolfSSL is
 GPLv3, so the browser binary that links it is too.
+
+lwIP's PPP files (`lwip/src/netif/ppp`, built only with `MODEM=1`) keep the
+pppd notices in their headers: BSD-style licenses from Carnegie Mellon
+University, Paul Mackerras, the Regents of the University of California and
+others, several with an acknowledgment clause ("This product includes software
+developed by ..."). A release that ships a `MODEM=1` build must reproduce those
+acknowledgments with its notices.
 
 Only the files Glaze builds are copied (for lwIP, also the headers its core
 includes unconditionally, such as `netif/ppp/ppp_opts.h`; for wolfSSL, the

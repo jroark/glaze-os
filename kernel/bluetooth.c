@@ -2,10 +2,16 @@
 #include "kernel.h"
 #include "drivers.h"
 #include "module.h"
+#include "uart_card.h"
 #include "hw.h"
 #include <glaze/bluetooth.h>
 static struct module image;
-static const struct bt_driver *driver;
+static const struct uart_driver *driver;
+/* Verified CIS entry 3: I/O 3f8h, divisor 1, 8E1, FIFO trigger one (BLUETOOTH.md). */
+static const struct uart_config config = {
+    .cor_address = 0xe0, .io_base = 0x3f8, .divisor = 1,
+    .cor = 0x43, .lcr = 0x1b, .mcr = 0x0b, .fcr = 7,
+};
 static bool claimed;
 static uint32_t generation;
 uint32_t bt_generation(void) { return generation; }
@@ -23,15 +29,9 @@ void bt_insert(void)
 {
     if (claimed) return;
     claimed = true; generation++;
-    int rv = module_load("drivers/btuart.ko", "glaze_driver", &image);
-    if (rv) goto failed;
-    const struct bt_driver *d = image.entry;
-    if (((uintptr_t)d & 3u) || !module_contains(&image, d, sizeof(*d)) ||
-        d->magic != BT_DRIVER_MAGIC || d->abi != BT_DRIVER_ABI || d->size != sizeof(*d)) goto failed;
-    const void *callbacks[] = {d->init,d->poll,d->stop,d->error,d->read,d->consume,d->write};
-    for (unsigned i = 0; i < sizeof(callbacks)/sizeof(callbacks[0]); i++)
-        if (!module_executable(&image, callbacks[i])) goto failed;
-    if (d->init()) { d->stop(); goto failed; }
+    const struct uart_driver *d = uart_card_load(&image);
+    if (!d) goto failed;
+    if (d->init(&config)) { d->stop(); goto failed; }
     driver = d; kputs("bluetooth: BCSP UART ready\n"); return;
 failed:
     module_unload(&image); kputs("bluetooth: UART module unavailable; socket reserved\n");
@@ -43,7 +43,7 @@ int sys_bt_io(struct proc *p, uint32_t op, uint32_t buffer, uint32_t size)
     if (!driver || !PCMCIA_CARD_PRESENT()) return GZ_ENOENT;
     if (op == BT_IO_RESET) {
         if (size) return GZ_EINVAL;
-        driver->stop(); return driver->init();
+        driver->stop(); return driver->init(&config);
     }
     if (!size || size > 256) return GZ_EINVAL;
     uint8_t bytes[256];

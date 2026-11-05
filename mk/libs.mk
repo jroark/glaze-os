@@ -41,9 +41,22 @@ FSSTACK_OBJS := $(patsubst %.c,$(OUT)/%.o,$(FSSTACK_SRCS) $(FATFS_SRCS))
 # lwIP for the network server; its port headers live in servers/net.
 NET_INC := -Ithird_party/lwip/src/include -Iservers/net -Ithird_party/hostap/src \
     -Ithird_party/hostap/src/utils -include servers/net/wpa/config.h -DGLAZE_HOSTAP
+# Dial-up over a CF modem (docs/hardware/MODEM.md): lwIP's PPP and the Hayes
+# dialer in bin/net. It is 36 KiB more than the NAND romfs slot has room for,
+# so GlazeBoot builds default to it and NAND images need MODEM=1 NAND_DROP=wince.
+# Without it a modem card still gets the kernel driver and Settings says why.
+MODEM ?= $(if $(filter glazeboot,$(MAKECMDGOALS)),1,0)
+NET_INC += -DGLAZE_MODEM=$(MODEM)
+# The option changes lwIP's structures: rebuild the stack when it changes.
+MODEM_STAMP := $(OUT)/.modem-$(MODEM)
+$(MODEM_STAMP):
+	@mkdir -p $(dir $@)
+	rm -f $(OUT)/.modem-*
+	touch $@
 NETSTACK_SRCS := $(wildcard third_party/lwip/src/core/*.c third_party/lwip/src/core/ipv4/*.c \
     third_party/lwip/src/api/*.c) \
-    third_party/lwip/src/netif/ethernet.c
+    third_party/lwip/src/netif/ethernet.c \
+    $(if $(filter 1,$(MODEM)),$(wildcard third_party/lwip/src/netif/ppp/*.c third_party/lwip/src/netif/ppp/polarssl/*.c))
 HOSTAP_SRCS := $(shell find third_party/hostap/src -name '*.c')
 NETSTACK_SRCS += $(HOSTAP_SRCS)
 $(patsubst %.c,$(OUT)/%.o,$(HOSTAP_SRCS)): TP_INC += $(NET_INC)
@@ -82,7 +95,8 @@ $(OUT)/lib/libjerry.a: $(JERRY_OBJS)
 	$(AR) rcs $@ $^
 
 $(FSSTACK_OBJS): TP_INC := $(FS_INC)
-$(NETSTACK_OBJS): TP_INC := $(NET_INC)
+$(NETSTACK_OBJS): TP_INC := $(NET_INC) -Os
+$(NETSTACK_OBJS) $(patsubst %.c,$(OUT)/%.o,$(wildcard servers/net/*.c)): $(MODEM_STAMP)
 $(HELIX_OBJS): TP_INC := $(HELIX_INC)
 $(WOLFSSL_OBJS): TP_INC := $(WOLFSSL_INC) -Os
 

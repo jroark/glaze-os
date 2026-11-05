@@ -394,3 +394,37 @@ int net_wifi_forget(void)
     SESSION_LOCKED();
     return call(NET_WIFI_FORGET, 0, 0, 0, 0, NULL);
 }
+
+int net_dial(const struct net_dial_config *config)
+{
+    SESSION_LOCKED();
+    struct net_dial_config empty = {0};
+    if (!config) config = &empty;
+    int rv = net_dial_config_validate(config);
+    if (rv || (rv = connect())) return rv;
+    memcpy(buf, config, sizeof(*config));
+    rv = call(NET_DIAL, 0, 0, 0, 0, NULL);
+    memset(buf, 0, sizeof(*config));
+    return rv;
+}
+int net_hangup(void)
+{
+    SESSION_LOCKED(); return call(NET_HANGUP, 0, 0, 0, 0, NULL);
+}
+int net_dial_status(struct net_dial_status *status)
+{
+    SESSION_LOCKED();
+    int rv = call(NET_DIAL_STATUS, 0, 0, 0, 0, NULL);
+    if (!rv) { memcpy(status, buf, sizeof(*status)); status->modem[sizeof(status->modem) - 1] = 0; }
+    return rv;
+}
+int net_dial_config(struct net_dial_config *config)
+{
+    SESSION_LOCKED();
+    int rv = call(NET_DIAL_CONFIG, 0, 0, 0, 0, NULL);
+    if (!rv) {
+        memcpy(config, buf, sizeof(*config));
+        if (net_dial_config_validate(config)) { memset(config, 0, sizeof(*config)); rv = GZ_ECORRUPT; }
+    }
+    return rv;
+}

@@ -275,7 +275,7 @@ settings-test: ../tests/native/settings.c ../tests/native/settings_sys.h ../apps
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/settings_sys.h \
 	    -o ../out/host/settings-test ../tests/native/settings.c hostres.c $(GFX) \
-	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/hardicon.c ../lib/libc/wifi.c ../lib/ui/input.c $(KEYBOARD)
+	    ../lib/ui/widgets.c ../lib/ui/keypad.c ../lib/ui/transition.c ../lib/ui/text.c ../lib/libc/tz.c ../lib/libc/touch.c ../lib/libc/hardicon.c ../lib/libc/wifi.c ../lib/ui/input.c $(KEYBOARD)
 	../out/host/settings-test
 .PHONY: settings-test
 
@@ -491,7 +491,7 @@ store-worker-test: $(O)/libwolfssl.a
 module-test: ../tests/native/module.c ../kernel/module.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/module-test ../tests/native/module.c
-	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko ../out/drivers/btuart.ko
+	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko ../out/drivers/cfuart.ko
 
 .PHONY: service-test
 service-test: ../tests/native/service.c ../kernel/service.c
@@ -654,3 +654,15 @@ bluetooth-serial-test:
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/bluetooth_serial.c -o ../out/host/bluetooth-serial-test
 	../out/host/bluetooth-serial-test
 .PHONY: bluetooth-serial-test
+
+modem-chat-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/modem_chat.c ../servers/net/hayes.c ../lib/libc/net_dial.c -o ../out/host/modem-chat-test
+	../out/host/modem-chat-test
+.PHONY: modem-chat-test
+
+modem-driver-test:
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/modem_driver.c -o ../out/host/modem-driver-test
+	../out/host/modem-driver-test
+.PHONY: modem-driver-test

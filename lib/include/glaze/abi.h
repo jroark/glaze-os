@@ -97,6 +97,7 @@ enum {
     SYS_OTA_STAGE,         /* PROC_FLASH: GZ_OTA_OP_*, three arguments (docs/os/OTA.md) */
     SYS_BT_CARD_INFO,      /* read-only cached CIS evidence; buffer, size */
     SYS_BT_IO,             /* PROC_BLUETOOTH: raw UART operation, buffer, size */
+    SYS_MODEM_IO,          /* PROC_NET: CF modem UART operation, buffer, size (glaze/modem.h) */
     SYS_COUNT
 };
 
@@ -312,7 +313,7 @@ struct gz_flash_info {
 /* SYS_NET_*: raw Ethernet frames for the network server (PROC_NET). */
 #define GZ_ETH_FRAME_MAX    1514    /* without the CRC */
 
-enum { GZ_NET_NONE, GZ_NET_NE2000, GZ_NET_XI825, GZ_NET_WL54CF, GZ_NET_USB };
+enum { GZ_NET_NONE, GZ_NET_NE2000, GZ_NET_XI825, GZ_NET_WL54CF, GZ_NET_USB, GZ_NET_MODEM };
 
 struct gz_netif_info {
     uint32_t present;           /* a network card initialized successfully */

@@ -487,11 +487,15 @@ static void show_card_details(void)
                                : st.state == NET_UP_STATIC ? "Connected (static)"
                                : st.state == NET_CONFIGURING ? "Configuring address..." : "Not connected";
             strlcpy(line[0], network_kind == GZ_NET_XI825 ? "XI-825 Wi-Fi"
-                             : network_kind == GZ_NET_WL54CF ? "WL54-CF Wi-Fi" : "NE2000 Ethernet",
+                             : network_kind == GZ_NET_WL54CF ? "WL54-CF Wi-Fi"
+                             : network_kind == GZ_NET_MODEM ? "Dial-up Modem" : "NE2000 Ethernet",
                     sizeof(line[0]));
             strlcpy(line[1], status, sizeof(line[1]));
-            snprintf(line[2], sizeof(line[2]), "MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-                     st.mac[0], st.mac[1], st.mac[2], st.mac[3], st.mac[4], st.mac[5]);
+            if (network_kind == GZ_NET_MODEM)
+                strlcpy(line[2], "Dial with Settings > Dial-up.", sizeof(line[2]));
+            else
+                snprintf(line[2], sizeof(line[2]), "MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                         st.mac[0], st.mac[1], st.mac[2], st.mac[3], st.mac[4], st.mac[5]);
             d->num_lines = 3;
             if (st.state == NET_UP || st.state == NET_UP_STATIC) {
                 char addr[16];

@@ -8,18 +8,21 @@ static int socket_present=1;
 static unsigned consumed, sent, stops, unloaded;
 static bool bad_callback, copy_fault;
 static int load_error, init_error, uart_error;
-static int initialize(void) { return init_error; }
+static const struct uart_config *configured;
+static int initialize(const struct uart_config *c) { configured = c; return init_error; }
 static void poll_uart(void) {}
 static void stop_uart(void) { stops++; }
 static int error_uart(void) { return uart_error; }
 static int read_uart(uint8_t *p,uint32_t n) { if(n>3)n=3; memset(p,0x42,n); return (int)n; }
 static void consume_uart(uint32_t n) { consumed+=n; }
 static int write_uart(const uint8_t *p,uint32_t n) { assert(p[0]==0x33); sent+=n; return (int)n; }
-static struct bt_driver descriptor={BT_DRIVER_MAGIC,BT_DRIVER_ABI,sizeof(struct bt_driver),
-    initialize,poll_uart,stop_uart,error_uart,read_uart,consume_uart,write_uart};
+static void set_lines(uint8_t m) {}
+static uint8_t msr(void) { return 0; }
+static struct uart_driver descriptor={UART_DRIVER_MAGIC,UART_DRIVER_ABI,sizeof(struct uart_driver),
+    initialize,poll_uart,stop_uart,error_uart,read_uart,consume_uart,write_uart,set_lines,msr};
 int module_load(const char *path,const char *symbol,struct module *m)
 {
-    assert(!strcmp(path,"drivers/btuart.ko") && !strcmp(symbol,"glaze_driver"));
+    assert(!strcmp(path,"drivers/cfuart.ko") && !strcmp(symbol,"glaze_driver"));
     if(load_error)return load_error;
     m->entry=&descriptor; return 0;
 }
@@ -37,6 +40,9 @@ int main(void)
     struct proc service={.flags=PROC_BLUETOOTH},app={0};
     assert(sys_bt_io(&app,BT_IO_RESET,0,0)==GZ_EPERM);
     bt_insert(); assert(bt_present() && bt_ready()); service.bt_generation=bt_generation();
+    /* The verified BCSP setup (BLUETOOTH.md): COR 43h at E0h, 3f8h, divisor 1, 8E1. */
+    assert(configured->cor_address==0xe0 && configured->cor==0x43 && configured->io_base==0x3f8 &&
+           configured->divisor==1 && configured->lcr==0x1b);
     assert(sys_bt_io(&service,BT_IO_READ,0,257)==GZ_EINVAL);
     copy_fault=true; assert(sys_bt_io(&service,BT_IO_READ,1,10)==GZ_EINVAL && consumed==0);
     assert(sys_bt_io(&service,BT_IO_WRITE,1,10)==GZ_EINVAL && sent==0);

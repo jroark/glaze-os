@@ -5,7 +5,8 @@
 #define BT_CIS_BYTES 256u
 #define BT_CIS_VERSION 1u
 /* SERIAL is a candidate, not proof of a Bluetooth controller. */
-enum { BT_CARD_ABSENT, BT_CARD_OTHER, BT_CARD_SERIAL, BT_CARD_BLUETOOTH };
+/* MODEM: a serial card whose FUNCE names a modem function (glaze/modem.h). */
+enum { BT_CARD_ABSENT, BT_CARD_OTHER, BT_CARD_SERIAL, BT_CARD_BLUETOOTH, BT_CARD_MODEM };
 struct bt_card_info {
     uint32_t version, generation, kind;
     uint32_t manufacturer, product, function, cor;
