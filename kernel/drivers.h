@@ -145,6 +145,8 @@ void pcmcia_resume(void);   /* after a HIBERNATE: everything inserted afresh */
 /* A card in the CF socket or the PCMCIA jacket's (socket 1), and the card
  * windows of whichever holds it (hw.h). */
 bool pcmcia_card_present(void);
+void pcmcia1_irq_ack(void);     /* GIRQ0 source 6: clear socket 1's cause */
+void pcmcia1_irq_arm(bool driver_up);  /* from the tick: route socket 1's interrupt */
 extern uint32_t pcmcia_io_base, pcmcia_attr_base;
 /* The CIS's LAN_NODE_ID (CISTPL_FUNCE): a network card's station address. */
 bool pcmcia_node_id(uint8_t mac[6]);

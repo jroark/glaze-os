@@ -191,12 +191,12 @@ int main(int argc, char **argv)
         /* Bring-up experiments on HWDUMP=1 kernels: load the value with
          * request 0x5b, then write it through the peek address encoding. */
         uint32_t pa = (uint32_t)strtoul(argv[i], NULL, 0), value = (uint32_t)strtoul(argv[i + 1], NULL, 0);
-        unsigned region = pa < 0x01000000u ? 0 : (pa >> 24) == 0x0A ? 1 : (pa >> 24) == 0x0F ? 2 : 3;
+        unsigned region = pa < 0x01000000u ? 0 : (pa >> 24) == 0x0A ? 1 : (pa >> 24) == 0x0F ? 2 : (pa >> 24) == 0x0B ? 3 : 4;
         uint32_t index = (pa & 0x00FFFFFFu) >> 2;
         int half = left == 3;
         uint8_t b[8]; int done;
         r = -1;
-        if (region > 2 || (pa & (half ? 1 : 3)) || index >= (1u << 22)) fprintf(stderr, "poke: bad address %08x\n", pa);
+        if (region > 3 || (pa & (half ? 1 : 3)) || index >= (1u << 22)) fprintf(stderr, "poke: bad address %08x\n", pa);
         else if (l.revision != 0x0100 || usb_lines(&l, 3) < 0) fputs("poke: the device isn't running Glaze\n", stderr);
         else if (libusb_control_transfer(l.dev, 0x40, 0x5b, (uint16_t)value, (uint16_t)(value >> 16), NULL, 0, 1000) >= 0) {
             libusb_interrupt_transfer(l.dev, 0x83, b, sizeof(b), &done, 1000);    /* the line state */
@@ -224,10 +224,10 @@ int main(int argc, char **argv)
         r = l.revision == 0x0100 && usb_lines(&l, 3) >= 0 ? 0 : -1;
         if (r) fputs("peek: the device isn't running Glaze\n", stderr);
         for (uint32_t k = 0; !r && k < count; k++, pa += 4) {
-            unsigned region = pa < 0x01000000u ? 0 : (pa >> 24) == 0x0A ? 1 : (pa >> 24) == 0x0F ? 2 : 3;
+            unsigned region = pa < 0x01000000u ? 0 : (pa >> 24) == 0x0A ? 1 : (pa >> 24) == 0x0F ? 2 : (pa >> 24) == 0x0B ? 3 : 4;
             uint32_t index = (pa & 0x00FFFFFFu) >> 2;
             uint8_t b[8]; int done;
-            if (region > 2 || (pa & 3) || index >= (1u << 22)) { fprintf(stderr, "peek: bad address %08x\n", pa); r = -1; break; }
+            if (region > 3 || (pa & 3) || index >= (1u << 22)) { fprintf(stderr, "peek: bad address %08x\n", pa); r = -1; break; }
             uint16_t value = (uint16_t)(2 | (region << 6 | index >> 16) << 8);
             r = libusb_control_transfer(l.dev, 0x40, 0x5a, value, (uint16_t)index, NULL, 0, 1000);
             if (r < 0) break;

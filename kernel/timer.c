@@ -189,6 +189,7 @@ void timer_irq(void)
     net_irq();
     bt_poll();
     modem_poll();
+    pcmcia1_irq_arm(net_up() || bt_ready() || modem_ready());
     audio_irq();
     buzzer_poll();
     battery_tick();

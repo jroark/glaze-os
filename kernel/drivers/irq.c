@@ -74,13 +74,20 @@ void irq_dispatch_ip2(void)
             (void)KJ_CF_CAUSE;
             KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
         }
+        /* The PCMCIA jacket's socket (hw.h KJ_INT_JACKET): masked while its
+         * card is served, its cause cleared first, as the OAL does. */
+        if (pending & KJ_INT_JACKET) {
+            KJ_SRC_JACKET &= ~KJ_SRC_ENABLE;
+            pcmcia1_irq_ack();
+        }
         if (pending & KJ_INT_KEYS)
             KJ_SRC_KEYS &= ~KJ_SRC_ENABLE;
         /* A source with no driver here, left enabled by Windows CE (a RAM
          * boot) or raised by a block it set up, would hold the line for
          * good: mask it with its enable, as the OAL masks what it serves.
          * The NAND's DMA did that on a real BE-300. */
-        uint32_t foreign = pending & ~(KJ_INT_CF | KJ_INT_KEYS | KJ_INT_AUDIO | KJ_INT_TOUCH) & 0x1FFFFu;
+        uint32_t foreign = pending & ~(KJ_INT_CF | KJ_INT_KEYS | KJ_INT_AUDIO | KJ_INT_TOUCH |
+                                       KJ_INT_JACKET) & 0x1FFFFu;
         for (uint32_t n = 0; foreign; n++, foreign >>= 1)
             if (foreign & 1u) {
                 KJ_GIRQ0_EN(n) &= ~KJ_SRC_ENABLE;
@@ -99,6 +106,13 @@ void irq_dispatch_ip2(void)
             if ((net_up() || bt_ready() || modem_ready()) &&
                 PCMCIA_CARD_PRESENT())
                 KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
+        }
+        if (pending & KJ_INT_JACKET) {
+            net_irq();
+            bt_poll();
+            modem_poll();
+            if ((net_up() || bt_ready() || modem_ready()) && PCMCIA_CARD_PRESENT())
+                KJ_SRC_JACKET |= KJ_SRC_ENABLE;
         }
         if (pending & KJ_INT_AUDIO) {
             /* WinCE's OAL masks the source before handing it to wavedev.
