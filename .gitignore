@@ -29,3 +29,6 @@ __pycache__/
 # Network debugger pairing exports contain a PSK and RNG seed.
 [Dd][Ee][Bb][Uu][Gg].[Kk][Ee][Yy]
 
+
+# The emulator saves a screenshot in its working directory on shutdown.
+/screenshot_*.bmp
