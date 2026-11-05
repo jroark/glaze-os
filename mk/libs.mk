@@ -75,20 +75,23 @@ WOLFSSL_SRCS := $(addprefix third_party/wolfssl/,src/ssl.c src/internal.c src/tl
     sp_int.c wolfmath.c asn.c coding.c memory.c wc_port.c wc_encrypt.c error.c logging.c))
 WOLFSSL_OBJS := $(patsubst %.c,$(OUT)/%.o,$(WOLFSSL_SRCS))
 
+# compiler-rt's soft-float builtins, private to Browser (JerryScript) and
+# Videos (pl_mpeg's timestamps). Static links get the 64-bit shifts from
+# libc.a (lib/libc/bitops.c), so the static archives leave them out; libc.so
+# doesn't export them, so the PIC archives keep them.
+SOFTFP_SRCS := $(wildcard third_party/compiler-rt/*.c)
+SOFTFP_STATIC_SRCS := $(filter-out %/ashldi3.c %/lshrdi3.c,$(SOFTFP_SRCS))
+
 # Browser-private JavaScript engine, math and software floating-point builtins.
-JERRY_SRCS := third_party/jerryscript/jerryscript.c third_party/jerryscript/jerryscript-math.c $(wildcard third_party/compiler-rt/*.c)
+JERRY_SRCS := third_party/jerryscript/jerryscript.c third_party/jerryscript/jerryscript-math.c $(SOFTFP_SRCS)
 JERRY_INC := -I$(OUT)/include -Ithird_party/jerryscript -Iapps/browser/js_platform -include apps/browser/js_config.h -Os -fvisibility=hidden
-JERRY_OBJS := $(patsubst %.c,$(OUT)/%.o,$(JERRY_SRCS))
+JERRY_OBJS := $(patsubst %.c,$(OUT)/%.o,$(filter-out %/ashldi3.c %/lshrdi3.c,$(JERRY_SRCS)))
 $(JERRY_OBJS): TP_INC := $(JERRY_INC)
 $(OUT)/lib/libjerry.a: $(JERRY_OBJS)
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
-# The same soft-float builtins alone, for Videos (pl_mpeg's timestamps). A
-# static link gets the 64-bit shifts from libc.a (lib/libc/bitops.c), which
-# libc.so doesn't export.
-SOFTFP_SRCS := $(wildcard third_party/compiler-rt/*.c)
-$(OUT)/lib/libsoftfp.a: $(patsubst %.c,$(OUT)/%.o,$(filter-out %/ashldi3.c %/lshrdi3.c,$(SOFTFP_SRCS)))
+$(OUT)/lib/libsoftfp.a: $(patsubst %.c,$(OUT)/%.o,$(SOFTFP_STATIC_SRCS))
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
