@@ -20,6 +20,7 @@ int gu_upload(struct gu_client *, const char *local, const char *remote);
 int gu_nand_snapshot(struct gu_client *, const char *path);
 int gu_nand_backup(struct gu_client *, const char *path);
 int gu_nand_apply(struct gu_client *, const char *source, const char *target, const char *plan, bool keep_fs, bool allow_mismatch);
+int gu_bt_audio(struct gu_client *,const char *,int,char **);
 int gu_bt_serial(struct gu_client *,const char *,int,char **);
 int gu_veo(struct gu_client *, const char *cmd, int left, char **argv);
 int gu_cf_info(struct gu_client *, uint32_t *sectors, uint32_t *generation);

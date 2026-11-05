@@ -17,6 +17,8 @@ int gz_power_status(struct gz_power_status *st);
 int gz_port_lookup(const char *name);
 int gz_notify(int port, uint32_t bits);
 int gz_getpid(void);
+void *gz_shm_map(int);
+int gz_shm_unmap(void *);
 int gz_send(int port, const struct gz_msg *msg, struct gz_msg *reply);
 const void *gz_romfs_map(const char *name, uint32_t *size);
 #endif

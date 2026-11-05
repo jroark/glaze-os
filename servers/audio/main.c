@@ -9,8 +9,8 @@
  * chunk at a time with a non-blocking receive in between, which keeps
  * requests answered while the ring fills.
  *
- * Positions come from the kernel's count of frames played (at the hardware
- * rate) since the track started or was sought, so they follow what is
+ * Positions come from the output's count of PCM frames consumed (at its
+ * negotiated rate) since the track started or was sought, so they follow what is
  * heard rather than what was decoded.
  *
  * System sounds (sound.c) are mixed over either mode. When neither holds
@@ -20,11 +20,13 @@
  */
 
 #include "sound.h"
+#include "output.h"
 #include "buzzer.h"
 #include "radio.h"
 #include "radio_mp3.h"
 
 #include <glaze/audio.h>
+#include <glaze/bluetooth.h>
 #include <glaze/fs.h>
 #include <glaze/media.h>
 #include <glaze/sys.h>
@@ -76,6 +78,7 @@ static struct media_mp3_info mp3;
 static HMP3Decoder dec;
 static uint8_t in_buf[IN_SIZE];
 static uint32_t in_pos, in_len, file_pos;
+static uint32_t decoded_off,decoded_len;
 static struct media_wav wav;
 static uint32_t wav_pos;                /* bytes into the data chunk */
 static int16_t pcm[PCM_FRAMES * 2];
@@ -105,15 +108,14 @@ static void log_msg(const char *msg)
 
 static void status(struct gz_audio_status *st)
 {
-    if (gz_audio_status(st) < 0)
-        memset(st, 0, sizeof(*st));
+    output_status(st);
 }
 
 /* ---- output ---------------------------------------------------------------- */
 
 static void out_stop(bool flush)
 {
-    gz_audio_stop(flush);
+    output_stop(flush);
     hw_running = false;
     fx_owned = false;
     if (flush)
@@ -121,18 +123,21 @@ static void out_stop(bool flush)
 }
 
 /* Set up conversion from `rate`/`ch` and flush everything queued. */
-static void out_config(uint32_t rate, uint32_t ch)
+static void out_config_to(uint32_t rate, uint32_t ch, bool route)
 {
     out_stop(true);
     hw_rate = media_hw_rate(rate);
     hw_ch = ch;
-    media_rs_init(&rs, rate, (int)ch, hw_rate, (int)ch);
-    sound_reconfig(hw_rate, hw_ch);
+    if(route)output_config(&hw_rate,&hw_ch);
+    media_rs_init(&rs, rate, (int)ch, hw_rate, (int)hw_ch);
+    sound_reconfig(output_bluetooth()?SOUND_RATE:hw_rate, output_bluetooth()?1:hw_ch);
 }
+
+static void out_config(uint32_t rate,uint32_t ch){out_config_to(rate,ch,true);}
 
 static void out_start(void)
 {
-    if (!hw_running && gz_audio_start(hw_rate, hw_ch) == 0)
+    if (!hw_running && output_start(hw_rate, hw_ch) == 0)
         hw_running = true;
 }
 
@@ -151,7 +156,7 @@ static void radio_release(void)
 static bool out_flush_pend(void)
 {
     while (pend_len) {
-        int n = gz_audio_write(pend + pend_off, pend_len * 2);
+        int n = output_write(pend + pend_off, pend_len * 2);
         if (n <= 0)
             return false;
         pend_off += (uint32_t)n / 2;
@@ -196,6 +201,7 @@ static void src_close(void)
     fd = -1;
     src = SRC_NONE;
     src_eof = true;
+    decoded_off=decoded_len=0;
 }
 
 static void base_name(const char *p, char *out, size_t max)
@@ -257,6 +263,7 @@ bad:
 static uint32_t src_seek(uint32_t ms)
 {
     src_eof = false;
+    decoded_off=decoded_len=0;
     drain_until = 0;
     if (src == SRC_MP3) {
         file_pos = media_mp3_seek_offset(&mp3, ms);
@@ -341,19 +348,19 @@ static int src_decode(void)
     return 0;
 }
 
-/* Decodes one unit into the ring, once what is pending has gone in. A unit
- * is at most PCM_FRAMES, and the hardware rate is within 10% of the source
- * rate, so it always converts into an empty pend. */
+/* A Bluetooth sink may require substantial upsampling. Retain decoded input
+ * until every frame has passed through the bounded conversion buffer. */
 static void pump_one(void)
 {
     if (!out_flush_pend() || src_eof)
         return;
-    int frames = src_decode();
-    if (frames <= 0) {
-        src_eof = true;
-        return;
+    if(!decoded_len){
+        int frames=src_decode();
+        if(frames<=0){src_eof=true;return;}
+        decoded_off=0;decoded_len=(uint32_t)frames;
     }
-    out_convert(pcm, frames);
+    int used=out_convert(pcm+decoded_off*src_ch,(int)decoded_len);
+    decoded_off+=(uint32_t)used;decoded_len-=(uint32_t)used;
     out_flush_pend();
 }
 
@@ -362,7 +369,7 @@ static bool ring_wants_data(void)
     struct gz_audio_status st;
 
     status(&st);
-    return st.queued + pend_len * 2 < GZ_AUDIO_RING - 4096;
+    return st.queued + pend_len * 2 < (output_bluetooth() ? BT_AUDIO_RING_SIZE : GZ_AUDIO_RING) - 4096;
 }
 
 /* Fills the ring until PRIME_BYTES are queued, then starts the output. */
@@ -456,7 +463,7 @@ static int op_seek(uint32_t ms)
         reseek_ms = MIN(ms, duration_ms);
         return 0;
     }
-    out_stop(true);
+    out_config(src_rate,src_ch);
     seek_base_ms = src_seek(MIN(ms, duration_ms));
     reseek = false;
     if (state == AUDIO_PLAYING) {
@@ -698,6 +705,21 @@ static void radio_service(void)
 static int sound_service(void)
 {
     bool busy = sound_busy();
+    if(output_bluetooth()){
+        /* Bluetooth carries media; UI/alert clips retain their local output. */
+        struct gz_audio_status local={0};gz_audio_status(&local);
+        if(busy){
+            fx_drain_until=0;
+            if(!local.running)gz_audio_start(SOUND_RATE,1|GZ_AUDIO_START_IDLE);
+            sound_pump();return 20;
+        }
+        if(local.running && !local.mix_queued){
+            uint64_t now=gz_time_us();
+            if(!fx_drain_until)fx_drain_until=now+2ull*PAGE_BYTES*1000000/(2*SOUND_RATE)+20000;
+            if(now>=fx_drain_until)gz_audio_stop(true);
+        }
+        return local.running?20:-1;
+    }
 
     if (!hw_running) {
         if (!busy)
@@ -711,7 +733,7 @@ static int sound_service(void)
             reseek_ms = position();
             reseek = true;
         }
-        out_config(SOUND_RATE, 1);
+        out_config_to(SOUND_RATE, 1, false);
         sound_pump();
         if (gz_audio_start(hw_rate, hw_ch | GZ_AUDIO_START_IDLE) < 0)
             return 1000;
@@ -872,6 +894,7 @@ int main(void)
         if (radio_owned) timeout = 10;
         if (state == AUDIO_PLAYING && stream_session < 0 && src != SRC_NONE)
             timeout = (!src_eof || pend_len) ? (ring_wants_data() ? 0 : -1) : 50;
+        if(output_bluetooth())timeout=min_timeout(timeout,10);
         int t = gz_recv(port, &m, min_timeout(timeout, sound_timeout));
         if (t > 0) {
             memset(&r, 0, sizeof(r));
@@ -879,6 +902,16 @@ int main(void)
             gz_reply(t, &r);
         } else if (t == GZ_RECV_NOTIFY) {
             sound_notify(m.w[0]);
+        }
+        /* Keep the last valid media clock when a card is pulled. Pause the
+         * player rather than unexpectedly continuing on the local speaker. */
+        if(output_lost()){
+            uint32_t ms=position();
+            if(stream_session>=0)stream_close();
+            if(radio_owned)radio_release();
+            if(state==AUDIO_PLAYING){state=AUDIO_PAUSED;reseek=true;reseek_ms=ms;}
+            out_stop(true);
+            log_msg("Bluetooth output disconnected; playback paused");
         }
         player_service();
         radio_service();

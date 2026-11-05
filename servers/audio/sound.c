@@ -295,3 +295,5 @@ bool sound_pump(void)
         out_len = (uint32_t)n * out_ch;
     }
 }
+
+int32_t sound_gain(void){return gain;}

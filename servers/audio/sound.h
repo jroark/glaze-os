@@ -10,6 +10,8 @@
 
 /* AUDIO_NOTIFY_* bits from the port. */
 void sound_notify(uint32_t bits);
+/* Master volume, Q15, shared by local DMA and Bluetooth media. */
+int32_t sound_gain(void);
 /* The output was set up for `rate`/`ch` and its rings flushed. */
 void sound_reconfig(uint32_t rate, uint32_t ch);
 /* A voice is playing or converted samples are waiting. */

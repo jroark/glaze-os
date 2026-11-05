@@ -17,7 +17,7 @@ Start with the [top-level README](../README.md) for building and running.
 - [Veo Photo Traveler CF camera](hardware/VEO.md)
 - [Ambicom DGCAM-CF camera storage](hardware/AMBICOM.md)
 - [WL54-CF wireless networking](hardware/WL54CF.md)
-- [Eye-Fi X2 diagnostics and networking feasibility](hardware/EYEFI.md)
+- [Eye-Fi SDHC storage through an SD-to-CF adapter](hardware/EYEFI.md)
 
 ## Operating system
 
