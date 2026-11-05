@@ -218,6 +218,7 @@
  * tuple byte per even address (PC Card spec, "Attribute Memory"). */
 #define CF_ATA_BASE         0x0A00C170u
 #define CF_ATA(r)           REG8(CF_ATA_BASE + (r))
+#define CF_ATA_DATA16       REG16(CF_ATA_BASE)   /* 16-bit data transfers */
 #define CF_ATA_CTL          REG8(0x0A00C376u)
 /* Tuples only: 0x0A00D200/D202 is the NAND direct-I/O data/control port
  * (the boot ROM sends NAND commands there), so attribute offset 0x200, the

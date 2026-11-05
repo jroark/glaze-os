@@ -121,5 +121,13 @@ void media_avi_close(struct media_avi *a);
  * and returns its length; otherwise returns 0. */
 #define MEDIA_JPEG_DHT_SIZE 420
 int media_jpeg_add_dht(const uint8_t *in, uint32_t in_len, uint8_t *out);
+/* The Annex K tables as one DHT segment of MEDIA_JPEG_DHT_SIZE bytes. */
+const uint8_t *media_jpeg_standard_dht(void);
+
+/* The JPEG header for a Veo Photo Traveler scan (docs/hardware/VEO.md):
+ * mode 1 640x480, 2 320x240, 3 160x120; `fine` for bridge 0xB2 = 0x39.
+ * Returns its length, MEDIA_VEO_HEADER_SIZE, or -1. */
+#define MEDIA_VEO_HEADER_SIZE 607
+int media_veo_jpeg_header(uint8_t *out, uint32_t size, unsigned mode, bool fine);
 
 #endif

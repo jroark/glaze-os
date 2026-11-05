@@ -126,6 +126,10 @@ bool bt_present(void);
 uint32_t bt_generation(void);
 int sys_bt_io(struct proc *, uint32_t, uint32_t, uint32_t);
 int sys_bt_card_info(struct proc *, uint32_t, uint32_t);
+bool cf_card_is_veo(void);
+bool cf_card_is_icsi_camera(void);
+void cf_probe_hold(void);
+int sys_cam_probe(struct proc *, uint32_t, uint32_t, uint32_t, uint32_t);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);
