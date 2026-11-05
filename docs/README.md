@@ -14,7 +14,10 @@ Start with the [top-level README](../README.md) for building and running.
 - [Networking through the USB cable](hardware/USB_NETWORK.md)
 - [Wi-Fi and network security](hardware/WIFI.md)
 - [CF Bluetooth discovery and serial](hardware/BLUETOOTH.md)
+- [Veo Photo Traveler CF camera](hardware/VEO.md)
+- [Ambicom DGCAM-CF camera storage](hardware/AMBICOM.md)
 - [WL54-CF wireless networking](hardware/WL54CF.md)
+- [Eye-Fi X2 diagnostics and networking feasibility](hardware/EYEFI.md)
 
 ## Operating system
 

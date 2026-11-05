@@ -66,3 +66,5 @@ int media_jpeg_add_dht(const uint8_t *in, uint32_t in_len, uint8_t *out)
     memcpy(out + i + sizeof(std_dht), in + i, in_len - i);
     return (int)(in_len + sizeof(std_dht));
 }
+
+const uint8_t *media_jpeg_standard_dht(void) { return std_dht; }

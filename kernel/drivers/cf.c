@@ -51,6 +51,7 @@
 #define CMD_IDENTIFY    0xEC
 #define CMD_SET_FEATURES 0xEF
 #define FEATURE_8BIT    0x01    /* CF spec: 8-bit data transfers */
+#define FEATURE_16BIT   0x81    /* CF spec: disable 8-bit transfers */
 
 /* CIS tuples (PC Card spec, "Card Information Structure"). */
 #define TPL_NULL        0x00
@@ -257,6 +258,28 @@ static void forget_card(void)
     card_info.generation = generation;
 }
 
+/* Veo Photo Traveler, captured on a BE-300 2026-11-04 (docs/hardware/VEO.md):
+ * MANFID ffff:0001, FUNCID fe, VERS_1 "VEO" "CFTraveler622". */
+bool cf_card_is_veo(void)
+{
+    return card_info.kind == BT_CARD_OTHER && card_info.function == 0xfe &&
+           card_info.manufacturer == 0xffff && card_info.product == 0x0001 &&
+           strstr(card_info.identification, "VEO") &&
+           strstr(card_info.identification, "CFTraveler622");
+}
+
+/* The Ambicom DGCAM-CF camera's 8 MB FAT16 store, an ICSI IC3100 ATA
+ * controller that transfers data only in 16-bit words (read_sector). */
+bool cf_card_is_icsi_camera(void)
+{
+    return card_info.function == FUNCID_FIXED && card_info.manufacturer == 0 &&
+           card_info.product == 0 && strstr(card_info.identification, "ICSI EMULATION");
+}
+
+/* Once a USB probe has touched the ICSI card, stop sending it IDENTIFY. */
+static bool probe_hold;
+void cf_probe_hold(void) { probe_hold = true; }
+
 int sys_bt_card_info(struct proc *p, uint32_t out, uint32_t size)
 {
     if (size != sizeof(card_info)) return GZ_EINVAL;
@@ -298,13 +321,22 @@ static int cis_function(void)
 }
 
 /*
- * Data moves a byte at a time, the card in 8-bit mode (set in identify).
- * On a real BE-300 after Windows CE, each 16-bit access of the data
- * register carried one byte with a zero high byte, so IDENTIFY read as
- * garbage; byte access works whatever the bridge or the card's mode.
+ * Data normally moves a byte at a time, the card in 8-bit mode (set in
+ * identify). On a real BE-300 after Windows CE, each 16-bit access of the
+ * data register carried one byte with a zero high byte, so IDENTIFY read
+ * as garbage. The Ambicom DGCAM-CF's ICSI IC3100 controller is the
+ * opposite: it aborts SET FEATURES 01h, byte reads of its data register
+ * return zeros, and 16-bit reads return the data (identify matches it).
  */
+static bool wide_data;
+
 static void read_sector(uint16_t *buf)
 {
+    if (wide_data) {
+        for (int i = 0; i < SECTOR / 2; i++)
+            buf[i] = CF_ATA_DATA16;
+        return;
+    }
     for (int i = 0; i < SECTOR / 2; i++) {
         uint16_t lo = CF_ATA(0);
         buf[i] = lo | (uint16_t)CF_ATA(0) << 8;
@@ -313,6 +345,11 @@ static void read_sector(uint16_t *buf)
 
 static void write_sector(const uint16_t *buf)
 {
+    if (wide_data) {
+        for (int i = 0; i < SECTOR / 2; i++)
+            CF_ATA_DATA16 = buf[i];
+        return;
+    }
     for (int i = 0; i < SECTOR / 2; i++) {
         CF_ATA(0) = (uint8_t)buf[i];
         CF_ATA(0) = (uint8_t)(buf[i] >> 8);
@@ -333,15 +370,35 @@ static void identify_string(char *out, int words_at, int nwords)
     out[n] = 0;
 }
 
-static bool identify(void)
+/* OnSpec 02b6:0003 (VERS_1 1.06), captured on a BE-300: IDENTIFY
+ * presents each byte in the low lane of a word even though READ SECTORS
+ * obeys SET FEATURES 01h. ATA-4 8.12 still defines the resulting words;
+ * normalize this adapter's transport before interpreting them. */
+static bool identify_low_lane(unsigned manufacturer, unsigned product)
 {
-    int function = cis_function();
-
-    if (card_info.kind == BT_CARD_SERIAL || card_info.kind == BT_CARD_BLUETOOTH)
+    if (manufacturer != 0x02b6 || product != 0x0003 ||
+        io_buf[0] != 0x8a || io_buf[1] != 0x84)
         return false;
-    if (!socket_full || (function >= 0 && function != FUNCID_FIXED))
-        return false;
+    for (unsigned i = 0; i < 256; ++i)
+        if (io_buf[i] & 0xff00) return false;
+    return true;
+}
 
+static void identify_pack_low_lane(void)
+{
+    /* The adapter completes the command after the usual 512 bus bytes:
+     * only ATA words 0..127 are available, including all LBA28 fields.
+     * Do not invent values for the unavailable optional upper words. */
+    for (unsigned i = 0; i < 128; ++i)
+        io_buf[i] = io_buf[2*i] | (uint16_t)io_buf[2*i+1] << 8;
+    memset(io_buf + 128, 0, 128 * sizeof(io_buf[0]));
+}
+
+/* Reset the card, choose the data width (CF spec SET FEATURES 01h enables
+ * 8-bit transfers, 81h disables them; a card that refuses reports an error)
+ * and read IDENTIFY into io_buf. */
+static bool identify_as(bool wide)
+{
     CF_ATA_CTL = CTL_SRST | CTL_NIEN;
     uint64_t t0 = time_us();
     while (time_us() - t0 < 10)
@@ -350,22 +407,50 @@ static bool identify(void)
     if (!wait_status(ST_DRDY, ST_DRDY))
         return false;
 
-    /* 8-bit transfers (CF spec SET FEATURES 01h); a card that refuses
-     * reports an error, and the transfers below still work byte-wise. */
-    CF_ATA(ATA_FEATURES) = FEATURE_8BIT;
+    /* The IC3100 aborts both 01h and 81h; it has no 8-bit mode. */
+    CF_ATA(ATA_FEATURES) = wide ? FEATURE_16BIT : FEATURE_8BIT;
     CF_ATA(ATA_DEVICE) = DEV_LBA;
     CF_ATA(ATA_COMMAND) = CMD_SET_FEATURES;
     (void)wait_status(0, 0);
 
+    wide_data = wide;
     CF_ATA(ATA_DEVICE) = DEV_LBA;
     CF_ATA(ATA_COMMAND) = CMD_IDENTIFY;
     if (!wait_status(ST_DRQ | ST_ERR, ST_DRQ))
         return false;
     read_sector(io_buf);
+    if (identify_low_lane(card_info.manufacturer, card_info.product)) {
+        identify_pack_low_lane();
+        kputs("cf: normalized OnSpec IDENTIFY low-byte lanes\n");
+    }
     /* Words 60-61: user-addressable LBA sectors (ATA-4 8.12). */
     info.sectors = io_buf[60] | (uint32_t)io_buf[61] << 16;
     identify_string(info.model, 27, 20);
     return info.sectors != 0;
+}
+
+static bool identify(void)
+{
+    int function = cis_function();
+
+    if (card_info.kind == BT_CARD_SERIAL || card_info.kind == BT_CARD_BLUETOOTH)
+        return false;
+    if (probe_hold && cf_card_is_icsi_camera())
+        return false;
+    if (!socket_full || (function >= 0 && function != FUNCID_FIXED))
+        return false;
+
+    /* The IC3100 (see read_sector) is matched by its CIS rather than
+     * probed: after a byte-wide IDENTIFY leaves its data unread, a soft
+     * reset hangs it busy (status 80) until the COR's SRESET. */
+    bool wide = cf_card_is_icsi_camera();
+    if (identify_as(wide)) {
+        if (wide)
+            kprintf("cf: %s: 16-bit data transfers\n", info.model);
+        return true;
+    }
+    wide_data = false;
+    return false;
 }
 
 static void delay_ms(uint32_t ms)

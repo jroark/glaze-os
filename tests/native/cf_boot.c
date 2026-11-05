@@ -7,6 +7,7 @@
 #define GLAZE_HW_H
 static uint32_t companion[0x10000/4], gpio[0x1000/4];
 static uint8_t attr[2048], ata[16], ctl;
+static uint16_t ata16;
 static uint32_t ctrl, reset, status, bridge, mock_a020, a024, a034, windows;
 #define REG32(pa) companion[((pa)&0xffff)/4]
 #define REG16(pa) (*(uint16_t *)&gpio[((pa)&0xfff)/4])
@@ -28,6 +29,7 @@ static uint32_t ctrl, reset, status, bridge, mock_a020, a024, a034, windows;
 #define CF_COR attr[0x200]
 #define CF_CCSR attr[0x202]
 #define CF_ATA(i) ata[i]
+#define CF_ATA_DATA16 ata16
 #define CF_ATA_CTL ctl
 #include "../../kernel/drivers/cf.c"
 const struct gz_bootinfo *ram_boot;
@@ -87,6 +89,22 @@ static void bluetooth_card_tests(void)
 int main(void)
 {
     bluetooth_card_tests();
+    /* Physical OnSpec IDENTIFY provides 256 bytes in 256 low-lane words.
+     * Include high bytes in the reconstructed ATA words and capacity. */
+    uint16_t expected[256];
+    for (unsigned i=0;i<256;++i) expected[i]=(uint16_t)(i*197u);
+    expected[0]=0x848a; expected[60]=0xc000; expected[61]=0x72;
+    for (unsigned i=0;i<256;++i) {
+        io_buf[2*i]=expected[i]&255; io_buf[2*i+1]=expected[i]>>8;
+    }
+    assert(identify_low_lane(0x02b6,3));
+    assert(!identify_low_lane(0x02b6,4) && !identify_low_lane(0x1234,3));
+    io_buf[100]|=0x100; assert(!identify_low_lane(0x02b6,3)); io_buf[100]&=255;
+    identify_pack_low_lane();
+    assert(!memcmp(io_buf,expected,128*sizeof(expected[0])));
+    for (unsigned i=128;i<256;++i) assert(!io_buf[i]);
+    assert((io_buf[60]|(uint32_t)io_buf[61]<<16)==7520256);
+    assert(!identify_low_lane(0x02b6,3)); /* standard packed IDENTIFY */
     REG16(0x0f000140)=0xa500; REG16(0x0f000144)=0x5a00;
     mock_a020=0xa5; a024=0x5a; a034=0xff; reset=4;
     socket_power_up();

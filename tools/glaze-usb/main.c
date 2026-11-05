@@ -100,6 +100,12 @@ static int usage(void)
           "  bt-status | bt-cancel          classic Bluetooth status/cancellation\n"
           "  bt-scan [--start-only]         discover classic Bluetooth devices\n"
           "  bt-info                       read-only CF Bluetooth identity and CIS\n"
+          "  veo-regs [BASE [A020]]        Veo camera: map I/O (0 keep, 1 set, 2 clear A020 bit 3), dump registers\n"
+          "  veo-init [still|preview] | veo-sensor REG   bring up the camera / read a sensor register\n"
+          "  veo-grab MODE fine|normal OUT.jpg   capture one JPEG (VEO_PROBE=1 builds)\n"
+          "  veo-peek REG | veo-poke REG VAL | veo-swrite REG VAL | veo-attr OFF [VAL] | veo-delay US\n"
+          "  veo-io SCRIPT                 raw socket I/O lines: r8|r16 PORT, w8|w16 PORT VAL, attr OFF [VAL],\n"
+          "                                block PORT COUNT [16], wait PORT MASK VAL [MS], sleep MS (- = stdin)\n"
           "  cf-info                       CF card geometry (read-only)\n"
           "  cf-read LBA COUNT OUTPUT       two-pass raw CF extent snapshot (read-only)\n"
           "  cf-format-recovery SECTORS GENERATION  erase CF filesystem; create recovery FAT16\n"
@@ -129,6 +135,13 @@ int main(int argc, char **argv)
     if ((!strcmp(cmd, "probe") || !strcmp(cmd, "ce-probe") || !strcmp(cmd, "ce-info") || !strcmp(cmd, "reset-link") || !strcmp(cmd, "diag") || !strcmp(cmd, "connect") || !strcmp(cmd,"net-disable") || !strcmp(cmd,"bt-serial-status") || !strcmp(cmd,"bt-disconnect") || !strcmp(cmd,"bt-status") || !strcmp(cmd,"bt-cancel") || !strcmp(cmd,"bt-info") || !strcmp(cmd,"cf-info") || !strcmp(cmd,"nand-status")) ? left != 0 :
         !strcmp(cmd,"bt-connect") ? (left<1 || left>3) :
         !strcmp(cmd,"bt-echo") ? left!=1 :
+        !strcmp(cmd,"veo-regs") ? left > 2 :
+        !strcmp(cmd,"veo-init") ? (left > 1 || (left == 1 && strcmp(argv[i],"still") && strcmp(argv[i],"preview"))) :
+        !strcmp(cmd,"veo-sensor") || !strcmp(cmd,"veo-peek") || !strcmp(cmd,"veo-delay") ? left != 1 :
+        !strcmp(cmd,"veo-poke") || !strcmp(cmd,"veo-swrite") ? left != 2 :
+        !strcmp(cmd,"veo-attr") ? (left < 1 || left > 2) :
+        !strcmp(cmd,"veo-grab") ? left != 3 :
+        !strcmp(cmd,"veo-io") ? left != 1 :
         !strcmp(cmd,"bt-scan") ? (left>1 || (left==1 && strcmp(argv[i],"--start-only"))) :
         !strcmp(cmd,"cf-read") ? left != 3 :
         !strcmp(cmd,"peek") ? (left < 1 || left > 2) :
@@ -324,6 +337,7 @@ int main(int argc, char **argv)
                 } else r=-1;
             }
             else if (!strcmp(cmd,"bt-connect") || !strcmp(cmd,"bt-serial-status") || !strcmp(cmd,"bt-disconnect") || !strcmp(cmd,"bt-echo")) r=gu_bt_serial(&c,cmd,left,argv+i);
+            else if (!strncmp(cmd,"veo-",4)) r=gu_veo(&c,cmd,left,argv+i);
             else if (!strcmp(cmd,"bt-status") || !strcmp(cmd,"bt-scan") || !strcmp(cmd,"bt-cancel")) {
                 r=-1;
                 if (!(c.caps & GU_CAP_BT_DISCOVERY)) fputs("Reload a build with Bluetooth discovery first.\n",stderr);

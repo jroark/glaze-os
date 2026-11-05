@@ -1,6 +1,7 @@
 /* USB development service. All filesystem work runs in userspace. */
 #include <glaze/usb.h>
 #include <glaze/bluetooth.h>
+#include <glaze/veo.h>
 #include <glaze/nand_repair.h>
 #include <glaze/debug_net.h>
 #include "network.h"
@@ -163,7 +164,7 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r = gz_sysinfo(&si); if (r) return r;
         gu_put32(payload, GU_VERSION);
         gu_put32(payload + 4, GU_CAP_FILES | GU_CAP_RUN | GU_CAP_LOGS | GU_CAP_RELOAD |
-                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ | GU_CAP_BT_CARD_INFO | GU_CAP_BT_DISCOVERY | GU_CAP_BT_SERIAL);
+                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ | GU_CAP_BT_CARD_INFO | GU_CAP_BT_DISCOVERY | GU_CAP_BT_SERIAL | GU_CAP_CAM_PROBE);
         if (!gz_nand_repair(GZ_NAND_REPAIR_AVAILABLE,NULL,0))
             gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_NAND_REPAIR);
         if (installer_session) gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_INSTALL_STATUS);
@@ -342,6 +343,21 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
             d[11]=(uint8_t)(status.devices[i].clock_offset>>8); memcpy(d+12,status.devices[i].name,40);
         }
         *out=48+status.count*52; return 0;
+    }
+    case GU_CAM_PROBE: {
+        /* op, arg, wanted bytes -> kernel result, then the op's data
+         * (VEO_PROBE=1 kernels; docs/hardware/VEO.md). */
+        if (n != 12) return GZ_EINVAL;
+        uint32_t op = gu_get32(b), arg = gu_get32(b+4), want = gu_get32(b+8);
+        uint32_t size = op == VEO_PROBE_REGS ? sizeof(struct veo_probe_regs)
+                      : op == VEO_PROBE_POLL ? sizeof(struct veo_probe_status)
+                      : op == VEO_PROBE_READ || op == VEO_PROBE_IO_BLOCK
+                        ? (want < GU_PAYLOAD - 4 ? want : GU_PAYLOAD - 4) : 0;
+        bool counted = op == VEO_PROBE_READ || op == VEO_PROBE_IO_BLOCK;
+        int r = gz_cam_probe(op, arg, size ? payload + 4 : NULL, size);
+        gu_put32(payload, (uint32_t)r);
+        *out = 4 + (r < 0 ? 0 : counted ? (uint32_t)r : size);
+        return 0;
     }
     case GU_BT_CARD_INFO: {
         if (n) return GZ_EINVAL;
