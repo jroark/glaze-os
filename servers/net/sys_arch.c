@@ -40,6 +40,12 @@ u32_t sys_now(void)
     return gz_time_ms();
 }
 
+/* PPP's magic-number seed (netif/ppp/magic.c): microseconds vary more. */
+u32_t sys_jiffies(void)
+{
+    return (u32_t)gz_time_us();
+}
+
 sys_prot_t sys_arch_protect(void)
 {
     gz_mutex_lock(&protect_lock);

@@ -15,6 +15,8 @@ static uint8_t cis[256];
 #define PCMCIA_BRIDGE_EN 4
 #define PCMCIA_CARD_STATUS socket_status
 #define PCMCIA_CARD_PRESENT() (socket_status == 4)  /* 4: a card, 0: none */
+#define PCMCIA0_IO 0x0A00C000u
+uint32_t pcmcia_io_base = PCMCIA0_IO, pcmcia_attr_base = 0x0A00D000u;
 static unsigned reads;
 static uint8_t read_cis(unsigned i)
 {
@@ -105,6 +107,11 @@ static const struct net_driver fake_xi = {
     xi_start, xi825_present, xi825_irq, xi825_removed, NULL, NULL,
     xi825_info, xi825_bind, xi825_send, xi825_recv, xi825_control
 };
+static const struct net_driver fake_el3 = {
+    .magic = NET_DRIVER_MAGIC, .abi = NET_DRIVER_ABI, .size = sizeof(struct net_driver), .kind = GZ_NET_3C589,
+    .init = ne_start, .present = ne2000_present, .irq = ne2000_irq, .stop = ne2000_removed, .send_frame = ne2000_send
+};
+static char last_path[32];
 static unsigned loads, allocations;
 static struct { void *base; unsigned pages, remaining; } blocks[4];
 static bool alloc_fail;
@@ -130,8 +137,10 @@ void page_free(void *p)
 int module_load(const char *path, const char *entry, struct module *m)
 {
     loads++;
+    snprintf(last_path, sizeof(last_path), "%s", path);
     if (load_fail) return GZ_ECORRUPT;
-    const struct net_driver *d = strstr(path, "xi825") ? &fake_xi : strstr(path, "wl54cf") ? &fake_wl : &fake_ne;
+    const struct net_driver *d = strstr(path, "xi825") ? &fake_xi : strstr(path, "wl54cf") ? &fake_wl :
+                                 strstr(path, "3c589") ? &fake_el3 : &fake_ne;
     m->base = m->entry = (void *)d; m->bytes = sizeof(*d); m->pages = 1;
     return 0;
 }
@@ -235,6 +244,13 @@ int main(void)
     /* Network cards other than the Wi-Fi ones get the NE2000 driver. */
     reset(0); card(0x1234, 5, 6); net_init();
     assert(net_present() && ne_probes == 1 && !wl_probes && !xi_probes);
+    /* The 3c589 has its own driver; other non-NE2000 makers are reserved. */
+    reset(0); card(0x0101, 0x0589, 6); ne_ok = true; net_init();
+    assert(net_present() && info.kind == GZ_NET_3C589 && !strcmp(last_path, "drivers/3c589.ko"));
+    reset(0); loads = 0; card(0x0105, 0x0110, 6); net_init();
+    assert(net_present() && !loads && !ne_probes && !net_up());
+    reset(0); loads = 0; card(0x0156, 0x0002, 6); load_fail = true; net_init(); load_fail = false;
+    assert(net_present() && loads == 1 && !strcmp(last_path, "drivers/hermes.ko") && !net_up());
     /* The XI-825 keeps its own syscalls and has Wi-Fi controls. */
     reset(0); card(0xd601, 5, 6); ne_ok = true; net_init(); p.net_generation = generation;
     assert(xi_probes == 1 && net_up() && info.kind == GZ_NET_XI825);

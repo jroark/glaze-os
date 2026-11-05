@@ -30,7 +30,11 @@ static uintptr_t module_resolve(const char *name)
     EXPORT(romfs_lookup); EXPORT(romfs_read);
     EXPORT(copy_to_as); EXPORT(copy_from_as); EXPORT(ipc_notify);
     EXPORT(pcmcia_node_id); EXPORT(net_set_mac); EXPORT(net_receive);
-    EXPORT(net_rx_drop); EXPORT(net_overrun);
+    EXPORT(net_rx_drop); EXPORT(net_overrun); EXPORT(pcmcia_modem_config);
+    EXPORT(pcmcia_card_present);
+    /* Data: the card windows of the socket holding the card (hw.h). */
+    if (!strcmp(name, "pcmcia_io_base")) return (uintptr_t)&pcmcia_io_base;
+    if (!strcmp(name, "pcmcia_attr_base")) return (uintptr_t)&pcmcia_attr_base;
     EXPORT(__udivsi3); EXPORT(__umodsi3); EXPORT(__divsi3); EXPORT(__modsi3);
     EXPORT(__vr4120_divsi3); EXPORT(__vr4120_modsi3);
     EXPORT(__udivdi3); EXPORT(__umoddi3); EXPORT(__divdi3); EXPORT(__moddi3);

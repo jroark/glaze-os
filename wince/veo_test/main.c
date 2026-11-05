@@ -19,6 +19,13 @@
  * VeoTest app-uninstall removes all of that.
  * VeoTest cis      logs the inserted card's CIS tuples (kernel mode) and the
  *                  active drivers.
+ * VeoTest pcmcia   logs CE's PCMCIA registry keys, the active drivers and the
+ *                  socket register words (read only).
+ * VeoTest snap     logs every register block pcmcia.dll maps (read only).
+ * VeoTest ne       reads the NE2000's command register at 0x0A00C300 (read only).
+ * VeoTest snap1    logs the socket 1 registers pcmcia.dll reads (read only).
+ * VeoTest s1probe  logs socket 1's registers and reads its candidate card
+ *                  windows (CIS, NE2000 command register), read only.
  * VeoTest menu     logs the menu, installer and CompDisk registry keys and the
  *                  program folders.
  *
@@ -445,9 +452,16 @@ static void cis(void)
     BYTE t[0x100];
     BOOL was = set_kmode(TRUE);
     DWORD status = R32(0x0A00A008), a020 = R32(0x0A00A020);
+    /* Read only: how pcmcia.dll powered this card (A034 is the socket's
+     * supply selection, bits 2-5), for cards Glaze can't yet power. */
+    DWORD ctrl = R32(0x0A00A000), reset = R32(0x0A00A004), a024 = R32(0x0A00A024);
+    DWORD a028 = R32(0x0A00A028), a02c = R32(0x0A00A02C), a030 = R32(0x0A00A030);
+    DWORD a034 = R32(0x0A00A034), card = R32(0x0A001000);
     for (unsigned i = 0; i < sizeof(t); i++) t[i] = *(volatile BYTE *)KSEG1(0x0A00D000UL + 2 * i);
     set_kmode(was);
     say(L"socket STATUS %08lx A020 %08lx", status, a020);
+    say(L"socket CTRL %08lx RESET %08lx A024 %08lx A028 %08lx A02C %08lx A030 %08lx A034 %08lx card %08lx",
+        ctrl, reset, a024, a028, a02c, a030, a034, card);
     for (unsigned i = 0; i < sizeof(t); i += 16) {
         WCHAR line[80]; int n = wsprintf(line, L"%03x:", i);
         for (unsigned j = 0; j < 16; j++) n += wsprintf(line + n, L" %02x", t[i + j]);
@@ -465,6 +479,209 @@ static void cis(void)
         i += 2 + len;
     }
     list_active();
+}
+
+/* Read only: sample the socket registers about every millisecond for 30 s
+ * while a card is inserted, logging each change with the first CIS bytes,
+ * to see how pcmcia.dll powers a card (a 5 V PC Card in a jacket) in the
+ * window in which it reads the CIS. Never writes a register. */
+static void watch(void)
+{
+    HMODULE core = LoadLibrary(L"coredll.dll");
+    BOOL (*set_kmode)(BOOL) = core ? (BOOL (*)(BOOL))GetProcAddress(core, L"SetKMode") : NULL;
+    if (!set_kmode) { say(L"no SetKMode"); return; }
+    static const DWORD regs[] = {
+        0x0A00A000, 0x0A00A004, 0x0A00A008, 0x0A00A01C, 0x0A00A020, 0x0A00A024,
+        0x0A00A028, 0x0A00A02C, 0x0A00A030, 0x0A00A034, 0x0A001000, 0x0A001B20,
+    };
+#define NREGS (sizeof(regs) / sizeof(regs[0]))
+    static struct { DWORD ms, v[NREGS]; BYTE cis[4]; WORD gpio[4]; } log[400];
+    unsigned count = 0;
+    DWORD last[NREGS + 3] = {0};
+    say(L"watch: waiting up to 180 s for a card, then sampling 15 s");
+    DWORD start = GetTickCount();
+    BOOL was = set_kmode(TRUE);
+    while ((R32(0x0A00A008) & 6) && GetTickCount() - start < 180000) {
+        set_kmode(was);
+        Sleep(2);
+        set_kmode(TRUE);
+    }
+    start = GetTickCount();
+    while (GetTickCount() - start < 15000 && count < 400) {
+        DWORD v[NREGS + 3];
+        for (unsigned i = 0; i < NREGS; i++) v[i] = R32(regs[i]);
+        BYTE cis[4];
+        for (unsigned i = 0; i < 4; i++) cis[i] = *(volatile BYTE *)KSEG1(0x0A00D000UL + 2 * i);
+        v[NREGS] = cis[0] | cis[1] << 8 | cis[2] << 16 | (DWORD)cis[3] << 24;
+        WORD gpio[4];
+        for (unsigned i = 0; i < 4; i++) gpio[i] = R16(0x0F000140UL + 4 * i);
+        v[NREGS + 1] = gpio[0] | (DWORD)gpio[1] << 16;
+        v[NREGS + 2] = gpio[2] | (DWORD)gpio[3] << 16;
+        if (!count || memcmp(v, last, sizeof(v))) {
+            log[count].ms = GetTickCount() - start;
+            memcpy(log[count].v, v, sizeof(log[count].v));
+            memcpy(log[count].cis, cis, 4);
+            memcpy(log[count].gpio, gpio, sizeof(gpio));
+            count++;
+            memcpy(last, v, sizeof(v));
+        }
+        set_kmode(was);
+        Sleep(1);
+        set_kmode(TRUE);
+    }
+    set_kmode(was);
+    say(L"ms: CTRL RESET STATUS BRIDGE A020 A024 A028 A02C A030 A034 card win | CIS | GPIO 140 144 148 14C");
+    for (unsigned n = 0; n < count; n++) {
+        WCHAR line[300];
+        int k = wsprintf(line, L"%5lu:", log[n].ms);
+        for (unsigned i = 0; i < NREGS; i++) k += wsprintf(line + k, L" %lx", log[n].v[i]);
+        k += wsprintf(line + k, L" | %02x %02x %02x %02x |", log[n].cis[0], log[n].cis[1], log[n].cis[2], log[n].cis[3]);
+        for (unsigned i = 0; i < 4; i++) k += wsprintf(line + k, L" %x", log[n].gpio[i]);
+        say(L"%s", line);
+    }
+#undef NREGS
+}
+
+/* Read only: how CE's PCMCIA layer reaches the inserted card: the socket
+ * and NE2000 registry keys, the active drivers' keys, and every socket
+ * register word from A000 and 1000. */
+static void pcmcia_dump(void)
+{
+    dump_key(HKEY_LOCAL_MACHINE, L"Drivers\\PCMCIA", 1);
+    dump_key(HKEY_LOCAL_MACHINE, L"Drivers\\BuiltIn\\PCMCIA", 0);
+    dump_key(HKEY_LOCAL_MACHINE, L"Drivers\\BuiltIn\\CardState", 0);
+    dump_key(HKEY_LOCAL_MACHINE, L"Comm\\NE20001", 0);
+    dump_key(HKEY_LOCAL_MACHINE, L"Comm\\NE2000", 0);
+    dump_key(HKEY_LOCAL_MACHINE, L"Drivers\\Active", 1);
+    HMODULE core = LoadLibrary(L"coredll.dll");
+    BOOL (*set_kmode)(BOOL) = core ? (BOOL (*)(BOOL))GetProcAddress(core, L"SetKMode") : NULL;
+    if (!set_kmode) { say(L"no SetKMode"); return; }
+    DWORD a[16], b[16];
+    BOOL was = set_kmode(TRUE);
+    for (unsigned i = 0; i < 16; i++) a[i] = R32(0x0A00A000UL + 4 * i);
+    for (unsigned i = 0; i < 16; i++) b[i] = R32(0x0A001000UL + 4 * i);
+    set_kmode(was);
+    for (unsigned i = 0; i < 16; i += 8)
+        say(L"A%03x: %lx %lx %lx %lx %lx %lx %lx %lx", 4 * i, a[i], a[i + 1], a[i + 2], a[i + 3], a[i + 4], a[i + 5], a[i + 6], a[i + 7]);
+    for (unsigned i = 0; i < 16; i += 8)
+        say(L"1%03x: %lx %lx %lx %lx %lx %lx %lx %lx", 4 * i, b[i], b[i + 1], b[i + 2], b[i + 3], b[i + 4], b[i + 5], b[i + 6], b[i + 7]);
+}
+
+/* Read only: every register block pcmcia.dll maps (its table at
+ * 0x0198AA64) in the companion chip, as 16-bit words, to compare with a
+ * card in and out. It also maps 0x0B000000-0x0B000557, read as 32-bit
+ * words; those are left out until they are known to be safe to read. */
+static void snap(void)
+{
+    static const struct { DWORD pa, size; } blocks[] = {
+        {0x0A001000, 0x14}, {0x0A001B00, 0x5C}, {0x0A00A000, 0x40},
+    };
+    HMODULE core = LoadLibrary(L"coredll.dll");
+    BOOL (*set_kmode)(BOOL) = core ? (BOOL (*)(BOOL))GetProcAddress(core, L"SetKMode") : NULL;
+    if (!set_kmode) { say(L"no SetKMode"); return; }
+    static WORD v[sizeof(blocks) / sizeof(blocks[0])][0x84 / 2];
+    BOOL was = set_kmode(TRUE);
+    for (unsigned b = 0; b < sizeof(blocks) / sizeof(blocks[0]); b++)
+        for (unsigned i = 0; i < blocks[b].size / 2; i++) v[b][i] = R16(blocks[b].pa + 2 * i);
+    set_kmode(was);
+    for (unsigned b = 0; b < sizeof(blocks) / sizeof(blocks[0]); b++)
+        for (unsigned i = 0; i < blocks[b].size / 2; i += 8) {
+            WCHAR line[120]; int n = wsprintf(line, L"%08lx:", blocks[b].pa + 2 * i);
+            for (unsigned j = i; j < i + 8 && j < blocks[b].size / 2; j++) n += wsprintf(line + n, L" %04x", v[b][j]);
+            say(L"%s", line);
+        }
+    list_active();
+}
+
+/* Read only: whether CE's NE2000 (IoBaseAddress 0x300) answers in the card
+ * I/O window Glaze uses (kernel/hw.h NE_BASE). Reads only the DP8390's
+ * command register and page 0's ISR, which have no read side effects,
+ * plus the socket and companion card status. */
+static void ne_probe(void)
+{
+    HMODULE core = LoadLibrary(L"coredll.dll");
+    BOOL (*set_kmode)(BOOL) = core ? (BOOL (*)(BOOL))GetProcAddress(core, L"SetKMode") : NULL;
+    if (!set_kmode) { say(L"no SetKMode"); return; }
+    BOOL was = set_kmode(TRUE);
+    DWORD a008 = R32(0x0A00A008), a01c = R32(0x0A00A01C), c1000 = R32(0x0A001000), c1008 = R32(0x0A001008);
+    BYTE cr = *(volatile BYTE *)KSEG1(0x0A00C300UL);
+    BYTE isr = (cr & 0xC0) ? 0 : *(volatile BYTE *)KSEG1(0x0A00C307UL);
+    set_kmode(was);
+    say(L"A008 %lx A01C %lx 1000 %lx 1008 %lx", a008, a01c, c1000, c1008);
+    say(L"C300 CR %02x ISR %02x%s", cr, isr, (cr & 0xC0) ? L" (not page 0)" : L"");
+}
+
+/* Read only: the socket 1 registers pcmcia.dll reads, as 32-bit words, at
+ * just the offsets it uses (its mapping table at 0x0198AA64: 0x0B000500,
+ * 0x0B000100, 0x0B000200, 0x0B000000 and the companion's 0x0A001000),
+ * plus the CF socket's A008, to compare with a card in and out. */
+static void snap1(void)
+{
+    static const DWORD regs[] = {
+        0x0B000508, 0x0B000520, 0x0B000524,
+        0x0B000108, 0x0B00010C, 0x0B000110, 0x0B00011C, 0x0B000128, 0x0B000140, 0x0B00014C, 0x0B000150,
+        0x0B000204, 0x0B000208,
+        0x0B000010,
+        0x0A001000, 0x0A001008, 0x0A001044, 0x0A00104C,
+        0x0A00A008,
+    };
+    HMODULE core = LoadLibrary(L"coredll.dll");
+    BOOL (*set_kmode)(BOOL) = core ? (BOOL (*)(BOOL))GetProcAddress(core, L"SetKMode") : NULL;
+    if (!set_kmode) { say(L"no SetKMode"); return; }
+    DWORD v[sizeof(regs) / sizeof(regs[0])];
+    BOOL was = set_kmode(TRUE);
+    for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) v[i] = R32(regs[i]);
+    set_kmode(was);
+    for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) say(L"%08lx: %08lx", regs[i], v[i]);
+    list_active();
+}
+
+/* Read only, with the card up under CE: socket 1's whole register blocks,
+ * then its candidate card windows from pcmcia.dll's window table
+ * (0x0198B9AC): CIS bytes at 0x0B600000 and 0x0B200000, and the NE2000's
+ * command register at port 0x300 in 0x0B400000 and 0x0B200000. Each line
+ * is logged before the next read, so a hang shows which access did it. */
+static void s1probe(void)
+{
+    static const struct { DWORD pa, size; } blocks[] = {
+        {0x0B000000, 0x14}, {0x0B000100, 0x58}, {0x0B000200, 0x10}, {0x0B000500, 0x58},
+    };
+    HMODULE core = LoadLibrary(L"coredll.dll");
+    BOOL (*set_kmode)(BOOL) = core ? (BOOL (*)(BOOL))GetProcAddress(core, L"SetKMode") : NULL;
+    if (!set_kmode) { say(L"no SetKMode"); return; }
+    BOOL was = set_kmode(TRUE);
+    DWORD detect = R32(0x0A001008);
+    set_kmode(was);
+    if (detect & 8) { say(L"no card on socket 1 (0x0A001008 %lx)", detect); return; }
+    for (unsigned b = 0; b < sizeof(blocks) / sizeof(blocks[0]); b++)
+        for (unsigned i = 0; i < blocks[b].size / 4; i += 8) {
+            DWORD v[8]; unsigned n = 0;
+            was = set_kmode(TRUE);
+            for (unsigned j = i; j < i + 8 && j < blocks[b].size / 4; j++) v[n++] = R32(blocks[b].pa + 4 * j);
+            set_kmode(was);
+            WCHAR line[140]; int k = wsprintf(line, L"%08lx:", blocks[b].pa + 4 * i);
+            for (unsigned j = 0; j < n; j++) k += wsprintf(line + k, L" %lx", v[j]);
+            say(L"%s", line);
+        }
+    static const DWORD cis_at[] = {0x0B600000, 0x0B200000};
+    for (unsigned w = 0; w < 2; w++) {
+        say(L"reading CIS at %08lx", cis_at[w]);
+        BYTE t[32];
+        was = set_kmode(TRUE);
+        for (unsigned i = 0; i < sizeof(t); i++) t[i] = *(volatile BYTE *)KSEG1(cis_at[w] + 2 * i);
+        set_kmode(was);
+        WCHAR line[140]; int k = wsprintf(line, L"  CIS:");
+        for (unsigned i = 0; i < sizeof(t); i++) k += wsprintf(line + k, L" %02x", t[i]);
+        say(L"%s", line);
+    }
+    static const DWORD io_at[] = {0x0B400300, 0x0B200300};
+    for (unsigned w = 0; w < 2; w++) {
+        say(L"reading NE2000 CR at %08lx", io_at[w]);
+        was = set_kmode(TRUE);
+        BYTE cr = *(volatile BYTE *)KSEG1(io_at[w]);
+        set_kmode(was);
+        say(L"  CR %02x", cr);
+    }
 }
 
 int WINAPI WinMain(HINSTANCE app, HINSTANCE previous, LPWSTR command, int show)
@@ -486,6 +703,12 @@ int WINAPI WinMain(HINSTANCE app, HINSTANCE previous, LPWSTR command, int show)
     else if (command && !lstrcmp(command, L"app-uninstall")) app_uninstall();
     else if (command && !lstrcmp(command, L"menu")) menu_dump();
     else if (command && !lstrcmp(command, L"cis")) cis();
+    else if (command && !lstrcmp(command, L"watch")) watch();
+    else if (command && !lstrcmp(command, L"pcmcia")) pcmcia_dump();
+    else if (command && !lstrcmp(command, L"snap")) snap();
+    else if (command && !lstrcmp(command, L"ne")) ne_probe();
+    else if (command && !lstrcmp(command, L"snap1")) snap1();
+    else if (command && !lstrcmp(command, L"s1probe")) s1probe();
     else say(L"usage: VeoTest install|capture|hw|uninstall|app-install|app-uninstall|menu|cis");
     say(L"done");
     CloseHandle(log_file);

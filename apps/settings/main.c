@@ -9,6 +9,7 @@
 #include <glaze/display.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
+#include <glaze/dialup.h>
 #include <glaze/notify.h>
 #include <glaze/ntp.h>
 #include <glaze/passcode.h>
@@ -24,7 +25,7 @@
 
 enum view { V_BLUETOOTH, V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
             V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD, V_BATTERY,
-            V_SLEEP, V_SLEEP_MODE, V_ICONS, V_ICON_ACTION };
+            V_SLEEP, V_SLEEP_MODE, V_ICONS, V_ICON_ACTION, V_DIALUP };
 
 #define ICON_CHOICES    64      /* what V_ICON_ACTION lists */
 
@@ -50,6 +51,7 @@ enum {
     R_SLEEP_PICK0, R_SLEEP_PICK_LAST = R_SLEEP_PICK0 + 2,
     R_ICONS, R_ICON0, R_ICON_APPS = R_ICON0 + HARDICON_COUNT,
     R_ICONACT0, R_ICONACT_LAST = R_ICONACT0 + ICON_CHOICES - 1,
+    R_DIALUP, R_DIALUP_FIELD0, R_DIALUP_DONE = R_DIALUP_FIELD0 + 3, R_DIALUP_CONNECT, R_DIALUP_FORGET,
 };
 
 struct hit {
@@ -65,6 +67,12 @@ static int preview_wall;
 static char ping_result[24];
 static struct wifi_status wireless_status;
 static bool wifi_available;
+/* Dial-up (glaze/dialup.h): a modem card's number, user and password. */
+static bool dialup_available;
+static struct dialup_status dialup_status;
+static struct dialup_config dialup_entry;
+static int dialup_field = -1;           /* the field being edited, or -1 */
+static int dialup_cursor, dialup_error;
 static int wifi_error;
 static struct wifi_credentials wifi_entry;
 static char wifi_password[65];
@@ -105,9 +113,47 @@ static uint32_t card_key(struct net_status *st)
         memset(st, 0, sizeof(*st));
         st->state = NET_NO_CARD;
     }
-    wifi_available = st->state != NET_NO_CARD && (st->kind == GZ_NET_XI825 || st->kind == GZ_NET_WL54CF);
+    wifi_available = st->state != NET_NO_CARD && (st->kind == GZ_NET_XI825 || st->kind == GZ_NET_WL54CF || st->kind == GZ_NET_HERMES);
+    dialup_available = st->state != NET_NO_CARD && st->kind == GZ_NET_MODEM;
     return st->state | (uint32_t)st->kind << 8;
 }
+static const char *dialup_name(uint32_t state)
+{
+    switch (state) {
+    case DIALUP_IDLE: return "Not connected";
+    case DIALUP_INITIALIZING: return "Starting modem" GFX_CH_ELLIPSIS;
+    case DIALUP_DIALING: return "Dialing" GFX_CH_ELLIPSIS;
+    case DIALUP_NEGOTIATING: return "Logging in" GFX_CH_ELLIPSIS;
+    case DIALUP_CONNECTED: return "Connected";
+    case DIALUP_HANGING_UP: return "Hanging up" GFX_CH_ELLIPSIS;
+    case DIALUP_FAILED: return "Connection failed";
+    default: return "No Modem";
+    }
+}
+static const char *dialup_error_text(int error)
+{
+    switch (error) {
+    case DIALUP_ENOMODEM: return "The modem doesn't answer";
+    case DIALUP_EBUSY: return "The line is busy";
+    case DIALUP_ENOCARRIER: return "No carrier (line dropped)";
+    case DIALUP_ENODIALTONE: return "No dial tone";
+    case DIALUP_ENOANSWER: return "No answer";
+    case DIALUP_EAUTH: return "Login refused. Check password.";
+    case DIALUP_EPPP: return "PPP negotiation failed";
+    case GZ_EINVAL: return "Check the phone number";
+    default: return "Dial-up request failed";
+    }
+}
+static char *dialup_text(int field)
+{
+    return field == 0 ? dialup_entry.number : field == 1 ? dialup_entry.user : dialup_entry.password;
+}
+static size_t dialup_size(int field)
+{
+    return field == 0 ? sizeof(dialup_entry.number) : field == 1 ? sizeof(dialup_entry.user)
+                                                                 : sizeof(dialup_entry.password);
+}
+static int dialup_flags(int field) { return field == 2 ? UI_EDIT_SECRET : 0; }
 static const char *wifi_name(uint32_t state)
 {
     switch (state) {
@@ -369,7 +415,9 @@ static void draw_root(gfx_surface *s)
     if (cell_visible(s))
         root_card = card_key(&st);
     if (wifi_available && cell_visible(s)) net_wifi_status(&wireless_status);
-    root_scroll.content_h = (12 + wifi_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
+    if (dialup_available && cell_visible(s) && net_dialup_status(&dialup_status))
+        memset(&dialup_status, 0, sizeof(dialup_status));
+    root_scroll.content_h = (12 + wifi_available + dialup_available + ce_boot) * UI_ROW_H + 32 + (ce_boot ? 12 : 0);
     root_scroll.view_h = UI_H - UI_NAV_H;
     if (!root_scroll.dragging && !root_scroll.animating)
         root_scroll.offset = MAX(0, MIN(root_scroll.offset, ui_scroll_max(&root_scroll)));
@@ -377,8 +425,9 @@ static void draw_root(gfx_surface *s)
     gfx_surface body = *s;
     gfx_rect_intersect(s->clip, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), &body.clip);
     s = &body;
-    cell(s, wifi_available ? 1 : 0, "Network", net_state_name(st.state), true, R_NETWORK);
+    cell(s, wifi_available || dialup_available ? 1 : 0, "Network", net_state_name(st.state), true, R_NETWORK);
     if (wifi_available) cell(s, 3, "Wi-Fi", wifi_name(wireless_status.state), true, R_WIFI);
+    if (dialup_available) cell(s, 3, "Dial-up", dialup_name(dialup_status.state), true, R_DIALUP);
     section_gap();
     cell(s, 1, "Sounds", NULL, true, R_SOUNDS);
     cell(s, 2, "Display", NULL, true, R_DISPLAY);
@@ -1219,6 +1268,87 @@ static void draw_wifi_credentials(gfx_surface *s)
     }
 }
 
+static void draw_dialup(gfx_surface *s)
+{
+    static const char *const labels[3] = {"Phone Number", "User Name", "Password"};
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, 0, UI_W, UI_H));
+    if (dialup_field >= 0) {
+        /* Editing one field: the Wi-Fi key page's layout. */
+        ui_draw_navbar(s, labels[dialup_field], "Dial-up", &back_rect, 0); add_hit(back_rect, R_BACK);
+        const char *value = dialup_text(dialup_field);
+        char shown[DIALUP_USER_MAX + 1];
+        unsigned n = (unsigned)strlen(value);
+        if (dialup_field == 2) { memset(shown, '*', n); shown[n] = 0; }
+        else memcpy(shown, value, n + 1);
+        gfx_rect field = gfx_r(10, 66, 220, 29);
+        gfx_round_rect(s, field, 5, 0xFFFFFF, 255);
+        gfx_surface clipped = *s; gfx_rect_intersect(s->clip, gfx_r(16, 68, 207, 25), &clipped.clip);
+        int x = 17;
+        if (n) x -= MAX(0, gfx_text_width(ui_font(FONT_R12), shown) - 202);
+        gfx_text(&clipped, x, 74, ui_font(FONT_R12), n ? shown : labels[dialup_field],
+                 n ? UI_TEXT : UI_TEXT_DETAIL, 255);
+        shown[MIN((unsigned)dialup_cursor, n)] = 0;
+        int caret = n ? x + gfx_text_width(ui_font(FONT_R12), shown) : 17;
+        gfx_line(&clipped, caret, 72, caret, 87, UI_TEXT, 255);
+        memset(shown, 0, sizeof(shown));
+        wifi_button(s, 103, "Done", R_DIALUP_DONE);
+        if (ui_keyboard_height()) ui_draw_keyboard(s, &wifi_keyboard, UI_H - ui_keyboard_height());
+        return;
+    }
+    const struct dialup_status *st = &dialup_status;
+    int err = dialup_error ? dialup_error : st->state == DIALUP_FAILED ? st->error : 0;
+    /* Scrolls like the Wi-Fi list: connection details push it past the screen. */
+    gfx_rect area = zone_area();
+    gfx_surface whole = *s;
+    gfx_rect_intersect(s->clip, area, &whole.clip);
+    s = &whole;
+    zone_scroll.content_h = 12 + 6 * UI_ROW_H + 4 * 14 + 12 + (err ? 14 + UI_ROW_H : 0) +
+                            (st->state == DIALUP_CONNECTED ? 14 + 3 * UI_ROW_H : 0);
+    zone_scroll.view_h = UI_H - UI_NAV_H;
+    if (!zone_scroll.dragging && !zone_scroll.animating)
+        zone_scroll.offset = MAX(0, MIN(zone_scroll.offset, ui_scroll_max(&zone_scroll)));
+    section_y = UI_NAV_H + 12 - zone_scroll.offset;
+    cell(s, 1, "Status", dialup_name(st->state), false, 0);
+    /* The card's VERS_1 strings are long: the name alone, as its own row. */
+    char modem[sizeof(st->modem)];
+    strlcpy(modem, st->modem[0] ? st->modem : "Modem", sizeof(modem));
+    for (size_t n = strlen(modem); n && modem[n - 1] == ' '; n--) modem[n - 1] = 0;
+    cell(s, 3, modem, NULL, false, 0);
+    section_gap();
+    for (int i = 0; i < 3; i++) {
+        const char *value = dialup_text(i);
+        char masked[DIALUP_PASSWORD_MAX + 1];
+        if (i == 2) {
+            unsigned n = (unsigned)strlen(value);
+            memset(masked, '*', n); masked[n] = 0;
+            value = n ? masked : st->configured && dialup_entry.user[0] ? "Saved" : "";
+        }
+        cell(s, i == 0 ? 1 : i == 2 ? 3 : 2, labels[i], value, true, R_DIALUP_FIELD0 + i);
+    }
+    section_gap();
+    bool active = st->state != DIALUP_IDLE && st->state != DIALUP_FAILED;
+    cell(s, 0, active ? "Hang Up" : "Connect", NULL, active || dialup_entry.number[0],
+         active || dialup_entry.number[0] ? R_DIALUP_CONNECT : 0);
+    if (err) {
+        section_gap();
+        cell(s, 0, dialup_error_text(err), NULL, false, 0);
+    }
+    if (st->state == DIALUP_CONNECTED) {
+        char addr[16], dns[16], speed[16];
+        section_gap();
+        snprintf(speed, sizeof(speed), "%u bps", (unsigned)st->connect_speed);
+        cell(s, 1, "Speed", st->connect_speed ? speed : "", false, 0);
+        cell(s, 2, "IP Address", net_ntoa(st->addr, addr), false, 0);
+        cell(s, 3, "DNS", net_ntoa(st->dns, dns), false, 0);
+    }
+    section_gap();
+    cell(s, 0, "Forget Settings", NULL, st->configured, st->configured ? R_DIALUP_FORGET : 0);
+    gfx_surface top = whole;
+    top.clip = gfx_r(0, 0, UI_W, UI_H);
+    ui_draw_navbar(&top, "Dial-up", "Settings", &back_rect, 0); add_hit(back_rect, R_BACK);
+}
+
 static gfx_rect pin_area(void)
 {
     return gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
@@ -1389,6 +1519,7 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_ICONS: draw_icons(s); break;
     case V_ICON_ACTION: draw_icon_action(s); break;
     case V_REBOOT: draw_reboot(s); break;
+    case V_DIALUP: draw_dialup(s); break;
     }
 }
 
@@ -1761,6 +1892,49 @@ static void pin_key(int k)
 
 static void activate(int id)
 {
+    if (id == R_DIALUP) {
+        dialup_error = net_dialup_status(&dialup_status);
+        memset(&dialup_entry, 0, sizeof(dialup_entry));
+        if (net_dialup_config(&dialup_entry))
+            memset(&dialup_entry, 0, sizeof(dialup_entry));
+        dialup_field = -1;
+        ui_scroll_reset(&zone_scroll, 0, UI_H - UI_NAV_H);
+        go(V_DIALUP, true);
+        return;
+    }
+    if (view == V_DIALUP) {
+        if (id == R_BACK && dialup_field >= 0) { dialup_field = -1; return; }
+        if (id == R_BACK) {
+            memset(&dialup_entry, 0, sizeof(dialup_entry));
+            go(V_ROOT, false);
+            return;
+        }
+        if (id >= R_DIALUP_FIELD0 && id < R_DIALUP_FIELD0 + 3) {
+            dialup_field = id - R_DIALUP_FIELD0;
+            dialup_cursor = (int)strlen(dialup_text(dialup_field));
+            ui_keyboard_edit_init(&wifi_keyboard, dialup_flags(dialup_field));
+            return;
+        }
+        if (id == R_DIALUP_DONE) { dialup_field = -1; return; }
+        if (id == R_DIALUP_CONNECT) {
+            bool active = dialup_status.state != DIALUP_IDLE && dialup_status.state != DIALUP_FAILED;
+            if (active) {
+                dialup_error = net_dialup_disconnect();
+            } else {
+                dialup_entry.version = DIALUP_VERSION;
+                dialup_error = net_dialup_connect(&dialup_entry);
+                memset(dialup_entry.password, 0, sizeof(dialup_entry.password));
+            }
+            net_dialup_status(&dialup_status);
+            return;
+        }
+        if (id == R_DIALUP_FORGET) {
+            dialup_error = net_dialup_forget();
+            memset(&dialup_entry, 0, sizeof(dialup_entry));
+            net_dialup_status(&dialup_status);
+            return;
+        }
+    }
     if (id == R_WIFI) {
         wifi_error = net_wifi_status(&wireless_status);
         ui_scroll_reset(&zone_scroll, 0, UI_H - UI_NAV_H);
@@ -2184,7 +2358,8 @@ static int hit_test(int x, int y);
 /* Scroll and tap list views; leave navbar events to the normal handler. */
 static bool zone_touch(const struct gz_input_event *ev)
 {
-    if ((view != V_BLUETOOTH && view != V_ZONE && view != V_WIFI && view != V_ROOT && view != V_ICON_ACTION) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
+    if ((view != V_BLUETOOTH && view != V_ZONE && view != V_WIFI && view != V_ROOT && view != V_ICON_ACTION &&
+         (view != V_DIALUP || dialup_field >= 0)) || (ev->type != GZ_EV_TOUCH_DOWN && ev->type != GZ_EV_TOUCH_MOVE &&
                            ev->type != GZ_EV_TOUCH_UP))
         return false;
     if (ev->type == GZ_EV_TOUCH_DOWN)
@@ -2207,6 +2382,10 @@ static bool zone_touch(const struct gz_input_event *ev)
             activate(id);
             if (view == V_WIFI) {
                 redraw_rect(zone_area());
+                return true;
+            }
+            if (view == V_DIALUP) {     /* a field opens its editor: all of it */
+                redraw();
                 return true;
             }
             if (view != V_ZONE && view != V_ROOT) return true;
@@ -2242,11 +2421,12 @@ int main(void)
     for (;;) {
         struct gz_input_event ev;
         int timeout = view == V_BLUETOOTH || view == V_ABOUT || view == V_DATETIME || view == V_NETWORK || view == V_WIFI || view == V_DEBUG ||
-                      view == V_BATTERY ? 1000
+                      view == V_BATTERY || view == V_DIALUP ? 1000
                     : view == V_ROOT ? 2000 : -1;
         if (view == V_TOUCH_TEST)
             timeout = 250;
-        if ((view == V_BLUETOOTH || view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION) && zone_scroll.animating)
+        if ((view == V_BLUETOOTH || view == V_ZONE || view == V_WIFI || view == V_ICON_ACTION || view == V_DIALUP) &&
+            zone_scroll.animating)
             timeout = 16;
         if (view == V_ROOT && root_scroll.animating)
             timeout = 16;
@@ -2262,6 +2442,23 @@ int main(void)
                 struct net_status st;
                 if (card_key(&st) != root_card || root_scroll.offset != old_offset)
                     redraw();       /* a card came or went: rows change */
+                continue;
+            }
+            if (view == V_DIALUP) {
+                struct net_status st;
+                card_key(&st);
+                if (!dialup_available) {    /* the modem was pulled */
+                    dialup_field = -1;
+                    memset(&dialup_entry, 0, sizeof(dialup_entry));
+                    view = V_ROOT;
+                    redraw();
+                    continue;
+                }
+                if (dialup_field < 0) {
+                    ui_scroll_step(&zone_scroll);
+                    if (net_dialup_status(&dialup_status)) memset(&dialup_status, 0, sizeof(dialup_status));
+                    redraw();
+                }
                 continue;
             }
             if (view == V_WIFI && !zone_scroll.animating) {
@@ -2302,6 +2499,26 @@ int main(void)
             pressed = R_NONE;
             redraw();
             continue;
+        }
+        if (view == V_DIALUP && dialup_field >= 0) {
+            bool changed = false;
+            char *text = dialup_text(dialup_field);
+            size_t size = dialup_size(dialup_field);
+            int flags = dialup_flags(dialup_field);
+            if (ui_edit_event(text, size, &dialup_cursor, &ev, flags)) { redraw(); continue; }
+            if (ui_keyboard_height() && ev.y >= UI_H - ui_keyboard_height() &&
+                (ev.type == GZ_EV_TOUCH_DOWN || ev.type == GZ_EV_TOUCH_MOVE || ev.type == GZ_EV_TOUCH_UP)) {
+                int ch = ui_keyboard_event(&wifi_keyboard, &ev, UI_H - ui_keyboard_height(), &changed);
+                if (ch == '\n') dialup_field = -1;
+                else if (ch) {
+                    struct gz_input_event key = {0};
+                    key.type = ch == '\b' ? GZ_EV_KEY_DOWN : GZ_EV_TEXT;
+                    key.code = ch == '\b' ? GZ_KEY_BACKSPACE : ch;
+                    ui_edit_event(text, size, &dialup_cursor, &key, flags);
+                }
+                if (ch || changed) redraw();
+                continue;
+            }
         }
         if (view == V_WIFI_CREDENTIALS && wifi_editing) {
             bool changed = false;

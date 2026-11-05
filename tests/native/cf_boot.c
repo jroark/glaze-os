@@ -24,7 +24,27 @@ static uint32_t ctrl, reset, status, bridge, mock_a020, a024, a034, windows;
 #define PCMCIA_WINDOWS windows
 #define PCMCIA_A020_CONFIG 8u
 #define PCMCIA_CD_MASK 6u
-#define PCMCIA_CARD_PRESENT() ((PCMCIA_STATUS & PCMCIA_CD_MASK) == 0)
+#define PCMCIA0_CARD_PRESENT() ((PCMCIA_STATUS & PCMCIA_CD_MASK) == 0)
+/* The jacket's socket (1) is always empty here. */
+static uint32_t socket1_detect = 8, socket1_bus, socket1_reg;
+#define PCMCIA1_DETECT socket1_detect
+#define PCMCIA1_EMPTY 8u
+#define PCMCIA1_PRESENCE socket1_reg
+#define PCMCIA1_ABSENT 0x40u
+#define PCMCIA1_BUS socket1_bus
+#define PCMCIA1_BUS_ON 1u
+#define PCMCIA1_ID socket1_reg
+#define PCMCIA1_ID_VALUE 0x641u
+#define PCMCIA1_CHIP socket1_reg
+#define PCMCIA1_CHIP_ID 0x7402u
+#define PCMCIA1_CTRL socket1_reg
+#define PCMCIA1_STATUS socket1_reg
+#define PCMCIA1_A520 socket1_reg
+#define PCMCIA1_CTRL_UP 0x0Bu
+#define PCMCIA0_IO 0x0a00c000u
+#define PCMCIA0_ATTR 0x0a00d000u
+#define PCMCIA1_IO 0x0b200000u
+#define PCMCIA1_ATTR 0x0b600000u
 #define CF_CIS(i) attr[(i)*2]
 #define CF_COR attr[0x200]
 #define CF_CCSR attr[0x202]
@@ -41,6 +61,7 @@ void bt_removed(void) {}
 bool net_present(void) { return false; }
 bool net_insert(unsigned m, unsigned p) { (void)m; (void)p; return false; }
 void net_removed(void) {}
+bool net_insert_modem(void) { return false; }
 int copy_to_as(struct addrspace *as, uint32_t a, const void *p, uint32_t n)
 { (void)as; (void)a; (void)p; (void)n; return 0; }
 int copy_from_as(struct addrspace *as, void *p, uint32_t a, uint32_t n)
@@ -57,7 +78,7 @@ static void bluetooth_card_tests(void)
     };
     memset(attr, 255, sizeof(attr));
     for (unsigned i = 0; i < sizeof(tuples); i++) attr[i*2] = tuples[i];
-    struct cis c; read_cis(&c); capture_card(&c);
+    struct cis c; read_cis(&c, false); capture_card(&c);
     assert(c.function == 2 && c.manufacturer == 0x160 && c.product == 0xaba0 && c.cor == 0xe0);
     assert(card_info.kind == BT_CARD_BLUETOOTH && card_info.cis_length == sizeof(tuples));
     assert(strstr(card_info.identification, "BCSP"));

@@ -12,5 +12,6 @@ int net_if_wifi(uint32_t op, void *buf);
 void net_if_poll(void);         /* frames from the kernel, DHCP fallback */
 int net_if_state(void);
 void net_if_status(struct net_status *st);
+void net_if_set_state(int state);   /* the dial-up dialer's progress */
 
 #endif

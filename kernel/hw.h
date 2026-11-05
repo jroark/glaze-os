@@ -201,11 +201,51 @@
  * and 8 with none, so it can't tell a cold card from no card. */
 #define PCMCIA_CARD_STATUS  REG32(0x0A001000u)
 #define PCMCIA_CD_MASK      0x06u
-#define PCMCIA_CARD_PRESENT() ((PCMCIA_STATUS & PCMCIA_CD_MASK) == 0)
+#define PCMCIA0_CARD_PRESENT() ((PCMCIA_STATUS & PCMCIA_CD_MASK) == 0)
+
+/*
+ * Socket 1: a PC Card in the PCMCIA jacket (docs/hardware/PCCARDS.md).
+ * Windows CE's pcmcia.dll calls it socket 1 and drives it through a second
+ * controller (its register map at 0x0198AA64; read on a BE-300 with an
+ * NE2000 in the jacket, 2026-11-05):
+ * - 0x0A001008 bit 3 reads 1 with the jacket's socket empty;
+ * - 0x0A001B00 bit 0 powers the controller's bus (with GPIO 5, as for the CF
+ *   socket); 0x0A001B50 bit 3 then reports power good;
+ * - 0x0B000100 and 0x0B000010 identify the controller (0x641, 0x7402) once it
+ *   is powered, and read 0 while it is off;
+ * - 0x0B000500 is a socket block laid out like 0x0A00A000 (CTRL 0xB and
+ *   STATUS 0x2F9 with the card up);
+ * - card windows: I/O at 0x0B200000 + port, attribute memory at 0x0B600000
+ *   (pcmcia.dll's window table at 0x0198B9AC).
+ */
+#define PCMCIA1_DETECT      REG32(0x0A001008u)
+#define PCMCIA1_EMPTY       0x08u
+#define PCMCIA1_PRESENCE    REG32(0x0A00104Cu)  /* 0x0C with a card, 0x48 without */
+#define PCMCIA1_ABSENT      0x40u
+#define PCMCIA1_BUS         REG32(0x0A001B00u)
+#define PCMCIA1_BUS_ON      0x01u
+#define PCMCIA1_CHIP        REG32(0x0B000010u)
+#define PCMCIA1_CHIP_ID     0x7402u
+#define PCMCIA1_ID          REG32(0x0B000100u)
+#define PCMCIA1_ID_VALUE    0x641u
+#define PCMCIA1_CTRL        REG32(0x0B000500u)
+#define PCMCIA1_STATUS      REG32(0x0B000508u)
+#define PCMCIA1_A520        REG32(0x0B000520u)
+#define PCMCIA1_CTRL_UP     0x0Bu
+#define PCMCIA1_IO          0x0B200000u
+#define PCMCIA1_ATTR        0x0B600000u
+#define PCMCIA0_IO          0x0A00C000u
+#define PCMCIA0_ATTR        0x0A00D000u
+
+/* The card windows of the socket holding the card (cf.c sets them; a driver
+ * module resolves them from the kernel). */
+extern uint32_t pcmcia_io_base, pcmcia_attr_base;
+bool pcmcia_card_present(void);
+#define PCMCIA_CARD_PRESENT() pcmcia_card_present()
 
 /* NE2000 (DP8390) in the card I/O window at ISA port 0x300; the window
  * decodes the low five address bits (be300 src/hw/cf_ne2000.c). */
-#define NE_BASE             0x0A00C300u
+#define NE_BASE             (pcmcia_io_base + 0x300u)
 #define NE_REG(r)           REG8(NE_BASE + (r))
 #define NE_DATA16           REG16(NE_BASE + 0x10)
 #define NE_RESET            REG8(NE_BASE + 0x1F)
@@ -224,7 +264,7 @@
  * (the boot ROM sends NAND commands there), so attribute offset 0x200, the
  * card's configuration register, is not reachable as CF_CIS(0x100); writing
  * it on a real BE-300 sent the NAND a stray byte and hung its next read. */
-#define CF_CIS(i)           REG8(0x0A00D000u + 2 * (i))
+#define CF_CIS(i)           REG8(pcmcia_attr_base + 2 * (i))
 
 /* VRC4173 SIU UART, register stride 4 (doc: UARTs). */
 #define UART_BASE           0x0A008680u

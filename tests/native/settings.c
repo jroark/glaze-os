@@ -236,6 +236,11 @@ int net_wifi_connect(const void *ssid, uint32_t length)
     return test_wifi_error;
 }
 int net_wifi_forget(void) { test_wifi.state = WIFI_DISCONNECTED; return 0; }
+int net_dialup_status(struct dialup_status *st) { memset(st, 0, sizeof(*st)); return 0; }
+int net_dialup_config(struct dialup_config *c) { (void)c; return GZ_ENOENT; }
+int net_dialup_connect(const struct dialup_config *c) { (void)c; return 0; }
+int net_dialup_disconnect(void) { return 0; }
+int net_dialup_forget(void) { return 0; }
 int net_wifi_connect_secure(const struct wifi_credentials *c) { test_wifi_connects++; return test_wifi_error; }
 int net_wifi_disconnect(void)
 {

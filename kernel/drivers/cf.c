@@ -85,9 +85,66 @@ static bool wait_status(uint8_t mask, uint8_t want)
     }
 }
 
+/*
+ * Two sockets (hw.h): the CF socket (0) and the PCMCIA jacket's (1), which
+ * Windows CE drives through a second controller. The controller reads 0
+ * while its bus is off, so it is only checked with the bus on; a card in
+ * the jacket is otherwise seen by two companion signals (CE, card in and
+ * out: 0x0A001008 bit 3 and 0x0A00104C bit 6 both clear with a card).
+ * Glaze takes over a card CE left powered and configured (a RAM boot), or
+ * powers the socket itself (socket1_power_up). docs/hardware/PCCARDS.md.
+ */
+uint32_t pcmcia_io_base = PCMCIA0_IO, pcmcia_attr_base = PCMCIA0_ATTR;
+static unsigned socket;         /* the socket the windows point at */
+static bool socket1_dead;       /* its power-up failed: wait for a new card */
+static bool socket1_ours;       /* Glaze powered it, so the COR is Glaze's */
+
+static bool socket1_card(void)
+{
+    return !(PCMCIA1_DETECT & PCMCIA1_EMPTY) && !(PCMCIA1_PRESENCE & PCMCIA1_ABSENT);
+}
+
+static bool socket1_up(void)
+{
+    if (!socket1_card() || !(PCMCIA1_BUS & PCMCIA1_BUS_ON))
+        return false;
+    return PCMCIA1_ID == PCMCIA1_ID_VALUE && PCMCIA1_CHIP == PCMCIA1_CHIP_ID &&
+           (PCMCIA1_CTRL & PCMCIA1_CTRL_UP) == PCMCIA1_CTRL_UP;
+}
+
+static void use_socket(unsigned s)
+{
+    socket = s;
+    pcmcia_io_base = s ? PCMCIA1_IO : PCMCIA0_IO;
+    pcmcia_attr_base = s ? PCMCIA1_ATTR : PCMCIA0_ATTR;
+}
+
+/* Whether a card is in either socket, pointing the windows at it. A card
+ * up in the jacket comes first, then the CF socket's own card detect, then
+ * a jacket card still to be powered. */
+bool pcmcia_card_present(void)
+{
+    if (!socket1_card())
+        socket1_dead = false;       /* emptied: the next card gets a try */
+    if (socket1_up()) {
+        use_socket(1);
+        return true;
+    }
+    if (PCMCIA0_CARD_PRESENT()) {
+        use_socket(0);
+        return true;
+    }
+    if (socket1_card() && !socket1_dead) {
+        use_socket(1);
+        return true;
+    }
+    use_socket(0);
+    return false;
+}
+
 static bool card_inserted(void)
 {
-    return PCMCIA_CARD_PRESENT();
+    return pcmcia_card_present();
 }
 
 /*
@@ -109,11 +166,15 @@ struct cis {
     unsigned manufacturer, product;
     uint32_t cor;                       /* attribute address, 0: none */
     int index, io_index;                /* default entry; one decoding 0x300 */
+    int com_index;                      /* an entry decoding a COM port range */
+    uint32_t com_base;                  /* its base (0x3F8, 0x2F8, ...) */
 };
 
 /* A CFTABLE_ENTRY's index and whether it can decode NET_IO_BASE: a range
- * starting there, or address lines only (the window picks the base). */
-static void cis_entry(unsigned at, unsigned len, struct cis *c)
+ * starting there, or address lines only (the window picks the base). With
+ * verbose, the entry's I/O ranges and IRQ are logged, so an unknown card
+ * can be configured from one boot log (PC Card spec "CFTABLE_ENTRY"). */
+static void cis_entry(unsigned at, unsigned len, struct cis *c, bool verbose)
 {
     unsigned end = at + len, p = at;
 #define NEXT() (p < end ? CF_CIS(p++) : 0)
@@ -144,10 +205,17 @@ static void cis_entry(unsigned at, unsigned len, struct cis *c)
             while ((NEXT() & 0x80) && p < end)
                 ;
     }
-    if (!(fs & 0x08))
+    if (verbose)
+        kprintf("cf: cftable %u%s:", index, indx & 0x40 ? " (default)" : "");
+    if (!(fs & 0x08)) {
+        if (verbose)
+            kputs(" no I/O\n");
         return;
+    }
     uint8_t io = NEXT();
     bool decodes = !(io & 0x80) && (io & 0x1F) >= 5;
+    if (verbose)
+        kprintf(" %u lines%s%s", io & 0x1F, io & 0x20 ? " 8-bit" : "", io & 0x40 ? " 16-bit" : "");
     if (io & 0x80) {
         uint8_t r = NEXT();
         unsigned asz = (r >> 4) & 3, lsz = (r >> 6) & 3;
@@ -157,22 +225,41 @@ static void cis_entry(unsigned at, unsigned len, struct cis *c)
             uint32_t base = 0;
             for (unsigned b = 0; b < asz; b++)
                 base |= (uint32_t)NEXT() << (8 * b);
+            uint32_t length = 0;
             for (unsigned b = 0; b < lsz; b++)
-                (void)NEXT();
+                length |= (uint32_t)NEXT() << (8 * b);
             decodes = decodes || base == NET_IO_BASE;
+            if (c->com_index < 0 && (base == 0x3F8 || base == 0x2F8 || base == 0x3E8 || base == 0x2E8)) {
+                c->com_index = index;
+                c->com_base = base;
+            }
+            if (verbose)
+                kprintf(" %x+%x", base, length + 1);
         }
+    }
+    if (verbose) {
+        if (fs & 0x10) {
+            uint8_t irq = NEXT();
+            kprintf(" irq %x%s", irq, irq & 0x20 ? " level" : "");
+        }
+        kputs("\n");
     }
     if (decodes && c->io_index < 0)
         c->io_index = index;
+    /* Address lines only, three or more: the window picks the base. */
+    if (!(io & 0x80) && (io & 0x1F) >= 3 && c->com_index < 0) {
+        c->com_index = index;
+        c->com_base = 0x3F8;
+    }
 #undef NEXT
 }
 
-static void read_cis(struct cis *c)
+static void read_cis(struct cis *c, bool verbose)
 {
     unsigned i = 0;
 
     memset(c, 0, sizeof(*c));
-    c->function = c->index = c->io_index = -1;
+    c->function = c->index = c->io_index = c->com_index = -1;
     for (int n = 0; n < 64 && i + 2 < CIS_LIMIT; n++) {
         uint8_t code = CF_CIS(i);
         if (code == TPL_END)
@@ -196,11 +283,13 @@ static void read_cis(struct cis *c)
             for (unsigned b = 0; b < rasz && 2 + b < len; b++)
                 c->cor |= (uint32_t)CF_CIS(at + 2 + b) << (8 * b);
         } else if (code == TPL_CFTABLE && len >= 1) {
-            cis_entry(at, len, c);
+            cis_entry(at, len, c, verbose);
         }
         i = at + len;
     }
 }
+
+static void serial_card(const struct cis *c);
 
 /* Cache tuple evidence while attribute memory is mapped. Queries never
  * reconfigure the socket, power-cycle a card, or touch UART/ATA registers.
@@ -247,6 +336,7 @@ static void capture_card(const struct cis *c)
         strstr(card_info.identification, "CF+ Bluetooth_Card, BCSP"))
         card_info.kind = BT_CARD_BLUETOOTH;
     if (card_info.kind == BT_CARD_BLUETOOTH) bt_insert();
+    else if (card_info.kind == BT_CARD_SERIAL) serial_card(c);
 }
 
 static void forget_card(void)
@@ -316,7 +406,7 @@ static int cis_function(void)
 {
     struct cis c;
 
-    read_cis(&c);
+    read_cis(&c, false);
     return c.function;
 }
 
@@ -469,10 +559,17 @@ static void note_boot_state(void)
     kprintf("cf: socket CTRL %x RESET %x STATUS %x BRIDGE %x A020 %x A024 %x A034 %x\n",
             PCMCIA_CTRL, PCMCIA_RESET, PCMCIA_STATUS, PCMCIA_BRIDGE, a020, PCMCIA_A024,
             PCMCIA_A034);
-    if ((a020 & 0x0Cu) == PCMCIA_A020_CONFIG) {
+    if ((a020 & 0x0Cu) == PCMCIA_A020_CONFIG && PCMCIA0_CARD_PRESENT() && !net_present()) {
         boot_cor = CF_COR;
         kprintf("cf: COR %x CCSR %x\n", (unsigned)boot_cor, CF_CCSR);
     }
+    /* The jacket's socket: its controller is read only while powered. */
+    uint32_t detect = PCMCIA1_DETECT, bus = PCMCIA1_BUS;
+    if (bus & PCMCIA1_BUS_ON)
+        kprintf("cf: socket 1 detect %x bus %x id %x/%x CTRL %x STATUS %x A520 %x\n", detect, bus,
+                PCMCIA1_ID, PCMCIA1_CHIP, PCMCIA1_CTRL, PCMCIA1_STATUS, PCMCIA1_A520);
+    else
+        kprintf("cf: socket 1 detect %x bus %x (off)\n", detect, bus);
 }
 
 /* CE may gate the socket while no card is present. Establish the stock
@@ -507,6 +604,93 @@ static void socket_power_up(void)
     PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
 }
 
+/*
+ * Socket 1's power-up, from pcmcia.dll (be300-modules 74_pcmcia.dll, base
+ * 0x01980000), whose socket 1 helpers address these registers:
+ * - 0x0198C83C: GPIO 5 on (0x0198C784, then 30 ms), 0x0A001B04 = 0,
+ *   0x0A001B00 bit 0; 0x0198B46C: up to 10 x 2 ms for power good
+ *   (0x0A001B50 bit 3), 0x0B00011C = 1, then 0x0B000140 = 1, 30 ms,
+ *   0x0B000130 = 1, 50 ms, and timings by 0x0B000508 bit 8;
+ * - 0x0198CDDC: 0x0B000128 = 1; 0x0198ADA8: 0x0B00014C = 0, 554 = 1,
+ *   510 = 0x11, 514/518 = 0x1062, 540-548 = 0, 500 bit 4 clear, 504 bit 2;
+ *   0x0A00104C bits 4-5; 500 bit 0 clear; 0x0198B854 then 0x0198B7B4: the
+ *   pin detectors 108-118 and 150 rearmed (0x30, then 3), 204 = 1, 208 = 1;
+ * - the card: 524 and 520 bits 2-3 clear, then CTRL bit 3, reset (504 bit
+ *   0), CTRL bit 0, reset released, CTRL bit 1 (0xB), as on the CF socket
+ *   (socket_power_up), and window 0 (51C bit 2), as CE leaves them.
+ * pcmcia.dll's control and reset helpers (0x0198B230-0x0198B3D4) are never
+ * called directly, so the card order follows the CF socket's traced one
+ * and the register values CE left with an NE2000 up (2026-11-05).
+ */
+/* The highest attribute address a COR can be written at: below the CF
+ * socket's NAND port (hw.h CF_CIS), anywhere in socket 1's 2 MiB window. */
+static uint32_t cor_limit(void) { return socket == 1 ? 0x200000u : 0x800u; }
+
+#define S1(off)         REG32(0x0B000000u + (off))
+#define COMPANION(off)  REG32(0x0A001000u + (off))
+static bool socket1_power_up(void)
+{
+    socket_bus_init();                  /* GPIO 5, as 0x0198C784 */
+    delay_ms(30);
+    COMPANION(0xB04) = 0;
+    COMPANION(0xB00) |= 1;
+    for (int i = 0; i < 50 && !(COMPANION(0xB50) & 8); i++)
+        delay_ms(2);
+    S1(0x11C) = 1;
+    S1(0x140) = 1;
+    delay_ms(30);
+    S1(0x130) = 1;
+    delay_ms(50);
+    if (PCMCIA1_ID != PCMCIA1_ID_VALUE || PCMCIA1_CHIP != PCMCIA1_CHIP_ID) {
+        kprintf("cf: socket 1 controller not answering (power %x, id %x/%x)\n",
+                COMPANION(0xB50), PCMCIA1_ID, PCMCIA1_CHIP);
+        return false;
+    }
+    if (S1(0x508) & 0x100) {
+        S1(0x514) = S1(0x518) = 0x1031;
+        S1(0x144) = 0;
+        S1(0x134) = 1;
+    } else {
+        S1(0x514) = S1(0x518) = 0x1062;
+        S1(0x134) = 0;
+        S1(0x144) = 1;
+    }
+    S1(0x128) = 1;
+    S1(0x14C) = 0;
+    S1(0x554) = 1;
+    S1(0x510) = 0x11;
+    S1(0x514) = S1(0x518) = 0x1062;
+    S1(0x540) = S1(0x544) = S1(0x548) = 0;
+    S1(0x500) &= ~0x10u;
+    S1(0x504) |= 4;
+    COMPANION(0x4C) |= 0x30;
+    S1(0x500) &= ~1u;
+    S1(0x204) = 0;
+    static const unsigned pins[] = {0x108, 0x10C, 0x110, 0x150, 0x114, 0x118};
+    for (unsigned i = 0; i < 6; i++)
+        S1(pins[i]) = 0x30;
+    S1(0x208) = 1;
+    for (unsigned i = 0; i < 6; i++)
+        S1(pins[i]) = 3;
+    S1(0x204) = 1;
+    /* The card's supply and reset. */
+    S1(0x524) &= ~0x0Cu;
+    S1(0x520) &= ~0x0Cu;
+    S1(0x504) |= 1;
+    S1(0x500) |= 8;
+    S1(0x500) |= 1;
+    delay_ms(300);
+    S1(0x504) &= ~1u;
+    delay_ms(20);
+    S1(0x500) |= 2;
+    S1(0x51C) |= 4;
+    S1(0x520) = (S1(0x520) & ~4u) | 8;  /* attribute memory and the COR */
+    kprintf("cf: socket 1 powered: CTRL %x RESET %x STATUS %x A520 %x\n", S1(0x500), S1(0x504),
+            S1(0x508), S1(0x520));
+    socket1_ours = true;
+    return true;
+}
+
 /* The configuration writes pcmcia.dll makes before atadisk.dll's first
  * command (traced in the emulator, the store at 0x0198A468): A034 bit 2,
  * A024 bits 2-3 clear, A020 bit 3 mapping the registers, then CCSR, COR,
@@ -538,24 +722,27 @@ static bool configure(void)
 }
 
 /*
- * DEBUG(hw): which A020 setting gives the XI-825 16-bit I/O cycles, by the
- * PRISM scratch register Linux hostap tests the same way (SWSUPPORT0 at
- * 0x28): a 16-bit write of 0x8A32 reads back whole only over a 16-bit bus.
+ * DEBUG(hw): which A020 setting gives a network card 16-bit I/O cycles, by
+ * a scratch register a 16-bit write of 0x8A32 reads back whole from only
+ * over a 16-bit bus: the PRISM's SWSUPPORT0 at 0x28 (Linux hostap tests it
+ * the same way), or a 3c589's window 2 station-address word at 0 (window 2
+ * selected through the command register at 0x0E, EtherLink III reference
+ * "Register Windows"; el3_init rewrites the address afterwards).
  * Keeps the setting that works, bit 3 set if both do.
  */
-#define PRISM_SWSUPPORT0    REG16(0x0A00C300u + 0x28)
-static void prism_bus_width(void)
+#define NET_REG16(r)    REG16(0x0A00C000u + NET_IO_BASE + (r))
+static void bus_width(const char *what, unsigned reg)
 {
     uint32_t a020 = PCMCIA_A020 & ~0x0Cu;
     uint16_t with, without;
 
     PCMCIA_A020 = a020 | PCMCIA_A020_CONFIG;
-    PRISM_SWSUPPORT0 = 0x8A32;
-    with = PRISM_SWSUPPORT0;
+    NET_REG16(reg) = 0x8A32;
+    with = NET_REG16(reg);
     PCMCIA_A020 = a020;
-    PRISM_SWSUPPORT0 = 0x8A32;
-    without = PRISM_SWSUPPORT0;
-    kprintf("cf: PRISM scratch reads %x with A020 bit 3, %x without\n", with, without);
+    NET_REG16(reg) = 0x8A32;
+    without = NET_REG16(reg);
+    kprintf("cf: %s scratch reads %x with A020 bit 3, %x without\n", what, with, without);
     if (with == 0x8A32 || without != 0x8A32)
         PCMCIA_A020 = a020 | PCMCIA_A020_CONFIG;
 }
@@ -567,8 +754,19 @@ static void configure_network(const struct cis *c)
     int index = c->io_index >= 0 ? c->io_index : c->index >= 0 ? c->index : 1;
     uint8_t cor = (uint8_t)(0x40u | (unsigned)index);
 
-    if (!c->cor || c->cor >= 0x800u) {
+    if (!c->cor || c->cor >= cor_limit()) {
         kprintf("cf: network card has no usable CONFIG (%x)\n", c->cor);
+        return;
+    }
+    if (socket == 1) {
+        /* Configured by Windows CE before a RAM boot: keep its COR. Else
+         * socket1_power_up left the configuration window mapped. */
+        if (socket1_ours) {
+            REG8(pcmcia_attr_base + c->cor) = cor;
+            delay_ms(10);
+        }
+        kprintf("cf: jacket network card %x:%x, COR %x at %x%s\n", c->manufacturer, c->product,
+                REG8(pcmcia_attr_base + c->cor), c->cor, socket1_ours ? "" : " as CE left it");
         return;
     }
     PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
@@ -578,8 +776,48 @@ static void configure_network(const struct cis *c)
     delay_ms(10);
     kprintf("cf: network card %x:%x, COR %x at %x (reads %x)\n", c->manufacturer,
             c->product, cor, c->cor, REG8(0x0A00D000u + c->cor));
-    if (c->manufacturer == 0xd601)
-        prism_bus_width();
+    if (c->manufacturer == 0xd601 || c->manufacturer == 0x0156) {
+        bus_width("HFA384x", 0x28);     /* PRISM and Hermes SWSUPPORT0 */
+    } else if (c->manufacturer == 0x0101) {
+        NET_REG16(0x0E) = 0x0802;           /* SelectWindow 2 */
+        bus_width("3c589", 0);
+    }
+}
+
+/* A serial card other than the Bluetooth one, normally a modem: configure
+ * the entry that decodes a COM port range (else the default, at 0x3F8),
+ * level interrupts, and give it to the modem driver (modem.c) as a network
+ * device. PC Card spec "Configuration Option Register". */
+static struct modem_config modem;
+const struct modem_config *pcmcia_modem_config(void) { return &modem; }
+
+static void serial_card(const struct cis *c)
+{
+    if (net_present())
+        return;                         /* already claimed */
+    int index = c->com_index >= 0 ? c->com_index : c->index >= 0 ? c->index : 1;
+    memset(&modem, 0, sizeof(modem));
+    modem.port = c->com_index >= 0 ? c->com_base : 0x3F8u;
+    modem.cor_address = c->cor;
+    modem.cor = (uint8_t)(0x40u | (unsigned)index);
+    memcpy(modem.identification, card_info.identification,
+           MIN(sizeof(modem.identification) - 1, sizeof(card_info.identification)));
+    if (c->cor && c->cor < cor_limit()) {
+        if (socket == 0) {
+            PCMCIA_A034 = (PCMCIA_A034 | 0x04u) & ~0x30u;
+            PCMCIA_A024 = PCMCIA_A024 & ~0x0Cu;
+            PCMCIA_A020 = (PCMCIA_A020 & ~0x04u) | PCMCIA_A020_CONFIG;
+        }
+        /* Socket 1: CE leaves its configuration window mapped (0x0B000520
+         * bit 3, like A020's). */
+        REG8(pcmcia_attr_base + c->cor) = modem.cor;
+        delay_ms(10);
+    }
+    kprintf("cf: serial card %x:%x in socket %u, COR %x at %x (reads %x), UART at %x\n",
+            c->manufacturer, c->product, socket, modem.cor, c->cor,
+            c->cor && c->cor < cor_limit() ? REG8(pcmcia_attr_base + c->cor) : 0, modem.port);
+    if (!net_insert_modem())
+        kputs("cf: serial card's UART didn't come up; socket reserved\n");
 }
 
 /* The tuple bytes of a card that isn't storage, for its CIS (the emulator
@@ -592,16 +830,57 @@ static void log_cis(void)
             kprintf(" %02x", CF_CIS(i));
         kputs("\n");
     }
+    struct cis c;
+    read_cis(&c, true);
+    kprintf("cf: card %x:%x function %d config %x \"%s\"\n", c.manufacturer, c.product,
+            c.function, c.cor, card_info.identification);
 }
 
 /* A card inserted after boot: power it, read its CIS, and bring up the
  * driver for it. Up to three power-ups: a card pushed in slowly may not
  * take the first. The emulator's cards ignore the COR. */
+/* A card Windows CE left up in the jacket (socket 1): its CIS and driver,
+ * without touching the socket. Only network and serial cards. */
+static void insert_jacket(void)
+{
+    struct cis c;
+
+    /* Taking over CE's live socket is for boot; a hot insertion is always
+     * powered and reset, even if a quick swap left the socket up. */
+    if (booted || !socket1_up()) {
+        socket1_ours = false;
+        if (!socket1_power_up()) {
+            socket1_dead = true;
+            return;
+        }
+        for (uint64_t t0 = time_us(); time_us() - t0 < 1000000u;) {
+            uint8_t first = CF_CIS(0);
+            if (first != 0x00 && first != 0xFF)
+                break;
+            delay_ms(10);
+        }
+    }
+    read_cis(&c, false);
+    capture_card(&c);           /* serial cards go to the modem driver here */
+    log_cis();
+    if (c.function == FUNCID_NETWORK) {
+        configure_network(&c);
+        if (!net_insert(c.manufacturer, c.product))
+            kputs("cf: jacket network card didn't come up\n");
+    } else if (c.function != 2) {
+        kprintf("cf: jacket card function %d not supported\n", c.function);
+    }
+}
+
 static void insert(void)
 {
     int kind = -1;              /* the FUNCID first read: retries follow it */
 
     inserts++;
+    if (socket == 1) {
+        insert_jacket();
+        return;
+    }
     for (int attempt = 0; attempt < 3; attempt++) {
         struct cis c;
 
@@ -614,7 +893,7 @@ static void insert(void)
                 break;
             delay_ms(10);
         }
-        read_cis(&c);
+        read_cis(&c, false);
         capture_card(&c);
         if (c.function != FUNCID_FIXED && c.function != kind)
             log_cis();
@@ -630,13 +909,10 @@ static void insert(void)
             kputs("cf: network card didn't come up, powering up again\n");
             continue;
         }
-        /* Serial cards remain reserved pending a verified Bluetooth match.
-         * Avoid repeated resets and any ATA/network register probing. */
-        if (kind == 2) {
-            kprintf("cf: serial card %x:%x; UART/BCSP transport pending\n",
-                    c.manufacturer, c.product);
+        /* Serial cards went to Bluetooth or the modem driver in
+         * capture_card. Avoid repeated resets and any ATA/network probing. */
+        if (kind == 2)
             return;
-        }
         /* Only storage gets ATA, whose waits stall the whole system; a card
          * whose CIS reads as nothing gets one try, the last. */
         if (kind != FUNCID_FIXED && (c.function != -1 || attempt < 2))
@@ -656,6 +932,13 @@ static void probe(void)
     probes++;
     socket_full = card_inserted();
     if (!socket_full) {
+        /* A card pulled from the jacket: cut its supply (control bits 0, 1
+         * and 3, set by socket1_power_up), so the next one is powered and
+         * reset afresh rather than taken over. */
+        if ((PCMCIA1_BUS & PCMCIA1_BUS_ON) && (PCMCIA1_CTRL & PCMCIA1_CTRL_UP)) {
+            PCMCIA1_CTRL &= ~PCMCIA1_CTRL_UP;
+            kputs("cf: socket 1 card powered off\n");
+        }
         if (card_info.kind != BT_CARD_ABSENT)
             forget_card();
         if (net_present()) {
@@ -667,9 +950,11 @@ static void probe(void)
         insert();
     } else if (!net_present()) {
         struct cis c;
-        read_cis(&c);
+        read_cis(&c, false);
         capture_card(&c);
-        info.present = identify();
+        /* ATA is at the CF socket's ports only; a jacket card is handled
+         * by insert_jacket. */
+        info.present = socket == 0 && identify();
     }
     if (info.present || was)
         info.generation++;
@@ -679,7 +964,8 @@ static void probe(void)
         removals++;
         kputs("cf: card removed\n");
     }
-    else if (socket_full && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
+    else if (socket == 0 && socket_full && !net_present() && card_info.kind != BT_CARD_SERIAL &&
+             card_info.kind != BT_CARD_BLUETOOTH)
         kprintf("cf: card not ready (status %x)\n", CF_ATA(ATA_STATUS));
 }
 
@@ -716,10 +1002,11 @@ void cf_debug(uint32_t out[8])
 
 void cf_init(void)
 {
-    if (ram_boot && !net_present())
+    if (ram_boot)
         note_boot_state();
     if (!net_present() && card_inserted()) {
-        PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
+        if (socket == 0)
+            PCMCIA_BRIDGE = PCMCIA_BRIDGE | PCMCIA_BRIDGE_EN;
         probe();
         if (!info.present && !net_present() && card_info.kind != BT_CARD_SERIAL && card_info.kind != BT_CARD_BLUETOOTH)
             insert(); /* CE may have handed over an unpowered socket. */

@@ -75,6 +75,30 @@
 #define DNS_TABLE_SIZE              4
 #define DNS_MAX_SERVERS             2
 
+/* PPP over serial for dial-up modems (servers/net/modem.c): PAP and
+ * CHAP-MD5 with lwIP's bundled MD5, IPCP with the peer's DNS servers. */
+#define PPP_SUPPORT                 1
+#define PPPOS_SUPPORT               1
+#define PPP_IPV4_SUPPORT            1
+#define PPP_IPV6_SUPPORT            0
+#define PAP_SUPPORT                 1
+#define CHAP_SUPPORT                1
+#define MSCHAP_SUPPORT              0
+#define EAP_SUPPORT                 0
+#define CCP_SUPPORT                 0
+#define MPPE_SUPPORT                0
+#define VJ_SUPPORT                  0
+#define LQR_SUPPORT                 0
+#define PPP_SERVER                  0
+#define PPP_NOTIFY_PHASE            0
+#define LWIP_PPP_API                0
+#define PPP_INPROC_IRQ_SAFE         0
+#define LWIP_INCLUDED_POLARSSL_MD5  1
+#define MEMP_NUM_PPP_PCB            1
+#define MEMP_NUM_PPPOS_INTERFACES   1
+#define PRINTPKT_SUPPORT            0
+#define PPP_DEBUG                   LWIP_DBG_OFF
+
 #define LWIP_STATS                  0
 #define LWIP_DEBUG                  0
 

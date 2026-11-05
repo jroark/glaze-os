@@ -1,6 +1,14 @@
 /* Z-Com XI-825 / PRISM station firmware interface.
  * Register/RID/descriptor definitions: Linux hostap HFA384x and the local
  * be300 docs/XI825.md and src/hw/xi825.c. No embedded firmware download.
+ *
+ * Built a second time as hermes.ko (kernel/drivers/hermes.c defines
+ * XI825_HERMES) for Lucent/Agere Hermes cards (WaveLAN/IEEE, Orinoco):
+ * the same HFA384x-family host interface (registers, BAP, FIDs, RIDs,
+ * TX/RX descriptors). Where Agere firmware differs, the XI825_HERMES
+ * branches follow Linux orinoco (hermes_rid.h, hw.c, scan.c): scan results
+ * as agere_scan_apinfo, the current TX rate in Mb/s, and WEP through the
+ * Agere RIDs.
  * IRQ and syscall paths run with interrupts disabled on this single CPU;
  * command completions/reclaim are polled and are never ACKed by the IRQ path.
  */
@@ -9,16 +17,23 @@
 #include "../hw.h"
 #include "../drivers.h"
 #include "../mips.h"
-#define XR(r) REG16(0x0A00C300u + (r))
+#define XR(r) REG16(pcmcia_io_base + 0x300u + (r))   /* hw.h: the socket holding the card */
 #define xread(r) XR(r)
 #define xwrite(r, v) (XR(r) = (v))
-#define xread8(r) REG8(0x0A00C300u + (r))
-#define xwrite8(r, v) (REG8(0x0A00C300u + (r)) = (v))
-#define xcor(v) (REG8(0x0A00D3E0u) = (v))
+#define xread8(r) REG8(pcmcia_io_base + 0x300u + (r))
+#define xwrite8(r, v) (REG8(pcmcia_io_base + 0x300u + (r)) = (v))
+#define xcor(v) (REG8(pcmcia_attr_base + 0x3E0u) = (v))
 #define xenable() (KJ_SRC_PCMCIA |= KJ_SRC_ENABLE)
 #define xdisable() (KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE)
 #endif
 #include <glaze/wifi.h>
+#ifdef XI825_HERMES
+#define NAME "hermes"
+#define KIND GZ_NET_HERMES
+#else
+#define NAME "xi825"
+#define KIND GZ_NET_XI825
+#endif
 
 enum { CMD=0, PARAM=2, STATUS=8, INFOFID=0x10, SELECT=0x18,
        OFFSET=0x1c, RXFID=0x20, ALLOCFID=0x22, EVSTAT=0x30,
@@ -119,6 +134,7 @@ static int scalar(uint16_t rid, uint16_t value)
     uint8_t b[2]; put16(b, value); return write_rid(rid, b, 2);
 }
 
+#ifndef XI825_HERMES
 static void scan_result(const uint8_t *b, unsigned len)
 {
     if (len < 4 || (len - 4) % 62) { wifi.error = GZ_EIO; wifi.scanning = 0; return; }
@@ -139,7 +155,7 @@ static void scan_result(const uint8_t *b, unsigned len)
         ap->rate = get16(p + 60);
     }
     wifi.scanning = 0;
-    kprintf("xi825: scan found %u networks\n", wifi.count);
+    kprintf(NAME ": scan found %u networks\n", wifi.count);
     notify();
 }
 /* Host scan results (info 0xF103, station firmware 1.3.1 and later): the
@@ -150,7 +166,7 @@ static void hostscan_result(const uint8_t *b, unsigned len)
 {
     unsigned size = len >= 4 ? get16(b) : 0;
     if (size != 64) {
-        kprintf("xi825: host scan record size %u\n", size);
+        kprintf(NAME ": host scan record size %u\n", size);
         wifi.error = GZ_EIO; wifi.scanning = 0; notify(); return;
     }
     wifi.count = 0;
@@ -170,9 +186,46 @@ static void hostscan_result(const uint8_t *b, unsigned len)
         ap->rate = get16(p + 60);
     }
     wifi.scanning = 0;
-    kprintf("xi825: host scan found %u networks\n", wifi.count);
+    kprintf(NAME ": host scan found %u networks\n", wifi.count);
     notify();
 }
+#endif
+#ifdef XI825_HERMES
+/* Agere scan results (info 0xF101): no header, then 50-byte records:
+ * channel, noise, level, BSSID, beacon interval, capabilities, SSID
+ * (length + 32 bytes), and no rates. Read from a real Orinoco Gold (8.72.1,
+ * 200 bytes for 4 networks) and WaveLAN Gold (6.4.1, 350 bytes for 7);
+ * Linux orinoco's agere_scan_apinfo. The firmware repeats a network it
+ * heard more than once, so records with a BSSID already listed are skipped. */
+static void agere_scan_result(const uint8_t *b, unsigned len)
+{
+    wifi.count = 0;
+    for (unsigned off = 0; off + 50 <= len && wifi.count < WIFI_AP_MAX; off += 50) {
+        const uint8_t *p = b + off;
+        unsigned channel = get16(p), n = get16(p + 16);
+        if (channel < 1 || channel > 14 || n < 1 || n > WIFI_SSID_MAX)
+            continue;
+        bool seen = false;
+        for (unsigned i = 0; i < wifi.count && !seen; i++)
+            seen = !memcmp(wifi.aps[i].bssid, p + 6, 6);
+        if (seen)
+            continue;
+        struct wifi_ap *ap = &wifi.aps[wifi.count++];
+        memset(ap, 0, sizeof(*ap));
+        ap->ssid_len = n;
+        memcpy(ap->ssid, p + 18, n);
+        memcpy(ap->bssid, p + 6, 6);
+        ap->channel = channel;
+        ap->noise = get16(p + 2);
+        ap->signal = get16(p + 4);
+        ap->privacy = (get16(p + 14) & 0x10) != 0;
+        ap->rate = 22;                          /* 802.11b: 11 Mb/s, in 500 kb/s */
+    }
+    wifi.scanning = 0;
+    kprintf(NAME ": scan found %u networks\n", wifi.count);
+    notify();
+}
+#endif
 static void information(void)
 {
     uint16_t fid = xread(INFOFID);
@@ -183,9 +236,15 @@ static void information(void)
     unsigned len = (words - 1) * 2;
     if (bap(fid, 4, scratch, len, false)) return;
     if (get16(hdr + 2) != 0xf200)
-        kprintf("xi825: info %x, %u bytes\n", get16(hdr + 2), len);
+        kprintf(NAME ": info %x, %u bytes\n", get16(hdr + 2), len);
+#ifdef XI825_HERMES
+    if (get16(hdr + 2) == 0xf101) agere_scan_result(scratch, len);
+#else
     if (get16(hdr + 2) == 0xf101) scan_result(scratch, len);
+#endif
+#ifndef XI825_HERMES
     else if (get16(hdr + 2) == 0xf103) hostscan_result(scratch, len);
+#endif
     else if (get16(hdr + 2) == 0xf200 && len >= 2) {
         unsigned state = get16(scratch);
         if (wifi.state == WIFI_DISCONNECTED || wifi.state == WIFI_FAILED) return;
@@ -263,16 +322,20 @@ void xi825_init(void)
         uint8_t id[8];
         if (!read_rid(0xfd20, id, sizeof(id))) {
             sta_version = (uint32_t)get16(id + 4) << 16 | get16(id + 6) << 8 | get16(id + 2);
-            kprintf("xi825: station firmware %u.%u.%u (id %x)\n", get16(id + 4), get16(id + 6),
+            kprintf(NAME ": station firmware %u.%u.%u (id %x)\n", get16(id + 4), get16(id + 6),
                     get16(id + 2), get16(id));
         }
     }
     if (!rv) rv = scalar(0xfc00, 1); /* infrastructure */
+#ifdef XI825_HERMES
+    if (!rv) rv = scalar(0xfc20, 0); /* WEP off (CNFWEPENABLED_AGERE) */
+#else
     if (!rv) rv = scalar(0xfc28, 0); /* open */
+#endif
     if (!rv) rv = command(0x0a, sizeof(scratch));
     if (!rv) rv = wait_reg(EVSTAT, ALLOC, ALLOC);
     if (rv) {
-        kprintf("xi825: initialization failed %d (CMD %x EVSTAT %x STATUS %x)\n", rv,
+        kprintf(NAME ": initialization failed %d (CMD %x EVSTAT %x STATUS %x)\n", rv,
                 xread(CMD), xread(EVSTAT), xread(STATUS));
         return;
     }
@@ -280,12 +343,12 @@ void xi825_init(void)
     tx_ready = true;
     xwrite(EVACK, ALLOC);
     present = true;
-    nic.present = 1; nic.kind = GZ_NET_XI825;
+    nic.present = 1; nic.kind = KIND;
     wifi.state = WIFI_DISCONNECTED;
     wifi.capabilities = WIFI_CAP(WIFI_OPEN) | WIFI_CAP(WIFI_WEP);
     xwrite(INTEN, RX | INFO | INFDROP);
     xenable();
-    kprintf("xi825: MAC %02x:%02x:%02x:%02x:%02x:%02x (disconnected)\n",
+    kprintf(NAME ": MAC %02x:%02x:%02x:%02x:%02x:%02x (disconnected)\n",
             nic.mac[0], nic.mac[1], nic.mac[2], nic.mac[3], nic.mac[4], nic.mac[5]);
 }
 bool xi825_present(void) { return present; }
@@ -386,7 +449,11 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
             wifi.current.signal = get16(b + 2); wifi.current.noise = get16(b + 4);
             if ((rv = read_rid(0xfd44, b, 2))) return rv;
             unsigned rate = get16(b);
+#ifdef XI825_HERMES
+            wifi.current.rate = rate == 11 ? 22 : rate == 6 ? 11 : rate == 2 ? 4 : rate == 1 ? 2 : 0;
+#else
             wifi.current.rate = rate == 8 ? 22 : rate == 4 ? 11 : rate == 2 ? 4 : rate == 1 ? 2 : 0;
+#endif
             if ((rv = read_rid(0xfdc1, b, 2))) return rv;
             wifi.current.channel = get16(b);
         }
@@ -402,9 +469,19 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
             put16(ssid, WIFI_SSID_MAX);
             for (unsigned i = 0; i < WIFI_SSID_MAX; i++)
                 ssid[2 + i] = (uint8_t)(0xA5 ^ i);
+#ifdef XI825_HERMES
+            /* Agere firmware before 8.10 has no host scan (Linux orinoco
+             * hw.c, has_hostscan): its scan inquiry lists only what it saw
+             * looking for the desired SSID, so it looks for any (length 0),
+             * as Linux leaves it. A real WaveLAN Gold (6.4.1) returned no
+             * networks for the made-up SSID. It may then join an open
+             * network by itself. */
+            if (sta_version < 0x080a00)
+                memset(ssid, 0, sizeof(ssid));
+#endif
             if (!(rv = write_rid(0xfc02, ssid, sizeof(ssid))) && !(rv = command(1, 0)))
                 port_on = true;
-            if (rv) kprintf("xi825: enabling the port to scan failed %d\n", rv);
+            if (rv) kprintf(NAME ": enabling the port to scan failed %d\n", rv);
         }
         wifi.error = 0; wifi.scanning = 1; scan_started = time_us();
         /* Firmware 1.3.1 and later scans all channels on a host scan
@@ -413,16 +490,25 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
          * matching the desired SSID. Older firmware, or one refusing the
          * RID, gets the inquiry. */
         rv = GZ_ENOENT;
+#ifdef XI825_HERMES
+        if (sta_version >= 0x080a00) {      /* host scan: firmware 8.10 on */
+            uint8_t any[34] = {0};
+            rv = write_rid(0xfcb2, any, sizeof(any));
+            if (rv) kprintf(NAME ": scan SSID refused %d\n", rv);
+            rv = GZ_ENOENT;
+        }
+#else
         if (sta_version >= 0x010301) {
             uint8_t req[38] = {0};
             put16(req, 0x3fff);
             put16(req + 2, 1);
             rv = write_rid(0xfce5, req, sizeof(req));
-            kprintf("xi825: host scan requested %d\n", rv);
+            kprintf(NAME ": host scan requested %d\n", rv);
         }
+#endif
         if (rv) {
             rv = command(0x11, 0xf101);
-            kprintf("xi825: scan requested %d\n", rv);
+            kprintf(NAME ": scan requested %d\n", rv);
         }
         if (rv) { wifi.scanning = 0; wifi.error = rv; }
         return rv;
@@ -450,14 +536,38 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
     /* Drain stale association/RX events before beginning another attempt. */
     xi825_irq();
     /* Erase every firmware key when leaving or replacing a network. */
+#ifdef XI825_HERMES
+    /* Agere: four { length, 14 bytes } keys in CNFWEPKEYS_AGERE (0xFC25),
+     * WEP enable 0xFC20, authentication 0xFC21 (orinoco hermes_rid.h). */
+    uint8_t keys[64] = {0};
+    if ((rv = write_rid(0xfc25, keys, sizeof(keys))) || (rv = scalar(0xfc20, 0)) ||
+        (rv = scalar(0xfc21, 1))) return rv;
+#else
     uint8_t zero[14] = {0};
     for (unsigned i = 0; i < 4; i++) {
         rv = write_rid(0xfc24 + i, zero, sizeof(zero));
         if (rv) return rv;
     }
     if ((rv = scalar(0xfc28, 0)) || (rv = scalar(0xfc2a, 1))) return rv;
+#endif
     wifi.security = WIFI_OPEN;
     if (op == WIFI_DISCONNECT) { notify(); return 0; }
+#ifdef XI825_HERMES
+    if (config.security == WIFI_WEP) {
+        /* __orinoco_hw_setup_wepkeys and __orinoco_hw_setup_enc, Agere:
+         * the key table, the TX key (CNFTXKEY_AGERE 0xFCB1), shared or
+         * open authentication, then WEP enabled. */
+        put16(keys + 16 * config.key_index, config.key_len);
+        memcpy(keys + 16 * config.key_index + 2, config.key, config.key_len);
+        rv = write_rid(0xfc25, keys, sizeof(keys));
+        memset(keys, 0, sizeof(keys)); memset(config.key, 0, sizeof(config.key));
+        if (!rv) rv = scalar(0xfcb1, config.key_index);
+        if (!rv) rv = scalar(0xfc21, config.shared_auth ? 2 : 1);
+        if (!rv) rv = scalar(0xfc20, 1);
+        if (rv) return rv;
+        wifi.security = WIFI_WEP;
+    }
+#else
     if (config.security == WIFI_WEP) {
         /* PRISM requires all four default-key RIDs to have the same size,
          * including unused slots (Linux hostap_set_encryption). */
@@ -475,6 +585,7 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
         if (rv) return rv;
         wifi.security = WIFI_WEP;
     }
+#endif
     uint8_t ssid[34] = {0};
     put16(ssid, req.ssid_len); memcpy(ssid + 2, req.ssid, req.ssid_len);
     if (!(rv = write_rid(0xfc02, ssid, sizeof(ssid)))) rv = command(1, 0);

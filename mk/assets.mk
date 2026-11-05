@@ -20,7 +20,7 @@ endif
 
 # Optional card drivers are independent relocatable kernel images. Only the
 # CIS-selected image is read into RAM; the dispatcher stays in the kernel.
-DRIVER_NAMES := ne2000 xi825 wl54cf btuart
+DRIVER_NAMES := ne2000 xi825 wl54cf btuart 3c589 hermes modem
 DRIVER_FILES := $(foreach d,$(DRIVER_NAMES),$(OUT)/drivers/$(d).ko)
 $(OUT)/kmod/%.o: kernel/modules/%.c
 	@mkdir -p $(dir $@)
@@ -29,7 +29,8 @@ $(OUT)/drivers/%.ko: $(OUT)/kmod/%.o $(OUT)/kernel/drivers/%.o
 	@mkdir -p $(dir $@)
 	$(LD) -m elf32ltsmip -r -o $@ $^
 	$(OBJCOPY) --strip-debug --remove-section=.reginfo --remove-section=.MIPS.abiflags \
-	    --remove-section=.pdr --remove-section=.gnu.attributes $@
+	    --remove-section=.pdr --remove-section=.gnu.attributes --remove-section=.comment \
+	    --strip-unneeded --keep-symbol=glaze_driver $@
 
 $(OUT)/services.bin: config/services.json tools/mkservices.py
 	@mkdir -p $(dir $@)

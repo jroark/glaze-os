@@ -1,7 +1,9 @@
 # Wi-Fi and network security
 
-Glaze provides Settings > Wi-Fi for the Z-Com XI-825 (PRISM) and AmbiCom
-WL54-CF (Marvell CF8385). Select an open network to join, or a secured
+Glaze provides Settings > Wi-Fi for the Z-Com XI-825 (PRISM), AmbiCom
+WL54-CF (Marvell CF8385), and Lucent/Agere Hermes PC Cards (WaveLAN/IEEE,
+Orinoco) in a PCMCIA jacket ([PCCARDS.md](PCCARDS.md)), the last so far
+only in the emulator. Select an open network to join, or a secured
 network to enter its key. Passwords are masked; Show Password reveals them.
 Done closes the keyboard and exposes security, WEP options, and Join.
 
@@ -9,6 +11,7 @@ Done closes the keyboard and exposes security, WEP options, and Join.
 | --- | --- | --- | --- | --- |
 | XI-825 | yes | yes | unavailable | unavailable |
 | WL54-CF | yes | yes | yes | yes |
+| Hermes (Orinoco) | yes | yes | unavailable | unavailable |
 
 The PRISM station host interface requires host data-cipher processing for
 WPA/TKIP and CCMP; this version uses firmware data encryption only. Settings

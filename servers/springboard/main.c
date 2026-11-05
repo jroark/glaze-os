@@ -487,7 +487,9 @@ static void show_card_details(void)
                                : st.state == NET_UP_STATIC ? "Connected (static)"
                                : st.state == NET_CONFIGURING ? "Configuring address..." : "Not connected";
             strlcpy(line[0], network_kind == GZ_NET_XI825 ? "XI-825 Wi-Fi"
-                             : network_kind == GZ_NET_WL54CF ? "WL54-CF Wi-Fi" : "NE2000 Ethernet",
+                             : network_kind == GZ_NET_WL54CF ? "WL54-CF Wi-Fi"
+                             : network_kind == GZ_NET_HERMES ? "Orinoco Wi-Fi"
+                             : network_kind == GZ_NET_3C589 ? "3Com Ethernet" : "NE2000 Ethernet",
                     sizeof(line[0]));
             strlcpy(line[1], status, sizeof(line[1]));
             snprintf(line[2], sizeof(line[2]), "MAC: %02X:%02X:%02X:%02X:%02X:%02X",

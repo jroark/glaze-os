@@ -43,7 +43,8 @@ NET_INC := -Ithird_party/lwip/src/include -Iservers/net -Ithird_party/hostap/src
     -Ithird_party/hostap/src/utils -include servers/net/wpa/config.h -DGLAZE_HOSTAP
 NETSTACK_SRCS := $(wildcard third_party/lwip/src/core/*.c third_party/lwip/src/core/ipv4/*.c \
     third_party/lwip/src/api/*.c) \
-    third_party/lwip/src/netif/ethernet.c
+    third_party/lwip/src/netif/ethernet.c \
+    $(wildcard third_party/lwip/src/netif/ppp/*.c third_party/lwip/src/netif/ppp/polarssl/*.c)
 HOSTAP_SRCS := $(shell find third_party/hostap/src -name '*.c')
 NETSTACK_SRCS += $(HOSTAP_SRCS)
 $(patsubst %.c,$(OUT)/%.o,$(HOSTAP_SRCS)): TP_INC += $(NET_INC)

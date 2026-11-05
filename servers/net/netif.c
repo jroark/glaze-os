@@ -33,6 +33,7 @@
 #include "netif/ethernet.h"
 #include "server.h"
 #include "wifi_supplicant.h"
+#include "modem.h"
 #include "utils/includes.h"
 #include "utils/common.h"
 #include "crypto/sha256.h"
@@ -47,6 +48,7 @@ static uint32_t dhcp_started, card_checked;
 static int bound_port;
 static bool added;          /* netif_add has run (once, for the first card) */
 static bool wireless, associated;
+static bool dialup;         /* a modem card: PPP, no Ethernet interface (modem.c) */
 static struct wifi_preference saved;
 static int auth_error, auth_failure;
 static void seed_from_card(void);
@@ -135,6 +137,14 @@ static void tcpip_ready(void *arg)
 /* Brings the interface up on the card the kernel reports in info. */
 static int attach(void)
 {
+    dialup = info.kind == GZ_NET_MODEM;
+    if (dialup) {
+        wireless = associated = false;
+        state = NET_DISCONNECTED;
+        gz_net_bind(bound_port);
+        modem_attach();
+        return 0;
+    }
     LOCK_TCPIP_CORE();
     if (!added) {
         if (!netif_add(&nif, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4, NULL, nif_init,
@@ -148,7 +158,7 @@ static int attach(void)
     } else {
         memcpy(nif.hwaddr, info.mac, ETH_HWADDR_LEN);
     }
-    wireless = info.kind == GZ_NET_XI825 || info.kind == GZ_NET_WL54CF;
+    wireless = info.kind == GZ_NET_XI825 || info.kind == GZ_NET_WL54CF || info.kind == GZ_NET_HERMES;
     associated = false;
     netif_set_up(&nif);
     if (info.kind == GZ_NET_USB) {
@@ -187,6 +197,13 @@ static int attach(void)
 /* The card was pulled: no lease to release, just forget the link. */
 static void detach(void)
 {
+    if (dialup) {
+        modem_detach();
+        dialup = false;
+        state = NET_NO_CARD;
+        net_log("net: modem removed\n");
+        return;
+    }
     wifi_supplicant_stop();
     auth_error = auth_failure = 0;
     LOCK_TCPIP_CORE();
@@ -448,6 +465,10 @@ void net_if_poll(void)
     }
     if (state == NET_NO_CARD)
         return;
+    if (dialup) {
+        modem_poll();
+        return;
+    }
     wifi_supplicant_poll();
     if (auth_failure) {
         auth_error = auth_failure; auth_failure = 0;
@@ -483,6 +504,11 @@ void net_if_poll(void)
     }
 }
 
+void net_if_set_state(int s)
+{
+    state = s;
+}
+
 int net_if_state(void)
 {
     return state;
@@ -498,6 +524,10 @@ void net_if_status(struct net_status *st)
     st->rx_frames = info.rx_frames;
     st->tx_frames = info.tx_frames;
     st->rx_dropped = info.rx_dropped;
+    if (dialup) {
+        modem_fill_status(st);
+        return;
+    }
     if (state == NET_UP || state == NET_UP_STATIC) {
         LOCK_TCPIP_CORE();
         st->addr = ip4_addr_get_u32(netif_ip4_addr(&nif));

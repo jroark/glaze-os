@@ -9,6 +9,7 @@
 #include <glaze/fs.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
+#include <glaze/dialup.h>
 #include <glaze/notify.h>
 #include <glaze/ntp.h>
 #include <glaze/pkg.h>
@@ -991,8 +992,29 @@ static void test_net(void)
         CHECK(net_socket(NET_TCP) == GZ_ENETDOWN, "net down without a card");
         return;
     }
+    if (st.kind == GZ_NET_MODEM) {
+        /* be300 --modem 127.0.0.1:5555 with tests/ppp_peer.py (PAP, glaze/secret). */
+        struct dialup_status ds;
+        CHECK(net_dialup_status(&ds) == 0 && (ds.state == DIALUP_IDLE || ds.state == DIALUP_FAILED),
+              "dialup idle with a modem");
+        printf("ktest: dialup modem \"%s\"\n", ds.modem);
+        struct dialup_config bad = { .version = DIALUP_VERSION };
+        strlcpy(bad.number, "555-1212x", sizeof(bad.number));
+        CHECK(net_dialup_connect(&bad) == GZ_EINVAL, "dialup rejects a bad number");
+        struct dialup_config cfg = { .version = DIALUP_VERSION };
+        strlcpy(cfg.number, "5551212", sizeof(cfg.number));
+        strlcpy(cfg.user, "glaze", sizeof(cfg.user));
+        strlcpy(cfg.password, "secret", sizeof(cfg.password));
+        CHECK(net_dialup_connect(&cfg) == 0, "dialup dials");
+        CHECK(net_wait_up(60000) == 0, "dialup PPP up");
+        CHECK(net_dialup_status(&ds) == 0 && ds.state == DIALUP_CONNECTED && ds.addr == NET_IP(10, 64, 0, 2) &&
+              ds.dns == NET_IP(10, 64, 0, 1) && ds.connect_speed == 57600, "dialup address and DNS from the peer");
+        struct dialup_config saved;
+        CHECK(net_dialup_config(&saved) == 0 && !strcmp(saved.number, "5551212") && !saved.password[0] &&
+              saved.reconnect, "dialup saved without exposing the password");
+    }
     CHECK(net_wait_up(15000) == 0 && net_status(&st) == 0 && st.addr, "net address");
-    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF) {
+    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF || st.kind == GZ_NET_HERMES) {
         struct wifi_status wireless;
         CHECK(net_wifi_status(&wireless) == 0 && wireless.state == WIFI_CONNECTED,
               "wifi authenticated before DHCP");
@@ -1102,9 +1124,9 @@ static void test_net(void)
         struct wifi_preference choice;
         CHECK(pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && !choice.reconnect,
               "wifi explicit disconnect disables reconnect");
-        /* The XI-825 starts associating and times out; the WL54-CF scans for
-         * the network first and refuses one that isn't there. */
-        if (card == GZ_NET_XI825) {
+        /* The XI-825 and Hermes start associating and time out; the WL54-CF
+         * scans for the network first and refuses one that isn't there. */
+        if (card == GZ_NET_XI825 || card == GZ_NET_HERMES) {
             CHECK(net_wifi_connect("missing", 7) == 0, "wifi unavailable network starts");
             gz_sleep_ms(11000);
             CHECK(net_wifi_status(&ws) == 0 && ws.state == WIFI_FAILED && ws.error == GZ_ETIMEDOUT,
@@ -1131,7 +1153,7 @@ static void test_net(void)
     } else {
         printf("ktest: INFO ntp %s: %s\n", NTP_SERVER, net_strerror(rv));
     }
-    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF) {
+    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF || st.kind == GZ_NET_HERMES) {
         struct wifi_preference choice;
         if (pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && choice.version == 2) {
             CHECK(net_wifi_disconnect() == 0, "wifi disconnect");
