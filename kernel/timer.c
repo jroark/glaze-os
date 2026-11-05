@@ -188,6 +188,7 @@ void timer_irq(void)
     usb_poll();
     net_irq();
     bt_poll();
+    modem_poll();
     audio_irq();
     buzzer_poll();
     battery_tick();

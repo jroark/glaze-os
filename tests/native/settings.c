@@ -237,6 +237,18 @@ int net_status(struct net_status *st)
     st->state = test_net_state;
     return 0;
 }
+static struct net_dial_status test_dial;
+static struct net_dial_config test_dial_saved, test_dial_sent;
+static int test_dials, test_hangups;
+int net_dial(const struct net_dial_config *c)
+{
+    test_dials++; test_dial_sent = *c;
+    test_dial.state = NET_DIAL_STARTING;
+    return 0;
+}
+int net_hangup(void) { test_hangups++; test_dial.state = NET_DIAL_HANGING_UP; return 0; }
+int net_dial_status(struct net_dial_status *st) { *st = test_dial; return 0; }
+int net_dial_config(struct net_dial_config *c) { *c = test_dial_saved; return 0; }
 static struct wifi_status test_wifi;
 static int test_wifi_error = GZ_ENOENT;
 static int test_wifi_connects, test_wifi_disconnects, test_wifi_scans;
@@ -647,6 +659,55 @@ static void reboot_tests(void)
     require(gfx_rect_empty(hit_rect(R_REBOOT_CE)), "NAND reboot row returned after scrolling");
 }
 
+/* Settings > Dial-up with a CF modem: the row, editing, Connect keeping the
+ * saved password, the status line and Hang Up. */
+static void dialup_tests(void)
+{
+    test_net_kind = GZ_NET_MODEM; test_net_state = NET_DISCONNECTED;
+    memset(&test_dial, 0, sizeof(test_dial));
+    memset(&test_dial_saved, 0, sizeof(test_dial_saved));
+    strcpy(test_dial_saved.number, "5550100"); strcpy(test_dial_saved.user, "me");
+    test_dial_saved.has_password = 1;
+    view = V_ROOT; load(); redraw(); compare_full();
+    require(modem_available && !gfx_rect_empty(hit_rect(R_DIALUP)), "modem must show the Dial-up row");
+    host_write_bmp("../out/host/settings-dialup-root.bmp", &ui.surf);
+    activate(R_DIALUP);
+    require(view == V_DIALUP, "Dial-up page");
+    redraw(); compare_full();
+    require(!strcmp(dial_config.number, "5550100") && dial_config.has_password, "saved dial settings loaded");
+    host_write_bmp("../out/host/settings-dialup.bmp", &ui.surf);
+    activate(R_DIAL_FIELD0 + 1);
+    require(view == V_DIALUP_EDIT && !strcmp(dial_text, "me"), "edit user name");
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-dialup-edit.bmp", &ui.surf);
+    strcpy(dial_text, "glaze"); activate(R_DIAL_DONE);
+    require(view == V_DIALUP && !strcmp(dial_config.user, "glaze"), "edited user name kept");
+    activate(R_DIAL_PULSE);
+    require(dial_config.pulse, "pulse dialing toggle");
+    redraw(); activate(R_DIAL_TOGGLE);
+    require(test_dials == 1 && test_dial_sent.keep_password && !strcmp(test_dial_sent.user, "glaze") &&
+            test_dial_sent.pulse && !test_dial_sent.password[0], "connect keeps the saved password");
+    test_dial.state = NET_DIAL_UP; test_dial.rate = 52000; strcpy(test_dial.modem, "L27-01");
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-dialup-online.bmp", &ui.surf);
+    require(gfx_rect_empty(hit_rect(R_DIAL_FIELD0)), "fields locked while online");
+    activate(R_DIAL_TOGGLE);
+    require(test_hangups == 1, "hang up");
+    test_dial.state = NET_DIAL_IDLE; test_dial.error = NET_DIAL_E_NO_DIALTONE;
+    redraw(); compare_full();
+    host_write_bmp("../out/host/settings-dialup-error.bmp", &ui.surf);
+    /* A new password replaces the saved one. */
+    activate(R_DIAL_FIELD0 + 2);
+    require(view == V_DIALUP_EDIT, "edit password");
+    strcpy(dial_text, "secret"); activate(R_DIAL_DONE);
+    activate(R_DIAL_TOGGLE);
+    require(test_dials == 2 && !test_dial_sent.keep_password && !strcmp(test_dial_sent.password, "secret"),
+            "a typed password is sent");
+    activate(R_BACK);
+    require(view == V_ROOT && !dial_config.password[0], "leaving Dial-up forgets the typed password");
+    test_net_kind = test_net_state = 0; load();
+}
+
 int main(void)
 {
 
@@ -843,6 +904,7 @@ int main(void)
     require(view == V_ROOT, "Wi-Fi back navigation");
     test_wifi_error = GZ_ENOENT;
     wifi_available = false;
+    dialup_tests();
     calibration_tests();
     icon_tests();
     display_tests();

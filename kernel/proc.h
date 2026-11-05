@@ -169,6 +169,7 @@ struct proc {
     uint64_t cpu_us;                /* accumulated scheduled time, all threads */
     bool frozen;                    /* GZ_PROC_SUSPENDED: runnable threads stay off the run queue */
     uint32_t bt_generation;
+    uint32_t modem_generation;      /* PROC_NET is bound to one modem card too */
     uint32_t net_generation;        /* PROC_NET is bound to one socket generation */
     int child_port;                 /* own port told GZ_NOTIFY_CHILD on a child's exit, or 0 */
 };

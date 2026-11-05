@@ -20,7 +20,7 @@ endif
 
 # Optional card drivers are independent relocatable kernel images. Only the
 # CIS-selected image is read into RAM; the dispatcher stays in the kernel.
-DRIVER_NAMES := ne2000 xi825 wl54cf btuart
+DRIVER_NAMES := ne2000 xi825 wl54cf cfuart
 DRIVER_FILES := $(foreach d,$(DRIVER_NAMES),$(OUT)/drivers/$(d).ko)
 $(OUT)/kmod/%.o: kernel/modules/%.c
 	@mkdir -p $(dir $@)

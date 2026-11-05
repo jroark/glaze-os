@@ -44,6 +44,9 @@ void kprintf(const char *format, ...) { (void)format; }
 void kputs(const char *s) { (void)s; }
 void bt_insert(void) { bt_inserts++; }
 void bt_removed(void) { bt_removals++; }
+static uint32_t modem_cor; static unsigned modem_index, modem_inserts, modem_removals;
+void modem_insert(uint32_t cor, unsigned index) { modem_cor = cor; modem_index = index; modem_inserts++; }
+void modem_removed(void) { modem_removals++; }
 bool net_present(void) { return false; }
 bool net_insert(unsigned m, unsigned p) { (void)m; (void)p; return false; }
 void net_removed(void) {}
@@ -134,9 +137,53 @@ static void bluetooth_card_tests(void)
     memset(&card_info, 0, sizeof(card_info)); card_info.version = BT_CIS_VERSION;
     socket_full = false;
 }
+/* Rockwell RC56LD-PCC, CF56R-BCT-DX, captured on a BE-300 2026-11-04 (MODEM.md). */
+static const uint8_t rc56ld[] = {
+    0x01,0x02,0x00,0xff,0x15,0x27,0x05,0x00,'R','o','c','k','w','e','l','l',
+    ' ','S','e','m','.',' ','S','y','s','.',0x00,'R','C','5','6','L',
+    'D','-','P','C','C',0x00,'0','2','1',0x00,'A',0x00,0xff,0x20,0x04,0x13,
+    0x00,0x00,0x00,0x21,0x02,0x02,0x00,0x22,0x04,0x00,0x02,0x0f,0x5c,0x22,0x09,0x05,
+    0x1f,0x0f,0x00,0x02,0x00,0x00,0x02,0x00,0x22,0x09,0x06,0x1f,0x0f,0x00,0x30,0x00,
+    0x00,0x30,0x00,0x22,0x09,0x07,0x1f,0x0f,0x00,0x30,0x00,0x00,0x30,0x00,0x22,0x0d,
+    0x02,0x06,0x00,0x3f,0x1c,0x03,0x03,0x0f,0x07,0x00,0x01,0xb5,0xff,0x22,0x09,0x13,
+    0x01,0x00,0x1f,0x00,0x7a,0x00,0xb5,0xff,0x22,0x10,0x84,0x06,0x00,0x0b,0x02,0x07,
+    0x14,0x00,0x08,0x00,0x04,0x00,0x02,0x00,0x00,0x00,0x1a,0x05,0x01,0x0d,0x20,0x04,
+    0x77,0x1b,0x0f,0xc5,0x41,0x9d,0x78,0x65,0x26,0x2e,0x25,0xe7,0x5f,0x23,0x30,0xbc,
+    0x86,0x28,0x1b,0x07,0x05,0x08,0xaa,0x60,0xf8,0x03,0x07,0x1b,0x07,0x05,0x08,0xaa,
+    0x60,0xf8,0x02,0x07,0x1b,0x07,0x05,0x08,0xaa,0x60,0xe8,0x03,0x07,0x1b,0x07,0x0d,
+    0x08,0xaa,0x60,0xe8,0x02,0x07,0xff,
+};
+static void modem_card_tests(void)
+{
+    memset(attr, 255, sizeof(attr));
+    for (unsigned i = 0; i < sizeof(rc56ld); i++) attr[i*2] = rc56ld[i];
+    struct cis c; read_cis(&c);
+    assert(c.function == 2 && c.manufacturer == 0x13 && c.product == 0 && c.cor == 0x420);
+    assert(c.modem && c.uart_index == 5);
+    capture_card(&c);
+    assert(card_info.kind == BT_CARD_MODEM && strstr(card_info.identification, "RC56LD"));
+    assert(modem_inserts == 1 && modem_cor == 0x420 && modem_index == 5);
+    /* Never ATA-probed. */
+    status = 0x2f9; socket_full = true;
+    memset(ata, 0x5a, sizeof(ata)); ctl = 0x77;
+    assert(!identify() && ctl == 0x77);
+    for (unsigned i = 0; i < sizeof(ata); i++) assert(ata[i] == 0x5a);
+    /* Removal and resume release it. */
+    uint32_t generation = card_info.generation;
+    status = PCMCIA_CD_MASK; probe();
+    assert(card_info.kind == BT_CARD_ABSENT && card_info.generation > generation && modem_removals);
+    /* A plain serial card (FUNCE type 0 only) is not a modem. */
+    c.modem = false; capture_card(&c); assert(card_info.kind == BT_CARD_SERIAL);
+    unsigned removals = modem_removals;
+    pcmcia_resume(); assert(modem_removals > removals);
+    memset(&card_info, 0, sizeof(card_info)); card_info.version = BT_CIS_VERSION;
+    socket_full = false;
+}
+
 int main(void)
 {
     bluetooth_card_tests();
+    modem_card_tests();
     /* Physical OnSpec IDENTIFY provides 256 bytes in 256 low-lane words.
      * Include high bytes in the reconstructed ATA words and capacity. */
     uint16_t expected[256];
@@ -181,5 +228,5 @@ int main(void)
     struct gz_bootinfo boot={0};ram_boot=&boot;status=PCMCIA_CD_MASK; /* empty socket */
     REG32(0x0a00111c)=0;pcmcia_cold_init(false);assert(!REG32(0x0a00111c));
     boot.flags=GZ_BOOT_FROM_ROM;pcmcia_cold_init(false);assert(REG32(0x0a00111c)==1);
-    puts("cf-boot: gated socket setup, COR, BT reinsertion, stale mapping, delayed CIS recovery, bounded retries and no ATA on unreadable cards PASS");
+    puts("cf-boot: gated socket setup, COR, BT reinsertion, modem CIS, stale mapping, delayed CIS recovery, bounded retries and no ATA on unreadable cards PASS");
 }

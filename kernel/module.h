@@ -12,17 +12,27 @@ void module_unload(struct module *module);
 bool module_executable(const struct module *module, const void *p);
 bool module_contains(const struct module *module, const void *p, uint32_t size);
 
-#define BT_DRIVER_MAGIC 0x47425444u
-#define BT_DRIVER_ABI 1u
-struct bt_driver {
+/* CF serial cards (Bluetooth BCSP, data modems): one 16550 behind the socket's
+ * I/O window. The socket dispatcher (cf.c) picks the configuration from the CIS. */
+#define UART_DRIVER_MAGIC 0x47554152u
+#define UART_DRIVER_ABI 2u
+struct uart_config {
+    uint32_t cor_address;   /* attribute offset of the COR (CONFIG tuple) */
+    uint16_t io_base;       /* ISA port the window decodes, e.g. 0x3f8 */
+    uint16_t divisor;       /* 16550 DLL/DLM */
+    uint8_t cor, lcr, mcr, fcr;
+};
+struct uart_driver {
     uint32_t magic, abi, size;
-    int (*init)(void);
+    int (*init)(const struct uart_config *);
     void (*poll)(void);
     void (*stop)(void);
     int (*error)(void);
     int (*read)(uint8_t *, uint32_t); /* peek: consume only after a successful user copy */
     void (*consume)(uint32_t);
     int (*write)(const uint8_t *, uint32_t);
+    void (*set_lines)(uint8_t mcr);   /* DTR bit 0, RTS bit 1; OUT2 is kept */
+    uint8_t (*status)(void);          /* 16550 MSR: CTS 0x10, DSR 0x20, RI 0x40, DCD 0x80 */
 };
 #define NET_DRIVER_MAGIC 0x474e4452u
 #define NET_DRIVER_ABI 1u

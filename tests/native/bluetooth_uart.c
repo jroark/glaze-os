@@ -14,15 +14,19 @@ static bool tx_irq;
 static uint8_t regs[8],output[4096],input[64],lsr_error;
 static uint8_t uart_read(unsigned);
 static void uart_write(unsigned,uint8_t);
-#define BT_UART_READ(r) uart_read(r)
-#define BT_UART_WRITE(r,v) uart_write(r,v)
+#define CF_UART_READ(r) uart_read(r)
+#define CF_UART_WRITE(r,v) uart_write(r,v)
 #define PCMCIA_CARD_PRESENT() present
 #define PCMCIA_A020 socket_config
 #define PCMCIA_A020_CONFIG 8u
 #define KJ_SRC_PCMCIA irq_enable
 #define KJ_SRC_ENABLE 8u
 #define REG8(addr) cor
-#include "../../kernel/drivers/btuart.c"
+#include "../../kernel/drivers/cfuart.c"
+/* The verified BCSP setup (BLUETOOTH.md), as kernel/bluetooth.c passes it. */
+static const struct uart_config bcsp = {
+    .cor_address = 0xe0, .io_base = 0x3f8, .divisor = 1, .cor = 0x43, .lcr = 0x1b, .mcr = 0x0b, .fcr = 7,
+};
 void kprintf(const char *format,...){}
 static uint8_t uart_read(unsigned r)
 {
@@ -48,24 +52,24 @@ static void drained(void){used=0;if(regs[1]&2)tx_irq=true;}
 static void initialize(bool fifo)
 {
     present=true;has_fifo=fifo;capacity=fifo?16:1;used=output_length=rx_at=rx_count=0;tx_irq=false;instant=false;lsr_error=0;memset(regs,0,sizeof(regs));
-    assert(!btuart_init());assert(tx_fifo==capacity && cor==0x43 && regs[3]==0x1b && regs[1]==5);
+    assert(!cfuart_init(&bcsp));assert(tx_fifo==capacity && cor==0x43 && regs[3]==0x1b && regs[1]==5);
 }
 int main(void)
 {
     uint8_t data[40];for(unsigned i=0;i<sizeof(data);i++)data[i]=(uint8_t)i;
-    initialize(true);assert(btuart_write(data,sizeof(data))==sizeof(data));assert(output_length==16 && used==16 && regs[1]==7);
-    btuart_poll();assert(output_length==16);drained();btuart_poll();assert(output_length==32);
-    drained();btuart_poll();assert(output_length==40 && regs[1]==5 && !memcmp(output,data,sizeof(data)));
-    initialize(false);assert(btuart_write(data,4)==4 && output_length==1);
-    for(unsigned i=0;i<3;i++){drained();btuart_poll();}assert(output_length==4 && !memcmp(output,data,4));
+    initialize(true);assert(cfuart_write(data,sizeof(data))==sizeof(data));assert(output_length==16 && used==16 && regs[1]==7);
+    cfuart_poll();assert(output_length==16);drained();cfuart_poll();assert(output_length==32);
+    drained();cfuart_poll();assert(output_length==40 && regs[1]==5 && !memcmp(output,data,sizeof(data)));
+    initialize(false);assert(cfuart_write(data,4)==4 && output_length==1);
+    for(unsigned i=0;i<3;i++){drained();cfuart_poll();}assert(output_length==4 && !memcmp(output,data,4));
     initialize(true);instant=true;
-    assert(btuart_write(data,sizeof(data))==sizeof(data));assert(output_length==16 && tx_irq);
-    btuart_poll();assert(output_length==32 && tx_irq);btuart_poll();assert(output_length==40 && regs[1]==5);
+    assert(cfuart_write(data,sizeof(data))==sizeof(data));assert(output_length==16 && tx_irq);
+    cfuart_poll();assert(output_length==32 && tx_irq);cfuart_poll();assert(output_length==40 && regs[1]==5);
     /* Ring backpressure never overwrites queued bytes. */
     initialize(true);uint8_t large[TX_SIZE];memset(large,0xa5,sizeof(large));
-    assert(btuart_write(large,sizeof(large))==sizeof(large));assert(btuart_write(data,17)==GZ_EBUSY);
-    memcpy(input,data,sizeof(data));rx_count=sizeof(data);btuart_poll();uint8_t received[40];assert(btuart_read(received,40)==40 && !memcmp(received,data,40));btuart_consume(40);
-    present=false;unsigned before=mmio;btuart_poll();btuart_stop();assert(mmio==before);
-    initialize(true);lsr_error=2;btuart_poll();assert(btuart_error()==GZ_EIO && !(irq_enable&8) && regs[1]==0);
+    assert(cfuart_write(large,sizeof(large))==sizeof(large));assert(cfuart_write(data,17)==GZ_EBUSY);
+    memcpy(input,data,sizeof(data));rx_count=sizeof(data);cfuart_poll();uint8_t received[40];assert(cfuart_read(received,40)==40 && !memcmp(received,data,40));cfuart_consume(40);
+    present=false;unsigned before=mmio;cfuart_poll();cfuart_stop();assert(mmio==before);
+    initialize(true);lsr_error=2;cfuart_poll();assert(cfuart_error()==GZ_EIO && !(irq_enable&8) && regs[1]==0);
     puts("Bluetooth UART: FIFO bursts, single-byte fallback, THRE acknowledgement race, ordering, backpressure, RX, removal and faults PASS");return 0;
 }
