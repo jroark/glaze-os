@@ -20,6 +20,7 @@
 /* Platform hooks, like ftl.c's: SYS_CF_* in main.c, an image file in
  * host/fattest.c. FatFs's get_fattime() comes from there too. */
 int card_raw_info(struct gz_cf_info *info);
+uint32_t card_now_ms(void);
 int card_raw_read(uint32_t lba, uint32_t count, void *buf);
 int card_raw_write(uint32_t lba, uint32_t count, const void *buf);
 void card_log(const char *msg);

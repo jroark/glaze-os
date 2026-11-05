@@ -12,7 +12,7 @@ static unsigned get16(const uint8_t *p) { return p[0]|(unsigned)p[1]<<8; }
 static void put16(uint8_t *p,unsigned n) { p[0]=(uint8_t)n; p[1]=(uint8_t)(n>>8); }
 static unsigned be16(const uint8_t *p) { return (unsigned)p[0]<<8|p[1]; }
 static bool due(uint32_t now,uint32_t end) { return (int32_t)(now-end)>=0; }
-static void fail(struct bt_serial *s,int error)
+void bt_l2_fail(struct bt_serial *s,int error)
 {
     s->status.state=BT_SERIAL_FAILED; s->status.error=error;
     s->qh=s->qt=s->offset=0; s->command_sent=false;s->closing=false;
@@ -38,8 +38,8 @@ int bt_serial_start(struct bt_serial *s,const uint8_t *peer,const uint8_t *pin,u
     memcpy(s->peer,peer,6); memcpy(s->status.peer,peer,6); memcpy(s->pin,pin,n); s->pin_length=(uint8_t)n;
     s->status.id=id; s->status.state=BT_SERIAL_CONNECTING; s->now=now; s->deadline=now+90000;
     s->rf_mtu=127;
-    s->channels[0].local=0x40; s->channels[1].local=0x41;
-    s->channels[0].mtu=s->channels[1].mtu=672;
+    s->service_uuid=0x1101;
+    for(unsigned i=0;i<4;i++){s->channels[i].local=(uint16_t)(0x40+i);s->channels[i].mtu=672;}
     return 0;
 }
 static int packet(struct bt_serial *s,unsigned cid,const uint8_t *p,unsigned n)
@@ -52,13 +52,14 @@ static int packet(struct bt_serial *s,unsigned cid,const uint8_t *p,unsigned n)
 static void signal_packet(struct bt_serial *s,unsigned code,unsigned id,const uint8_t *p,unsigned n)
 {
     uint8_t bytes[256];
-    if (n>252) { fail(s,GZ_ECORRUPT); return; }
+    if (n>252) { bt_l2_fail(s,GZ_ECORRUPT); return; }
     bytes[0]=(uint8_t)code; bytes[1]=(uint8_t)id; put16(bytes+2,n); if(n)memcpy(bytes+4,p,n);
-    if (packet(s,1,bytes,n+4)) fail(s,GZ_EFULL);
+    if (packet(s,1,bytes,n+4)) bt_l2_fail(s,GZ_EFULL);
 }
 static unsigned next_id(struct bt_serial *s) { if(!++s->signal_id)++s->signal_id; return s->signal_id; }
-static void open_channel(struct bt_serial *s,unsigned index,unsigned psm)
+void bt_l2_open(struct bt_serial *s,unsigned index,unsigned psm)
 {
+    if(index>=4){bt_l2_fail(s,GZ_EINVAL);return;}
     uint8_t p[4]; put16(p,psm); put16(p+2,s->channels[index].local);
     signal_packet(s,2,next_id(s),p,4);
 }
@@ -70,11 +71,12 @@ static void configure(struct bt_serial *s,struct bt_channel *ch)
 static void sdp_query(struct bt_serial *s)
 {
     uint8_t p[40]={6,0,0,0,0,0x35,3,0x19,0x11,1,2,0,0x35,6,9,0,4,9,1,0};
+    p[8]=(uint8_t)(s->service_uuid>>8);p[9]=(uint8_t)s->service_uuid;
     if(!++s->sdp_id)++s->sdp_id;
     p[2]=s->sdp_id; p[20]=(uint8_t)s->continuation_length;
     memcpy(p+21,s->continuation,s->continuation_length);
     unsigned n=21+s->continuation_length; p[4]=(uint8_t)(n-5);
-    if(packet(s,s->channels[0].remote,p,n))fail(s,GZ_EFULL);
+    if(packet(s,s->channels[0].remote,p,n))bt_l2_fail(s,GZ_EFULL);
 }
 /* Strict, depth-bounded SDP data-element traversal of the requested attribute 4. */
 static int element(const uint8_t *p,unsigned size,unsigned *type,const uint8_t **value,unsigned *n,unsigned *used)
@@ -153,49 +155,61 @@ static int rf_frame(struct bt_serial *s,unsigned dlci,unsigned control,bool comm
 }
 static void rf_control(struct bt_serial *s,unsigned type,bool command,const uint8_t *p,unsigned n)
 {
-    uint8_t bytes[32]; if(n>30){fail(s,GZ_ECORRUPT);return;}
+    uint8_t bytes[32]; if(n>30){bt_l2_fail(s,GZ_ECORRUPT);return;}
     bytes[0]=(uint8_t)(type|(command?2:0)|1);bytes[1]=(uint8_t)(n<<1|1);memcpy(bytes+2,p,n);
-    if(rf_frame(s,0,0xef,true,bytes,n+2,-1))fail(s,GZ_EFULL);
+    if(rf_frame(s,0,0xef,true,bytes,n+2,-1))bt_l2_fail(s,GZ_EFULL);
 }
 static void channel_ready(struct bt_serial *s,unsigned index)
 {
     struct bt_channel *ch=&s->channels[index]; if(!ch->configured || !ch->peer_configured)return;
     if(!index && s->stage==3){s->stage=4;sdp_query(s);}
-    if(index && s->stage==5){s->stage=6;if(rf_frame(s,0,0x3f,true,NULL,0,-1))fail(s,GZ_EFULL);}
+    if(index && s->profile_ready){s->profile_ready(s->profile,index);return;}
+    if(index && s->stage==5){s->stage=6;if(rf_frame(s,0,0x3f,true,NULL,0,-1))bt_l2_fail(s,GZ_EFULL);}
 }
 static void l2_signal(struct bt_serial *s,const uint8_t *p,unsigned n)
 {
     while(n>=4) {
         unsigned code=p[0],id=p[1],length=get16(p+2);p+=4;n-=4;
-        if(!id || length>n){fail(s,GZ_ECORRUPT);return;}
-        if(code==3 && length>=8) {
+        if(!id || length>n){bt_l2_fail(s,GZ_ECORRUPT);return;}
+#ifdef BT_SERIAL_DEBUG
+        if(s->profile && code==2 && length>=4)printf("bluetooth audio: incoming PSM %x CID %x\n",get16(p),get16(p+2));
+#endif
+        if(code==2 && length==4){
+            unsigned psm=get16(p),remote=get16(p+2);struct bt_channel *ch=&s->channels[3];
+            unsigned result=psm==1 && s->profile && s->status.encrypted?0:2;
+            if(!result && (remote<0x40 || ch->remote))result=4;
+            for(unsigned i=0;i<3;i++)if(!result && s->channels[i].remote==remote)result=4;
+            uint8_t reply[8]={0};put16(reply,result?0:ch->local);put16(reply+2,remote);put16(reply+4,result);
+            signal_packet(s,3,id,reply,sizeof(reply));
+            if(!result){ch->remote=(uint16_t)remote;configure(s,ch);}
+        } else if(code==3 && length>=8) {
             unsigned local=get16(p+2),result=get16(p+4);
-            for(unsigned i=0;i<2;i++)if(s->channels[i].local==local) {
+            for(unsigned i=0;i<4;i++)if(s->channels[i].local==local) {
                 if(result==1)break;
-                if(result || get16(p)<0x40){fail(s,GZ_ECONNREFUSED);return;}
+                if(result || get16(p)<0x40){bt_l2_fail(s,GZ_ECONNREFUSED);return;}
                 s->channels[i].remote=(uint16_t)get16(p);configure(s,&s->channels[i]);break;
             }
         } else if(code==4 && length>=4) {
             struct bt_channel *ch=NULL;unsigned index=0;
-            for(unsigned i=0;i<2;i++)if(s->channels[i].local==get16(p)){ch=&s->channels[i];index=i;break;}
+            for(unsigned i=0;i<4;i++)if(s->channels[i].local==get16(p)){ch=&s->channels[i];index=i;break;}
             if(!ch){uint8_t reject[2]={2,0};signal_packet(s,1,id,reject,2);}
             else {
                 uint8_t reply[128];put16(reply,ch->remote);put16(reply+2,0);put16(reply+4,0);unsigned rlen=6;
                 if(get16(p+2)){put16(reply+4,2);}
                 for(unsigned at=4;at<length;) {
-                    if(length-at<2 || p[at+1]>length-at-2){fail(s,GZ_ECORRUPT);return;}
+                    if(length-at<2 || p[at+1]>length-at-2){bt_l2_fail(s,GZ_ECORRUPT);return;}
                     unsigned type=p[at]&0x7f,len=p[at+1];
                     if(type==1 && len==2){unsigned mtu=get16(p+at+2);if(mtu<48){put16(reply+4,1);reply[6]=1;reply[7]=2;put16(reply+8,48);rlen=10;}else ch->mtu=(uint16_t)mtu;}
                     else if(type==2 && len==2){} /* optional flush timeout */
-                    else if(!(p[at]&0x80)){put16(reply+4,3);if(rlen+2+len>sizeof(reply)){fail(s,GZ_ECORRUPT);return;}memcpy(reply+rlen,p+at,len+2);rlen+=len+2;}
+                    else if(!(p[at]&0x80)){put16(reply+4,3);if(rlen+2+len>sizeof(reply)){bt_l2_fail(s,GZ_ECORRUPT);return;}memcpy(reply+rlen,p+at,len+2);rlen+=len+2;}
                     at+=len+2;
                 }
                 signal_packet(s,5,id,reply,rlen);
                 if(!get16(reply+4)){ch->peer_configured=1;channel_ready(s,index);}
             }
         } else if(code==5 && length>=6) {
-            for(unsigned i=0;i<2;i++)if(s->channels[i].local==get16(p)) {
-                if(get16(p+2) || get16(p+4)){fail(s,GZ_ECONNREFUSED);return;}
+            for(unsigned i=0;i<4;i++)if(s->channels[i].local==get16(p)) {
+                if(get16(p+2) || get16(p+4)){bt_l2_fail(s,GZ_ECONNREFUSED);return;}
                 s->channels[i].configured=1;channel_ready(s,i);
             }
         } else if(code==0x0a && length==2) {
@@ -205,20 +219,26 @@ static void l2_signal(struct bt_serial *s,const uint8_t *p,unsigned n)
             else if(type==3){reply[4]=2;count=12;}
             else put16(reply+2,1);
             signal_packet(s,0x0b,id,reply,count);
-        } else if(code==6 && length==4) {signal_packet(s,7,id,p,4);fail(s,GZ_ENOTCONN);}
+        } else if(code==6 && length==4) {
+            signal_packet(s,7,id,p,4);
+            if(s->profile && (get16(p)==s->channels[3].local || (get16(p)==s->channels[0].local && s->stage>=5))){
+                unsigned index=get16(p)==s->channels[3].local?3:0;
+                s->channels[index].remote=0;s->channels[index].configured=s->channels[index].peer_configured=0;
+            } else bt_l2_fail(s,GZ_ENOTCONN);
+        }
         else if(code==8)signal_packet(s,9,id,p,length);
         else if(code!=1 && code!=7 && code!=9 && code!=0x0b){uint8_t reject[2]={0};signal_packet(s,1,id,reject,2);}
         p+=length;n-=length;
     }
-    if(n)fail(s,GZ_ECORRUPT);
+    if(n)bt_l2_fail(s,GZ_ECORRUPT);
 }
 static void sdp_response(struct bt_serial *s,const uint8_t *p,unsigned n)
 {
-    if(n<8 || p[0]!=7 || be16(p+1)!=s->sdp_id || be16(p+3)!=n-5){fail(s,GZ_ECORRUPT);return;}
+    if(n<8 || p[0]!=7 || be16(p+1)!=s->sdp_id || be16(p+3)!=n-5){bt_l2_fail(s,GZ_ECORRUPT);return;}
     unsigned count=be16(p+5);
-    if(count>n-8 || s->attribute_length+count>sizeof(s->attributes)){fail(s,GZ_ECORRUPT);return;}
+    if(count>n-8 || s->attribute_length+count>sizeof(s->attributes)){bt_l2_fail(s,GZ_ECORRUPT);return;}
     unsigned continuation=p[7+count];
-    if(continuation>16 || n!=8+count+continuation){fail(s,GZ_ECORRUPT);return;}
+    if(continuation>16 || n!=8+count+continuation){bt_l2_fail(s,GZ_ECORRUPT);return;}
     memcpy(s->attributes+s->attribute_length,p+7,count);s->attribute_length+=count;
     if(continuation){memcpy(s->continuation,p+8+count,continuation);s->continuation_length=continuation;sdp_query(s);return;}
 #ifdef BT_SERIAL_DEBUG
@@ -226,22 +246,23 @@ static void sdp_response(struct bt_serial *s,const uint8_t *p,unsigned n)
     for(unsigned i=0;i<s->attribute_length;i++)printf(" %02x",s->attributes[i]);
     printf("\n");
 #endif
+    if(s->profile_sdp){s->profile_sdp(s->profile,s->attributes,s->attribute_length);return;}
     int channel=service_channel(s->attributes,s->attribute_length);
-    if(channel<1 || channel>30){fail(s,GZ_ENOENT);return;}
+    if(channel<1 || channel>30){bt_l2_fail(s,GZ_ENOENT);return;}
     s->status.channel=(uint8_t)channel;s->dlci=(uint8_t)(channel<<1);s->stage=5;
-    s->status.state=BT_SERIAL_OPENING;open_channel(s,1,3);
+    s->status.state=BT_SERIAL_OPENING;bt_l2_open(s,1,3);
 }
 static void rf_mcc(struct bt_serial *s,const uint8_t *p,unsigned n)
 {
-    if(n<2 || !(p[0]&1) || !(p[1]&1) || n!=2u+(p[1]>>1)){fail(s,GZ_ECORRUPT);return;}
+    if(n<2 || !(p[0]&1) || !(p[1]&1) || n!=2u+(p[1]>>1)){bt_l2_fail(s,GZ_ECORRUPT);return;}
     unsigned type=p[0]&0xfc,length=p[1]>>1;bool command=(p[0]&2)!=0;p+=2;
     if(type==0x80 && length==8 && p[0]==s->dlci) {
         uint8_t pn[8];memcpy(pn,p,8);
-        unsigned mtu=get16(p+4);if(mtu<1){fail(s,GZ_ECORRUPT);return;}
+        unsigned mtu=get16(p+4);if(mtu<1){bt_l2_fail(s,GZ_ECORRUPT);return;}
         s->rf_mtu=(uint16_t)MIN(mtu,MIN(127u,(unsigned)s->channels[1].mtu-5));s->credit_flow=command?p[1]==0xf0:p[1]==0xe0;
         s->tx_credits=p[7];s->rx_credits=7;
         if(command){pn[1]=s->credit_flow?0xe0:0;put16(pn+4,s->rf_mtu);pn[7]=7;rf_control(s,0x80,false,pn,8);}
-        else if(s->stage==7){s->stage=8;if(rf_frame(s,s->dlci,0x3f,true,NULL,0,-1))fail(s,GZ_EFULL);}
+        else if(s->stage==7){s->stage=8;if(rf_frame(s,s->dlci,0x3f,true,NULL,0,-1))bt_l2_fail(s,GZ_EFULL);}
     } else if(type==0xe0 && length>=2 && (p[0]>>2)==s->dlci) {
         s->remote_paused=(p[1]&2)!=0;
         if(command)rf_control(s,type,false,p,length);
@@ -253,22 +274,22 @@ static void rf_mcc(struct bt_serial *s,const uint8_t *p,unsigned n)
 }
 static void rf_receive(struct bt_serial *s,const uint8_t *p,unsigned n)
 {
-    if(n<4 || !(p[0]&1)){fail(s,GZ_ECORRUPT);return;}
+    if(n<4 || !(p[0]&1)){bt_l2_fail(s,GZ_ECORRUPT);return;}
     unsigned dlci=p[0]>>2,control=p[1]&0xef,head=3,length=p[2]>>1;
-    if(!(p[2]&1)){if(n<5){fail(s,GZ_ECORRUPT);return;}length|=(unsigned)p[3]<<7;head++;}
+    if(!(p[2]&1)){if(n<5){bt_l2_fail(s,GZ_ECORRUPT);return;}length|=(unsigned)p[3]<<7;head++;}
     unsigned credit=(control==0xef && (p[1]&0x10) && dlci && s->credit_flow)?1:0;
-    if(n!=head+credit+length+1 || p[n-1]!=fcs(p,control==0xef?2:head)){fail(s,GZ_ECORRUPT);return;}
+    if(n!=head+credit+length+1 || p[n-1]!=fcs(p,control==0xef?2:head)){bt_l2_fail(s,GZ_ECORRUPT);return;}
     if(control==0x63) {
         if(!dlci && s->stage==6){s->stage=7;uint8_t pn[8]={s->dlci,0xf0,0,0,127,0,0,7};put16(pn+4,MIN(127u,(unsigned)s->channels[1].mtu-5));rf_control(s,0x80,true,pn,8);}
         else if(dlci==s->dlci && s->stage==8){s->stage=9;uint8_t msc[2]={(uint8_t)(s->dlci<<2|3),0x8d};rf_control(s,0xe0,true,msc,2);}
-    } else if(control==0x2f && dlci==s->dlci){if(rf_frame(s,dlci,0x73,false,NULL,0,-1))fail(s,GZ_EFULL);}
-    else if(control==0x43){rf_frame(s,dlci,0x73,false,NULL,0,-1);fail(s,GZ_ENOTCONN);}
-    else if(control==0x0f)fail(s,GZ_ECONNREFUSED);
+    } else if(control==0x2f && dlci==s->dlci){if(rf_frame(s,dlci,0x73,false,NULL,0,-1))bt_l2_fail(s,GZ_EFULL);}
+    else if(control==0x43){rf_frame(s,dlci,0x73,false,NULL,0,-1);bt_l2_fail(s,GZ_ENOTCONN);}
+    else if(control==0x0f)bt_l2_fail(s,GZ_ECONNREFUSED);
     else if(control==0xef && !dlci)rf_mcc(s,p+head,length);
     else if(control==0xef && dlci==s->dlci) {
         if(credit)s->tx_credits=(uint8_t)MIN(255u,(unsigned)s->tx_credits+p[head]);
         if(length) {
-            if(length>s->rf_mtu || length>sizeof(s->rx)-(s->rh-s->rt) || (s->credit_flow&&!s->rx_credits)){fail(s,GZ_EFULL);return;}
+            if(length>s->rf_mtu || length>sizeof(s->rx)-(s->rh-s->rt) || (s->credit_flow&&!s->rx_credits)){bt_l2_fail(s,GZ_EFULL);return;}
             if(s->credit_flow)s->rx_credits--;
             for(unsigned i=0;i<length;i++)s->rx[s->rh++%sizeof(s->rx)]=p[head+credit+i];
             s->status.received+=length;s->status.available=s->rh-s->rt;
@@ -281,15 +302,16 @@ void bt_serial_acl(struct bt_serial *s,const uint8_t *p,unsigned n)
     if(n<4 || n!=4u+get16(p+2) || (get16(p)&0xfff)!=s->handle)return;
     unsigned boundary=(p[1]>>4)&3;p+=4;n-=4;
     if(boundary==0 || boundary==2){
-        if(n<4 || get16(p)>BT_L2_MAX){fail(s,GZ_ECORRUPT);return;}
+        if(n<4 || get16(p)>BT_L2_MAX){bt_l2_fail(s,GZ_ECORRUPT);return;}
         s->have=0;s->want=4+get16(p);
     } else if(boundary!=1 || !s->have)return;
-    if(n>s->want-s->have){fail(s,GZ_ECORRUPT);return;}
+    if(n>s->want-s->have){bt_l2_fail(s,GZ_ECORRUPT);return;}
     memcpy(s->reassembly+s->have,p,n);s->have+=n;
     if(s->have!=s->want)return;
     const uint8_t *data=s->reassembly+4;unsigned length=s->want-4,cid=get16(s->reassembly+2);
     if(cid==1)l2_signal(s,data,length);
     else if(cid==s->channels[0].local && s->stage==4)sdp_response(s,data,length);
+    else if(s->profile_data){for(unsigned i=1;i<4;i++)if(cid==s->channels[i].local)s->profile_data(s->profile,i,data,length);}
     else if(cid==s->channels[1].local)rf_receive(s,data,length);
     s->have=s->want=0;
 }
@@ -299,12 +321,12 @@ void bt_serial_event(struct bt_serial *s,const uint8_t *p,unsigned n)
 {
     if(n<2 || n!=2u+p[1])return;
     if(p[0]==3 && n==13 && !memcmp(p+5,s->peer,6)) {
-        if(p[2]){s->status.hci_status=p[2];if(s->status.state!=BT_SERIAL_IDLE)fail(s,GZ_ECONNREFUSED);return;}
+        if(p[2]){s->status.hci_status=p[2];if(s->status.state!=BT_SERIAL_IDLE)bt_l2_fail(s,GZ_ECONNREFUSED);return;}
         s->handle=(uint16_t)get16(p+3);
         if(s->status.state==BT_SERIAL_IDLE || s->closing){s->status.state=BT_SERIAL_CLOSING;s->closing=true;s->command_sent=false;return;}
         s->status.state=BT_SERIAL_PAIRING;s->command_sent=false;
     } else if((p[0]==0x16 || p[0]==0x17) && n==8 && !memcmp(p+2,s->peer,6)) {
-        if(s->security_opcode){fail(s,GZ_EFULL);return;}
+        if(s->security_opcode){bt_l2_fail(s,GZ_EFULL);return;}
         memcpy(s->security,s->peer,6);s->security_length=6;
         if(p[0]==0x16 && s->pin_length){s->security_opcode=0x040d;s->security[6]=s->pin_length;memset(s->security+7,0,16);memcpy(s->security+7,s->pin,s->pin_length);s->security_length=23;}
         else if(p[0]==0x17 && s->key_valid && !memcmp(s->peer,s->key_peer,6)){s->security_opcode=0x040b;memcpy(s->security+6,s->key,16);s->security_length=22;}
@@ -312,24 +334,24 @@ void bt_serial_event(struct bt_serial *s,const uint8_t *p,unsigned n)
     } else if(p[0]==0x18 && n==25 && !memcmp(p+2,s->peer,6)) {
         memcpy(s->key_peer,p+2,6);memcpy(s->key,p+8,16);s->key_valid=true;
     } else if(p[0]==6 && n==5 && get16(p+3)==s->handle) {
-        if(p[2]){s->status.hci_status=p[2];s->key_valid=false;memset(s->key,0,16);fail(s,GZ_EPERM);return;}
+        if(p[2]){s->status.hci_status=p[2];s->key_valid=false;memset(s->key,0,16);bt_l2_fail(s,GZ_EPERM);return;}
         s->status.authenticated=1;
         if(s->status.state==BT_SERIAL_PAIRING){s->status.state=BT_SERIAL_ENCRYPTING;s->command_sent=false;}
     } else if(p[0]==8 && n==6 && get16(p+3)==s->handle) {
-        if(p[2] || !p[5]){s->status.hci_status=p[2];fail(s,GZ_EPERM);return;}
+        if(p[2] || !p[5]){s->status.hci_status=p[2];bt_l2_fail(s,GZ_EPERM);return;}
         s->status.encrypted=1;
         if(s->status.state==BT_SERIAL_ENCRYPTING){
-            if(s->status.channel){s->status.state=BT_SERIAL_OPENING;s->stage=5;s->dlci=(uint8_t)(s->status.channel<<1);open_channel(s,1,3);}
-            else {s->status.state=BT_SERIAL_DISCOVERING;s->stage=3;open_channel(s,0,1);}
+            if(s->status.channel){s->status.state=BT_SERIAL_OPENING;s->stage=5;s->dlci=(uint8_t)(s->status.channel<<1);bt_l2_open(s,1,3);}
+            else {s->status.state=BT_SERIAL_DISCOVERING;s->stage=3;bt_l2_open(s,0,1);}
         }
     } else if(p[0]==5 && n==6 && get16(p+3)==s->handle) {
         s->handle=0xffff;s->qh=s->qt=s->offset=0;
         if(s->closing){s->status.state=BT_SERIAL_IDLE;s->closing=false;}
-        else if(s->status.state!=BT_SERIAL_FAILED)fail(s,GZ_ENOTCONN);
+        else if(s->status.state!=BT_SERIAL_FAILED)bt_l2_fail(s,GZ_ENOTCONN);
         memset(s->pin,0,16);s->pin_length=0;
     } else if((p[0]==0x0e || p[0]==0x0f) && n>=6) {
         unsigned op=p[0]==0x0e?get16(p+3):get16(p+4),status=p[0]==0x0e?p[5]:p[2];
-        if(status && bt_serial_opcode(op)){s->status.hci_status=(uint8_t)status;fail(s,GZ_EIO);}
+        if(status && bt_serial_opcode(op)){s->status.hci_status=(uint8_t)status;bt_l2_fail(s,GZ_EIO);}
         if(!status && op==0x0408){s->status.state=BT_SERIAL_IDLE;s->closing=false;memset(s->pin,0,16);s->pin_length=0;}
     }
 }
@@ -341,14 +363,21 @@ static void transmit(struct bt_serial *s)
     uint8_t p[258];put16(p,s->handle|(s->offset?0x1000:0x2000));put16(p+2,count);
     memcpy(p+4,s->queue[index].bytes+s->offset,count);
     int r=s->acl(s->arg,p,count+4);
-    if(!r){s->offset+=count;if(s->offset==s->queue[index].length){s->qt++;s->offset=0;}}
-    else if(r!=GZ_EBUSY)fail(s,r);
+    if(!r){
+#ifdef BT_SERIAL_DEBUG
+        if(s->profile && !s->offset && get16(s->queue[index].bytes+2)==s->channels[1].remote && s->queue[index].length>=6){
+            const uint8_t *v=s->queue[index].bytes+4;
+            printf("bluetooth audio: sent %02x %02x %02x len %u CID %x\n",v[0],v[1],s->queue[index].length>6?v[2]:0,s->queue[index].length-4,get16(s->queue[index].bytes+2));
+        }
+#endif
+        s->offset+=count;if(s->offset==s->queue[index].length){s->qt++;s->offset=0;}}
+    else if(r!=GZ_EBUSY)bt_l2_fail(s,r);
 }
 void bt_serial_tick(struct bt_serial *s,uint32_t now)
 {
     s->now=now;
     if(s->status.state==BT_SERIAL_IDLE)return;
-    if(s->status.state!=BT_SERIAL_CONNECTED && s->status.state!=BT_SERIAL_FAILED && due(now,s->deadline))fail(s,GZ_ETIMEDOUT);
+    if(s->status.state!=BT_SERIAL_CONNECTED && s->status.state!=BT_SERIAL_FAILED && due(now,s->deadline))bt_l2_fail(s,GZ_ETIMEDOUT);
     if(s->security_opcode){
         if(!s->command(s->arg,s->security_opcode,s->security,s->security_length)){s->security_opcode=0;memset(s->security,0,sizeof(s->security));}
         return;
@@ -368,7 +397,7 @@ void bt_serial_tick(struct bt_serial *s,uint32_t now)
         if(!s->command(s->arg,op,p,n))s->command_sent=true;
     }
     transmit(s);
-    if(s->status.state==BT_SERIAL_CONNECTED) {
+    if(s->status.state==BT_SERIAL_CONNECTED && !s->profile) {
         unsigned free=sizeof(s->rx)-(s->rh-s->rt),budget=MIN(7u,free/s->rf_mtu);
         if(s->credit_flow && budget>s->rx_credits) {
             unsigned grant=budget-s->rx_credits;
@@ -400,4 +429,11 @@ int bt_serial_rx(struct bt_serial *s,uint8_t *p,unsigned n)
     for(unsigned i=0;i<count;i++)p[i]=s->rx[s->rt++%sizeof(s->rx)];
     s->status.available=s->rh-s->rt;
     return count?(int)count:s->status.state==BT_SERIAL_CONNECTED?0:GZ_ENOTCONN;
+}
+
+int bt_l2_send(struct bt_serial *s,unsigned index,const uint8_t *p,unsigned n)
+{
+    if(index>=4 || !s->channels[index].remote)return GZ_ENOTCONN;
+    if(n>s->channels[index].mtu)return GZ_EINVAL;
+    return packet(s,s->channels[index].remote,p,n);
 }

@@ -163,7 +163,7 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r = gz_sysinfo(&si); if (r) return r;
         gu_put32(payload, GU_VERSION);
         gu_put32(payload + 4, GU_CAP_FILES | GU_CAP_RUN | GU_CAP_LOGS | GU_CAP_RELOAD |
-                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ | GU_CAP_BT_CARD_INFO | GU_CAP_BT_DISCOVERY | GU_CAP_BT_SERIAL);
+                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ | GU_CAP_BT_CARD_INFO | GU_CAP_BT_DISCOVERY | GU_CAP_BT_SERIAL | GU_CAP_BT_AUDIO);
         if (!gz_nand_repair(GZ_NAND_REPAIR_AVAILABLE,NULL,0))
             gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_NAND_REPAIR);
         if (installer_session) gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_INSTALL_STATUS);
@@ -287,6 +287,24 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         if (r<0) return r;
         gu_put32(payload,(uint32_t)r); *out=4;
         return 0;
+    }
+    case GU_BT_AUDIO: {
+        if(n<4)return GZ_EINVAL;
+        unsigned op=gu_get32(b);
+        if(op==BT_AUDIO_CONNECT){
+            if(n<11 || b[10]<1 || b[10]>16 || n!=11u+b[10])return GZ_EINVAL;
+            struct bt_serial_handle handle;return bt_audio_connect(b+4,b+11,b[10],&handle);
+        }
+        if(op==BT_AUDIO_STATUS){
+            if(n!=4)return GZ_EINVAL;
+            struct bt_audio_status st;int error=bt_audio_status(&st);if(error)return error;
+            uint32_t fields[]={st.state,st.id,(uint32_t)st.error,st.rate,st.channels,st.bitpool,st.packets,st.frames_played,st.queued,st.underruns,st.authenticated,st.encrypted};
+            for(unsigned i=0;i<12;i++)gu_put32(payload+4*i,fields[i]);
+            memcpy(payload+48,st.peer,6);payload[54]=st.hci_status;payload[55]=0;*out=56;return 0;
+        }
+        if(op==BT_AUDIO_CLOSE)return n==4?bt_audio_disconnect_current():GZ_EINVAL;
+        if(op==BT_AUDIO_TONE)return n==8?bt_audio_tone(gu_get32(b+4)):GZ_EINVAL;
+        return GZ_EINVAL;
     }
     case GU_BT_SERIAL: {
         if(n<4)return GZ_EINVAL;

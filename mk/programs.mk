@@ -40,12 +40,37 @@ $(OUT)/servers/%.o: servers/%.c
 STATIC_PROGS := fs net
 # Keep the default NAND romfs within its fixed 4.75 MiB slot as Settings grows.
 PROG_CFLAGS_settings += -Os
-PROG_CFLAGS_bluetooth += -Os $(if $(BT_DEBUG),-DBT_DEBUG) $(if $(BT_SERIAL_DEBUG),-DBT_SERIAL_DEBUG)
+SBC_SRCS := $(wildcard third_party/sbc/srce/*.c)
+SBC_INC := -Ithird_party/sbc/include
+PROG_EXTRA_bluetooth := $(SBC_SRCS)
+$(patsubst %.c,$(OUT)/dyn/%.o,$(SBC_SRCS)): TP_INC := $(SBC_INC) -Os
+$(OUT)/dyn/third_party/%.o: third_party/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(PIC_CFLAGS) $(TP_INC) -c -o $@ $<
+$(patsubst %.c,$(OUT)/%.o,$(SBC_SRCS)): TP_INC := $(SBC_INC) -Os
+PROG_CFLAGS_bluetooth += $(SBC_INC) -Os $(if $(BT_DEBUG),-DBT_DEBUG) $(if $(BT_SERIAL_DEBUG),-DBT_SERIAL_DEBUG)
 PROG_CFLAGS_usb += -Os
 PROG_CFLAGS_springboard += -Os
 PROG_CFLAGS_files += -Os
+PROG_CFLAGS_appstore += -Os
+# Keep space for the SBC encoder without shrinking the application set.
+# Helix and the shared media/gfx libraries retain their separate flags.
+PROG_CFLAGS_audio += -Os
+PROG_CFLAGS_video += -Os
+PROG_CFLAGS_music += -Os
+PROG_CFLAGS_calendar += -Os
+PROG_CFLAGS_clock += -Os
+PROG_CFLAGS_notes += -Os
+PROG_CFLAGS_calculator += -Os
+PROG_CFLAGS_photos += -Os
+# CE control adapters use size optimization too; CPU/GDI execution retains -O2.
+CE_UI_SRCS := $(addprefix apps/wince/,dialog_template.c date_control.c list.c property.c property_state.c tabs.c text.c crt.c main.c shell.c view.c)
+$(patsubst %.c,$(OUT)/dyn/%.o,$(CE_UI_SRCS)): PIC_CFLAGS += -Os
+$(patsubst %.c,$(OUT)/dyn/%.o,$(CE_UI_SRCS)): mk/programs.mk
+$(patsubst %.c,$(OUT)/dyn/%.o,$(wildcard servers/audio/*.c apps/video/*.c apps/music/*.c apps/calendar/*.c apps/clock/*.c apps/notes/*.c apps/calculator/*.c apps/photos/*.c)): mk/programs.mk
+$(OUT)/servers/bluetooth/%.o: USER_CFLAGS += $(SBC_INC) -Os
 $(OUT)/dyn/servers/bluetooth/main.o $(OUT)/dyn/servers/bluetooth/serial.o: FORCE
-$(OUT)/dyn/apps/settings/main.o $(patsubst %.c,$(OUT)/dyn/%.o,$(wildcard servers/bluetooth/*.c servers/usb/*.c servers/springboard/*.c apps/files/*.c)): mk/programs.mk
+$(OUT)/dyn/apps/settings/main.o $(patsubst %.c,$(OUT)/dyn/%.o,$(wildcard servers/bluetooth/*.c servers/usb/*.c servers/springboard/*.c apps/files/*.c apps/appstore/*.c)): mk/programs.mk
 
 define STATIC_template
 $(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/lib/crt0.o $(USER_LIBS) $$(PROG_STATIC_DEPS_$(notdir $(1))) lib/user.lds
@@ -58,7 +83,7 @@ endef
 define DYNAMIC_template
 $(OUT)/dyn/$(1)/%.o: $(1)/%.c
 	@mkdir -p $$(dir $$@)
-	$(CC) $(PIC_CFLAGS) $(PROG_CFLAGS_$(notdir $(1))) -c -o $$@ $$<
+	$(CC) $$(PIC_CFLAGS) $$(PROG_CFLAGS_$(notdir $(1))) -c -o $$@ $$<
 $(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/dyn/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/pic/crt0.o $(OUT)/pic/start.o $(SHARED_LIBS) \
     $(PROG_DEPS_$(notdir $(1)))
 	@mkdir -p $$(dir $$@)

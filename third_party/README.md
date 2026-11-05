@@ -8,6 +8,7 @@ Vendored projects (local changes are listed below):
 | `littlefs/` | [littlefs](https://github.com/littlefs-project/littlefs) | v2.11 (`6cb4e86540ec`) | BSD-3-Clause, `littlefs/LICENSE.md` |
 | `stb/` | [stb_image.h](https://github.com/nothings/stb) image decoder (the browser's PNG, JPEG and GIF) | v2.30 (`2c980bb59875`) | public domain / MIT, end of `stb/stb_image.h` |
 | `dhara/` | [Dhara](https://github.com/dlbeer/dhara) NAND translation layer, plus its BCH ECC | `1b166e41b74b` | ISC-style, `dhara/LICENSE` |
+| `sbc/` | Broadcom Bluedroid fixed-point SBC encoder (BTstack third-party mirror) | `9edb5d82ea6e`; pin in `sbc/UPSTREAM.md` | Apache-2.0, `sbc/LICENSE` |
 | `helix-mp3/` | RealNetworks [Helix](https://github.com/ultraembedded/libhelix-mp3) fixed-point MP3 decoder: `pub/` headers, `real/` C sources, `mp3dec.c`, `mp3tabs.c` | `0a0e0673f82b` (2019 mirror of the 2003 release) | RPSL 1.0 / RCSL, `helix-mp3/LICENSE.txt` |
 | `fatfs/` | ChaN's [FatFs](http://elm-chan.org/fsw/ff/) FAT12/16/32 module: `ff.c`, `ff.h`, `diskio.h`, `ffunicode.c` (via the [abbrev/fatfs](https://github.com/abbrev/fatfs) mirror) | R0.16 (`ab992fcf2926`) | 1-clause BSD-style, `fatfs/LICENSE.txt` |
 | `wolfssl/` | [wolfSSL](https://github.com/wolfSSL/wolfssl) TLS 1.2/1.3 client: `src/`, `wolfcrypt/src/` and the `wolfssl/` headers they include; also `ed25519.c` and `ge_low_mem.c` for the kernel's OTA signature check (`kernel/crypto/user_settings.h`) | v5.9.4-stable (`3c5eead44904`) | GPLv3, `wolfssl/COPYING` and `wolfssl/LICENSING` |

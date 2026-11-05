@@ -210,21 +210,21 @@ static void rejections(void)
 {
     uint8_t *copy = malloc(new_size);
 
-    assert(stage(bad_key_gzu, bad_key_size, staged, "1.0", 2) == GZ_OTA_E_SIGNATURE);
-    assert(stage(downgrade_gzu, downgrade_size, staged, "1.0", 2) == GZ_OTA_E_VERSION);
-    assert(stage(new_gzu, new_size, staged, "1.1", 2) == GZ_OTA_E_VERSION);    /* reinstall */
-    assert(stage(new_gzu, new_size, staged, "1.0", 1) == GZ_OTA_E_SPL);
-    assert(stage(new_gzu, new_size, "/Card/Updates/x.gzu", "1.0", 2) == GZ_OTA_E_FILE);
-    assert(stage(new_gzu, new_size - 1, staged, "1.0", 2) == GZ_OTA_E_FILE);
+    assert(stage(bad_key_gzu, bad_key_size, staged, "1.0", GZ_SPL_VERSION) == GZ_OTA_E_SIGNATURE);
+    assert(stage(downgrade_gzu, downgrade_size, staged, "1.0", GZ_SPL_VERSION) == GZ_OTA_E_VERSION);
+    assert(stage(new_gzu, new_size, staged, "1.1", GZ_SPL_VERSION) == GZ_OTA_E_VERSION);    /* reinstall */
+    assert(stage(new_gzu, new_size, staged, "1.0", GZ_SPL_VERSION - 1) == GZ_OTA_E_SPL);
+    assert(stage(new_gzu, new_size, "/Card/Updates/x.gzu", "1.0", GZ_SPL_VERSION) == GZ_OTA_E_FILE);
+    assert(stage(new_gzu, new_size - 1, staged, "1.0", GZ_SPL_VERSION) == GZ_OTA_E_FILE);
     memcpy(copy, new_gzu, new_size);
     copy[40] ^= 1;                                  /* the signed build string */
-    assert(stage(copy, new_size, staged, "1.0", 2) == GZ_OTA_E_SIGNATURE);
+    assert(stage(copy, new_size, staged, "1.0", GZ_SPL_VERSION) == GZ_OTA_E_SIGNATURE);
     memcpy(copy, new_gzu, new_size);
     copy[new_size - 100] ^= 0x10;                   /* romfs contents */
-    assert(stage(copy, new_size, staged, "1.0", 2) == GZ_OTA_E_DIGEST);
+    assert(stage(copy, new_size, staged, "1.0", GZ_SPL_VERSION) == GZ_OTA_E_DIGEST);
     assert(!ota_stage_journal());
     free(copy);
-    assert(stage(new_gzu, new_size, staged, "1.0", 2) == 0 && ota_stage_journal());
+    assert(stage(new_gzu, new_size, staged, "1.0", GZ_SPL_VERSION) == 0 && ota_stage_journal());
     puts("ota: rejects wrong key, tampering, downgrade, reinstall, old SPL, card path, wrong size");
 }
 
@@ -237,7 +237,7 @@ static void straight(void)
     scan();
     assert(map.journal == NAND_BOOT_NONE);
     assert(spl(&info) == OTA_APPLY_NONE);
-    assert(stage(new_gzu, new_size, staged, "1.0", 2) == 0);
+    assert(stage(new_gzu, new_size, staged, "1.0", GZ_SPL_VERSION) == 0);
     int phys = arm();
     assert(phys >= (int)GZ_NAND_RESERVE_FIRST);
     scan();
@@ -249,13 +249,48 @@ static void straight(void)
     puts("ota: applies a staged update, leaves the file system and no journal");
 }
 
+/* A valid header followed by its own CRC has a constant CRC residue. When
+ * the kernel's first body page stays the same, changing just version/build
+ * or an image CRC cannot change the containing block's CRC. A version
+ * string elsewhere in the kernel exposed this on the physical BE-300. */
+static void header_changes(void)
+{
+    uint8_t *old = malloc(new_bin_size);
+    assert(old);
+    for (unsigned body_change = 0; body_change < 2; body_change++) {
+        memcpy(old, new_bin, new_bin_size);
+        struct gz_kernel_header *h = (void *)old;
+        memset(h->version, 0, sizeof(h->version));
+        memcpy(h->version, "1.0", 3);
+        memset(h->build, 0, sizeof(h->build));
+        memcpy(h->build, "old", 3);
+        if (body_change) {
+            assert(h->size > BLOCK + 128);
+            old[sizeof(*h) + BLOCK + 128] ^= 1;
+            h->image_crc = gz_crc32(0, old + sizeof(*h), h->size);
+        }
+        h->header_crc = gz_crc32(0, old, sizeof(*h) - 4);
+        assert(ota_kernel_header_ok(h));
+        assert(memcmp(old, new_bin, sizeof(*h)));
+        assert(gz_crc32(0, old, BLOCK) == gz_crc32(0, new_bin, BLOCK));
+        build(old, new_bin_size);
+        assert(stage(new_gzu, new_size, staged, "1.0", GZ_SPL_VERSION) == 0);
+        assert(arm() >= (int)GZ_NAND_RESERVE_FIRST);
+        struct gz_spl_info info;
+        assert(spl(&info) == OTA_APPLY_DONE && info.ota_result == GZ_OTA_APPLIED);
+        assert(installed(new_bin, new_bin_size) && fs_untouched());
+    }
+    free(old);
+    puts("ota: updates changed kernel headers despite equal block CRCs, with and without body changes");
+}
+
 static void power_cuts(void)
 {
     struct gz_spl_info info;
     unsigned total, tried = 0;
 
     build(old_bin, old_size);
-    assert(stage(new_gzu, new_size, staged, "1.0", 2) == 0 && arm() > 0);
+    assert(stage(new_gzu, new_size, staged, "1.0", GZ_SPL_VERSION) == 0 && arm() > 0);
     memcpy(snapshot, nand, sizeof(nand));
     /* Count the apply's program and erase operations. */
     cut_at = ~0u;
@@ -292,7 +327,7 @@ static void failing_block(void)
     struct gz_spl_info info;
 
     build(old_bin, old_size);
-    assert(stage(new_gzu, new_size, staged, "1.0", 2) == 0 && arm() > 0);
+    assert(stage(new_gzu, new_size, staged, "1.0", GZ_SPL_VERSION) == 0 && arm() > 0);
     failing[GZ_OTA_FIRST_BLOCK + 20] = 1;           /* romfs's 10th block */
     assert(spl(&info) == OTA_APPLY_DONE);
     assert(installed(new_bin, new_bin_size));
@@ -305,7 +340,7 @@ static void damaged_source(void)
     struct gz_spl_info info;
 
     build(old_bin, old_size);
-    assert(stage(new_gzu, new_size, staged, "1.0", 2) == 0 && arm() > 0);
+    assert(stage(new_gzu, new_size, staged, "1.0", GZ_SPL_VERSION) == 0 && arm() > 0);
     /* Wreck every data page in the middle of the file system: some hold the
      * staged file, and the corruption is beyond the BCH code. */
     for (uint32_t i = FS_PAGES / 3; i < FS_PAGES / 3 + 2048; i++)
@@ -324,7 +359,7 @@ static void damaged_source(void)
 static int torn_arm(unsigned pages)
 {
     build(old_bin, old_size);
-    assert(stage(new_gzu, new_size, staged, "1.0", 2) == 0);
+    assert(stage(new_gzu, new_size, staged, "1.0", GZ_SPL_VERSION) == 0);
     ops = 0;
     cut_at = 1 + 1 + pages; /* the erase, then the pages */
     if (!setjmp(cut))
@@ -384,6 +419,7 @@ int main(int argc, char **argv)
            gz_version_cmp("1.0", "1.0.1") < 0 && gz_version_cmp("1.x", "1.0") < 0);
     assert(gz_version_ok("1.0", 16) && !gz_version_ok("1..0", 16) && !gz_version_ok("", 16));
     rejections();
+    header_changes();
     straight();
     failing_block();
     damaged_source();

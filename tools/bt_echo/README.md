@@ -36,6 +36,11 @@ No global Bluetooth preference or security-policy changes are made. macOS may
 ask for Bluetooth permission or pairing confirmation. The helper only accepts
 RFCOMM traffic from the explicitly allowed card and echoes bounded chunks.
 
+If pairing succeeds but macOS closes the first serial setup, stop the helper,
+restart it with just `--allow CARD_ADDRESS` (omit `--pin`), and reconnect Glaze
+using its cached bond. This avoids starting another Mac pairing exchange while
+testing an already paired link.
+
 Glaze keeps the PIN/link key in RAM only. A warm serial reconnect can reuse its
 key. After a Glaze reboot, macOS can retain a stale bond and time out without
 requesting a PIN. In Bluetooth settings, forget this test card, then restart the

@@ -33,6 +33,7 @@
 #include "netif/ethernet.h"
 #include "server.h"
 #include "wifi_supplicant.h"
+#include "wifi_retry.h"
 #include "utils/includes.h"
 #include "utils/common.h"
 #include "crypto/sha256.h"
@@ -49,6 +50,7 @@ static bool added;          /* netif_add has run (once, for the first card) */
 static bool wireless, associated;
 static struct wifi_preference saved;
 static int auth_error, auth_failure;
+static struct wifi_retry retry = {.delay = WIFI_RETRY_MIN_MS};
 static void seed_from_card(void);
 static int connect_network(const struct wifi_credentials *c);
 static int save_choice(const struct wifi_preference *choice)
@@ -149,6 +151,7 @@ static int attach(void)
         memcpy(nif.hwaddr, info.mac, ETH_HWADDR_LEN);
     }
     wireless = info.kind == GZ_NET_XI825 || info.kind == GZ_NET_WL54CF;
+    wifi_retry_reset(&retry);
     associated = false;
     netif_set_up(&nif);
     if (info.kind == GZ_NET_USB) {
@@ -187,6 +190,7 @@ static int attach(void)
 /* The card was pulled: no lease to release, just forget the link. */
 static void detach(void)
 {
+    wifi_retry_reset(&retry);
     wifi_supplicant_stop();
     auth_error = auth_failure = 0;
     LOCK_TCPIP_CORE();
@@ -395,6 +399,7 @@ int net_if_wifi(uint32_t op, void *buf)
         int rv = pref_delete(WIFI_PREF);
         if (rv && rv != GZ_ENOENT) return rv;
         forced_memzero(&saved, sizeof(saved));
+        wifi_retry_reset(&retry);
         wifi_supplicant_stop(); auth_error = auth_failure = 0;
         rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL); wifi_link(); return rv;
     }
@@ -415,6 +420,7 @@ int net_if_wifi(uint32_t op, void *buf)
     int rv = save_choice(&next);
     if (!rv) {
         saved = next;
+        wifi_retry_reset(&retry);
         if (op == WIFI_DISCONNECT) {
             wifi_supplicant_stop(); auth_error = auth_failure = 0;
             rv = gz_wifi_ctl(WIFI_DISCONNECT, NULL);
@@ -422,6 +428,13 @@ int net_if_wifi(uint32_t op, void *buf)
     }
     forced_memzero(&next, sizeof(next));
     wifi_link(); return rv;
+}
+
+static void retry_saved_network(void *ctx)
+{
+    (void)ctx;
+    int rv = connect_network(&saved.credentials);
+    net_log("wifi: retry saved network %d\n", rv);
 }
 
 void net_if_poll(void)
@@ -489,6 +502,9 @@ void net_if_poll(void)
         }
         UNLOCK_TCPIP_CORE();
     }
+    wifi_retry_poll(&retry, gz_time_ms(), wireless && saved.reconnect,
+                    associated, state == NET_ASSOCIATING, auth_error || auth_failure,
+                    retry_saved_network, NULL);
 }
 
 int net_if_state(void)
