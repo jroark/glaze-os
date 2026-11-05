@@ -48,6 +48,10 @@ static uint16_t tx_fid;
 static bool tx_ready;
 static uint64_t association_started, scan_started;
 static bool port_on;            /* MAC port 0 enabled (command 1) */
+/* The port is on only for an "any" scan (Agere firmware before 8.10), so
+ * it is turned off again once the scan is over, before it joins an open
+ * network by itself. */
+static bool scan_any;
 static uint32_t sta_version;    /* station firmware, major << 16 | minor << 8 | variant */
 static struct { uint16_t len; uint8_t data[1536]; } queue[QUEUE];
 static uint32_t head, tail;
@@ -234,7 +238,9 @@ static void information(void)
     unsigned words = get16(hdr);
     if (!words || words > 799) { wifi.error = GZ_EIO; return; }
     unsigned len = (words - 1) * 2;
-    if (bap(fid, 4, scratch, len, false)) return;
+    /* An empty frame (an old Agere scan with nothing to report) has no
+     * body to read. */
+    if (len && bap(fid, 4, scratch, len, false)) return;
     if (get16(hdr + 2) != 0xf200)
         kprintf(NAME ": info %x, %u bytes\n", get16(hdr + 2), len);
 #ifdef XI825_HERMES
@@ -303,6 +309,10 @@ void xi825_irq(void)
     if (wifi.scanning && time_us() - scan_started > 5000000) {
         wifi.scanning = 0; wifi.error = GZ_ETIMEDOUT; notify();
     }
+    if (scan_any && !wifi.scanning) {
+        command(2, 0);
+        port_on = scan_any = false;
+    }
     if (wifi.state == WIFI_CONNECTING && time_us() - association_started > 10000000) {
         command(2, 0);
         port_on = false;
@@ -360,7 +370,7 @@ void xi825_removed(void)
     xdisable();
     present = false;
     tx_ready = false;
-    port_on = false;
+    port_on = scan_any = false;
     head = tail = 0;
     memset(&nic, 0, sizeof(nic));
     memset(&wifi, 0, sizeof(wifi));
@@ -476,11 +486,16 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
              * as Linux leaves it. A real WaveLAN Gold (6.4.1) returned no
              * networks for the made-up SSID. It may then join an open
              * network by itself. */
-            if (sta_version < 0x080a00)
+            bool any = sta_version < 0x080a00;
+            if (any)
                 memset(ssid, 0, sizeof(ssid));
+#else
+            bool any = false;
 #endif
-            if (!(rv = write_rid(0xfc02, ssid, sizeof(ssid))) && !(rv = command(1, 0)))
+            if (!(rv = write_rid(0xfc02, ssid, sizeof(ssid))) && !(rv = command(1, 0))) {
                 port_on = true;
+                scan_any = any;
+            }
             if (rv) kprintf(NAME ": enabling the port to scan failed %d\n", rv);
         }
         wifi.error = 0; wifi.scanning = 1; scan_started = time_us();
@@ -529,7 +544,7 @@ static int control(struct proc *p, uint32_t op, uint32_t buf)
         if (!req.ssid_len || req.ssid_len > WIFI_SSID_MAX) return GZ_EINVAL;
     }
     if ((rv = command(2, 0))) return rv;
-    port_on = false;
+    port_on = scan_any = false;
     wifi.state = WIFI_DISCONNECTED; wifi.error = 0;
     head = tail = 0;
     memset(&wifi.current, 0, sizeof(wifi.current));
