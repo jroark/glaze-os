@@ -28,6 +28,8 @@ NAND_BOOT_PROBE ?=
 COLD_SOCKET_TEST ?=
 # Snapshot hardware registers at kernel entry and after driver setup.
 HWDUMP ?=
+# VEO_PROBE=1: Veo CF camera bring-up over USB diagnostics (docs/hardware/VEO.md).
+VEO_PROBE ?=
 # Beep at early kernel stages, before the LCD is on (power-on bring-up).
 BOOT_BEEP ?=
 # The idle thread's VR4131 STANDBY (docs/hardware/POWER.md); IDLE_STANDBY=0 spins

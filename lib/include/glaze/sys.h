@@ -115,6 +115,10 @@ struct bt_card_info;
 static inline int gz_bt_card_info(struct bt_card_info *info, uint32_t size)
 { return GZ_SC2(SYS_BT_CARD_INFO, info, size); }
 
+/* USB service, VEO_PROBE=1 kernels: Veo camera bring-up (glaze/veo.h). */
+static inline int gz_cam_probe(uint32_t op, uint32_t arg, void *buffer, uint32_t size)
+{ return GZ_SC4(SYS_CAM_PROBE, op, arg, buffer, size); }
+
 /* Network server only (see servers/net). */
 static inline int gz_wifi_ctl(uint32_t op, void *buf) { return GZ_SC2(SYS_WIFI_CTL, op, buf); }
 static inline int gz_net_info(struct gz_netif_info *info) { return GZ_SC1(SYS_NET_INFO, info); }

@@ -126,6 +126,10 @@ bool bt_present(void);
 uint32_t bt_generation(void);
 int sys_bt_io(struct proc *, uint32_t, uint32_t, uint32_t);
 int sys_bt_card_info(struct proc *, uint32_t, uint32_t);
+bool cf_card_is_veo(void);
+bool cf_card_is_icsi_camera(void);
+void cf_probe_hold(void);
+int sys_cam_probe(struct proc *, uint32_t, uint32_t, uint32_t, uint32_t);
 /* modem.c: a CF data modem's UART, for the network server (PROC_NET). */
 void modem_insert(uint32_t cor_address, unsigned config_index);
 void modem_removed(void);

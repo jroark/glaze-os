@@ -7,6 +7,7 @@
 #define GLAZE_HW_H
 static uint32_t companion[0x10000/4], gpio[0x1000/4];
 static uint8_t attr[2048], ata[16], ctl;
+static uint16_t ata16;
 static uint32_t ctrl, reset, status, bridge, mock_a020, a024, a034, windows;
 static bool require_attribute;
 static unsigned bt_inserts, bt_removals;
@@ -34,6 +35,7 @@ static uint8_t cis_byte(unsigned i)
 #define CF_COR attr[0x200]
 #define CF_CCSR attr[0x202]
 #define CF_ATA(i) ata[i]
+#define CF_ATA_DATA16 ata16
 #define CF_ATA_CTL ctl
 #include "../../kernel/drivers/cf.c"
 const struct gz_bootinfo *ram_boot;

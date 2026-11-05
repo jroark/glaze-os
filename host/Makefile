@@ -51,9 +51,9 @@ clipboard-test: ../tests/native/clipboard.c ../tests/native/clipboard_sys.h ../l
 USB_PKG_CONFIG ?= $(if $(wildcard /opt/homebrew/bin/pkg-config),/opt/homebrew/bin/pkg-config,pkg-config)
 USB_FLAGS := $(shell $(USB_PKG_CONFIG) --cflags --libs libusb-1.0 2>/dev/null)
 USB_CC ?= $(CC)
-USB_SOURCES := $(wildcard ../tools/glaze-usb/*.c)
+USB_SOURCES := $(wildcard ../tools/glaze-usb/*.c) ../lib/media/veo_jpeg.c ../lib/media/jpeg.c
 USB_TLS := -I../third_party/wolfssl -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS
-../out/host/glaze-usb: $(USB_SOURCES) $(wildcard ../tools/glaze-usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h ../lib/include/glaze/debug_net.h ../lib/include/glaze/usb_net.h $(O)/libwolfssl.a
+../out/host/glaze-usb: $(USB_SOURCES) $(wildcard ../tools/glaze-usb/*.h) ../lib/include/glaze/usb_wire.h ../lib/include/glaze/usb_boot.h ../lib/include/glaze/abi.h ../lib/include/glaze/debug_net.h ../lib/include/glaze/usb_net.h ../lib/include/glaze/veo.h ../lib/include/glaze/media.h $(O)/libwolfssl.a
 	@mkdir -p ../out/host
 	$(USB_CC) -std=gnu11 -O2 -g -Wall -Wextra -I../lib/include $(USB_TLS) $(USB_SOURCES) $(O)/libwolfssl.a $(USB_FLAGS) -o $@
 glaze-usb: ../out/host/glaze-usb
@@ -592,6 +592,12 @@ cf-boot-test: ../tests/native/cf_boot.c ../kernel/drivers/cf.c
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/cf_boot.c -o ../out/host/cf-boot-test
 	../out/host/cf-boot-test
 .PHONY: cf-boot-test
+
+veo-test: ../tests/native/veo.c ../kernel/drivers/veo.c ../lib/media/veo_jpeg.c ../lib/media/jpeg.c ../lib/include/glaze/veo.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/veo.c ../lib/media/veo_jpeg.c ../lib/media/jpeg.c -o ../out/host/veo-test
+	../out/host/veo-test
+.PHONY: veo-test
 
 nand-program-test: ../tests/native/nand_program.c ../kernel/drivers/nand.c $(BE300_SOURCE)/src/hw/nand.c $(BE300_SOURCE)/src/hw/nand_restore.c
 	@mkdir -p ../out/host
