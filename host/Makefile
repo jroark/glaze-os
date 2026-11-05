@@ -491,7 +491,7 @@ store-worker-test: $(O)/libwolfssl.a
 module-test: ../tests/native/module.c ../kernel/module.c
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o ../out/host/module-test ../tests/native/module.c
-	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko ../out/drivers/cfuart.ko
+	../out/host/module-test ../out/drivers/ne2000.ko ../out/drivers/xi825.ko ../out/drivers/wl54cf.ko ../out/drivers/cfuart.ko ../out/drivers/3c589.ko ../out/drivers/hermes.ko
 
 .PHONY: service-test
 service-test: ../tests/native/service.c ../kernel/service.c

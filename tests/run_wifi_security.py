@@ -45,7 +45,7 @@ def main():
         log=(work/(label+'.stdout.log')).read_text(errors='replace')
         if 'ktest: ALL PASS (0 failures)' not in log:raise RuntimeError(f'{work.name}/{label}: guest failed; see logs')
         if card not in ('none','cf') and 'net: DHCP address ' not in log:raise RuntimeError(f'{work.name}: no DHCP')
-        if card in ('xi825','wl54cf'):
+        if card in ('xi825','wl54cf','hermes'):
             number={'open':0,'wep':1,'wpa':2,'wpa2':3}[mode]
             if f'ktest: wifi security {number} connected' not in log:raise RuntimeError(f'{work.name}: security mismatch')
         print(work.name+'/'+label+': PASS',flush=True)
@@ -54,7 +54,7 @@ def main():
         mode='open' if legacy else 'wep' if wep104 else mode or 'open';work=directory/case;work.mkdir()
         overrides=[]
         seed=work/'entropy';seed.write_bytes(secrets.token_bytes(32));overrides.append('/Library/Preferences/net.entropy='+str(seed))
-        if card in ('xi825','wl54cf'):
+        if card in ('xi825','wl54cf','hermes'):
             key=(b'1234567890123' if wep104 else b'12345') if mode=='wep' else b'' if mode=='open' else b'password'
             credentials=struct.pack('<I32sIIII64s',5,b'BE300',{'open':0,'wep':1,'wpa':2,'wpa2':3}[mode],len(key),0,0,key)
             pref=work/'preference'
@@ -68,7 +68,7 @@ def main():
         nand=bytearray(source.read_bytes());nand[0x500000:0x500000+fs.stat().st_size]=fs.read_bytes();(work/'nand.bin').write_bytes(nand)
         if card=='cf':(work/'cf.img').write_bytes(bytes(8*1024*1024))
         boot(work,card,mode,'first',wep104)
-        if card in ('xi825','wl54cf'):boot(work,card,mode,'reboot',wep104)
+        if card in ('xi825','wl54cf','hermes'):boot(work,card,mode,'reboot',wep104)
     try:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:list(pool.map(run,args.cases.split(',')))
         if hashlib.sha256(source.read_bytes()).hexdigest()!=before:raise RuntimeError('source NAND changed')

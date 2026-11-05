@@ -150,7 +150,7 @@ static int attach(void)
     } else {
         memcpy(nif.hwaddr, info.mac, ETH_HWADDR_LEN);
     }
-    wireless = info.kind == GZ_NET_XI825 || info.kind == GZ_NET_WL54CF;
+    wireless = info.kind == GZ_NET_XI825 || info.kind == GZ_NET_WL54CF || info.kind == GZ_NET_HERMES;
     wifi_retry_reset(&retry);
     associated = false;
     netif_set_up(&nif);

@@ -1058,7 +1058,7 @@ static void test_net(void)
         return;
     }
     CHECK(net_wait_up(15000) == 0 && net_status(&st) == 0 && st.addr, "net address");
-    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF) {
+    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF || st.kind == GZ_NET_HERMES) {
         struct wifi_status wireless;
         CHECK(net_wifi_status(&wireless) == 0 && wireless.state == WIFI_CONNECTED,
               "wifi authenticated before DHCP");
@@ -1170,7 +1170,9 @@ static void test_net(void)
               "wifi explicit disconnect disables reconnect");
         /* The XI-825 starts associating and times out; the WL54-CF scans for
          * the network first and refuses one that isn't there. */
-        if (card == GZ_NET_XI825) {
+        /* The XI-825 and Hermes start associating and time out; the WL54-CF
+         * scans for the network first and refuses one that isn't there. */
+        if (card == GZ_NET_XI825 || card == GZ_NET_HERMES) {
             CHECK(net_wifi_connect("missing", 7) == 0, "wifi unavailable network starts");
             gz_sleep_ms(11000);
             CHECK(net_wifi_status(&ws) == 0 && ws.state == WIFI_FAILED && ws.error == GZ_ETIMEDOUT,
@@ -1197,7 +1199,7 @@ static void test_net(void)
     } else {
         printf("ktest: INFO ntp %s: %s\n", NTP_SERVER, net_strerror(rv));
     }
-    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF) {
+    if (st.kind == GZ_NET_XI825 || st.kind == GZ_NET_WL54CF || st.kind == GZ_NET_HERMES) {
         struct wifi_preference choice;
         if (pref_get(WIFI_PREF, &choice, sizeof(choice)) == sizeof(choice) && choice.version == 2) {
             CHECK(net_wifi_disconnect() == 0, "wifi disconnect");

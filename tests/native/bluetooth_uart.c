@@ -22,6 +22,9 @@ static void uart_write(unsigned,uint8_t);
 #define KJ_SRC_PCMCIA irq_enable
 #define KJ_SRC_ENABLE 8u
 #define REG8(addr) cor
+#define PCMCIA0_IO 0x0a00c000u
+static uint32_t pcmcia_io_base = PCMCIA0_IO;
+static uint32_t pcmcia_attr_base __attribute__((unused)) = 0x0a00d000u;  /* REG8 ignores the address */
 #include "../../kernel/drivers/cfuart.c"
 /* The verified BCSP setup (BLUETOOTH.md), as kernel/bluetooth.c passes it. */
 static const struct uart_config bcsp = {

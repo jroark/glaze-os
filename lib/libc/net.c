@@ -68,6 +68,21 @@ static int connect(void)
     return 0;
 }
 
+/* Wi-Fi and dial-up requests hold no socket, so when the server has
+ * restarted (a network card was swapped) they open a new session at once
+ * instead of failing once with GZ_ENETDOWN as socket calls must. */
+static int control_connect(void)
+{
+    bool stale = session >= 0;
+    int rv = connect();
+    if (rv == GZ_ENETDOWN && stale)
+        rv = connect();
+    return rv;
+}
+#define CONTROL_LOCKED() \
+    SESSION_LOCKED(); \
+    do { int crv_ = control_connect(); if (crv_) return crv_; } while (0)
+
 static int call(uint32_t op, uint32_t a, uint32_t b, uint32_t c, uint32_t d, struct gz_msg *reply)
 {
     struct gz_msg m, r;
@@ -118,18 +133,18 @@ int net_status(struct net_status *st)
 
 int net_wifi_status(struct wifi_status *status)
 {
-    SESSION_LOCKED();
+    CONTROL_LOCKED();
     int rv = call(NET_WIFI_STATUS, 0, 0, 0, 0, NULL);
     if (!rv) memcpy(status, buf, sizeof(*status));
     return rv;
 }
 int net_wifi_scan(void)
 {
-    SESSION_LOCKED(); return call(NET_WIFI_SCAN, 0, 0, 0, 0, NULL);
+    CONTROL_LOCKED(); return call(NET_WIFI_SCAN, 0, 0, 0, 0, NULL);
 }
 int net_wifi_connect(const void *ssid, uint32_t length)
 {
-    SESSION_LOCKED();
+    CONTROL_LOCKED();
     if (!ssid || !length || length > WIFI_SSID_MAX) return GZ_EINVAL;
     int rv = connect(); if (rv) return rv;
     struct wifi_request req = { .ssid_len = length };
@@ -139,7 +154,7 @@ int net_wifi_connect(const void *ssid, uint32_t length)
 }
 int net_wifi_disconnect(void)
 {
-    SESSION_LOCKED(); return call(NET_WIFI_DISCONNECT, 0, 0, 0, 0, NULL);
+    CONTROL_LOCKED(); return call(NET_WIFI_DISCONNECT, 0, 0, 0, 0, NULL);
 }
 
 int net_wait_up(int timeout_ms)
@@ -381,7 +396,7 @@ const char *net_strerror(int err)
 
 int net_wifi_connect_secure(const struct wifi_credentials *credentials)
 {
-    SESSION_LOCKED();
+    CONTROL_LOCKED();
     int rv = wifi_credentials_validate(credentials);
     if (rv || (rv = connect())) return rv;
     memcpy(buf, credentials, sizeof(*credentials));
@@ -391,13 +406,13 @@ int net_wifi_connect_secure(const struct wifi_credentials *credentials)
 }
 int net_wifi_forget(void)
 {
-    SESSION_LOCKED();
+    CONTROL_LOCKED();
     return call(NET_WIFI_FORGET, 0, 0, 0, 0, NULL);
 }
 
 int net_dial(const struct net_dial_config *config)
 {
-    SESSION_LOCKED();
+    CONTROL_LOCKED();
     struct net_dial_config empty = {0};
     if (!config) config = &empty;
     int rv = net_dial_config_validate(config);
@@ -409,18 +424,18 @@ int net_dial(const struct net_dial_config *config)
 }
 int net_hangup(void)
 {
-    SESSION_LOCKED(); return call(NET_HANGUP, 0, 0, 0, 0, NULL);
+    CONTROL_LOCKED(); return call(NET_HANGUP, 0, 0, 0, 0, NULL);
 }
 int net_dial_status(struct net_dial_status *status)
 {
-    SESSION_LOCKED();
+    CONTROL_LOCKED();
     int rv = call(NET_DIAL_STATUS, 0, 0, 0, 0, NULL);
     if (!rv) { memcpy(status, buf, sizeof(*status)); status->modem[sizeof(status->modem) - 1] = 0; }
     return rv;
 }
 int net_dial_config(struct net_dial_config *config)
 {
-    SESSION_LOCKED();
+    CONTROL_LOCKED();
     int rv = call(NET_DIAL_CONFIG, 0, 0, 0, 0, NULL);
     if (!rv) {
         memcpy(config, buf, sizeof(*config));

@@ -142,6 +142,10 @@ int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);
 void pcmcia_resume(void);   /* after a HIBERNATE: everything inserted afresh */
+/* A card in the CF socket or the PCMCIA jacket's (socket 1), and the card
+ * windows of whichever holds it (hw.h). */
+bool pcmcia_card_present(void);
+extern uint32_t pcmcia_io_base, pcmcia_attr_base;
 /* The CIS's LAN_NODE_ID (CISTPL_FUNCE): a network card's station address. */
 bool pcmcia_node_id(uint8_t mac[6]);
 int sys_cf_read(struct proc *p, uint32_t lba, uint32_t count, uint32_t ubuf);
@@ -187,6 +191,11 @@ void ne2000_irq(void);
 bool ne2000_present(void);
 void ne2000_removed(void);
 int ne2000_send(const uint8_t *frame, uint32_t len);
+bool el3_init(void);         /* 3c589.c: 3Com EtherLink III */
+void el3_irq(void);
+bool el3_present(void);
+void el3_removed(void);
+int el3_send(const uint8_t *frame, uint32_t len);
 bool wl54cf_init(void);
 void wl54cf_irq(void);
 void wl54cf_removed(void);

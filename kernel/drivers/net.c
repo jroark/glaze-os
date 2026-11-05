@@ -112,6 +112,20 @@ static void select_card(unsigned manufacturer, unsigned product)
         kind = GZ_NET_XI825; path = "drivers/xi825.ko";
     } else if (manufacturer == 0x02df && product == 0x8103) {
         kind = GZ_NET_WL54CF; path = "drivers/wl54cf.ko";
+    } else if (manufacturer == 0x0101 && product == 0x0589) {
+        kind = GZ_NET_3C589; path = "drivers/3c589.ko";     /* Linux 3c589_cs */
+    } else if (manufacturer == 0x0156 && product == 0x0002) {
+        kind = GZ_NET_HERMES; path = "drivers/hermes.ko";   /* Lucent/Agere Orinoco */
+    } else if (manufacturer == 0x0101 || manufacturer == 0x0105 || manufacturer == 0x0128 ||
+               manufacturer == 0x0156) {
+        /* 3Com, Xircom, Megahertz and Lucent cards that aren't NE2000
+         * clones: NE2000 register writes could wedge them. Keep the socket
+         * reserved so ATA never touches them either. */
+        kprintf("net: unsupported network card %x:%x; socket reserved\n", manufacturer, product);
+        kind = GZ_NET_NONE;
+        driver = NULL;
+        online = false;
+        return;
     } else {
         kind = GZ_NET_NE2000; path = "drivers/ne2000.ko";
     }
@@ -134,7 +148,7 @@ static void select_card(unsigned manufacturer, unsigned product)
         if (callbacks[i] && !module_executable(&image, callbacks[i])) {
             error = GZ_ECORRUPT; goto failed;
         }
-    if (kind != GZ_NET_XI825) {
+    if (kind != GZ_NET_XI825 && kind != GZ_NET_HERMES) {
         queue = page_alloc_n(QUEUE_PAGES);
         if (!queue) { error = GZ_ENOMEM; goto failed; }
         tx_buf = (uint8_t *)queue + QUEUE_LEN * sizeof(*queue);
@@ -162,8 +176,13 @@ void net_init(void)
 {
     if (driver)
         return;  /* The cold socket initializer already configured this card. */
-    PCMCIA_BRIDGE |= PCMCIA_BRIDGE_EN;
-    if (!PCMCIA_CARD_PRESENT())
+    /* Finds the socket holding a card and points the windows at it (cf.c). */
+    bool present = PCMCIA_CARD_PRESENT();
+    /* The C000/D000 card windows are the CF socket's; the jacket's
+     * (socket 1) are elsewhere and CE leaves this bit clear for it. */
+    if (pcmcia_io_base == PCMCIA0_IO)
+        PCMCIA_BRIDGE |= PCMCIA_BRIDGE_EN;
+    if (!present)
         return;
     unsigned function = 0xff, manufacturer = 0, product = 0;
     for (unsigned i = 0, n = 0; n < 64 && i + 2 < 0x100; n++) {

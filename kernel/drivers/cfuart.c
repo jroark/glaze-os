@@ -8,7 +8,6 @@
 #include <glaze/abi.h>
 #include "../hw.h"
 #include "../module.h"
-#define WINDOW 0x0a00c000u
 /* Tests (tests/native/bluetooth_uart.c) substitute the register access. */
 #ifndef CF_UART_READ
 #define CF_UART_READ(r) REG8(io + (r))
@@ -30,13 +29,18 @@ int cfuart_error(void) { return fault; }
 int cfuart_init(const struct uart_config *c)
 {
     KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
-    if (!c->cor_address || c->cor_address >= 0x800u || (c->io_base & 7u) ||
-        c->io_base < 0x100u || c->io_base > 0x3f8u || !c->divisor)
+    /* The windows of the socket holding the card (hw.h, cf.c): the CF
+     * socket's, below its NAND port, or the PCMCIA jacket's (socket 1). */
+    bool cf_socket = pcmcia_io_base == PCMCIA0_IO;
+    if (!c->cor_address || c->cor_address >= (cf_socket ? 0x800u : 0x200000u) ||
+        (c->io_base & 7u) || c->io_base < 0x100u || c->io_base > 0x3f8u || !c->divisor)
         return fault = GZ_EINVAL;
-    io = WINDOW + c->io_base;
-    /* Socket power/bus policy belongs to cf.c; preserve the live setup. */
-    PCMCIA_A020 = (PCMCIA_A020 & ~4u) | PCMCIA_A020_CONFIG;
-    REG8(0x0a00d000u + c->cor_address) = c->cor;
+    io = pcmcia_io_base + c->io_base;
+    /* Socket power/bus policy belongs to cf.c; preserve the live setup.
+     * Socket 1's configuration window is mapped by cf.c (socket1_power_up). */
+    if (cf_socket)
+        PCMCIA_A020 = (PCMCIA_A020 & ~4u) | PCMCIA_A020_CONFIG;
+    REG8(pcmcia_attr_base + c->cor_address) = c->cor;
     W(3, (uint8_t)(c->lcr | 0x80u));            /* DLAB */
     W(0, (uint8_t)c->divisor); W(1, (uint8_t)(c->divisor >> 8));
     W(3, c->lcr);

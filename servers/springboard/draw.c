@@ -255,7 +255,7 @@ void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool pad
                     style == SB_STATUS_GRAY ? 0x637080 : 0xA4ACB7;
         if (icon == SB_ICON_STORAGE) draw_card(s, r.x+1, 3, color);
         else if (icon == SB_ICON_BLUETOOTH) draw_bluetooth(s, r.x+1, 2, color);
-        else if (v->network_kind == GZ_NET_XI825 || v->network_kind == GZ_NET_WL54CF) draw_wifi(s, r.x+1, 2, color);
+        else if (v->network_kind == GZ_NET_XI825 || v->network_kind == GZ_NET_WL54CF || v->network_kind == GZ_NET_HERMES) draw_wifi(s, r.x+1, 2, color);
         else draw_network(s, r.x+1, 2, color);
     }
     if (padlock)

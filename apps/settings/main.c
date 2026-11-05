@@ -121,7 +121,7 @@ static uint32_t card_key(struct net_status *st)
         memset(st, 0, sizeof(*st));
         st->state = NET_NO_CARD;
     }
-    wifi_available = st->state != NET_NO_CARD && (st->kind == GZ_NET_XI825 || st->kind == GZ_NET_WL54CF);
+    wifi_available = st->state != NET_NO_CARD && (st->kind == GZ_NET_XI825 || st->kind == GZ_NET_WL54CF || st->kind == GZ_NET_HERMES);
     modem_available = st->state != NET_NO_CARD && st->kind == GZ_NET_MODEM;
     return st->state | (uint32_t)st->kind << 8;
 }

@@ -500,7 +500,9 @@ static void show_card_details(void)
                                : st.state == NET_CONFIGURING ? "Configuring address..." : "Not connected";
             strlcpy(line[0], st.kind == GZ_NET_XI825 ? "XI-825 Wi-Fi"
                              : st.kind == GZ_NET_WL54CF ? "WL54-CF Wi-Fi" : st.kind == GZ_NET_USB ? "USB Network"
-                             : st.kind == GZ_NET_MODEM ? "Dial-up Modem" : "NE2000 Ethernet",
+                             : st.kind == GZ_NET_MODEM ? "Dial-up Modem"
+                             : st.kind == GZ_NET_HERMES ? "Orinoco Wi-Fi"
+                             : st.kind == GZ_NET_3C589 ? "3Com Ethernet" : "NE2000 Ethernet",
                     sizeof(line[0]));
             strlcpy(line[1], status, sizeof(line[1]));
             if (st.kind == GZ_NET_MODEM)
