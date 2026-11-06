@@ -122,6 +122,16 @@ int main(void)
     usb_poll();
     if (!reboot_setjmp(reboot_return)) { sys_usb_ctl(&p, GZ_USB_REBOOT_CE, 0, 0); assert(0); }
     assert(rebooted == 1);
+    /* A network session's reply went over TLS: a stalled USB FIFO (or no
+     * cable at all) must not block the restart. */
+    memset(user, 0, 24);
+    assert(sys_usb_ctl(&p, GZ_USB_WRITE, 0, 24) == 24);
+    gu_put32(user, 1); assert(sys_usb_ctl(&p, GZ_USB_DEBUG_TRANSPORT, 0, 4) == 0);
+    if (!reboot_setjmp(reboot_return)) { sys_usb_ctl(&p, GZ_USB_REBOOT_CE, 0, 0); assert(0); }
+    assert(rebooted == 2);
+    gu_put32(user, 0); assert(sys_usb_ctl(&p, GZ_USB_DEBUG_TRANSPORT, 0, 4) == 0);
+    assert(usbf_host_in(&model, answer, sizeof(answer)) == 24);
+    usb_poll();
     uint32_t old = generation; set_lines(0); assert(configured && generation != old);
     set_lines(3); assert(lines == 3);
     usbf_host_bus_reset(&model); usb_poll(); assert(!configured && !tx_busy && rh == rt);

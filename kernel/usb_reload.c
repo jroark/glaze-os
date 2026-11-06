@@ -189,7 +189,7 @@ int usb_reload_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
     }
     if (op == GZ_USB_RELOAD_GO && prepared) {
         uint64_t end = time_us() + 2000000u;
-        while (!usb_tx_idle()) if (time_us() >= end) return GZ_ETIMEDOUT;
+        while (!usb_reply_sent()) if (time_us() >= end) return GZ_ETIMEDOUT;
         usb_stop();
         /* The trampoline masks CPU interrupts, stops audio and flushes
          * caches before relocation. No further scheduler entry occurs. */

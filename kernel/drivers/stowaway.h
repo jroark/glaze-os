@@ -3,7 +3,7 @@
 #define GLAZE_STOWAWAY_H
 #include <glaze/abi.h>
 struct stowaway_decoder {
-    bool down[128], caps;
+    bool down[128], caps, numlock;
     uint16_t held[96]; /* translated key-down code, including edit shortcuts */
     int repeat;
     uint32_t deadline;

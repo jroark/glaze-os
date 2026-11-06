@@ -2,10 +2,10 @@
 
 Read with the root CLAUDE.md, which covers building, testing and toolchain rules.
 
-**Input.** Touch comes from the VRC4173 PIU, through GIRQ0 to GIU line 0 to IP2 (`kernel/drivers/irq.c`, `input.c`); buttons are polled and also arrive on GIRQ0. Events go into a kernel ring that only the bound compositor drains. SpringBoard forwards events to the foreground app through the shared ring in `struct sb_shared`. `ui_next_event` coalesces consecutive moves. Stowaway is detected once at boot
-(`kernel/drivers/stowaway*.c`); UART RX is polled on the timer tick. `GZ_EV_TEXT`
+**Input.** Touch comes from the VRC4173 PIU, through GIRQ0 to GIU line 0 to IP2 (`kernel/drivers/irq.c`, `input.c`); buttons are polled and also arrive on GIRQ0. Events go into a kernel ring that only the bound compositor drains. SpringBoard forwards events to the foreground app through the shared ring in `struct sb_shared`. `ui_next_event` coalesces consecutive moves. The Stowaway dock keyboard
+(`kernel/drivers/stowaway*.c`) is watched, handshaken and read on the timer tick, so it attaches and detaches live. `GZ_EV_TEXT`
 and keyboard key events pass through SpringBoard to the foreground app.
-`SYS_INPUT_STATUS` reports dock presence, passed in `SB_HELLO` reply word 4;
+`SYS_INPUT_STATUS` reports dock presence, passed in `SB_HELLO` reply word 4 and rechecked by `ui_next_event` on every event;
 `ui_has_hardware_keyboard()` / `ui_keyboard_height()` separate editing focus
 from on-screen keyboard layout. `make -C host stowaway-test` checks the decoder
 and shared text editor.
