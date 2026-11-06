@@ -23,6 +23,7 @@ static int suspends, sounds, set_bg_rv;
 /* Queued by the fake SpringBoard when the app suspends itself. */
 static struct gz_input_event while_away[4];
 static int n_away;
+static int input_status;          /* GZ_INPUT_* the kernel reports */
 
 int gz_port_create(void) { return 1; }
 int gz_port_lookup(const char *name) { return 2; }
@@ -31,6 +32,7 @@ void *gz_shm_map(int id) { return NULL; }
 int gz_getpid(void) { return SELF; }
 void gz_sleep_ms(uint32_t ms) { now += ms; }
 uint32_t gz_time_ms(void) { return now; }
+int gz_input_status(void) { return input_status; }
 
 int gz_recv(int port, struct gz_msg *m, int timeout_ms)
 {
@@ -199,6 +201,18 @@ int main(void)
     push(GZ_EV_TOUCH_MOVE,10,10);push(GZ_EV_TOUCH_MOVE,20,20);
     assert(next(0).x==20 && !uikb_ink_down());
     printf("handwriting preserves stroke samples and cancels safely: PASS\n");
+
+    /* Docking or undocking the keyboard shows on the next event, with a full redraw. */
+    ui.hardware_keyboard = false;
+    input_status = GZ_INPUT_STOWAWAY;
+    ui.dirty = gfx_r(0, 0, 0, 0);
+    push(GZ_EV_TEXT, 0, 0); assert(next(0).type == GZ_EV_TEXT);
+    assert(ui.hardware_keyboard && !gfx_rect_empty(ui.dirty));
+    input_status = 0;
+    push(GZ_EV_TOUCH_DOWN, 1, 1); assert(next(0).type == GZ_EV_TOUCH_DOWN);
+    assert(!ui.hardware_keyboard);
+    push(GZ_EV_TOUCH_UP, 1, 1); next(0);
+    printf("a docked keyboard is noticed on the next event: PASS\n");
 
     printf("ui events: PASS\n");
     free(sh);

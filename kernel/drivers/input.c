@@ -317,6 +317,7 @@ void input_suspend(void)
 void input_resume(bool cold)
 {
     keys_sync();
+    stowaway_resume();
     if (cold) {
         piu_start();
         return;

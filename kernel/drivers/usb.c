@@ -222,6 +222,15 @@ bool usb_tx_idle(void)
     usb_poll();
     return tt == th && !tx_busy && !short_pending && !zlp && (R(0x1464) & 4);
 }
+
+/* Before a reload or a return to Windows CE, the acknowledgement must have
+ * left. A network session sent it over TLS (servers/usb waits for lwIP), and
+ * with the cable out 0x1464 bit 2 never sets on a real BE-300, so only a USB
+ * session waits for the FIFO. */
+bool usb_reply_sent(void)
+{
+    return network_debugger || usb_tx_idle();
+}
 int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
 {
     if (!(p->flags & PROC_USB)) return GZ_EPERM;
@@ -251,7 +260,7 @@ int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
     if (op == GZ_USB_REBOOT_CE) {
         if (len) return GZ_EINVAL;
         uint64_t end = time_us() + 2000000u;
-        while (!usb_tx_idle()) if (time_us() >= end) return GZ_ETIMEDOUT;
+        while (!usb_reply_sent()) if (time_us() >= end) return GZ_ETIMEDOUT;
         machine_reboot_ce();
     }
     if ((op >= GZ_USB_SCRIPT_BEGIN && op <= GZ_USB_SCRIPT_CANCEL) || op == GZ_USB_LIVE_INPUT)

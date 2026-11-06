@@ -13,7 +13,7 @@ const struct nand_boot_map *boot_nand_map(void);   /* the scan boot_nand_read us
 
 /* console.c */
 void uart_putc(char c);
-void console_use_debug_uart(void);
+void console_use_debug_uart(bool on);
 void console_ram_boot(void);
 bool console_dead(void);
 bool timer_rtc_ok(void);

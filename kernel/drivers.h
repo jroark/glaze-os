@@ -35,6 +35,7 @@ void usb_poll(void);
 void usb_stop(void);
 void usb_resume(void);      /* after a HIBERNATE */
 bool usb_tx_idle(void);
+bool usb_reply_sent(void);
 void usb_log_putc(char c);
 void usb_panic_poll(void);
 int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
@@ -75,6 +76,7 @@ void display_sleep(void);   /* panel and backlight off (drivers/power.c) */
 void display_wake(void);    /* panel on, backlight still off */
 void input_push(uint16_t type, uint16_t code, int x, int y);
 void stowaway_init(void);
+void stowaway_resume(void);
 void stowaway_poll(void);
 int stowaway_status(void);
 void input_irq(uint16_t kj_status);

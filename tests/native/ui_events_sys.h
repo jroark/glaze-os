@@ -12,4 +12,5 @@ int gz_getpid(void);
 void gz_sleep_ms(uint32_t ms);
 uint32_t gz_time_ms(void);
 int gz_proc_set_bg(int pid, int state);
+int gz_input_status(void);
 #endif

@@ -140,6 +140,14 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
             }
             if (!ui_in_background() && ev->type < GZ_EV_APP_ACTIVATE)
                 uisnd_event(ev);
+            /* The dock keyboard comes and goes (kernel/drivers/stowaway_hw.c):
+             * the first key after docking or touch after undocking relays out
+             * the on-screen keyboard, since apps lay out from this as they draw. */
+            bool hw = (gz_input_status() & GZ_INPUT_STOWAWAY) != 0;
+            if (hw != ui.hardware_keyboard) {
+                ui.hardware_keyboard = hw;
+                ui_invalidate_all();
+            }
             return 1;
         }
         int wait = timeout_ms;
