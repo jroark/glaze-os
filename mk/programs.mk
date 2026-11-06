@@ -1,6 +1,13 @@
 # ---- user programs ----------------------------------------------------------
 
 PROG_DIRS := $(patsubst %/,%,$(wildcard apps/*/ servers/*/))
+
+# Installable diagnostic for existing devices; no OS reload required.
+eyefi-package: $(OUT)/bin/eyefi.elf apps/eyefi/Info assets/gen/icon_files.gzi
+	@mkdir -p $(OUT)/pkg
+	$(OBJCOPY) --strip-all $(OUT)/bin/eyefi.elf $(OUT)/pkg/eyefi-app
+	python3 tools/mkromfs.py --package $(OUT)/pkg/eyefi.gzp Info=apps/eyefi/Info app=$(OUT)/pkg/eyefi-app res/icon.gzi=assets/gen/icon_files.gzi
+.PHONY: eyefi-package
 ifeq ($(NETDEBUG_TESTS),1)
 PROG_DIRS += tests/debug_guest
 PROG_CFLAGS_debug_guest := $(WOLFSSL_INC) -DDEBUG_RELOAD_ADDR='"$(or $(DEBUG_RELOAD_ADDR),10.0.0.254)"'

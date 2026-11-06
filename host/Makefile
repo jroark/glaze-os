@@ -707,6 +707,16 @@ bluetooth-uart-test:
 	../out/host/bluetooth-uart-test
 .PHONY: bluetooth-uart-test
 
+eyefi-test: ../tests/native/eyefi.c ../tests/native/eyefi_files.c ../tests/native/eyefi_research.c ../apps/eyefi/main.c ../apps/eyefi/protocol.c ../apps/eyefi/protocol.h ../apps/eyefi/research.c ../apps/eyefi/research.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/eyefi.c ../apps/eyefi/protocol.c -o ../out/host/eyefi-test
+	../out/host/eyefi-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/eyefi_files.c ../apps/eyefi/protocol.c -o ../out/host/eyefi-files-test
+	../out/host/eyefi-files-test
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/eyefi_research.c ../apps/eyefi/protocol.c -o ../out/host/eyefi-research-test
+	cd ../out/host && ./eyefi-research-test
+.PHONY: eyefi-test
+
 wifi-retry-test: ../tests/native/wifi_retry.c ../servers/net/wifi_retry.h
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/wifi_retry.c -o ../out/host/wifi-retry-test
 	../out/host/wifi-retry-test
