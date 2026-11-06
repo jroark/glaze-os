@@ -11,7 +11,7 @@ services from the trusted catalog, with `net` conditional on network hardware.
 `libc.so.1` owns the allocator, threads, errno, resource mapping, filesystem and
 network and audio clients, and BSD socket wrappers. `libgfx.so.1` owns
 graphics and font resources; `libui.so.1` owns widgets and the app client.
-`libmedia.so.1` holds the WAV/ADPCM/AVI/MP3-probe/resampling code the audio
+`libmedia.so.1` holds the WAV/ADPCM/AVI/MP3-probe/MP2/resampling code the audio
 server and Videos both use. `libwolfssl.so.1` shares TLS code between Browser,
 App Store and audio; its RNG and time callbacks resolve from each executable
 and its contexts remain private to that process. Each has an explicit export map. lwIP,

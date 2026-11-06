@@ -57,6 +57,9 @@ PROG_CFLAGS_appstore += -Os
 # Helix and the shared media/gfx libraries retain their separate flags.
 PROG_CFLAGS_audio += -Os
 PROG_CFLAGS_video += -Os
+# MPEG-1 decoding (pl_mpeg) is the hot loop: -O2 costs 4 KiB of romfs, and
+# -Os decodes 11% slower.
+$(OUT)/dyn/apps/video/mpeg.o: PROG_CFLAGS_video += -O2
 PROG_CFLAGS_music += -Os
 PROG_CFLAGS_calendar += -Os
 PROG_CFLAGS_clock += -Os
@@ -72,10 +75,13 @@ $(OUT)/servers/bluetooth/%.o: USER_CFLAGS += $(SBC_INC) -Os
 $(OUT)/dyn/servers/bluetooth/main.o $(OUT)/dyn/servers/bluetooth/serial.o: FORCE
 $(OUT)/dyn/apps/settings/main.o $(patsubst %.c,$(OUT)/dyn/%.o,$(wildcard servers/bluetooth/*.c servers/usb/*.c servers/springboard/*.c apps/files/*.c apps/appstore/*.c)): mk/programs.mk
 
+# The kernel maps segments by 4 KiB page (kernel/image.c), so static programs
+# use that page size too: ld's MIPS default of 64 KiB put 60 KiB of padding
+# before the code of each, in romfs.
 define STATIC_template
-$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/lib/crt0.o $(USER_LIBS) $$(PROG_STATIC_DEPS_$(notdir $(1))) lib/user.lds
+$(OUT)/bin/$(notdir $(1)).elf: $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) $(OUT)/lib/crt0.o $(USER_LIBS) $$(PROG_STATIC_DEPS_$(notdir $(1))) lib/user.lds mk/programs.mk
 	@mkdir -p $$(dir $$@)
-	$(LD) -m elf32ltsmip -T lib/user.lds --gc-sections -o $$@ $(OUT)/lib/crt0.o \
+	$(LD) -m elf32ltsmip -z max-page-size=4096 -T lib/user.lds --gc-sections -o $$@ $(OUT)/lib/crt0.o \
 	    $$(patsubst %.c,$(OUT)/%.o,$$(wildcard $(1)/*.c) $$(PROG_EXTRA_$(notdir $(1)))) \
 	    --start-group $(USER_LIBS) $$(PROG_STATIC_DEPS_$(notdir $(1))) --end-group
 endef
@@ -144,6 +150,10 @@ $(OUT)/shared/libwolfssl.so.1: $(WOLFSSL_PIC_OBJS) $(OUT)/shared/libc.so.1 lib/w
 JERRY_PIC_OBJS := $(patsubst %.c,$(OUT)/pic/%.o,$(JERRY_SRCS))
 $(JERRY_PIC_OBJS): TP_INC := $(JERRY_INC)
 $(OUT)/pic/libjerry.a: $(JERRY_PIC_OBJS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
+$(OUT)/pic/libsoftfp.a: $(patsubst %.c,$(OUT)/pic/%.o,$(SOFTFP_SRCS))
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
