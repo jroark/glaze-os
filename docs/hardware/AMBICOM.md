@@ -23,9 +23,44 @@ IDENTIFY (in 16-bit words):
 Sector 0 is an MBR. Its one partition is bootable, type `04` (FAT16 under 32 MB), and covers LBA
 16 for 15,984 sectors, so the camera's pictures live on a normal FAT16 volume.
 
+## Board
+
+From photos of the opened card (2026-11-05):
+
+| Ref | Part | What it is |
+| --- | --- | --- |
+| U2 | ICSI (Integrated Circuit Solution Inc.) IC3102-F128TQ, date code 0242, 128-pin TQFP | camera controller and CF ATA interface |
+| U1 | Samsung K9F6408U0C-TCB0 | 64 Mbit (8 MiB) NAND, 512 + 16 byte pages, 16,384 pages |
+| — | Vanguard VG36641641DT-7L (labelled `90-114-01000`, `MS41021B1d10`) | 64 Mbit (4M x 16) SDRAM, 8 MiB, probably the frame buffer |
+| Y1 | 12.000 MHz crystal | controller clock |
+| — | `104` (100 kΩ) resistor arrays by the edge connector | CF bus pull-ups |
+
+There's no separate ROM chip. The image sensor isn't on this side of the board, so the photos
+don't show it.
+
+What follows from the parts:
+- The chip is an IC3102, but IDENTIFY reports `IC3100PCMCIA`. That string is probably the firmware's
+  name for the product family, not the exact part number.
+- The NAND holds 16,384 sectors, and 16,000 of them are visible as LBAs. The other 384 sectors
+  (192 KiB) are probably spare blocks, and maybe firmware or settings. This explains why reads past
+  LBA 16000 fail with IDNF.
+- No IC3102 datasheet has turned up. ICSI's launch release (20 June 2002, on the Wayback copy of
+  `www.icsi.com.tw/asp/news_data.asp?language=EN&id=82498400F5746C3348256BDE001D0B96`) calls it a
+  "CF camera card and CF memory card 2-in-1 controller" for Pocket PC and Pocket PC 2002, sold as a
+  "total solution" reference design. Its features: an 8051-compatible ("4 clocks per machine
+  cycle") 8-bit CPU, 32 KB of programmable flash ROM, a CMOS sensor interface (up to 500K pixels or
+  SVGA), CF 1.4 and True IDE, **full-speed USB 1.1** (for reaching the card "directly without the
+  PDA"), SDRAM up to 512 Mbit, NAND up to 128 MB, and **in-system programming through USB or
+  PCMCIA**. The firmware is on the chip, so a firmware-update command exists on the PCMCIA side.
+- The IC1100-F128TQ card reader chip (January 2002) is from the same family: the same CPU, 32 KB
+  flash and 128-pin TQFP, with ISP over USB, PCMCIA or I2C, and a UART on pins 25 and 57. Its
+  10-page datasheet (pinout only, no registers) is distributed by Nexty as an ISSI part. Whether the
+  IC3102 has the same pinout hasn't been checked. The sibling IC3101 (January 2003) is a USB
+  "dual-mode" still camera controller.
+
 ## The controller's quirks
 
-The ICSI IC3100 needs 16-bit data transfers:
+The ICSI IC3102 (IDENTIFY says IC3100) needs 16-bit data transfers:
 - It aborts SET FEATURES `01h` (8-bit on) and `81h` (8-bit off) with ABRT, so it has no 8-bit
   mode.
 - Byte reads of the data register return zeros, and the card stays at status `58` (DRQ) with the
@@ -66,7 +101,11 @@ always reading whole sectors and starting each attempt with a COR reset:
 
 **F0h isn't safe.** Some form of it, perhaps combined with the hang, erases or remaps the addressed
 sector. Don't send it to a card without a full image backup (`glaze-usb cf-read 0 16000`). It's
-probably a vendor flash command, not the camera interface.
+probably a vendor flash command, not the camera interface. A guess, from the board: F0h may work on
+raw NAND pages rather than the LBA map, which would fit it erasing the MBR's page.
+
+DOWNLOAD MICROCODE (92h) stays off-limits. The IC3102's firmware lives in on-chip flash, which can
+be reprogrammed over PCMCIA, and 92h or a vendor opcode could overwrite it.
 
 Still untested: the standard commands used in unusual ways (for example, writes to particular
 LBAs) and the other non-vendor opcodes.
