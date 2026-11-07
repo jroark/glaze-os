@@ -4,7 +4,7 @@
 static unsigned attempts;
 static void connect(void *ctx) { assert(ctx==&attempts); attempts++; }
 static void poll(struct wifi_retry *r,uint32_t now,bool enabled,bool up,bool busy,bool bad_key)
-{ wifi_retry_poll(r,now,enabled,up,busy,bad_key,connect,&attempts); }
+{ wifi_retry_poll(r,now,WIFI_RETRY_MAX_MS,enabled,up,busy,bad_key,connect,&attempts); }
 int main(void)
 {
  struct wifi_retry r;wifi_retry_reset(&r);

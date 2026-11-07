@@ -111,6 +111,32 @@ from the CIS (`00:02:2d:...`), then association with the user's network and a
 DHCP lease. Which security mode that network used is not recorded, and
 removal, WEP/WPA/WPA2 and throughput are not yet checked on hardware.
 
+**Power save** follows Libertas
+[cmd.c](https://github.com/torvalds/linux/blob/v6.6/drivers/net/wireless/marvell/libertas/cmd.c)
+(`lbs_set_ps_mode`), cmdresp.c's PS events and main.c's
+`lbs_send_confirmsleep`. `802_11_PS_MODE` (0x0021) is 18 bytes: action,
+null-packet interval, multiple DTIM, reserved, local listen interval.
+- ENTER_PS (0x30, multiple DTIM 1, or 3 with the screen off) once the link
+  has been idle for 1 s (0.2 s with the screen off). The driver checks this
+  from the tick.
+- Event PS_SLEEP (0x0B): with nothing to send, the host answers
+  SLEEP_CONFIRMED (0x34) down the command FIFO. That command has no
+  response, and the card then takes no commands or frames.
+- Event PS_AWAKE (0x0A): the card woke for a beacon. Frames queued while
+  it slept (at most 4) are sent, followed by EXIT_PS (0x31).
+- A frame sent while awake in power save, and any command, also leaves
+  power save. A command waits up to 1.5 s for PS_AWAKE first.
+- LINK_LOST, disconnect and removal reset the state. Firmware that answers
+  ENTER_PS with an error is marked unsupported and stays at full power.
+- `WIFI_POWER` (`glaze/wifi.h`) selects ACTIVE or SAVE, or turns the radio
+  off with RADIO_CONTROL (0x1C) while disconnected. A scan or connect turns
+  it back on.
+
+The be300 model raises PS_SLEEP after 4 idle ticks and PS_AWAKE every 10
+ticks times the DTIM multiple. It counts host access while the card is
+asleep as a violation, which the native test requires to be zero.
+docs/hardware/POWER.md "Network cards" covers the rest of the policy.
+
 The card can be inserted
 and pulled at run time (`kernel/drivers/cf.c`'s `pcmcia_poll`, `net.c`); a
 GlazeBoot boot swaps it in for the CF card (`EMU_ARGS="--cf-eject-after 40
@@ -122,7 +148,8 @@ provides the virtual AP and existing NAT backend.
 ```sh
 make -C host net-driver-test
 make -C host wl54cf-driver-test BE300_SOURCE=/path/to/be300-worktree
-./build.sh WL54CF=1 INIT=bin/ktest
+./build.sh WL54CF=1 NAND_DROP=wince INIT=bin/ktest
+/usr/bin/python3 tests/run_wl54cf.py --emulator /path/to/be300 --host-ip <LAN address>
 ```
 
 Both native targets run with AddressSanitizer and UndefinedBehaviorSanitizer.

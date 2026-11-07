@@ -1091,6 +1091,34 @@ void cf_init(void)
     booted = true;
 }
 
+/* Before a sleep (drivers/power.c): a network card, a radio especially,
+ * draws far more than the suspended CPU, and SUSPEND leaves the socket
+ * powered. The card goes as if pulled and its socket loses power;
+ * pcmcia_resume() inserts it afresh at the wake, and the network server
+ * attaches and reconnects. Storage, modem and Bluetooth cards stay up.
+ * docs/hardware/POWER.md "Network cards". */
+bool pcmcia_suspend(void)
+{
+    if (!net_present())
+        return false;
+    net_removed();
+    if (socket == 1) {
+        /* As probe() does for a card pulled from the jacket. */
+        if (PCMCIA1_BUS & PCMCIA1_BUS_ON)
+            PCMCIA1_CTRL &= ~PCMCIA1_CTRL_UP;
+    } else {
+        /* pcmcia.dll's supply helpers (be300-modules 74_pcmcia.dll):
+         * 0x0198C2D8 sets A034 bit 2 for Vcc on and clears it (with bits 4
+         * and 5) for off; 0x0198C31C sets bit 3; 0x0198C33C clears bits 2
+         * and 3 together. socket_power_up() sets both. Stop decoding the
+         * card's windows first. */
+        PCMCIA_BRIDGE &= ~PCMCIA_BRIDGE_EN;
+        PCMCIA_A034 &= ~0x0Cu;
+    }
+    kprintf("cf: network card in socket %u powered off for the sleep\n", socket);
+    return true;
+}
+
 /* After a HIBERNATE (drivers/power.c), which cut the socket's power: what
  * was in it is gone, as if pulled, and whatever is in it now is inserted
  * afresh. The file server remounts on the new generation. */
