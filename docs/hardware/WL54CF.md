@@ -32,16 +32,19 @@ make glazeboot-exe BE300_DEV=/path/to/be300-dev
 
 The fetcher verifies every download against the pinned manifest before writing
 anything. Binary files remain ignored under `firmware/wl54cf/`.
-`WL54CF_FW_DIR` overrides their build location. Ordinary builds do not need
-firmware; `WL54CF=1` requires both files and packs them under `firmware/`.
-Without it, `make hwpkg-wl54cf` packs the same pair as an unsigned
-`out/pkg/hw-wl54cf.gzp` that installs from Files on a stock image
+`WL54CF_FW_DIR` overrides their build location. Every build includes the
+firmware by default (`WL54CF=1`, since the WL54-CF is the BE-300's most usable
+networking): the build stops if the files haven't been fetched, and packs them
+under `firmware/` in romfs with `LICENCE.Marvell` and `wl54cf-linux.json`, so
+any NAND image or OTA that carries them carries their notice and provenance.
+`WL54CF=0` leaves them out. For such an image, `make hwpkg-wl54cf` packs the
+same pair as an unsigned `out/pkg/hw-wl54cf.gzp` that installs from Files
 ([hardware packages](../os/HARDWARE_PACKAGES.md)); like the files, keep it
 private.
 Redistributed builds must include the full license notice and provenance;
 `tools/package_glazeboot.py` enforces the exact pair and adds these notices.
-The public emulator NAND omits firmware: this license is limited to Marvell
-silicon, not an emulated card. Driver/model tests use synthetic fixtures.
+The public emulator NAND omits firmware, so build it with `WL54CF=0`: this
+license is limited to Marvell silicon, not an emulated card. Driver/model tests use synthetic fixtures.
 
 The Linux main image (97,128 bytes) is byte-identical to the one extracted from
 AmbiCom's package. Its helper is 2,140 bytes, versus 2,136 bytes in that package,

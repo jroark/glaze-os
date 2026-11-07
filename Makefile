@@ -42,6 +42,10 @@ IDLE_STANDBY ?= 1
 # any the boot ROM or SPL overwrote on the way back (docs/hardware/POWER.md). Rebuild
 # kernel/drivers/power.o after changing it.
 HIBERNATE_VERIFY ?=
+# romfs files are LZ4 page containers, inflated by the kernel as pages fault in
+# (kernel/romfs.c, tools/romfs.py): about 38% smaller, which makes room for
+# the WL54-CF firmware. ROMFS_LZ4=0 builds a plain archive.
+ROMFS_LZ4 ?= 1
 
 # GCC's VR41xx errata workarounds, off by default as in Linux's VR41xx
 # builds: VR_FIX="-mfix-vr4130 -mfix-vr4120" pads mflo/mfhi and keeps GCC

@@ -491,9 +491,11 @@ static void test_romfs_cache(void)
         fs_remove("/ktest-romfs.bin");
     }
     gz_sysinfo(&a);
-    if (ram_boot()) {
-        /* The whole archive is in reserved RAM; nothing is cached. */
-        CHECK(a.cache_pages == 0 && a.reclaimable_pages == 0, "romfs in RAM, no cache");
+    if (ram_boot() && a.cache_pages == 0) {
+        /* A plain archive in reserved RAM is mapped as it is; nothing is
+         * cached. An LZ4 one (ROMFS_LZ4=1) is decoded into cache frames as
+         * from NAND, so it takes the checks below. */
+        CHECK(a.reclaimable_pages == 0, "romfs in RAM, no cache");
         return;
     }
     CHECK(a.cache_pages > 0 && a.reclaimable_pages <= a.cache_pages && a.free_pages >= a.reclaimable_pages,
