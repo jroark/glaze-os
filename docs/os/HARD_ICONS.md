@@ -51,8 +51,20 @@ extrapolated from it, as Windows CE also did.
 
 - A stroke whose DOWN lands at calibrated y ≥ 320 belongs to SpringBoard.
   None of its events reach the app, the status bar or a banner.
-- The icon fires on release if the finger is still over the same icon and no
-  more than 8 px above the strip (`HARDICON_SLOP`).
+- The icon fires on release only if the finger stayed over the same icon the
+  whole stroke, no more than 8 px above the strip (`HARDICON_SLOP`).
+- On a real BE-300, Notes (icon 4) used to open by itself. These rules keep a
+  stray reading from firing an icon:
+  - A press in the first 4 rows below the LCD (`HARDICON_MARGIN`) is kept
+    from the app but never fires. It is more likely a bottom-row tap that the
+    calibration pushed past the LCD.
+  - A stroke shorter than 40 ms (`HARDICON_MIN_MS`, under one 45 ms PIU
+    scan) never fires. A single noisy sample turns into a DOWN and an UP at
+    the same moment.
+  - The kernel drops samples where both Y plates read past the strip's far
+    edge. That reading means the plate is floating, with no contact.
+- Every strip stroke logs `springboard: icon N fire|reject <why>` to the
+  serial console, with its points and duration.
 - A stroke that starts on the LCD and slides down onto the strip stays with
   its app, clamped to the bottom row, as before.
 - Calibration sampling and the calibration test page still get raw touches.

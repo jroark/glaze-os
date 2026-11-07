@@ -12,6 +12,8 @@
 #define HARDICON_PREF   "sb.icons"
 #define HARDICON_TOP    GZ_FB_HEIGHT    /* first panel row of the strip */
 #define HARDICON_SLOP   8               /* a release this far above still counts */
+#define HARDICON_MARGIN 4               /* a press this close to the LCD never fires */
+#define HARDICON_MIN_MS 40              /* about one 45 ms PIU scan: shorter is a phantom */
 #define HARDICON_TARGET 48              /* a romfs path or a package id */
 
 enum hardicon_kind {
