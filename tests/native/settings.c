@@ -101,6 +101,8 @@ int gz_power_status(struct gz_power_status *st)
     st->version = GZ_POWER_VERSION;
     st->flags = GZ_POWER_VALID | GZ_POWER_AC;
     st->percent = st->level = 100;
+    st->card_power = GZ_CARD_POWER_DOZE;      /* a Wi-Fi card asleep 90 % of its time */
+    st->card_full_ms = 600; st->card_save_ms = 400; st->card_doze_ms = 8000; st->card_off_ms = 1000;
     return 0;
 }
 int gz_port_lookup(const char *name)
@@ -975,6 +977,14 @@ int main(void)
     activate(R_INPUT_KEYS);require(input_disk==UI_INPUT_QWERTY && input_preview.method==UI_INPUT_QWERTY,"keyboard default persistence");
     input_error=GZ_EIO;activate(R_INPUT_WRITE);require(input_message && input_disk==UI_INPUT_QWERTY,"save error was hidden");input_error=0;
     activate(R_BACK);require(view==V_ROOT,"input method back navigation");
+    char card_text[24]; struct gz_power_status ps; gz_power_status(&ps);
+    battery_card_text(&ps, card_text, sizeof card_text);
+    require(!strcmp(card_text, "Dozing 90%"), "network card power text");
+    ps.card_power = GZ_CARD_POWER_FULL; battery_card_text(&ps, card_text, sizeof card_text);
+    require(!strcmp(card_text, "Always On"), "wired card power text");
+    activate(R_BATTERY); redraw();
+    host_write_bmp("../out/host/settings-battery.bmp", &ui.surf);
+    activate(R_BACK); require(view == V_ROOT, "battery back navigation");
     puts("settings: rendering, navigation, scrolling, sliders, calibration, display and input methods PASS");
     return 0;
 }
