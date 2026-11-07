@@ -10,12 +10,22 @@ SSL_FILES := $(wildcard assets/ssl/*)
 # System sounds, romfs "sounds/", synthesized by tools/mksounds.py and checked in.
 SOUND_FILES := $(wildcard assets/sounds/*)
 
-# Local Marvell firmware (never checked in). See docs/hardware/WL54CF.md.
-WL54CF ?= 0
+# Marvell firmware for the WL54-CF, the BE-300's most usable networking: in
+# every build by default (docs/hardware/WL54CF.md). The binaries are never
+# checked in: fetch them with tools/fetch_wl54cf_firmware.py. Its licence
+# and provenance go into romfs beside them, since every image or OTA that
+# carries the firmware redistributes it. WL54CF=0 leaves it out, as the
+# public emulator image must (the licence covers Marvell silicon only).
+WL54CF ?= 1
 WL54CF_FW_DIR ?= firmware/wl54cf
 WL54CF_FW :=
+WL54CF_NOTICES :=
 ifeq ($(WL54CF),1)
 WL54CF_FW := $(WL54CF_FW_DIR)/cf8385_helper.bin $(WL54CF_FW_DIR)/cf8385.bin
+WL54CF_NOTICES := firmware/LICENCE.Marvell firmware/wl54cf-linux.json
+ifneq ($(words $(wildcard $(WL54CF_FW))),2)
+$(error WL54-CF firmware is missing from $(WL54CF_FW_DIR): run python3 tools/fetch_wl54cf_firmware.py, or build with WL54CF=0)
+endif
 endif
 
 # Optional card drivers are independent relocatable kernel images. Only the

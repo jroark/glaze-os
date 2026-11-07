@@ -62,7 +62,7 @@ GB_ASSETS := $(filter-out $(foreach a,$(GB_DROP),assets/gen/icon_$(a).gzi) \
 
 $(GB_DIR)/romfs.img: $(DRIVER_FILES) $(OUT)/services.bin $(ROMFS_LIBRARY_FILES) $(ROMFS_BINS) $(ASSET_FILES) $(WEB_FILES) $(SSL_FILES) $(SOUND_FILES) $(WL54CF_FW) tools/mkromfs.py FORCE
 	@mkdir -p $(dir $@)
-	$(PYTHON) tools/mkromfs.py $@ $(call ROMFS_ARGS,$(GB_PROGS),$(GB_ASSETS))
+	$(PYTHON) tools/mkromfs.py $(ROMFS_FLAGS) $@ $(call ROMFS_ARGS,$(GB_PROGS),$(GB_ASSETS))
 
 $(GB_DIR)/glaze.cfg: wince/glazeboot/glaze.cfg
 	@mkdir -p $(dir $@)

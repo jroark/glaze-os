@@ -98,12 +98,24 @@ static bool wait_status(uint8_t mask, uint8_t want)
  */
 uint32_t pcmcia_io_base = PCMCIA0_IO, pcmcia_attr_base = PCMCIA0_ATTR;
 static unsigned socket;         /* the socket the windows point at */
+static int inserted_on = -1;    /* the socket the card in hand was inserted on */
 static bool socket1_dead;       /* its power-up failed: wait for a new card */
 static bool socket1_ours;       /* Glaze powered it, so the COR is Glaze's */
 
 static bool socket1_card(void)
 {
-    return !(PCMCIA1_DETECT & PCMCIA1_EMPTY) && !(PCMCIA1_PRESENCE & PCMCIA1_ABSENT);
+    /* Its unit reads 0 throughout while its clock is gated (no jacket after
+     * a cold NAND boot, gate 1120): not a card. A live one reads 0x48
+     * empty or 0x0C with a card (hw.h). */
+    return PCMCIA1_PRESENCE != 0 &&
+           !(PCMCIA1_DETECT & PCMCIA1_EMPTY) && !(PCMCIA1_PRESENCE & PCMCIA1_ABSENT);
+}
+
+/* The card in hand went to socket 1, which failed, and the CF slot now
+ * reports a card: it was the CF slot's, caught before its detect settled. */
+static bool moved_to_cf(void)
+{
+    return inserted_on == 1 && socket == 0;
 }
 
 static bool socket1_up(void)
@@ -914,6 +926,7 @@ static void insert(bool power_up)
 
     cis_retry_at = 0;
     inserts++;
+    inserted_on = (int)socket;
     if (socket == 1) {
         insert_jacket();
         return;
@@ -995,6 +1008,7 @@ static void probe(void)
             PCMCIA1_CTRL &= ~PCMCIA1_CTRL_UP;
             kputs("cf: socket 1 card powered off\n");
         }
+        inserted_on = -1;
         if (card_info.kind != BT_CARD_ABSENT)
             forget_card();
         if (net_present()) {
@@ -1002,7 +1016,10 @@ static void probe(void)
             kputs("cf: network card removed\n");
         }
         info.present = false;
-    } else if (!had && booted) {
+    } else if ((!had || moved_to_cf()) && booted) {
+        /* A new card, or one first sent to a socket 1 that didn't answer
+         * and now reported by the CF slot (a WL54-CF after a NAND boot, real
+         * BE-300 2026-11-07): inserted there. */
         cis_retries = 20;
         insert(true);
     } else if (!net_present()) {
@@ -1122,7 +1139,7 @@ void pcmcia_resume(void)
 
 void pcmcia_poll(void)
 {
-    if (booted && card_inserted() != socket_full)
+    if (booted && (card_inserted() != socket_full || (socket_full && moved_to_cf())))
         probe();
     else if (booted && socket_full && cis_retry_at && time_us() >= cis_retry_at) {
         insert(false);
