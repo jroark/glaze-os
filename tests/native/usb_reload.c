@@ -38,6 +38,7 @@ int copy_from_as(struct addrspace *as, void *p, uint32_t va, uint32_t n)
 int copy_to_as(struct addrspace *as,uint32_t va,const void *p,uint32_t n)
 { (void)as; if (va>sizeof(input) || n>sizeof(input)-va) return -1; memcpy(input+va,p,n); return 0; }
 bool usb_tx_idle(void) { return true; }
+bool usb_reply_sent(void) { return true; }
 void usb_stop(void) {}
 uint64_t time_us(void) { return 0; }
 static void begin(struct proc *p, const uint8_t *kernel, unsigned ks, const uint8_t *romfs, unsigned rs)

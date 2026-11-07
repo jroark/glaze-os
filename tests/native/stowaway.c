@@ -30,9 +30,9 @@ static void decoder_tests(void) {
     struct stowaway_decoder s = {0};
     tap(&s, 0, 0); expect(0, GZ_EV_TEXT, '1'); /* zero isn't a sentinel */
     tap(&s, 17, 2); expect(1, GZ_EV_TEXT, 'a');
-    stowaway_decode(&s, 87, 3, emit);
+    stowaway_decode(&s, 89, 3, emit);
     stowaway_decode(&s, 88, 3, emit);
-    stowaway_decode(&s, 87 | 128, 4, emit);
+    stowaway_decode(&s, 89 | 128, 4, emit);
     tap(&s, 17, 5); expect(2, GZ_EV_TEXT, 'A');
     tap(&s, 0, 6); expect(3, GZ_EV_TEXT, '!');
     stowaway_decode(&s, 88 | 128, 7, emit);
@@ -40,9 +40,9 @@ static void decoder_tests(void) {
     stowaway_decode(&s, 24, 8, emit); /* duplicate caps must not toggle */
     stowaway_decode(&s, 24 | 128, 9, emit);
     tap(&s, 17, 10); expect(4, GZ_EV_TEXT, 'A');
-    stowaway_decode(&s, 87, 11, emit);
+    stowaway_decode(&s, 89, 11, emit);
     tap(&s, 17, 12); expect(5, GZ_EV_TEXT, 'a');
-    stowaway_decode(&s, 87 | 128, 13, emit);
+    stowaway_decode(&s, 89 | 128, 13, emit);
     int n = count;
     stowaway_decode(&s, 26, 14, emit); tap(&s, 17, 15);
     expect(n, GZ_EV_KEY_DOWN, GZ_KEY_SELECT_ALL);
@@ -53,10 +53,31 @@ static void decoder_tests(void) {
     stowaway_decode(&s, 35 | 128, 19, emit);
     tap(&s, 127, 20); tap(&s, 105, 20); /* bad/unmapped bytes */
     assert(count == n);
-    tap(&s, 51, 21);
+    tap(&s, 51, 21); tap(&s, 59, 21); /* Inbox, Contacts: unmapped app keys */
+    assert(count == n);
+    /* Fn layer, as printed on a Targus: arrows, OK, Off. */
+    stowaway_decode(&s, 8, 21, emit); tap(&s, 81, 21);
     expect(n, GZ_EV_KEY_DOWN, GZ_KEY_KBD_HOME);
     expect(n + 1, GZ_EV_KEY_UP, GZ_KEY_KBD_HOME);
     assert(GZ_KEY_KBD_HOME != GZ_KEY_HOME);
+    tap(&s, 83, 21); expect(n + 2, GZ_EV_KEY_DOWN, GZ_KEY_END);
+    tap(&s, 73, 21); expect(n + 4, GZ_EV_KEY_DOWN, GZ_KEY_PAGEUP);
+    tap(&s, 82, 21); expect(n + 6, GZ_EV_KEY_DOWN, GZ_KEY_PAGEDOWN);
+    tap(&s, 65, 21); expect(n + 8, GZ_EV_KEY_DOWN, GZ_KEY_OK);
+    tap(&s, 50, 21); expect(n + 10, GZ_EV_KEY_DOWN, GZ_KEY_POWER);
+    stowaway_decode(&s, 89, 21, emit); tap(&s, 81, 21); /* Shift+Fn+Left */
+    expect(n + 12, GZ_EV_KEY_DOWN, GZ_KEY_SELECT_HOME);
+    stowaway_decode(&s, 89 | 128, 21, emit);
+    /* Fn+Caps Lock is Numlock: the yellow keypad, not caps. */
+    tap(&s, 24, 21); stowaway_decode(&s, 8 | 128, 21, emit);
+    tap(&s, 60, 21); expect(n + 14, GZ_EV_TEXT, '4');
+    tap(&s, 54, 21); expect(n + 15, GZ_EV_TEXT, '/');
+    tap(&s, 17, 21); expect(n + 16, GZ_EV_TEXT, 'A'); /* caps still on from above */
+    stowaway_decode(&s, 8, 21, emit); tap(&s, 24, 21); stowaway_decode(&s, 8 | 128, 21, emit);
+    tap(&s, 60, 21); expect(n + 17, GZ_EV_TEXT, 'U');
+    tap(&s, 81, 21); expect(n + 18, GZ_EV_KEY_DOWN, GZ_KEY_LEFT); /* Fn released */
+    tap(&s, 55, 21); expect(n + 20, GZ_EV_TEXT, ' ');             /* second Space */
+    tap(&s, 79, 21); expect(n + 21, GZ_EV_KEY_DOWN, GZ_KEY_HOME);  /* Today */
     s = (struct stowaway_decoder){0}; count = 0;
     stowaway_decode(&s, 0, 100, emit);
     stowaway_decode(&s, 0, 101, emit);
@@ -83,9 +104,9 @@ static void decoder_tests(void) {
         tap(&s,scan[i],2010+i*2);
         expect(i*2,GZ_EV_KEY_DOWN,commands[i]);expect(i*2+1,GZ_EV_KEY_UP,commands[i]);
     }
-    stowaway_decode(&s,26|128,2030,emit);stowaway_decode(&s,87,2040,emit);
+    stowaway_decode(&s,26|128,2030,emit);stowaway_decode(&s,89,2040,emit);
     tap(&s,81,2050);expect(8,GZ_EV_KEY_DOWN,GZ_KEY_SELECT_LEFT);expect(9,GZ_EV_KEY_UP,GZ_KEY_SELECT_LEFT);
-    stowaway_decode(&s,83,2060,emit);stowaway_decode(&s,87|128,2061,emit);
+    stowaway_decode(&s,83,2060,emit);stowaway_decode(&s,89|128,2061,emit);
     stowaway_decode(&s,83|128,2062,emit);
     expect(10,GZ_EV_KEY_DOWN,GZ_KEY_SELECT_RIGHT);expect(11,GZ_EV_KEY_UP,GZ_KEY_SELECT_RIGHT);
 }

@@ -145,7 +145,7 @@ class SDKTests(unittest.TestCase):
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.assertEqual(result.returncode, 0, result.stdout)
         for name in ("libc.so.1", "libgfx.so.1", "libui.so.1", "libmedia.so.1", "libwolfssl.so.1",
-                     "ld-glaze.so.1", "crt0.o", "start.o"):
+                     "ld-glaze.so.1", "crt0.o", "start.o", "libgps.a"):
             self.assertTrue((self.sdk / "src/rebuilt" / name).is_file(), name)
 
     def test_manifest_records_os_version(self):

@@ -49,8 +49,11 @@ static void copy_field(char *dst, size_t n, const char *src, size_t len)
     dst[len] = 0;
 }
 
-static int parse_info(const char *text, size_t len, struct pkg_info *info)
+/* *hardware: Info says type=hardware (glaze/hwpkg.h); such a package has
+ * no executable. struct pkg_info stays as SDK apps know it. */
+static int parse_info(const char *text, size_t len, struct pkg_info *info, bool *hardware)
 {
+    bool hw = false;
     memset(info, 0, sizeof(*info));
     strlcpy(info->exec, "app", sizeof(info->exec));
     for (size_t i = 0; i < len;) {
@@ -71,9 +74,13 @@ static int parse_info(const char *text, size_t len, struct pkg_info *info)
                 copy_field(info->version, sizeof(info->version), eq + 1, vlen);
             else if (klen == 4 && !memcmp(line, "exec", 4))
                 copy_field(info->exec, sizeof(info->exec), eq + 1, vlen);
+            else if (klen == 4 && !memcmp(line, "type", 4))
+                hw = vlen == 8 && !memcmp(eq + 1, "hardware", 8);
         }
         i = end + 1;
     }
+    if (hardware)
+        *hardware = hw;
     if (!id_ok(info->id) || !info->name[0] || !entry_name_ok(info->exec) || strchr(info->exec, '/'))
         return GZ_EINVAL;
     return 0;
@@ -120,18 +127,23 @@ static const struct entry *find_entry(const struct entry *ents, uint32_t count, 
     return NULL;
 }
 
-static int read_entry_info(int fd, const struct entry *ents, uint32_t count, struct pkg_info *info)
+static int read_entry_info(int fd, const struct entry *ents, uint32_t count, struct pkg_info *info,
+                           bool *hardware)
 {
     const struct entry *e = find_entry(ents, count, "Info");
     char text[INFO_MAX];
+    bool hw;
 
     if (!e || e->size > sizeof(text))
         return GZ_EINVAL;
     if (fs_seek(fd, (int32_t)e->offset, FS_SEEK_SET) < 0 || fs_read(fd, text, e->size) != (int)e->size)
         return GZ_EIO;
-    int rv = parse_info(text, e->size, info);
-    if (!rv && !find_entry(ents, count, info->exec))
+    int rv = parse_info(text, e->size, info, &hw);
+    /* An app needs its executable; hardware support, its manifest. */
+    if (!rv && !find_entry(ents, count, hw ? "Manifest" : info->exec))
         rv = GZ_EINVAL;
+    if (hardware)
+        *hardware = hw;
     return rv;
 }
 
@@ -145,9 +157,26 @@ int pkg_read_info(const char *gzp, struct pkg_info *info)
         return fd;
     int rv = read_table(fd, ents, &count, &size);
     if (!rv)
-        rv = read_entry_info(fd, ents, count, info);
+        rv = read_entry_info(fd, ents, count, info, NULL);
     fs_close(fd);
     return rv;
+}
+
+int pkg_hardware(const char *gzp)
+{
+    static struct entry ents[MAX_ENTRIES];
+    struct pkg_info info;
+    uint32_t count, size;
+    bool hw = false;
+    int fd = fs_open(gzp, FS_O_READ);
+
+    if (fd < 0)
+        return fd;
+    int rv = read_table(fd, ents, &count, &size);
+    if (!rv)
+        rv = read_entry_info(fd, ents, count, &info, &hw);
+    fs_close(fd);
+    return rv ? rv : hw;
 }
 
 int pkg_read_entry(const char *gzp, const char *name, void *buf, uint32_t max)
@@ -170,7 +199,7 @@ int pkg_read_entry(const char *gzp, const char *name, void *buf, uint32_t max)
     return rv ? rv : (int)e->size;
 }
 
-int pkg_bundle_info(const char *bundle, struct pkg_info *info)
+static int bundle_info(const char *bundle, struct pkg_info *info, bool *hardware)
 {
     char path[FS_PATH_MAX], text[INFO_MAX];
 
@@ -178,7 +207,12 @@ int pkg_bundle_info(const char *bundle, struct pkg_info *info)
     int n = fs_read_file(path, text, sizeof(text));
     if (n < 0)
         return n;
-    return parse_info(text, (size_t)n, info);
+    return parse_info(text, (size_t)n, info, hardware);
+}
+
+int pkg_bundle_info(const char *bundle, struct pkg_info *info)
+{
+    return bundle_info(bundle, info, NULL);
 }
 
 static void bundle_path(char *out, size_t n, const char *root, const char *id, const char *suffix)
@@ -349,6 +383,8 @@ int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX])
     char bak[FS_PATH_MAX], source[FS_PATH_MAX];
     uint32_t count, size, need = 0;
     uint8_t *buf = NULL;
+    struct pkg_info old_info;
+    bool hardware = false, old_hardware = false;
     int fd, rv;
 
     if (strcmp(root, "") && strcmp(root, "/Card"))
@@ -360,7 +396,10 @@ int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX])
         return fd;
     rv = read_table(fd, ents, &count, &size);
     if (!rv)
-        rv = read_entry_info(fd, ents, count, &info);
+        rv = read_entry_info(fd, ents, count, &info, &hardware);
+    /* Hardware support goes on the flash: the card may be what it drives. */
+    if (!rv && hardware && *root)
+        rv = GZ_EPERM;
     if (rv)
         goto out;
     rv = recover_one(root, info.id);
@@ -368,6 +407,8 @@ int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX])
         goto out;
     if (pkg_find(info.id, old) < 0)
         old[0] = 0;
+    if (*old && bundle_info(old, &old_info, &old_hardware))
+        old_hardware = false;
     for (uint32_t i = 0; i < count; i++) {
         if (ents[i].size > 0x7fffffffu - need - 1024) {
             rv = GZ_EFULL;
@@ -445,12 +486,23 @@ int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX])
 out:
     free(buf);
     fs_close(fd);
+    /* The kernel loads drivers from what the file server registered. */
+    if (!rv && (hardware || old_hardware))
+        fs_hw_rescan();
     return rv;
 }
 
 int pkg_uninstall(const char *bundle)
 {
-    return fs_remove_all(bundle);
+    struct pkg_info info;
+    bool hardware = false;
+
+    if (bundle_info(bundle, &info, &hardware))
+        hardware = false;
+    int rv = fs_remove_all(bundle);
+    if (hardware)
+        fs_hw_rescan();
+    return rv;
 }
 
 struct listed {
@@ -463,7 +515,8 @@ static int listed_cmp(const void *a, const void *b)
     return strcasecmp(((const struct listed *)a)->info.name, ((const struct listed *)b)->info.name);
 }
 
-int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_info *info, void *arg), void *arg)
+static int list(const char *root, bool want_hardware,
+                void (*fn)(const char *bundle, const struct pkg_info *info, void *arg), void *arg)
 {
     static struct listed apps[MAX_LISTED];
     struct fs_dirent ents[8];
@@ -518,9 +571,10 @@ int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_i
                 strlen(path) >= PKG_BUNDLE_MAX)
                 continue;
             struct listed *a = &apps[napps];
+            bool hardware = false;
             /* The folder must match its Info, so the id stays unique. */
-            if (pkg_bundle_info(path, &a->info) == 0 && strlen(a->info.id) == len - 4 &&
-                !memcmp(a->info.id, ents[i].name, len - 4)) {
+            if (bundle_info(path, &a->info, &hardware) == 0 && hardware == want_hardware &&
+                strlen(a->info.id) == len - 4 && !memcmp(a->info.id, ents[i].name, len - 4)) {
                 strlcpy(a->bundle, path, sizeof(a->bundle));
                 napps++;
             }
@@ -530,4 +584,15 @@ int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_i
     for (int i = 0; i < napps; i++)
         fn(apps[i].bundle, &apps[i].info, arg);
     return napps;
+}
+
+/* Apps only: hardware support never shows on the home screen. */
+int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_info *info, void *arg), void *arg)
+{
+    return list(root, false, fn, arg);
+}
+
+int pkg_list_hardware(void (*fn)(const char *bundle, const struct pkg_info *info, void *arg), void *arg)
+{
+    return list("", true, fn, arg);
 }

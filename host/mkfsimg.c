@@ -151,6 +151,12 @@ int main(int argc, char **argv)
         if (!eq || argv[i][0] != '/')
             die("bad file argument", argv[i], 0);
         *eq = 0;
+        /* Its folders too, such as an installed bundle's (tests/hwpkg_fs.py). */
+        for (char *slash = strchr(argv[i] + 1, '/'); slash; slash = strchr(slash + 1, '/')) {
+            *slash = 0;
+            lfs_mkdir(&lfs, argv[i]);
+            *slash = '/';
+        }
         copy_file(eq + 1, argv[i]);
     }
     lfs_unmount(&lfs);

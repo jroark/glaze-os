@@ -18,12 +18,14 @@ Start with the [top-level README](../README.md) for building and running.
 - [Veo Photo Traveler CF camera](hardware/VEO.md)
 - [Ambicom DGCAM-CF camera storage](hardware/AMBICOM.md)
 - [CF dial-up modem](hardware/MODEM.md)
+- [CF GPS receivers (AmbiCom GPS-CF) and map tile packs](hardware/GPS.md)
 - [WL54-CF wireless networking](hardware/WL54CF.md)
 - [Eye-Fi SDHC storage through an SD-to-CF adapter](hardware/EYEFI.md)
 
 ## Operating system
 
 - [Loadable drivers and hardware-dependent services](os/DRIVERS_SERVICES.md)
+- [Hardware-support packages: drivers, firmware and dial-up as installable packages](os/HARDWARE_PACKAGES.md)
 - [Native shared libraries](os/DYNAMIC_LIBRARIES.md)
 - [Over-the-air OS updates](os/OTA.md)
 - [Copy, cut and paste](os/CLIPBOARD.md)

@@ -7,6 +7,7 @@
 #endif
 #include "drivers.h"
 #include "service.h"
+#include "hwfile.h"
 #include <glaze/service.h>
 
 static struct gz_service_manifest manifest;
@@ -20,8 +21,39 @@ static uint32_t order[GZ_SERVICE_MAX];
 
 static uint32_t hardware_generation(const struct gz_service_spec *s)
 {
-    /* A network service belongs to one NIC or one modem card: either swap restarts it. */
-    return s->policy & GZ_SERVICE_BLUETOOTH ? bt_generation() : net_generation() + modem_generation();
+    /* A network service belongs to one NIC or one modem card: either swap
+     * restarts it, and so does a package installed or removed that could
+     * replace it (hwfile.c). */
+    uint32_t packages = s->policy & GZ_SERVICE_OVERRIDABLE ? hwfile_generation() : 0;
+    return (s->policy & GZ_SERVICE_BLUETOOTH ? bt_generation() : net_generation() + modem_generation()) + packages;
+}
+
+/* The romfs program, or an installed hardware package's replacement for an
+ * overridable one (bin/net with dial-up). GZ_EINPROGRESS: the package's copy
+ * is still on its way from the file server; try on a later pass. */
+static struct proc *start(const struct gz_service_spec *s, int *error)
+{
+    *error = 0;
+    if (s->policy & GZ_SERVICE_OVERRIDABLE) {
+        struct hwfile f;
+        int rv = hwfile_open_package(s->path, &f);
+        if (rv == GZ_EINPROGRESS) {
+            *error = rv;
+            return NULL;
+        }
+        if (!rv) {
+            struct proc *p = proc_spawn_verified(f.buf, f.size, s->name, s->privileges);
+            hwfile_close(&f);
+            hwfile_trim();
+            if (p) {
+                kprintf("service: %s from an installed package\n", s->name);
+                return p;
+            }
+            kprintf("service: installed %s didn't start; using romfs\n", s->path);
+        } else if (rv != GZ_ENOENT)
+            kprintf("service: installed %s unavailable (%d); using romfs\n", s->path, rv);
+    }
+    return proc_spawn(s->path, 0, s->privileges);
 }
 static bool alive(unsigned i) { return proc_by_pid(states[i].pid) != NULL; }
 
@@ -60,8 +92,11 @@ static void reconcile(void)
         struct gz_service_spec *s = &manifest.entries[i];
         if ((wanted & (1u << i)) && !states[i].pid && time_us() >= states[i].retry &&
             (s->after & running) == s->after) {
-            struct proc *p = proc_spawn(s->path, 0, s->privileges);
-            if (p) {
+            int error;
+            struct proc *p = start(s, &error);
+            if (error == GZ_EINPROGRESS) {
+                states[i].retry = time_us() + 100000u;
+            } else if (p) {
                 p->net_generation = net_generation();
                 p->bt_generation = bt_generation();
                 p->modem_generation = modem_generation();
@@ -86,6 +121,7 @@ static void service_worker(void)
     for (;;) {
         uint32_t flags = irq_save();
         pcmcia_poll();
+        net_retry();
         reconcile();
         thread_sleep_until(time_us() + 100000u);
         irq_restore(flags);
@@ -106,7 +142,9 @@ void services_init(void)
         if (!s->name[0] || !memchr(s->name, 0, sizeof(s->name)) ||
             !memchr(s->path, 0, sizeof(s->path)) || strncmp(s->path, "bin/", 4) ||
             (s->privileges & ~(PROC_PRIVILEGED | PROC_FLASH | PROC_NET | PROC_AUDIO | PROC_USB | PROC_BLUETOOTH)) ||
-            (s->policy & ~(GZ_SERVICE_NETWORK | GZ_SERVICE_REQUIRED | GZ_SERVICE_BLUETOOTH)) || (s->after & ~all) ||
+            (s->policy & ~(GZ_SERVICE_NETWORK | GZ_SERVICE_REQUIRED | GZ_SERVICE_BLUETOOTH |
+                           GZ_SERVICE_OVERRIDABLE)) || (s->after & ~all) ||
+            ((s->policy & GZ_SERVICE_OVERRIDABLE) && (s->policy & GZ_SERVICE_REQUIRED)) ||
             ((s->privileges & PROC_BLUETOOTH) && !(s->policy & GZ_SERVICE_BLUETOOTH)) ||
             ((s->privileges & PROC_NET) && !(s->policy & GZ_SERVICE_NETWORK)))
             panic("invalid service definition");

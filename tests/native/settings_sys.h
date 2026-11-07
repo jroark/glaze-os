@@ -21,4 +21,5 @@ void *gz_shm_map(int);
 int gz_shm_unmap(void *);
 int gz_send(int port, const struct gz_msg *msg, struct gz_msg *reply);
 const void *gz_romfs_map(const char *name, uint32_t *size);
+int gz_hw_ctl(uint32_t op, const void *a1, uint32_t a2);
 #endif

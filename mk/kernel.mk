@@ -17,6 +17,7 @@ KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -Ikernel -MMD \
     $(if $(HWDUMP),-DGLAZE_HWDUMP) \
     $(if $(VEO_PROBE),-DGLAZE_VEO_PROBE) \
     $(if $(BOOT_BEEP),-DGLAZE_BOOT_BEEP) \
+    $(if $(STOWAWAY_TRACE),-DGLAZE_STOWAWAY_TRACE) \
     $(if $(filter 0,$(IDLE_STANDBY)),-DGLAZE_NO_STANDBY) \
     $(if $(HIBERNATE_VERIFY),-DGLAZE_HIBERNATE_VERIFY)
 
@@ -48,9 +49,17 @@ $(OUT)/gen/ota_key.h: $(OTA_PUBKEY) tools/mkota.py FORCE
 $(OUT)/kernel/ota.o: $(OUT)/gen/ota_key.h
 $(OUT)/kernel/ota.o: KERNEL_CFLAGS += -I$(OUT)/gen
 $(OUT)/kernel/ota_stage.o: KERNEL_CFLAGS += $(KCRYPTO_INC)
+# Hardware packages (kernel/hwfile.c) trust the same release key.
+$(OUT)/kernel/hwfile.o: $(OUT)/gen/ota_key.h
+$(OUT)/kernel/hwfile.o: KERNEL_CFLAGS += $(KCRYPTO_INC) -I$(OUT)/gen
+# The flat kernel must fit its 176 KiB slot (0x14000-0x40000, tools/mk_nand.py),
+# and scripted test builds come within a few KiB of it: code that runs only
+# when a card or package changes, or an update is staged, is built for size.
+KERNEL_COLD := hwfile module service ota_stage drivers/net
+$(foreach o,$(KERNEL_COLD),$(OUT)/kernel/$(o).o): KERNEL_CFLAGS += -Os
 
-# These bake in INIT/BUILD_ID/INPUT_SCRIPT/VERSION; rebuild them every time.
-$(OUT)/kernel/main.o $(OUT)/kernel/drivers/veo.o $(OUT)/kernel/ota.o $(OUT)/kernel/syscall.o $(OUT)/kernel/drivers/input.o $(OUT)/kernel/drivers/power.o $(OUT)/romfs.img: FORCE
+# These bake in INIT/BUILD_ID/INPUT_SCRIPT/VERSION/STOWAWAY_TRACE; rebuild them every time.
+$(OUT)/kernel/main.o $(OUT)/kernel/drivers/veo.o $(OUT)/kernel/ota.o $(OUT)/kernel/hwfile.o $(OUT)/kernel/syscall.o $(OUT)/kernel/drivers/input.o $(OUT)/kernel/drivers/power.o $(OUT)/kernel/drivers/stowaway_hw.o $(OUT)/romfs.img: FORCE
 
 $(OUT)/kernel/reboot.checked: $(OUT)/kernel/reboot_entry.o
 	@if $(CROSS)objdump -r -j .text.reboot $< | grep -q 'R_MIPS_'; then \

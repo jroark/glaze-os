@@ -5,6 +5,7 @@
 #include "../drivers.h"
 #include "../hw.h"
 #include "../kernel.h"
+#include "../hwfile.h"
 #include <glaze/wifi.h>
 
 #include "wl54cf_io.h"
@@ -88,14 +89,25 @@ static void signal(uint16_t bits)
     wl_write16(0, bits);
     wl_write16(2, bits);
 }
+/* The pair comes from romfs (WL54CF=1 builds) or an installed firmware
+ * package; net.c has fetched a package's copy before calling init. */
+static bool load_firmware(const struct hwfile *helper, const struct hwfile *fw);
 static bool firmware(void)
 {
-    const struct romfs_entry *helper = romfs_lookup("firmware/cf8385_helper.bin");
-    const struct romfs_entry *fw = romfs_lookup("firmware/cf8385.bin");
-    if (!helper || !fw) {
-        kputs("wl54cf: missing firmware; extract vendor CAB and build WL54CF=1\n");
-        return false;
-    }
+    struct hwfile helper, fw;
+    int a = hwfile_open("firmware/cf8385_helper.bin", &helper);
+    int b = hwfile_open("firmware/cf8385.bin", &fw);
+    bool ok = !a && !b;
+    if (!ok)
+        kputs("wl54cf: missing firmware; install a WL54-CF firmware package or build WL54CF=1\n");
+    else
+        ok = load_firmware(&helper, &fw);
+    if (!a) hwfile_close(&helper);
+    if (!b) hwfile_close(&fw);
+    return ok;
+}
+static bool load_firmware(const struct hwfile *helper, const struct hwfile *fw)
+{
     if (wl_read8(0x3f) == 0x5a)
         return true;
     if (wl_read8(0x3f) != 0 || !helper->size || helper->size > 65536 || !fw->size ||
@@ -103,7 +115,7 @@ static bool firmware(void)
         return false;
     for (uint32_t pos = 0; pos < helper->size;) {
         unsigned n = MIN(256u, helper->size - pos);
-        if ((n & 1) || romfs_read(helper, pos, buf, n))
+        if ((n & 1) || hwfile_read(helper, pos, buf, n))
             return false;
         wl_write16(0x18, n);
         write_fifo(0x1a, buf, n);
@@ -131,7 +143,7 @@ static bool firmware(void)
             n &= ~1u;
         } else
             retries = 0;
-        if (!n || n > sizeof(buf) || n > fw->size - pos || romfs_read(fw, pos, buf, n))
+        if (!n || n > sizeof(buf) || n > fw->size - pos || hwfile_read(fw, pos, buf, n))
             return false;
         wl_write16(0x18, n);
         write_fifo(0x1a, buf, n);

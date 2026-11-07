@@ -204,6 +204,7 @@ extern bool need_resched;
 struct proc *proc_spawn(const char *path, int parent, uint32_t flags);
 struct proc *proc_spawn_image(struct addrspace *src_as, uint32_t src, uint32_t size, const char *name,
                               int parent, uint32_t flags);
+struct proc *proc_spawn_verified(const void *elf, uint32_t size, const char *name, uint32_t flags);
 struct proc *proc_by_pid(int pid);
 void proc_exit(struct proc *p, int code);
 void proc_reap(void);

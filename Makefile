@@ -32,6 +32,9 @@ HWDUMP ?=
 VEO_PROBE ?=
 # Beep at early kernel stages, before the LCD is on (power-on bring-up).
 BOOT_BEEP ?=
+# STOWAWAY_TRACE=1: log the dock keyboard's probe (modem lines, bytes) and every
+# byte it sends, for bring-up over network debugging (tests/STOWAWAY.md).
+STOWAWAY_TRACE ?=
 # The idle thread's VR4131 STANDBY (docs/hardware/POWER.md); IDLE_STANDBY=0 spins
 # instead, for bisecting on hardware. Rebuild kernel/sched.o after changing it.
 IDLE_STANDBY ?= 1
@@ -60,6 +63,7 @@ include mk/romfs.mk
 include mk/kernel.mk
 include mk/spl.mk
 include mk/packages.mk
+include mk/hwpkgs.mk
 include mk/fs.mk
 include mk/nand.mk
 include mk/glazeboot.mk

@@ -69,6 +69,19 @@ int romfs_read(const struct romfs_entry *e, uint32_t off, void *p, uint32_t n)
     memcpy(p, (e == &helper ? helper_data : firmware_data) + off, n);
     return 0;
 }
+/* kernel/hwfile.c: romfs only here (hwfile-test covers packages). */
+int hwfile_open(const char *name, struct hwfile *f)
+{
+    memset(f, 0, sizeof(*f));
+    f->slot = -1;
+    f->rom = romfs_lookup(name);
+    if (!f->rom)
+        return GZ_ENOENT;
+    f->size = f->rom->size;
+    return 0;
+}
+int hwfile_read(const struct hwfile *f, uint32_t off, void *p, uint32_t n) { return romfs_read(f->rom, off, p, n); }
+void hwfile_close(struct hwfile *f) { f->rom = NULL; }
 bool pcmcia_node_id(uint8_t mac[6]) { (void)mac; return false; }
 uint64_t time_us(void)
 {

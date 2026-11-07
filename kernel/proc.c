@@ -131,7 +131,7 @@ static struct proc *spawn(const char *name, struct addrspace *src_as, const stru
     strncpy(p->name, name, sizeof(p->name) - 1);
 
     int load_error = elf_load(&p->as, src_as, rom, src, size, &entry, &start);
-    if (!load_error && !rom && !start.abi)
+    if (!load_error && !rom && src_as && !start.abi)
         load_error = GZ_EINVAL;     /* installed apps run on the dynamic linker */
     if (load_error) { kprintf("proc: cannot load %s (%d)\n", name, load_error); goto fail; }
     if (as_stack_region(&p->as, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE))
@@ -179,6 +179,14 @@ struct proc *proc_spawn_image(struct addrspace *src_as, uint32_t src, uint32_t s
                               int parent, uint32_t flags)
 {
     return spawn(name, src_as, NULL, src, size, parent, flags);
+}
+
+/* A catalog service from an installed hardware package: an ELF in kernel
+ * pages that hwfile.c has checked against its signed manifest. Static, like
+ * the romfs copy it replaces, and with the catalog's privileges. */
+struct proc *proc_spawn_verified(const void *elf, uint32_t size, const char *name, uint32_t flags)
+{
+    return spawn(name, NULL, NULL, (uint32_t)(uintptr_t)elf, size, 0, flags);
 }
 
 void proc_exit(struct proc *p, int code)

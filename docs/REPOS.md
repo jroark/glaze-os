@@ -6,7 +6,7 @@ against its exported SDK or its outputs, and find it as a sibling checkout.
 | Repository | Owns | Builds from glaze-os |
 | --- | --- | --- |
 | [glaze-os](https://github.com/jroark/glaze-os) | Kernel, SPL, servers, built-in apps, libraries, the SDK, glaze-usb, GlazeBoot, the system packages (`hello`, `taskmanager`, `maintenance`), `tools/mkstore.py` (the App Store catalog format) | n/a |
-| [glaze-apps](https://github.com/jroark/glaze-apps) | AIM, Gmail, Chat, Doom, SomaFM, Minesweeper, Solitaire, Tetris, Fifteen, Sketch | the SDK (`out/sdk/glaze-sdk`); glaze-os sources for native tests |
+| [glaze-apps](https://github.com/jroark/glaze-apps) | AIM, Gmail, Chat, Doom, SomaFM, Maps, Minesweeper, Solitaire, Tetris, Fifteen, Sketch | the SDK (`out/sdk/glaze-sdk`); glaze-os sources for native tests |
 | [glaze-emulators](https://github.com/jroark/glaze-emulators) | NES, Game Boy, Master System, Genesis, Game Gear, TurboGrafx-16 and their cores | the SDK; `lib/include` for native tests |
 | [glaze-web](https://github.com/jroark/glaze-web) | glaze-os.com, App Store listings (`store/apps.json`), the site and App Store stacks and publishers | `tools/mkstore.py`, `tools/package_glazeboot.py`, `firmware/`; every repo's `out/pkg` |
 | [glaze-installer](https://github.com/jroark/glaze-installer) | The offline macOS/Windows desktop installer | OS images, `tools/`, `userdata/`, `firmware/`, C sources for its helpers; every repo's `out/pkg` |

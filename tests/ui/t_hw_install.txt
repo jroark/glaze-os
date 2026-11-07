@@ -1,0 +1,12 @@
+# Install hardware support from Files while a 3c589 sits in the PCMCIA jacket
+# with no driver: the card comes up once the package is installed, without a
+# reboot. The image must trust the package's key and hold it in /Documents:
+#   make OTA_PUBKEY=<pub.bin> FS_EXTRA=/Documents/hw-pccards.gzp=out/pkg/hw-pccards.gzp
+# (tools/mkhwpkg.py, make hwpkgs), booted with --jacket --3c589. Look for
+# "hw: fetched drivers/3c589.ko" and "net: DHCP address"; the screenshot
+# keeps the "Hardware Support Installed" alert.
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+6500 tap 120 64
+8500 tap 120 64
+10500 tap 120 286

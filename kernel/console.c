@@ -31,12 +31,12 @@ bool console_dead(void)
     return dead;
 }
 
-void console_use_debug_uart(void)
+void console_use_debug_uart(bool on)
 {
     /* VR4131 UM sections 18.2.2/18.2.10: DSIUTH/DSIULS at
      * PA 0x0F000820/0x0F000825; NK OAL 0x80078308 uses this TX path.
-     * Use its independent TX path when the dock owns the companion SIU. */
-    debug_uart = true;
+     * Use its independent TX path while the dock owns the companion SIU. */
+    debug_uart = on;
 }
 
 void uart_putc(char c)

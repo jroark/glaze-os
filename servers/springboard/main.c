@@ -2544,7 +2544,9 @@ int main(void)
         } else if (sb_hold_due(&power_hold, t)) {
             int mode = sleep_mode();
             power_off(mode == POWER_SLEEP_NEVER ? GZ_SLEEP_SUSPEND : mode, "Power held");
-        } else if (!installer.active && sb_idle_sleep_wait(&idle, t) == 0) {
+        } else if (!installer.active && !debug_activity && sb_idle_sleep_wait(&idle, t) == 0) {
+            /* A debugger session (USB or network) holds off the idle power
+             * off: on battery over Wi-Fi a reload's upload outlasts it. */
             power_off(sleep_mode(), "idle");
         }
         if (!installer.active && sb_idle_wait(&idle, t) == 0)

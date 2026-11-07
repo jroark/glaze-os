@@ -15,7 +15,7 @@ LIBS := c gfx ui media
 LIBFILES := $(foreach n,$(LIBS),$(OUT)/lib$(n).so.1) $(OUT)/libwolfssl.so.1
 .DEFAULT_GOAL := all
 .PHONY: all
-all: $(LIBFILES) $(OUT)/crt0.o $(OUT)/start.o $(OUT)/ld-glaze.so.1
+all: $(LIBFILES) $(OUT)/libgps.a $(OUT)/crt0.o $(OUT)/start.o $(OUT)/ld-glaze.so.1
 $(OUT)/%.o: lib/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(PIC) -c $< -o $@
@@ -34,6 +34,10 @@ $(eval $(call LIBRARY,c,libc,,))
 $(eval $(call LIBRARY,gfx,gfx,$(OUT)/libc.so.1,-l:libc.so.1))
 $(eval $(call LIBRARY,ui,ui,$(OUT)/libgfx.so.1,-l:libgfx.so.1 -l:libc.so.1))
 $(eval $(call LIBRARY,media,media,$(OUT)/libc.so.1,-l:libc.so.1))
+# libgps.a: GPS parsing and projection, linked statically into apps (-lgps).
+$(OUT)/libgps.a: $(OUT)/gps/gps.o
+	rm -f $@
+	$(CROSS)ar rcs $@ $^
 # wolfSSL, as Glaze builds it (third-party code, so without Glaze's warnings).
 # Its glaze_tls_seed/glaze_tls_time imports come from each executable, so no -z defs.
 WOLFSSL_SRCS := $(addprefix third_party/wolfssl/,src/ssl.c src/internal.c src/tls.c src/tls13.c \

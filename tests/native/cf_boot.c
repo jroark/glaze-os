@@ -79,6 +79,9 @@ void bt_removed(void) { bt_removals++; }
 static uint32_t modem_cor; static unsigned modem_index, modem_inserts, modem_removals;
 void modem_insert(uint32_t cor, unsigned index) { modem_cor = cor; modem_index = index; modem_inserts++; }
 void modem_removed(void) { modem_removals++; }
+static uint32_t gps_cor; static unsigned gps_index, gps_inserts, gps_removals;
+void gps_insert(uint32_t cor, unsigned index) { gps_cor = cor; gps_index = index; gps_inserts++; }
+void gps_removed(void) { gps_removals++; }
 bool net_present(void) { return false; }
 bool net_insert(unsigned m, unsigned p) { (void)m; (void)p; return false; }
 void net_removed(void) {}
@@ -185,6 +188,47 @@ static const uint8_t rc56ld[] = {
     0x60,0xf8,0x02,0x07,0x1b,0x07,0x05,0x08,0xaa,0x60,0xe8,0x03,0x07,0x1b,0x07,0x0d,
     0x08,0xaa,0x60,0xe8,0x02,0x07,0xff,
 };
+/* The AmbiCom GPS-CF's card, read on a BE-300 through Glaze USB 2026-11-06
+ * (GPS.md): VERS_1 "CFGPS" "LPV1.0", MANFID 0104:0060, FUNCID serial, a
+ * plain 16550 FUNCE, COR at 0x400, entries 0d/15/1d/25 at COM1-4, 2d any. */
+static const uint8_t cfgps[] = {
+    0x01,0x03,0x00,0x00,0xff,0x10,0x05,0x07,0x00,0xf8,0x00,0xbc,0x17,0x03,0xd2,0x3a,
+    0xff,0x14,0x00,0x20,0x04,0x04,0x01,0x60,0x00,0x21,0x02,0x02,0x01,0x22,0x04,0x00,
+    0x02,0x0f,0x7f,0x15,0x13,0x05,0x00,0x43,0x46,0x47,0x50,0x53,0x00,0x4c,0x50,0x56,
+    0x31,0x2e,0x30,0x00,0x00,0x00,0x00,0xff,0x1a,0x05,0x01,0x2d,0x00,0x04,0x03,0x1b,
+    0x1b,0xcd,0x41,0x99,0x7f,0x55,0x4d,0x5d,0x1d,0x2d,0x2c,0x22,0xb0,0x60,0xf8,0x03,
+    0x07,0x30,0xff,0xff,0x20,0xc1,0x05,0x43,0x4f,0x4d,0x31,0x00,0x1b,0x05,0x0d,0x01,
+    0x01,0xb5,0x1e,0x1b,0x1b,0xd5,0x41,0x99,0x7f,0x55,0x4d,0x5d,0x1d,0x2d,0x2c,0x22,
+    0xb0,0x60,0xf8,0x02,0x07,0x30,0xff,0xff,0x20,0xc1,0x05,0x43,0x4f,0x4d,0x32,0x00,
+    0x1b,0x05,0x15,0x01,0x01,0xb5,0x1e,0x1b,0x1b,0xdd,0x41,0x99,0x7f,0x55,0x4d,0x5d,
+    0x1d,0x2d,0x2c,0x22,0xb0,0x60,0xe8,0x03,0x07,0x30,0xff,0xff,0x20,0xc1,0x05,0x43,
+    0x4f,0x4d,0x33,0x00,0x1b,0x05,0x1d,0x01,0x01,0xb5,0x1e,0x1b,0x1b,0xe5,0x41,0x99,
+    0x7f,0x55,0x4d,0x5d,0x1d,0x2d,0x2c,0x22,0xb0,0x60,0xe8,0x02,0x07,0x30,0xff,0xff,
+    0x20,0xc1,0x05,0x43,0x4f,0x4d,0x34,0x00,0x1b,0x05,0x25,0x01,0x01,0xb5,0x1e,0x1b,
+    0x17,0xed,0x41,0x99,0x7f,0x55,0x4d,0x5d,0x1d,0x2d,0x2c,0x22,0x23,0x30,0xff,0xff,
+    0x20,0xc1,0x05,0x43,0x4f,0x4d,0x58,0x00,0x1b,0x05,0x2d,0x01,0x01,0xb5,0x1e,0xff,
+};
+static void gps_card_tests(void)
+{
+    memset(attr, 255, sizeof(attr));
+    for (unsigned i = 0; i < sizeof(cfgps); i++) attr[i*2] = cfgps[i];
+    struct cis c; read_cis(&c, false);
+    assert(c.readable && c.function == 2 && c.manufacturer == 0x104 && c.product == 0x60 && c.cor == 0x400);
+    assert(!c.modem && c.uart_index == 0x0d);
+    unsigned before = gps_inserts;
+    capture_card(&c);
+    assert(card_info.kind == BT_CARD_GPS && strstr(card_info.identification, "CFGPS"));
+    assert(gps_inserts == before + 1 && gps_cor == 0x400 && gps_index == 0x0d);
+    status = 0x2f9; socket_full = true;
+    memset(ata, 0x5a, sizeof(ata)); ctl = 0x77;
+    assert(!identify() && ctl == 0x77);
+    unsigned removals = gps_removals;
+    status = PCMCIA_CD_MASK; probe();
+    assert(card_info.kind == BT_CARD_ABSENT && gps_removals > removals);
+    memset(&card_info, 0, sizeof(card_info)); card_info.version = BT_CIS_VERSION;
+    socket_full = false;
+}
+
 static void modem_card_tests(void)
 {
     memset(attr, 255, sizeof(attr));
@@ -204,10 +248,14 @@ static void modem_card_tests(void)
     uint32_t generation = card_info.generation;
     status = PCMCIA_CD_MASK; probe();
     assert(card_info.kind == BT_CARD_ABSENT && card_info.generation > generation && modem_removals);
-    /* A plain serial card (FUNCE type 0 only) is not a modem. */
-    c.modem = false; capture_card(&c); assert(card_info.kind == BT_CARD_SERIAL);
-    unsigned removals = modem_removals;
-    pcmcia_resume(); assert(modem_removals > removals);
+    /* A plain serial card (FUNCE type 0 only) is not a modem: with a COM1
+     * entry it goes to the GPS listener (GPS.md). */
+    c.modem = false; capture_card(&c); assert(card_info.kind == BT_CARD_GPS);
+    assert(gps_inserts == 1 && gps_cor == 0x420 && gps_index == 5);
+    unsigned removals = modem_removals, gps_gone = gps_removals;
+    pcmcia_resume(); assert(modem_removals > removals && gps_removals > gps_gone);
+    /* Without a COM1 entry it stays an unclaimed serial card. */
+    c.uart_index = -1; capture_card(&c); assert(card_info.kind == BT_CARD_SERIAL && gps_inserts == 1);
     memset(&card_info, 0, sizeof(card_info)); card_info.version = BT_CIS_VERSION;
     socket_full = false;
 }
@@ -216,6 +264,7 @@ int main(void)
 {
     bluetooth_card_tests();
     modem_card_tests();
+    gps_card_tests();
     /* Physical OnSpec IDENTIFY provides 256 bytes in 256 low-lane words.
      * Include high bytes in the reconstructed ATA words and capacity. */
     uint16_t expected[256];
@@ -260,5 +309,5 @@ int main(void)
     struct gz_bootinfo boot={0};ram_boot=&boot;status=PCMCIA_CD_MASK; /* empty socket */
     REG32(0x0a00111c)=0;pcmcia_cold_init(false);assert(!REG32(0x0a00111c));
     boot.flags=GZ_BOOT_FROM_ROM;pcmcia_cold_init(false);assert(REG32(0x0a00111c)==1);
-    puts("cf-boot: gated socket setup, COR, BT reinsertion, modem CIS, stale mapping, delayed CIS recovery, bounded retries and no ATA on unreadable cards PASS");
+    puts("cf-boot: gated socket setup, COR, BT reinsertion, modem CIS, GPS CIS, stale mapping, delayed CIS recovery, bounded retries and no ATA on unreadable cards PASS");
 }

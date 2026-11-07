@@ -35,6 +35,7 @@ void usb_poll(void);
 void usb_stop(void);
 void usb_resume(void);      /* after a HIBERNATE */
 bool usb_tx_idle(void);
+bool usb_reply_sent(void);
 void usb_log_putc(char c);
 void usb_panic_poll(void);
 int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
@@ -75,6 +76,7 @@ void display_sleep(void);   /* panel and backlight off (drivers/power.c) */
 void display_wake(void);    /* panel on, backlight still off */
 void input_push(uint16_t type, uint16_t code, int x, int y);
 void stowaway_init(void);
+void stowaway_resume(void);
 void stowaway_poll(void);
 int stowaway_status(void);
 void input_irq(uint16_t kj_status);
@@ -138,6 +140,13 @@ bool modem_ready(void);
 bool modem_present(void);
 uint32_t modem_generation(void);
 int sys_modem_io(struct proc *, uint32_t, uint32_t, uint32_t);
+/* gps.c: an NMEA receiver on a CF serial card, readable by any process. */
+void gps_insert(uint32_t cor_address, unsigned config_index);
+void gps_removed(void);
+void gps_poll(void);
+bool gps_ready(void);
+uint32_t gps_generation(void);
+int sys_gps_io(struct proc *, uint32_t, uint32_t, uint32_t);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);
@@ -175,7 +184,9 @@ int usbnet_bind(int port);
 int usbnet_send(struct proc *p, uint32_t buf, uint32_t len);
 int usbnet_recv(struct proc *p, uint32_t buf, uint32_t max);
 int usbnet_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
-bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up */
+bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up, or its driver is
+                                                             * pending or not installed */
+void net_retry(void);       /* service worker: a pending or newly installed driver */
 void net_removed(void);
 void net_set_mac(const uint8_t mac[6]);
 void net_receive(const uint8_t *frame, uint32_t len);
