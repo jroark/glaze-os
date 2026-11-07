@@ -211,12 +211,46 @@ bool net_insert(unsigned manufacturer, unsigned product)
     return online && driver && driver->present();
 }
 
+/* Time at each GZ_CARD_POWER_* level, for Settings → Battery. */
+static uint8_t power_noted, power_now;
+static uint64_t power_at, power_us[GZ_CARD_POWER_OFF + 1];
+static uint32_t irqs;
+static void power_account(void);
+void net_power_note(unsigned state)
+{
+    if (state > GZ_CARD_POWER_OFF || state == power_noted) return;
+    power_account();            /* the time so far was in the old state */
+    power_noted = (uint8_t)state;
+    power_account();
+}
+static void power_account(void)
+{
+    uint64_t now = time_us();
+    if (power_at) power_us[power_now] += now - power_at;
+    power_at = now;
+    power_now = !driver ? GZ_CARD_POWER_NONE : !online ? GZ_CARD_POWER_OFF :
+                power_noted ? power_noted : GZ_CARD_POWER_FULL;
+}
+void net_power_status(struct gz_power_status *st)
+{
+    power_account();
+    st->card_power = power_now;
+    st->card_full_ms = (uint32_t)(power_us[GZ_CARD_POWER_FULL] / 1000u);
+    st->card_save_ms = (uint32_t)(power_us[GZ_CARD_POWER_SAVE] / 1000u);
+    st->card_doze_ms = (uint32_t)(power_us[GZ_CARD_POWER_DOZE] / 1000u);
+    st->card_off_ms = (uint32_t)((power_us[GZ_CARD_POWER_RADIO_OFF] + power_us[GZ_CARD_POWER_OFF]) / 1000u);
+    st->net_irqs = irqs;
+}
+
 /* The card was pulled: its driver forgets it, and its frames go. */
 void net_removed(void)
 {
     if (driver) driver->stop();
+    power_account();
     driver = NULL;
     online = claimed = false;
+    power_noted = 0;
+    power_account();            /* from now on, no card */
     generation++;
     kind = GZ_NET_NONE;
     head = tail = 0;
@@ -238,7 +272,11 @@ void net_irq(void)
      * notices the removal itself. */
     if (!PCMCIA_CARD_PRESENT())
         return;
-    if (driver && online) driver->irq();
+    if (driver && online) {
+        irqs++;
+        driver->irq();
+    }
+    power_account();
 }
 
 static int check(struct proc *p)
@@ -330,8 +368,9 @@ int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t address)
     if (!driver || !driver->control || !info.present)
         return GZ_ENOENT;
     union { struct wifi_status status; struct wifi_config config; struct wifi_request request;
-            struct wifi_key key; } data;
+            struct wifi_key key; struct wifi_power power; } data;
     unsigned n = op == WIFI_CONFIGURE ? sizeof(data.config) :
+                 op == WIFI_POWER ? sizeof(data.power) :
                  op == WIFI_SET_KEY ? sizeof(data.key) :
                  op == WIFI_CONNECT ? sizeof(data.request) : 0;
     memset(&data, 0, sizeof(data));

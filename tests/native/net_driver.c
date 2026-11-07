@@ -25,6 +25,8 @@ static uint8_t read_cis(unsigned i)
     return cis[i];
 }
 #define CF_CIS(i) read_cis(i)
+static uint64_t clock_us = 1;
+uint64_t time_us(void) { return clock_us; }
 #define NET_TEST
 #include "../../kernel/drivers/net.c"
 #include "../../kernel/drivers/usbnet.c"
@@ -268,7 +270,22 @@ int main(void)
     assert(sys_net_bind(&p, 7) == 0);
     uint8_t frame[60] = {0};
     net_receive(frame, sizeof(frame));
+    /* Power accounting: a driver that never notes its state counts as full
+     * power; a noted state takes over; removal ends the card's time. */
+    struct gz_power_status ps = {0};
+    net_power_status(&ps);
+    unsigned irqs_before = ps.net_irqs, full_before = ps.card_full_ms;
+    socket_status = 4;
+    clock_us += 3000000; net_irq();
+    net_power_note(GZ_CARD_POWER_DOZE);
+    clock_us += 2000000; net_irq();
+    net_power_status(&ps);
+    assert(ps.net_irqs == irqs_before + 2 && ps.card_full_ms == full_before + 3000);
+    assert(ps.card_doze_ms == 2000 && ps.card_power == GZ_CARD_POWER_DOZE);
     net_removed();
+    clock_us += 1000000;
+    net_power_status(&ps);
+    assert(ps.card_power == GZ_CARD_POWER_NONE && ps.card_doze_ms == 2000);
     assert(removes == 1 && !net_present() && !net_up() && head == tail);
     assert(sys_net_send(&p, 0, 60) == GZ_EDEAD);
     assert(sys_wifi_ctl(&p, WIFI_STATUS, 0) == GZ_EDEAD);

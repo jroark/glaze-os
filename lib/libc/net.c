@@ -131,6 +131,20 @@ int net_status(struct net_status *st)
     return 0;
 }
 
+int net_power(bool screen_on)
+{
+    struct gz_msg m = {0}, r;
+    int peer = gz_port_lookup(NET_PORT_NAME);
+    if (peer <= 0)
+        return GZ_ENETDOWN;
+    m.w[0] = NET_POWER;
+    m.w[1] = (uint32_t)-1;
+    m.w[2] = screen_on;
+    if (gz_send(peer, &m, &r) < 0)
+        return GZ_EIO;
+    return (int)r.w[0];
+}
+
 int net_wifi_status(struct wifi_status *status)
 {
     CONTROL_LOCKED();

@@ -297,12 +297,15 @@ void battery_idle(uint32_t us)
     st.standby_count++;
 }
 
+_Static_assert(__builtin_offsetof(struct gz_power_status, card_power) == GZ_POWER_STATUS_V1_SIZE,
+               "version 1 callers get the prefix");
 int battery_status(struct addrspace *as, uint32_t uout, uint32_t size)
 {
-    if (size != sizeof(st))
+    if (size != sizeof(st) && size != GZ_POWER_STATUS_V1_SIZE)
         return GZ_EINVAL;
     st.idle_ms = (uint32_t)(idle_us / 1000u);
-    return copy_to_as(as, uout, &st, sizeof(st)) ? GZ_EINVAL : 0;
+    net_power_status(&st);
+    return copy_to_as(as, uout, &st, size) ? GZ_EINVAL : 0;
 }
 
 void battery_init(void)

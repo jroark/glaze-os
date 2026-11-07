@@ -12,6 +12,7 @@ int net_if_wifi(uint32_t op, void *buf);
 void net_if_poll(void);         /* frames from the kernel, DHCP fallback */
 int net_if_state(void);
 void net_if_status(struct net_status *st);
+void net_if_power(bool screen_on);  /* NET_POWER */
 
 /* modem.c: dial-up PPP over a CF modem, when there is no network card. */
 int net_modem_init(int port);

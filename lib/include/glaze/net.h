@@ -60,6 +60,9 @@ enum {
     NET_HANGUP,
     NET_DIAL_STATUS,    /* -> buf: struct net_dial_status */
     NET_DIAL_CONFIG,    /* -> buf: the saved struct net_dial_config, password blank */
+    /* SpringBoard's hint, without a session: w1 = -1, w2 = 1 screen on, 0 off.
+     * With the screen off the radio dozes longer and reconnects less often. */
+    NET_POWER,
 };
 
 #define NET_MSG_DONTWAIT    0x1     /* send: queue what fits, GZ_ETIMEDOUT if nothing */
@@ -155,6 +158,9 @@ struct net_dial_status {
 /* ---- client API (libc) --------------------------------------------------- */
 
 int net_status(struct net_status *st);
+/* Tell the server the screen went on or off (SpringBoard). Never waits for
+ * the server to start: without one there is nothing to tell. */
+int net_power(bool screen_on);
 /* Waits up to timeout_ms for an address; returns 0 or GZ_ENETDOWN. */
 int net_wait_up(int timeout_ms);
 int net_resolve(const char *host, uint32_t *addr, int timeout_ms);

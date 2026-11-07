@@ -151,6 +151,56 @@ the card icon moves left.
 - the latest and averaged readings
 - calibration source and range
 - CPU idle
+- the network card's power: "Always On" (a wired card, or a radio at full
+  power), "Dozing N%" (802.11 power save; N is the share of the card's time
+  asleep or off), "Radio Off", or "None"
+
+## Network cards
+
+A network card in the CF socket or the jacket draws far more than the
+idle CPU: a Wi-Fi radio listening all the time is the largest draw while
+the device is on, and Suspend used to leave the socket powered. Glaze
+cuts it in three places.
+
+**802.11 power save** (WL54-CF, `kernel/drivers/wl54cf.c`,
+`docs/hardware/WL54CF.md`). After a second without traffic on an
+authorized link, the driver sends ENTER_PS, and the radio wakes only for
+beacons (every DTIM, every third with the screen off). Frames to send while
+it sleeps wait for its next PS_AWAKE. Any frame sent, or any command,
+returns it to full power, and the idle timer starts over. The access point
+buffers frames for it meanwhile. Firmware that refuses ENTER_PS stays at
+full power.
+
+**Radio off.** Disconnected for 30 s with no saved network to rejoin, the
+net server turns the radio off (`WIFI_POWER_OFF`, RADIO_CONTROL). A scan or
+a connect turns it back on.
+
+**Screen off** (`NET_POWER`, `net_power()` in `glaze/net.h`). SpringBoard
+tells the net server when the screen goes off and on. With it off, the
+driver enters power save after 0.2 s idle with a DTIM multiple of 3
+(`WIFI_POWER_SAVE`), and reconnect attempts back off to every 5 minutes
+instead of 30 s. Open connections are left alone.
+
+**Sleep.** Before SUSPEND or HIBERNATE, `pcmcia_suspend()` (`cf.c`) removes
+a network card as if pulled and powers its socket off: socket 1 by
+clearing its control bits, as on a removal, and socket 0 by clearing
+`0x0A00A034` bits 2 and 3. pcmcia.dll's supply helpers (0x0198C2D8 and
+0x0198C31C set them; 0x0198C33C clears both) say these are the supply
+bits. At the wake, `pcmcia_resume()` inserts the card afresh (firmware,
+the net service's restart, the saved network and DHCP), as after a
+Hibernate. Storage, modem and Bluetooth cards are left powered.
+
+The time spent at each level since boot is in `gz_power_status()`
+(version 2: `card_power`, `card_full_ms`, `card_save_ms`, `card_doze_ms`,
+`card_off_ms`, `net_irqs`). Callers built for version 1 pass its smaller
+size (`GZ_POWER_STATUS_V1_SIZE`) and get the old fields. NE2000 and 3c589
+cards have no power states of their own; for them only the sleep cut
+applies. Hermes and XI-825 radios don't use power save yet.
+
+Unverified on hardware: the socket 0 power-off (the emulator ignores
+`A034`); whether the WL54-CF's 2.5 firmware accepts PS_MODE (if it doesn't,
+"the firmware refused power save" is logged); and the current saved, which
+the BE-300 can't measure except through the battery voltage's slope.
 
 ## Power off
 
@@ -195,7 +245,8 @@ and GZ_WAKE_* in `glaze/abi.h`) is `kernel/drivers/power.c`:
    - a battery sample in progress;
    - the touch source;
    - the panel, by CE's sequence (`display_sleep`);
-   - the CMCU watchdog (`cmcu_stop`).
+   - the CMCU watchdog (`cmcu_stop`);
+   - a network card's socket (`pcmcia_suspend`, see [Network cards](#network-cards)).
 2. It sleeps:
    - **Suspend.** VR4131 SUSPEND, with only the power switch's interrupt
      (SYSINT1 POWERINTR), GIRQ0's button source and the ETIME compare
@@ -213,7 +264,8 @@ and GZ_WAKE_* in `glaze/abi.h`) is `kernel/drivers/power.c`:
 4. It starts everything again: after a Hibernate, the companion gates,
    `irq_init`, the CMCU, USB (the host's session is lost), the PIU, the
    audio block and the PCMCIA socket (whatever is in it is inserted afresh,
-   and the file server remounts the card).
+   and the file server remounts the card). A network card powered off for
+   a Suspend is inserted afresh too.
 5. It returns GZ_WAKE_POWER or GZ_WAKE_ALARM, and the mode used.
 
 **Hibernate and the SPL** (`kernel/resume.h`, `kernel/power_resume.S`,

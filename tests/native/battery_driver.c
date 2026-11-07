@@ -39,6 +39,7 @@ int copy_to_as(struct addrspace *as, uint32_t uva, const void *src, uint32_t len
 }
 
 #include "../../kernel/drivers/battery.c"
+void net_power_status(struct gz_power_status *s) { s->card_power = GZ_CARD_POWER_FULL; s->net_irqs = 7; }
 
 static void tick(int n)
 {
@@ -112,6 +113,8 @@ static void test_driver(void)
     assert(st.version == GZ_POWER_VERSION && st.cal_min == 0xBF8 && st.cal_max == 0xD96);
     assert((st.flags & (GZ_POWER_AC | GZ_POWER_CAL_EEPROM | GZ_POWER_VALID)) == GZ_POWER_AC);
     assert(battery_status(NULL, 0, sizeof(st) - 4) == GZ_EINVAL);
+    assert(st.card_power == GZ_CARD_POWER_FULL && st.net_irqs == 7);
+    assert(battery_status(NULL, 0, GZ_POWER_STATUS_V1_SIZE) == 0);   /* older SDK apps */
 
     /* The first sample half a second in; a pen-down defers it. */
     adc = 0xD00;

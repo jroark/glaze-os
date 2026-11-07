@@ -65,7 +65,7 @@ def main():
         script.write_text('3000 drag 40 280 235 280 500\n4500 tap 90 120\n'
                           f'6500 tap 100 50\n7000 text {url}\n8000 key enter\n')
         with (work / 'build.log').open('w') as log:
-            subprocess.run(['./build.sh', 'WL54CF=1', 'INIT=bin/springboard',
+            subprocess.run(['./build.sh', 'WL54CF=1', 'NAND_DROP=wince', 'INIT=bin/springboard',
                             f'INPUT_SCRIPT={script.relative_to(root)}'],
                            cwd=root, stdout=log, stderr=subprocess.STDOUT, check=True)
         source = root / 'out/glaze.bin'
