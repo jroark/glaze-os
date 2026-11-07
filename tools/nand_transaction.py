@@ -7,7 +7,11 @@ update replaces one installed Glaze image with another: --installed names the
 source's own placement plan, which must be bound to the same CE backup.
 --keep-filesystem updates a device whose file system has changed since: the
 source is a fresh snapshot, --installed-image the image installed, and only the
-blocks below the file system are replaced by the new image's. A failed
+blocks below the file system are replaced by the new image's. --replace-snapshot
+installs over whatever a fresh two-pass snapshot holds (an image installed by
+OTA or another tool, with no placement plan here), replacing every block,
+file system included; the writer still checks the chip against the snapshot
+before erasing anything. A failed
 transaction is never resumed blindly or repaired by guessing new mappings.
 """
 import argparse
@@ -38,7 +42,7 @@ def keep_filesystem(source,new,installed_image,factory,bad,placement,installed):
         raise ValueError('the new image changes the physical manifest, so the file system would not carry over')
     return new[:boot]+source[boot:]
 
-def prepare(source,target,factory,inventory,placement=None,restore=False,installed=None,kept=False):
+def prepare(source,target,factory,inventory,placement=None,restore=False,installed=None,kept=False,replace=False):
     if any(len(data)!=n.RAW_SIZE for data in (source,target,factory)):raise ValueError('all images must be exact physical 512+16 snapshots')
     if inventory.get('version')!=1 or inventory['source_sha256']!=n.sha(factory):raise ValueError('factory inventory is not bound to the original CE backup')
     bad=inventory['quarantined']
@@ -46,7 +50,7 @@ def prepare(source,target,factory,inventory,placement=None,restore=False,install
     if restore:
         if target!=factory:raise ValueError('restoration target must be the exact original CE backup')
     elif not kept:  # keep_filesystem() bound both images
-        if source!=factory and not bound(installed,factory,source,bad):
+        if source!=factory and not replace and not bound(installed,factory,source,bad):
             raise ValueError('installation must start from the original CE snapshot or an installed image\'s placement plan')
         if not placement or placement['backup_sha256']!=n.sha(factory) or placement['physical_sha256']!=n.sha(target):
             raise ValueError('physical placement plan is not bound to these images')
@@ -71,7 +75,7 @@ def prepare(source,target,factory,inventory,placement=None,restore=False,install
     plan=b'GZNDTX1\0'+bytes.fromhex(n.sha(source))+bytes.fromhex(n.sha(target))+bitmap
     plan+=struct.pack('<I',zlib.crc32(plan))
     review={'version':1,'operation':'restore' if restore else 'install' if source==factory else
-            'update, file system kept' if kept else 'update','source_sha256':n.sha(source),
+            'update, file system kept' if kept else 'replace snapshot' if replace else 'update','source_sha256':n.sha(source),
             'target_sha256':n.sha(target),'factory_sha256':n.sha(factory),'preserve_blocks':sorted(bad),
             'write_order':changed,'commit_block_zero_last':not changed or changed[-1]==0 or 0 not in changed,
             'artifact':'offline transaction; execution requires nand=repair and explicit --execute'}
@@ -86,6 +90,8 @@ def main():
     p.add_argument('--keep-filesystem',action='store_true',
                    help='keep the snapshot SOURCE\'s file system; writes the target to OUT.target.raw')
     p.add_argument('--installed-image',type=Path,help='with --keep-filesystem: the image --installed describes')
+    p.add_argument('--replace-snapshot',action='store_true',
+                   help='install over a fresh snapshot of an image with no placement plan here, file system included')
     args=p.parse_args()
     try:
         inventory=json.loads(args.inventory.read_text())
@@ -100,7 +106,10 @@ def main():
             if args.restore or not args.installed_image:raise ValueError('--keep-filesystem needs --installed-image and no --restore')
             target=keep_filesystem(source,target,args.installed_image.read_bytes(),factory,inventory['quarantined'],
                                    placement,installed)
-        plan,review=prepare(source,target,factory,inventory,placement,args.restore,installed,args.keep_filesystem)
+        if args.replace_snapshot and (args.restore or args.keep_filesystem or args.installed):
+            raise ValueError('--replace-snapshot is an install: no --restore, --keep-filesystem or --installed')
+        plan,review=prepare(source,target,factory,inventory,placement,args.restore,installed,args.keep_filesystem,
+                            args.replace_snapshot)
         path=Path(str(args.out)+'.review.json')
         if args.out.exists() or path.exists() or (args.keep_filesystem and kept_path.exists()):
             raise ValueError('output already exists')

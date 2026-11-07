@@ -4,26 +4,26 @@ import argparse
 import json
 from pathlib import Path
 import struct
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import romfs  # noqa: E402  (tools/romfs.py)
 
 
 def measure(path):
     data = path.read_bytes()
-    if data[:4] != b"GZRF":
-        raise ValueError(f"{path}: not a Glaze romfs")
-    count, = struct.unpack_from("<I", data, 4)
+    files = romfs.entries(data)     # decompressed, for an LZ4 archive
     result = dict(romfs_bytes=len(data), binaries=0, binary_bytes=0,
                   libraries=0, library_bytes=0, elf_load_bytes=0,
                   elf_page_padding=0)
-    for i in range(count):
-        name, offset, size = struct.unpack_from("<48sII", data, 8 + 56 * i)
-        name = name.split(b"\0", 1)[0].decode()
+    for name, elf in sorted(files.items()):
+        size = len(elf)
         if not name.startswith(("bin/", "lib/")):
             continue
         group = "binary" if name.startswith("bin/") else "library"
         result["binaries" if group == "binary" else "libraries"] += 1
         result[group + "_bytes"] += size
         result["elf_page_padding"] += -size % 4096
-        elf = data[offset:offset + size]
         if elf[:7] != b"\x7fELF\x01\x01\x01":
             raise ValueError(f"{path}: {name}: not ELF32 little endian")
         phoff, = struct.unpack_from("<I", elf, 28)

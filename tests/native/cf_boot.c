@@ -83,7 +83,8 @@ static uint32_t gps_cor; static unsigned gps_index, gps_inserts, gps_removals;
 void gps_insert(uint32_t cor, unsigned index) { gps_cor = cor; gps_index = index; gps_inserts++; }
 void gps_removed(void) { gps_removals++; }
 bool net_present(void) { return false; }
-bool net_insert(unsigned m, unsigned p) { (void)m; (void)p; return false; }
+static unsigned net_inserts, net_product;
+bool net_insert(unsigned m, unsigned p) { (void)m; net_product = p; net_inserts++; return false; }
 void net_removed(void) {}
 int copy_to_as(struct addrspace *as, uint32_t a, const void *p, uint32_t n)
 { (void)as; (void)a; (void)p; (void)n; return 0; }
@@ -260,11 +261,71 @@ static void modem_card_tests(void)
     socket_full = false;
 }
 
+/* AmbiCom WL54-CF (Marvell 88W8300), CIS read on a BE-300 2026-11-07. */
+static const uint8_t wl54cf[] = {
+    0x01,0x03,0x00,0x00,0xff,0x17,0x04,0x67,0x5a,0x08,0xff,0x1d,0x05,0x03,0x67,0x5a,
+    0x08,0xff,0x15,0x30,0x05,0x00,'M','a','r','v','e','l','l',0x00,'8','8',
+    'W','8','3','0','0',' ','8','0','2','.','1','1','g',' ','P','C',' ','C','a','r','d',0x00,
+    'V','e','r','s','i','o','n',' ','1','.','1',0x00,0x00,0xff,0x20,0x04,0xdf,0x02,0x03,0x81,
+    0x21,0x02,0x06,0x00,0x22,0x02,0x01,0x07,0x22,0x05,0x02,0x40,0x42,0x0f,0x00,0x22,
+    0x05,0x02,0x80,0x84,0x1e,0x00,0x22,0x05,0x02,0x60,0xec,0x53,0x00,0x22,0x05,0x02,
+    0xc0,0xd8,0xa7,0x00,0x22,0x02,0x03,0x07,0x22,0x08,0x04,0x06,0x00,0x02,0x2d,0x42,
+    0xe8,0xcc,0x22,0x02,0x05,0x01,0x1a,0x08,0x07,0x01,0x00,0x02,0x00,0x00,0x01,0x00,
+    0x1b,0x0d,0xc1,0x01,0x19,0x76,0x35,0x3d,0x36,0x36,0x05,0x67,0x7f,0xff,0xff,0xff,
+};
+static void reset_sockets(void)
+{
+    memset(&card_info, 0, sizeof(card_info)); card_info.version = BT_CIS_VERSION;
+    memset(&info, 0, sizeof(info));
+    socket_full = false; socket1_dead = false; inserted_on = -1; use_socket(0);
+    cis_retries = 0; cis_retry_at = 0;
+}
+/* A WL54-CF inserted into the CF slot after a NAND boot, with no jacket. */
+static void wl54cf_socket_tests(void)
+{
+    memset(attr, 255, sizeof(attr));
+    for (unsigned i = 0; i < sizeof(wl54cf); i++) attr[i*2] = wl54cf[i];
+    booted = true;
+
+    /* Socket 1's unit is clock-gated: every register reads 0. That is no
+     * jacket, not a card in one; the CF slot's card goes to socket 0. */
+    reset_sockets();
+    socket1_detect = 0; socket1_reg = 0; socket1_bus = 0;
+    status = PCMCIA_CD_MASK;                    /* the CF slot's detect not settled */
+    pcmcia_poll();
+    assert(!socket_full && !net_inserts);
+    status = 0;
+    unsigned n = net_inserts;
+    pcmcia_poll();
+    assert(socket_full && socket == 0 && net_inserts > n && net_product == 0x8103);
+
+    /* A live socket 1 that reads as a card but doesn't answer: the card goes
+     * there first, then to the CF slot once that reports it. */
+    reset_sockets();
+    socket1_detect = 0; socket1_reg = 0x0C;     /* "card", wrong controller ID */
+    status = PCMCIA_CD_MASK;
+    pcmcia_poll();
+    assert(socket_full && inserted_on == 1 && socket1_dead);
+    status = 0;
+    n = net_inserts;
+    pcmcia_poll();
+    assert(socket == 0 && inserted_on == 0 && net_inserts > n);
+    /* Nothing more happens until the card changes. */
+    n = net_inserts;
+    pcmcia_poll();
+    assert(net_inserts == n);
+
+    socket1_detect = 8; socket1_reg = 0; socket1_bus = 0;
+    reset_sockets();
+    booted = false;
+}
+
 int main(void)
 {
     bluetooth_card_tests();
     modem_card_tests();
     gps_card_tests();
+    wl54cf_socket_tests();
     /* Physical OnSpec IDENTIFY provides 256 bytes in 256 low-lane words.
      * Include high bytes in the reconstructed ATA words and capacity. */
     uint16_t expected[256];

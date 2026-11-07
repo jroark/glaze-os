@@ -684,6 +684,14 @@ modem-chat-test:
 	../out/host/modem-chat-test
 .PHONY: modem-chat-test
 
+# kernel/romfs.c and kernel/lz4.c on archives from tools/mkromfs.py, plain and --lz4.
+romfs-lz4-test: ../tests/native/romfs_lz4.c ../kernel/romfs.c ../kernel/lz4.c ../tools/mkromfs.py \
+    ../tools/romfs.py ../tools/lz4block.py ../tests/romfs_lz4_data.py
+	python3 -I ../tests/romfs_lz4_data.py ../out/host/romfs-lz4
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/romfs_lz4.c -o ../out/host/romfs-lz4-test
+	../out/host/romfs-lz4-test ../out/host/romfs-lz4/plain.img ../out/host/romfs-lz4/lz4.img ../out/host/romfs-lz4/f
+.PHONY: romfs-lz4-test
+
 gps-test: ../tests/native/gps.c ../kernel/gps.c ../lib/gps/gps.c ../lib/gps/gps_tables.h ../lib/include/glaze/gps.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/gps.c -lm -o ../out/host/gps-test

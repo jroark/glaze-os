@@ -20,6 +20,16 @@
  * reserved RAM at an 8 KiB-aligned address, so every page already has a
  * frame of the right colour: page_pa returns it, and nothing is cached,
  * counted or reclaimed.
+ *
+ * Compressed archives (tools/mkromfs.py --lz4, format in tools/romfs.py)
+ * have a ".lz4" entry, and each other file is an LZ4 page container. The
+ * table still describes the physical layout, which is what SPLs check in an
+ * OTA. romfs_init reads every container's page index and gives each file a
+ * logical, uncompressed place in the archive, rewriting its table entry, so
+ * offsets, sizes, colours and the cache are as for a plain archive. A page
+ * is read from just the 512-byte blocks holding it and decoded into its
+ * frame (kernel/lz4.c). A compressed archive in RAM goes through the cache
+ * too, since its pages must be decoded.
  */
 
 #include "kernel.h"
@@ -29,28 +39,113 @@
 #include "drivers/nand.h"
 #include "drivers/nand_boot.h"
 #include <glaze/bootinfo.h>
+#include "lz4.h"
 
 #define NPAGES          (SDRAM_SIZE / PAGE_SIZE)
 #define NAND_PER_PAGE   (PAGE_SIZE / NAND_PAGE_DATA)
 #define FIRST_NAND_PAGE (ROMFS_OFFSET / NAND_PAGE_DATA)
 #define MAX_PAGES       ((FLASH_FS_OFFSET - ROMFS_OFFSET) / PAGE_SIZE)
 #define MAX_FILES       256
+#define MAX_LOGICAL     (2 * MAX_PAGES) /* a compressed archive's pages, uncompressed */
 
 static struct romfs_entry table[MAX_FILES];
 static uint32_t nfiles, npages;
-static uint16_t cache[MAX_PAGES];       /* archive page -> frame + 1 */
+static uint16_t cache[MAX_LOGICAL];     /* archive page -> frame + 1 */
+static bool lz;                         /* LZ4 page containers */
+static uint32_t lz_off[MAX_LOGICAL];    /* logical page -> its bytes in the archive */
+static uint16_t lz_len[MAX_LOGICAL];    /* their length; PAGE_SIZE: stored raw */
+static uint8_t lz_buf[PAGE_SIZE + 2 * NAND_PAGE_DATA] __attribute__((aligned(4)));
 static uint16_t owner[NPAGES];          /* frame -> archive page + 1 */
 static uint16_t maps[NPAGES];           /* frame -> mappings in address spaces */
 static uint32_t cached, hand;
 static uint32_t ram_pa;                 /* the archive in RAM; 0 from NAND */
 
-/* A 512-byte block of the archive. */
-static void read_block(uint32_t n, uint8_t *buf)
+/* A 512-byte block of the archive: through the boot reader at init, the
+ * NAND driver afterwards. */
+static void read_block_with(uint32_t n, uint8_t *buf, bool booted)
 {
     if (ram_pa)
         memcpy(buf, (const uint8_t *)KSEG0(ram_pa) + n * NAND_PAGE_DATA, NAND_PAGE_DATA);
+    else if (booted)
+        nand_read_page(FIRST_NAND_PAGE + n, buf);
     else
         boot_nand_read(FIRST_NAND_PAGE + n, buf);
+}
+
+static void read_block(uint32_t n, uint8_t *buf) { read_block_with(n, buf, false); }
+
+/* Bytes at any offset of the archive, at init. */
+static void read_bytes(uint32_t off, void *dst, uint32_t len)
+{
+    static uint8_t blk[NAND_PAGE_DATA] __attribute__((aligned(4)));
+    uint8_t *out = dst;
+
+    while (len) {
+        uint32_t in = off % NAND_PAGE_DATA, n = MIN(len, NAND_PAGE_DATA - in);
+        read_block(off / NAND_PAGE_DATA, blk);
+        memcpy(out, blk + in, n);
+        out += n; off += n; len -= n;
+    }
+}
+
+/* Reads every container's page index and moves each file to its logical
+ * place. The physical extents were checked by the caller. */
+static bool lz_init(uint32_t count)
+{
+    uint32_t logical = 0, marker = MAX_FILES, header[3], desc[2];
+
+    for (uint32_t i = 0; i < count; i++)
+        if (!strncmp(table[i].name, ".lz4", sizeof(table[i].name)))
+            marker = i;
+    if (marker == MAX_FILES)
+        return true;                            /* a plain archive */
+    lz = true;
+    for (uint32_t i = 0; i < count; i++) {
+        struct romfs_entry *e = &table[i];
+        if (i == marker)
+            continue;
+        if (e->size < sizeof(header))
+            goto bad;
+        read_bytes(e->offset, header, sizeof(header));
+        uint32_t size = header[1], pages = header[2];
+        if (memcmp(header, "GZL4", 4) || pages != ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE ||
+            pages > MAX_LOGICAL - logical / PAGE_SIZE || 12 + 8 * pages > e->size)
+            goto bad;
+        for (uint32_t p = 0; p < pages; p++) {
+            read_bytes(e->offset + 12 + 8 * p, desc, sizeof(desc));
+            if (!desc[1] || desc[1] > PAGE_SIZE || desc[0] > e->size || desc[1] > e->size - desc[0])
+                goto bad;
+            lz_off[logical / PAGE_SIZE + p] = e->offset + desc[0];
+            lz_len[logical / PAGE_SIZE + p] = (uint16_t)desc[1];
+        }
+        e->offset = logical;
+        e->size = size;
+        logical += pages * PAGE_SIZE;
+        continue;
+bad:
+        kprintf("romfs: bad LZ4 container %s\n", e->name);
+        return false;
+    }
+    /* Drop the marker, so lookups and indices see only files. */
+    memmove(&table[marker], &table[marker + 1], (count - marker - 1) * sizeof(table[0]));
+    npages = logical / PAGE_SIZE;
+    return true;
+}
+
+/* Decodes logical page idx into page. */
+static bool lz_fill(uint32_t idx, uint8_t *page)
+{
+    uint32_t off = lz_off[idx], len = lz_len[idx];
+    uint32_t first = off / NAND_PAGE_DATA, last = (off + len - 1) / NAND_PAGE_DATA;
+
+    for (uint32_t b = first; b <= last; b++)
+        read_block_with(b, lz_buf + (b - first) * NAND_PAGE_DATA, true);
+    const uint8_t *src = lz_buf + off % NAND_PAGE_DATA;
+    if (len == PAGE_SIZE) {
+        memcpy(page, src, PAGE_SIZE);
+        return true;
+    }
+    return lz4_decode(src, len, page, PAGE_SIZE) == PAGE_SIZE;
 }
 
 void romfs_init(void)
@@ -87,7 +182,9 @@ void romfs_init(void)
         }
         npages = MAX(npages, end);
     }
-    nfiles = count;
+    if (!lz_init(count))
+        return;
+    nfiles = lz ? count - 1 : count;
 }
 
 const struct romfs_entry *romfs_lookup(const char *name)
@@ -116,15 +213,23 @@ static uint32_t page_pa(uint32_t idx)
 {
     if (idx >= npages)
         return 0;
-    if (ram_pa)
+    if (ram_pa && !lz)
         return ram_pa + idx * PAGE_SIZE;
     if (cache[idx])
         return (uint32_t)(cache[idx] - 1) * PAGE_SIZE;
-    uint8_t *page = page_alloc_colour_raw(idx * PAGE_SIZE);     /* all read below */
+    uint8_t *page = page_alloc_colour_raw(idx * PAGE_SIZE);     /* all written below */
     if (!page)
         return 0;
-    for (uint32_t i = 0; i < NAND_PER_PAGE; i++)
-        nand_read_page(FIRST_NAND_PAGE + idx * NAND_PER_PAGE + i, page + i * NAND_PAGE_DATA);
+    if (lz) {
+        if (!lz_fill(idx, page)) {
+            kprintf("romfs: page %u doesn't decode\n", idx);
+            page_free(page);
+            return 0;
+        }
+    } else {
+        for (uint32_t i = 0; i < NAND_PER_PAGE; i++)
+            nand_read_page(FIRST_NAND_PAGE + idx * NAND_PER_PAGE + i, page + i * NAND_PAGE_DATA);
+    }
     mm_sync_code(page, PAGE_SIZE);      /* programs run from these pages */
     uint32_t frame = PHYS(page) / PAGE_SIZE;
     cache[idx] = (uint16_t)(frame + 1);
@@ -142,7 +247,7 @@ uint32_t romfs_cached_frame(const struct romfs_entry *e, uint32_t off)
 {
     uint32_t idx = (e->offset + off) / PAGE_SIZE;
 
-    if (ram_pa)
+    if (ram_pa && !lz)
         return page_pa(idx);
     return idx < npages && cache[idx] ? (uint32_t)(cache[idx] - 1) * PAGE_SIZE : 0;
 }
@@ -245,5 +350,6 @@ int romfs_fault(struct addrspace *as, struct region *r, uint32_t va)
 
 void romfs_list(void)
 {
-    kprintf("romfs: %u files, %u KiB in %s\n", nfiles, npages * 4, ram_pa ? "RAM" : "NAND");
+    kprintf("romfs: %u files, %u KiB in %s%s\n", nfiles, npages * 4, ram_pa ? "RAM" : "NAND",
+            lz ? " (LZ4)" : "");
 }

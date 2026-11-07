@@ -125,6 +125,15 @@ To install a pack, copy it to `/Maps` on the device (`glaze-usb put x.gzmap
 /Maps/x.gzmap`), or to `/Card/Maps` before swapping in the GPS card. Generated
 packs belong under ignored `out/`.
 
+To build a NAND image with a pack (and an app package's files) in the factory
+file system, without committing them, pass `FS_EXTRA`. `mkfsimg` creates the
+folders:
+
+```sh
+./build.sh FS_EXTRA="/Maps/city.gzmap=out/maps/city.gzmap \
+    /Applications/maps.app/app=out/fsextra/maps.app/app ..."
+```
+
 Example:
 
 ```sh

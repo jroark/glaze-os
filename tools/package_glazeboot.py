@@ -15,6 +15,11 @@ from datetime import date
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
+import sys  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import romfs  # noqa: E402  (tools/romfs.py)
+
 BUILTIN_APPS = ('appstore', 'browser', 'calculator', 'calendar', 'clock', 'files',
                 'music', 'notes', 'photos', 'settings', 'video', 'wince')
 
@@ -40,21 +45,7 @@ else:
 
 
 def romfs_entries(blob):
-    if len(blob) < 8 or blob[:4] != b'GZRF':
-        raise ValueError('romfs.img is not a Glaze archive')
-    count = struct.unpack_from('<I', blob, 4)[0]
-    if count > (len(blob) - 8) // 56:
-        raise ValueError('romfs.img has a truncated file table')
-    names = {}
-    for i in range(count):
-        raw, offset, size = struct.unpack_from('<48sII', blob, 8 + 56 * i)
-        name = raw.split(b'\0', 1)[0].decode('utf-8')
-        if offset + size > len(blob):
-            raise ValueError(f'romfs entry exceeds the archive: {name}')
-        if name in names:
-            raise ValueError(f'duplicate romfs entry: {name}')
-        names[name] = blob[offset:offset + size]
-    return names
+    return romfs.entries(blob)       # decompresses an LZ4 archive (tools/romfs.py)
 
 
 def firmware_manifest(repository):
@@ -64,7 +55,9 @@ def firmware_manifest(repository):
 def check_firmware(entries, manifest):
     expected = {'firmware/' + Path(name).name: entry
                 for name, entry in manifest['files'].items() if name.startswith('libertas/')}
-    found = {name for name in entries if name.startswith('firmware/')}
+    # The licence and provenance travel in romfs beside the pair (mk/assets.mk).
+    notices = {'firmware/LICENCE.Marvell', 'firmware/wl54cf-linux.json'}
+    found = {name for name in entries if name.startswith('firmware/')} - notices
     if found != set(expected):
         raise ValueError('boot archive must contain exactly the approved Linux firmware pair')
     for name, entry in expected.items():

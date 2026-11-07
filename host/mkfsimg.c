@@ -151,10 +151,13 @@ int main(int argc, char **argv)
         if (!eq || argv[i][0] != '/')
             die("bad file argument", argv[i], 0);
         *eq = 0;
-        /* Its folders too, such as an installed bundle's (tests/hwpkg_fs.py). */
+        /* Its folders too: an installed bundle's (tests/hwpkg_fs.py), or
+         * FS_EXTRA's /Maps/x.gzmap. */
         for (char *slash = strchr(argv[i] + 1, '/'); slash; slash = strchr(slash + 1, '/')) {
             *slash = 0;
-            lfs_mkdir(&lfs, argv[i]);
+            rv = lfs_mkdir(&lfs, argv[i]);
+            if (rv && rv != LFS_ERR_EXIST)
+                die("mkdir", argv[i], rv);
             *slash = '/';
         }
         copy_file(eq + 1, argv[i]);
