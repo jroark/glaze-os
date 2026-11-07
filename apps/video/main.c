@@ -1,6 +1,6 @@
 /*
- * Videos: the Motion-JPEG AVI files in /Movies, played full width with
- * their sound.
+ * Videos: the Motion-JPEG AVI and MPEG-1 (.mpg) files in /Movies, played
+ * full width with their sound. MPEG-1 is in mpeg.c; this file plays both.
  *
  * Audio (PCM or IMA ADPCM) goes to the audio server as a PCM stream
  * (glaze/audio.h), and the stream's clock, which counts what has been
@@ -14,8 +14,16 @@
  * read front to back into a window that video frames and sound chunks are
  * copied out of, topped up while waiting for the next frame.
  *
+ * MPEG-1 decodes frame after frame rather than any frame at will, so it
+ * keeps pace differently: frames that are late are decoded but not drawn,
+ * B frames are dropped without decoding, and pausing or seeking restarts
+ * at the intra frame before the point (mpeg_seek). Its sound is MPEG audio
+ * Layer II, which the stream's packets carry and libmedia decodes.
+ *
  * The list shows each video's first frame, decoded in the background.
  */
+
+#include "mpeg.h"
 
 #include <glaze/audio.h>
 #include <glaze/fs.h>
@@ -76,6 +84,7 @@
 struct video {
     char name[FS_NAME_MAX];
     char title[FS_NAME_MAX];
+    bool mpeg;
     uint32_t duration_ms;
     uint16_t thumb_px[THUMB_W * THUMB_H];
     bool has_thumb, tried;
@@ -91,6 +100,12 @@ static struct ui_list list;
 /* The open video. */
 static int fd = -1;
 static struct media_avi avi;
+static bool is_mpeg;                /* the open video is MPEG-1, not avi */
+static struct mpeg_info mi;
+static uint32_t mpeg_at = UINT32_MAX; /* decoders are positioned for this ms */
+static uint32_t next_ms;            /* MPEG: when the next frame is due */
+static bool video_end;              /* MPEG: no more frames */
+static uint32_t vid_w, vid_h, dur_ms;
 static int current;
 static uint8_t *jbuf, *jfixed;      /* a frame as read, and with Huffman tables */
 static uint32_t jcap;
@@ -106,6 +121,7 @@ static bool playing, ended;
 static uint32_t base_ms;            /* media time when the clock started */
 static uint32_t paused_ms;
 static bool audio_on;               /* clock from the audio stream */
+static uint32_t ac_played, ac_wall, ac_last, ac_step; /* smoothing it */
 static uint32_t wall_t0;
 
 /* Audio feed. */
@@ -148,9 +164,11 @@ static void list_videos(void)
     while (nvideos < MAX_VIDEOS && (n = fs_list(MOVIES, skip, ents, 8)) > 0) {
         for (int i = 0; i < n && nvideos < MAX_VIDEOS; i++) {
             const char *dot = strrchr(ents[i].name, '.');
-            if (ents[i].type != FS_FILE || !dot || strcasecmp(dot, ".avi"))
+            bool mpg = dot && (!strcasecmp(dot, ".mpg") || !strcasecmp(dot, ".mpeg"));
+            if (ents[i].type != FS_FILE || !dot || (strcasecmp(dot, ".avi") && !mpg))
                 continue;
             struct video *v = &videos[nvideos++];
+            v->mpeg = mpg;
             memcpy(v->name, ents[i].name, sizeof(v->name));
             memcpy(v->title, ents[i].name, sizeof(v->title));
             v->title[dot - ents[i].name] = 0;
@@ -162,7 +180,12 @@ static void list_videos(void)
 
 static void close_video(void)
 {
-    media_avi_close(&avi);
+    if (is_mpeg)
+        mpeg_close();
+    else
+        media_avi_close(&avi);
+    is_mpeg = false;
+    mpeg_at = UINT32_MAX;
     free(win);
     win = NULL;
     win_len = 0;
@@ -179,6 +202,47 @@ static void close_video(void)
     pcm = NULL;
 }
 
+static bool decode_frame(uint32_t k);
+
+/* The MPEG-1 half of open_video: positioned at the first frame. */
+static bool open_mpeg(int i, uint32_t size)
+{
+    is_mpeg = true;
+    if (!mpeg_open(fd, size, &mi) || mi.width > MAX_W || mi.height > MAX_H) {
+        close_video();
+        return false;
+    }
+    frame_px = malloc(mi.width * mi.height * 2);
+    if (mi.has_audio)
+        pcm = malloc(MEDIA_MP2_FRAME_SAMPLES * mi.channels * 2);
+    if (!frame_px || (mi.has_audio && !pcm)) {
+        close_video();
+        return false;
+    }
+    gfx_surface_init(&frame, frame_px, (int)mi.width, (int)mi.height, (int)mi.width);
+    vid_w = mi.width;
+    vid_h = mi.height;
+    dur_ms = videos[i].duration_ms = mi.duration_ms;
+    mpeg_at = 0;
+    next_ms = 0;
+    video_end = false;
+    return true;
+}
+
+/* The first frame of the open video, into frame_px. */
+static bool first_frame(void)
+{
+    uint32_t t;
+
+    if (!is_mpeg)
+        return decode_frame(0);
+    if (!mpeg_next_frame(&t))
+        return false;
+    mpeg_convert(frame_px);
+    next_ms = t + mi.frame_us / 1000;
+    return true;
+}
+
 /* Opens video i and sizes the buffers for its largest chunks. */
 static bool open_video(int i)
 {
@@ -189,6 +253,8 @@ static bool open_video(int i)
     snprintf(path, sizeof(path), MOVIES "/%s", videos[i].name);
     if (fs_stat(path, &st) < 0 || (fd = fs_open(path, FS_O_READ)) < 0)
         return false;
+    if (videos[i].mpeg)
+        return open_mpeg(i, st.size);
     if (media_avi_open(fs_reader, NULL, st.size, &avi) < 0 || !avi.mjpeg ||
         avi.width > MAX_W || avi.height > MAX_H) {
         close_video();
@@ -214,7 +280,9 @@ static bool open_video(int i)
         return false;
     }
     gfx_surface_init(&frame, frame_px, (int)avi.width, (int)avi.height, (int)avi.width);
-    videos[i].duration_ms = (uint32_t)((uint64_t)avi.nvideo * avi.usec_per_frame / 1000);
+    vid_w = avi.width;
+    vid_h = avi.height;
+    dur_ms = videos[i].duration_ms = (uint32_t)((uint64_t)avi.nvideo * avi.usec_per_frame / 1000);
     return true;
 }
 
@@ -296,14 +364,14 @@ static void load_thumb(int i)
     v->tried = true;
     if (!open_video(i))
         return;
-    if (decode_frame(0)) {
+    if (first_frame()) {
         gfx_surface_init(&t, v->thumb_px, THUMB_W, THUMB_H, THUMB_W);
         gfx_fill(&t, gfx_r(0, 0, THUMB_W, THUMB_H), 0x000000);
-        int th = THUMB_W * (int)avi.height / (int)avi.width;
+        int th = THUMB_W * (int)vid_h / (int)vid_w;
         if (th > THUMB_H)
             th = THUMB_H;
         gfx_blit_scaled(&t, gfx_r(0, (THUMB_H - th) / 2, THUMB_W, th), &frame,
-                        gfx_r(0, 0, (int)avi.width, (int)avi.height), 255);
+                        gfx_r(0, 0, (int)vid_w, (int)vid_h), 255);
         v->has_thumb = true;
     }
     close_video();
@@ -321,7 +389,7 @@ static int next_thumb(void)
 
 static uint32_t duration(void)
 {
-    return (uint32_t)((uint64_t)avi.nvideo * avi.usec_per_frame / 1000);
+    return dur_ms;
 }
 
 static uint32_t clock_ms(void)
@@ -330,9 +398,33 @@ static uint32_t clock_ms(void)
 
     if (!playing)
         return paused_ms;
-    if (audio_on && audio_stream_clock(&played, NULL) >= 0)
-        return base_ms + played;
+    if (audio_on && audio_stream_clock(&played, NULL) >= 0) {
+        /* The server's count moves a DMA buffer at a time (up to ~90 ms);
+         * carry on from the last step on the wall clock, by at most one
+         * step, and never back. */
+        uint32_t now = gz_time_ms();
+        if (played != ac_played) {
+            ac_played = played;
+            ac_wall = now;
+        }
+        uint32_t t = played + MIN(now - ac_wall, ac_step);
+        ac_last = MAX(ac_last, t);
+        return base_ms + ac_last;
+    }
     return base_ms + (gz_time_ms() - wall_t0);
+}
+
+/* Starts the stream for `rate` and `channels`, and its clock at 0. */
+static bool open_stream(uint32_t rate, int channels)
+{
+    if (audio_stream_open(rate, channels) != 0)
+        return false;
+    /* One 4 KiB DMA buffer of output (kernel/drivers/audio.c), resampled
+     * to the nearest hardware rate. */
+    ac_step = 4096 / (2 * (uint32_t)channels) * 1000 / media_hw_rate(rate) + 10;
+    ac_played = UINT32_MAX;
+    ac_last = 0;
+    return true;
 }
 
 /* Continue on the wall clock from wherever the sound left off. */
@@ -349,15 +441,21 @@ static void stop_clock(void)
 {
     paused_ms = clock_ms();
     playing = false;
-    if (avi.has_audio)
+    if (audio_on)
         audio_stream_close();
     audio_on = false;
 }
+
+static void start_mpeg(uint32_t ms);
 
 /* Starts playing at `ms`: video from the frame there, sound from the
  * chunk holding that moment. */
 static void start_at(uint32_t ms)
 {
+    if (is_mpeg) {
+        start_mpeg(ms);
+        return;
+    }
     uint32_t f = (uint32_t)((uint64_t)ms * 1000 / avi.usec_per_frame);
 
     if (f >= avi.nvideo)
@@ -370,7 +468,7 @@ static void start_at(uint32_t ms)
     pcm_off = pcm_len = 0;
     audio_on = false;
     audio_eof = true;
-    if (avi.has_audio && avi.naudio && audio_stream_open(avi.audio.rate, avi.audio.channels) == 0) {
+    if (avi.has_audio && avi.naudio && open_stream(avi.audio.rate, avi.audio.channels)) {
         uint32_t af = (uint32_t)((uint64_t)ms * avi.audio.rate / 1000);
         uint32_t k = 0;
         while (k + 1 < avi.naudio && avi.audio_frame[k + 1] <= af)
@@ -382,9 +480,56 @@ static void start_at(uint32_t ms)
     }
 }
 
+/* MPEG-1: the decoders can only go on from where they are, so anywhere
+ * else is a seek. The sound starts with its first frame from there, and
+ * the clock with it. */
+static void start_mpeg(uint32_t ms)
+{
+    uint32_t shown_at, at;
+
+    if (ms >= dur_ms)
+        ms = 0;
+    if (ms != mpeg_at) {
+        if (!mpeg_seek(ms, &shown_at)) {
+            ended = true;
+            return;
+        }
+        mpeg_convert(frame_px);
+        frame_ok = true;
+        next_ms = shown_at + mi.frame_us / 1000;
+        video_end = false;
+    }
+    mpeg_at = UINT32_MAX;
+    base_ms = ms;
+    wall_t0 = gz_time_ms();
+    playing = true;
+    ended = false;
+    pcm_off = pcm_len = 0;
+    audio_on = false;
+    audio_eof = true;
+    if (mi.has_audio) {
+        int n = mpeg_audio(pcm, &at);
+        if (n > 0 && open_stream(mi.rate, mi.channels)) {
+            base_ms = at;
+            pcm_len = (uint32_t)n * mi.channels * 2;
+            audio_on = true;
+            audio_eof = false;
+        }
+    }
+}
+
 /* Decodes audio chunk k into pcm, dropping skip_frames from its start. */
 static void decode_chunk(uint32_t k)
 {
+    if (is_mpeg) {
+        uint32_t at;
+        int n = mpeg_audio(pcm, &at);
+        pcm_off = 0;
+        pcm_len = n > 0 ? (uint32_t)n * mi.channels * 2 : 0;
+        if (n <= 0)
+            audio_eof = true;
+        return;
+    }
     const struct media_avi_chunk *c = &avi.audio_chunks[k];
     const struct media_audio_fmt *f = &avi.audio;
     uint32_t frames = 0;
@@ -418,6 +563,10 @@ static uint32_t keep_from(uint32_t off)
 /* Tops up the window while there is time before the next frame. */
 static void prefetch(void)
 {
+    if (is_mpeg) {
+        mpeg_prefetch();
+        return;
+    }
     uint32_t keep = keep_from(win_off + win_len);
 
     if (keep >= win_off && win_off + win_len < keep + WIN_AHEAD)
@@ -444,12 +593,14 @@ static void feed_audio(void)
         }
         if (audio_stream_clock(&played, &queued) < 0 || queued > AUDIO_AHEAD_MS)
             return;
-        if (next_chunk >= avi.naudio) {
+        if (!is_mpeg && next_chunk >= avi.naudio)
             audio_eof = true;
+        else
+            decode_chunk(next_chunk++);
+        if (audio_eof) {
             audio_stream_write(NULL, 0);   /* short tail: start now */
             return;
         }
-        decode_chunk(next_chunk++);
     }
     /* All sound sent: once it has been heard, the wall clock carries on. */
     if (audio_on && audio_eof && audio_stream_clock(&played, &queued) >= 0 && queued == 0)
@@ -508,8 +659,8 @@ static void draw_list(gfx_surface *s)
     ui_list_draw(s, &list, draw_video, NULL);
     if (!nvideos) {
         gfx_text_center(s, 0, UI_NAV_H + 100, UI_W, ui_font(FONT_B17), "No Videos", 0x666666, 255);
-        gfx_text_center(s, 0, UI_NAV_H + 126, UI_W, sf, "Motion-JPEG AVI files you add", 0x888888, 255);
-        gfx_text_center(s, 0, UI_NAV_H + 144, UI_W, sf, "to " MOVIES " appear here.", 0x888888, 255);
+        gfx_text_center(s, 0, UI_NAV_H + 126, UI_W, sf, "MPEG-1 and Motion-JPEG videos", 0x888888, 255);
+        gfx_text_center(s, 0, UI_NAV_H + 144, UI_W, sf, "you add to " MOVIES " appear here.", 0x888888, 255);
     }
     gfx_reset_clip(s);
     ui_draw_navbar(s, "Videos", NULL, NULL, 1);
@@ -517,11 +668,11 @@ static void draw_list(gfx_surface *s)
 
 static gfx_rect video_rect(void)
 {
-    int w = UI_W, h = (int)((uint32_t)UI_W * avi.height / avi.width);
+    int w = UI_W, h = (int)((uint32_t)UI_W * vid_h / vid_w);
 
     if (h > UI_H) {
         h = UI_H;
-        w = (int)((uint32_t)UI_H * avi.width / avi.height);
+        w = (int)((uint32_t)UI_H * vid_w / vid_h);
     }
     return gfx_r((UI_W - w) / 2, (UI_H - h) / 2, w, h);
 }
@@ -624,7 +775,9 @@ static void play_video(int i)
     current = i;
     if (!open_video(i))
         return;
-    frame_ok = decode_frame(0);
+    frame_ok = first_frame();
+    if (is_mpeg && frame_ok)
+        mpeg_at = 0;                /* still there: start without a seek */
     shown = 0;
     view = V_PLAYER;
     show_overlay();
@@ -659,10 +812,21 @@ static void seek_to(uint32_t ms)
 
     stop_clock();
     ms = MIN(ms, duration());
-    uint32_t f = (uint32_t)((uint64_t)ms * 1000 / avi.usec_per_frame);
-    if (f < avi.nvideo && decode_frame(f)) {
-        frame_ok = true;
-        shown = (int)f;
+    if (is_mpeg) {
+        uint32_t at;
+        if (mpeg_seek(ms, &at)) {
+            mpeg_convert(frame_px);
+            frame_ok = true;
+            next_ms = at + mi.frame_us / 1000;
+            video_end = false;
+            mpeg_at = ms;
+        }
+    } else {
+        uint32_t f = (uint32_t)((uint64_t)ms * 1000 / avi.usec_per_frame);
+        if (f < avi.nvideo && decode_frame(f)) {
+            frame_ok = true;
+            shown = (int)f;
+        }
     }
     paused_ms = ms;
     ended = false;
@@ -670,21 +834,85 @@ static void seek_to(uint32_t ms)
         start_at(ms);
 }
 
+static void finish(void)
+{
+    stop_clock();
+    paused_ms = duration();
+    ended = true;
+    show_overlay();
+    redraw();
+}
+
+static void hide_overlay_when_idle(void)
+{
+    if (overlay && playing && gz_time_ms() > overlay_until && !scrubbing) {
+        overlay = false;
+        redraw();
+    }
+}
+
+/* MPEG-1's play_step. Frames are decoded in order until the one that is
+ * due; any that are already late on the way are decoded without being
+ * drawn, or skipped if B frames. A slow decoder still draws a frame every
+ * MPEG_DRAW_MS, behind the sound. */
+#define MPEG_DRAW_MS    250
+static void mpeg_step(void)
+{
+    feed_audio();
+    uint32_t t = clock_ms(), frame_ms = mi.frame_us / 1000;
+
+    if (video_end) {
+        /* Over once the last frame's time is up and the sound has been
+         * heard (feed_audio goes to the wall clock then). */
+        if (t >= next_ms && !audio_on) {
+            finish();
+            return;
+        }
+        if (overlay && t / 1000 != (t + 40) / 1000)
+            redraw();
+    } else if (t >= next_ms) {
+        uint32_t t0 = gz_time_ms(), at;
+        bool decoded = false;
+        for (;;) {
+            if (clock_ms() >= next_ms + frame_ms && mpeg_skip_b(&next_ms))
+                continue;
+            if (!mpeg_next_frame(&at)) {
+                video_end = true;
+                break;
+            }
+            decoded = true;
+            next_ms = at + frame_ms;
+            if (clock_ms() < next_ms || gz_time_ms() - t0 >= MPEG_DRAW_MS)
+                break;
+            feed_audio();
+        }
+        if (decoded) {
+            mpeg_convert(frame_px);
+            frame_ok = true;
+            present_frame();
+        }
+    } else if (next_ms > t + 60) {
+        prefetch();
+    } else if (overlay && t / 1000 != (t + 40) / 1000) {
+        redraw();       /* the elapsed time ticks over */
+    }
+    hide_overlay_when_idle();
+}
+
 /* Shows the frame that is due; at the end, stops with the controls up. */
 static void play_step(void)
 {
+    if (is_mpeg) {
+        mpeg_step();
+        return;
+    }
     feed_audio();
     uint32_t t = clock_ms();
     uint32_t f = (uint32_t)((uint64_t)t * 1000 / avi.usec_per_frame);
 
     if (f >= avi.nvideo) {
-        if (!audio_on || audio_eof) {
-            stop_clock();
-            paused_ms = duration();
-            ended = true;
-            show_overlay();
-            redraw();
-        }
+        if (!audio_on || audio_eof)
+            finish();
         return;
     }
     if ((int)f != shown) {
@@ -697,10 +925,7 @@ static void play_step(void)
     } else if (overlay && t / 1000 != (t + 40) / 1000) {
         redraw();       /* the elapsed time ticks over */
     }
-    if (overlay && playing && gz_time_ms() > overlay_until && !scrubbing) {
-        overlay = false;
-        redraw();
-    }
+    hide_overlay_when_idle();
 }
 
 /* ---- events -------------------------------------------------------------------- */
@@ -804,8 +1029,13 @@ int main(void)
         struct gz_input_event ev;
         int wait = -1;
 
-        if (view == V_PLAYER && playing)
+        if (view == V_PLAYER && playing) {
             wait = 10;
+            if (is_mpeg && !video_end) {     /* not past a frame that's due */
+                uint32_t t = clock_ms();
+                wait = next_ms <= t ? 0 : (int)MIN(next_ms - t, 10u);
+            }
+        }
         else if (view == V_LIST && (next_thumb() >= 0 || list.sc.animating))
             wait = list.sc.animating ? 30 : 0;
         if (ui_next_event(&ev, wait)) {

@@ -5,8 +5,11 @@ Commit: `3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff`
 License: Apache-2.0 WITH LLVM-exception (`LICENSE.TXT`).
 
 Only the binary64/binary32 arithmetic, conversion, comparison and 64-bit shift
-helpers needed by JerryScript and its math library are vendored, together with
-the headers and `.inc` files they include. Upstream files are unmodified.
+helpers needed by JerryScript and its math library, and by pl_mpeg in Videos
+(`addsf3.c`, `subsf3.c`, `mulsf3.c` and `floatsisf.c` for its unused float
+audio decoder, which the linker drops), are vendored, together with the
+headers and `.inc` files they include. Upstream files are unmodified.
 `glaze_fp_mode.c` is the Glaze implementation of the soft-float environment:
 round to nearest, ties to even, with no hardware exception flags. These helpers
-are private to the browser, not a new libgcc dependency or a system ABI change.
+are private to the browser and Videos (`libjerry.a`, `libsoftfp.a`), not a new
+libgcc dependency or a system ABI change.

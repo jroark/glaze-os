@@ -28,11 +28,13 @@ WOLFSSL := $(addprefix ../third_party/wolfssl/,src/ssl.c src/internal.c src/tls.
     asn.c coding.c memory.c wc_port.c wc_encrypt.c error.c logging.c))
 WOLFSSL_CFLAGS := -std=gnu11 -O2 -g -I../third_party/wolfssl -I../apps/browser/tls -DWOLFSSL_USER_SETTINGS
 
-# libmedia and the Helix MP3 decoder (the audio server's and Video app's
-# decoding), compared against ffmpeg by tests/mediatest.py.
-MEDIA := $(wildcard ../lib/media/*.c ../third_party/helix-mp3/*.c ../third_party/helix-mp3/real/*.c)
+# libmedia, the Helix MP3 decoder and the Video app's MPEG-1 (the audio
+# server's and Video app's decoding), compared against ffmpeg by
+# tests/mediatest.py.
+MEDIA := $(wildcard ../lib/media/*.c ../third_party/helix-mp3/*.c ../third_party/helix-mp3/real/*.c) ../apps/video/mpeg.c
 MEDIA_CFLAGS := $(CFLAGS) -Wno-unused-but-set-variable -I../third_party/helix-mp3/pub -I../third_party/stb \
-    -fsanitize=address,undefined -fno-sanitize=shift
+    -I../third_party/pl_mpeg -fsanitize=address,undefined -fno-sanitize=shift \
+    -fno-sanitize=float-cast-overflow
 
 # Every binary, object and render goes under out/host, never into the source tree.
 O := ../out/host

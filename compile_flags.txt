@@ -6,3 +6,4 @@
 -Ikernel
 -DGLAZE_BUILD="dev"
 -Ilib/libc/include
+-Ithird_party/pl_mpeg

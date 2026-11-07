@@ -6,6 +6,7 @@ Vendored projects (local changes are listed below):
 | --- | --- | --- | --- |
 | `jitterentropy/` | [Jitterentropy](https://github.com/smuellerDD/jitterentropy-library) CPU timing-jitter seed collector | 3.6.3 | BSD-style or GPL-2.0-or-later; Glaze elects GPL; port and pin in `UPSTREAM.md` |
 | `littlefs/` | [littlefs](https://github.com/littlefs-project/littlefs) | v2.11 (`6cb4e86540ec`) | BSD-3-Clause, `littlefs/LICENSE.md` |
+| `pl_mpeg/` | [pl_mpeg](https://github.com/phoboslab/pl_mpeg) MPEG-1 video decoder and MPEG-PS demuxer, for Videos (`apps/video/mpeg.c`) | `c871f2be022e` (2025-12-30) | MIT, `SPDX-License-Identifier` at the top of `pl_mpeg/pl_mpeg.h` |
 | `stb/` | [stb_image.h](https://github.com/nothings/stb) image decoder (the browser's PNG, JPEG and GIF) | v2.30 (`2c980bb59875`) | public domain / MIT, end of `stb/stb_image.h` |
 | `dhara/` | [Dhara](https://github.com/dlbeer/dhara) NAND translation layer, plus its BCH ECC | `1b166e41b74b` | ISC-style, `dhara/LICENSE` |
 | `sbc/` | Broadcom Bluedroid fixed-point SBC encoder (BTstack third-party mirror) | `9edb5d82ea6e`; pin in `sbc/UPSTREAM.md` | Apache-2.0, `sbc/LICENSE` |
@@ -20,6 +21,18 @@ The emulator cores moved to glaze-emulators with their packages. One exception
 to "unmodified": Helix's `real/assembly.h` has no portable C
 path, so its final `#error Unsupported platform` branch is replaced with C
 versions of `MULSHIFT32`, `MADD64`, `CLZ` and friends (marked "Glaze").
+
+`pl_mpeg/pl_mpeg.h` is unmodified. Videos uses only its demuxer and video
+decoder, with symbols hidden so the linker drops the rest; its MP2 decoder
+is float, so libmedia's `mp2.c` is a fixed-point port of it instead (with
+the standard's dequantization steps, which pl_mpeg approximates). Around
+pl_mpeg's own behaviour `mpeg.c` passes over an open GOP's leading B
+pictures after a seek, which `plm_seek` decodes against a missing reference
+and mislabels, and shows the last reference frame of a stream that ends
+with B pictures, which `plm_video_decode` drops. Its timestamps are doubles,
+so Videos links the soft-float builtins in `compiler-rt/` (`libsoftfp.a`).
+Its demuxer's seek can convert an infinite byte rate to `long`; compiler-rt
+saturates, and the host test disables UBSan's float-cast-overflow check.
 
 `fatfs/ffconf.h` is FatFs's configuration template with Glaze's settings,
 listed at its top. wolfSSL's configuration is Glaze's
