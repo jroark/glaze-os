@@ -16,7 +16,8 @@ int main(void)
     static uint16_t px[240 * 320];
     gfx_surface s;
     struct gz_datetime dt = { 2009, 1, 1, 9, 41, 0, 4 };
-    struct sb_view v = { .pressed = -1, .switcher_pressed = -1, .switcher_minus_pressed = -1, .shimmer_x = 120 };
+    struct sb_view v = { .pressed = -1, .switcher_pressed = -1, .switcher_minus_pressed = -1, .shimmer_x = 120,
+                         .drag_item = ITEM_NONE, .merge_onto = ITEM_NONE, .open_folder = -1 };
 
     gfx_surface_init(&s, px, 240, 320, 240);
     sb_draw_init();
@@ -129,5 +130,34 @@ int main(void)
     v.jiggle_phase = 1;
     sb_draw_home(&s, &v);
     host_write_bmp("../out/host/home_switcher_jiggle.bmp", &s);
+    v.switcher_open = v.switcher_edit = false;
+
+    /* Home editing: Photos dropped on Clock made a folder; Calendar is
+     * being dragged towards the toolbar, over Calculator's centre. */
+    struct sb_loc from;
+    layout_find(&sb_layout, 1, &from);
+    layout_move(&sb_layout, &from, &(struct sb_drop){ .kind = DROP_MERGE, .onto = 2 });
+    layout_rename(&sb_layout, 0, "Utilities");
+    v.jiggle = true;
+    v.drag_item = 0;
+    v.drag_x = 150;
+    v.drag_y = 200;
+    v.merge_onto = 3;
+    sb_draw_home(&s, &v);
+    host_write_bmp("../out/host/home_jiggle_drag.bmp", &s);
+
+    v.jiggle = false;
+    v.drag_item = v.merge_onto = ITEM_NONE;
+    sb_draw_home(&s, &v);
+    host_write_bmp("../out/host/home_folder.bmp", &s);
+
+    v.open_folder = 0;
+    sb_draw_home(&s, &v);
+    host_write_bmp("../out/host/home_folder_open.bmp", &s);
+
+    v.jiggle = v.folder_edit = true;
+    snprintf(v.folder_name, sizeof(v.folder_name), "Utilit");
+    sb_draw_home(&s, &v);
+    host_write_bmp("../out/host/home_folder_rename.bmp", &s);
     return 0;
 }

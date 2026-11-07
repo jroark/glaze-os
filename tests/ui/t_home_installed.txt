@@ -1,0 +1,22 @@
+# Installed apps and folders:
+# 1. Install Hello from Files > Card (as t_bg_reinstall.txt): it is appended
+#    after App Store on the home screen.
+# 2. Hold Hello until the icons jiggle and drop it on Files: a folder opens.
+# 3. Tap Hello's delete button inside the folder and confirm: Hello is
+#    uninstalled and the folder, left with Files alone, turns back into it.
+# Card: tools/mkcfimg.sh out/cf.img 16 16 out/pkg/hello.gzp
+# Boot it for about 36 s; uninstalling takes a few seconds of flash writes (CF=out/cf.img tests/run.sh tests/ui/t_home_installed.txt 36).
+3000 drag 40 280 235 280 500
+4500 tap 30 120
+8000 tap 120 64
+10500 tap 120 64
+12500 tap 120 242
+17000 tap 120 203
+18000 key home
+19500 down 90 192
+20800 move 80 180
+21000 move 32 122
+21100 move 31 121
+21800 up 31 121
+23000 tap 62 144
+24000 tap 170 187

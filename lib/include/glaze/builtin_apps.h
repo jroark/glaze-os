@@ -1,7 +1,9 @@
 /*
  * The built-in apps on the home screen, in order: X(label, icon, path,
  * status style, dock). SpringBoard's home screen and Settings → Icon
- * Buttons both list them; a RAM boot's romfs may hold only some.
+ * Buttons both list them; a RAM boot's romfs may hold only some. `dock`
+ * puts an app in the toolbar until the user rearranges the home screen
+ * (the sb.layout preference, servers/springboard/layout.h).
  */
 #ifndef GLAZE_BUILTIN_APPS_H
 #define GLAZE_BUILTIN_APPS_H

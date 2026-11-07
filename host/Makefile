@@ -2,7 +2,7 @@
 CC ?= cc
 CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -I../lib/include -I.
 GFX := ../lib/gfx/gfx.c ../lib/gfx/blit.c ../lib/gfx/text.c ../lib/gfx/res.c
-SB := ../servers/springboard/draw.c ../lib/ui/keypad.c
+SB := ../servers/springboard/draw.c ../servers/springboard/layout.c ../lib/ui/keypad.c
 EDIT := ../lib/ui/edit.c clipboard_stub.c
 KEYBOARD := ../lib/ui/keyboard.c ../lib/ui/handwriting.c ../lib/ui/recognize.c $(EDIT)
 
@@ -300,6 +300,12 @@ hardicon-test: ../tests/native/hardicon.c ../lib/libc/hardicon.c ../servers/spri
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/hardicon-test $^
 	../out/host/hardicon-test
 .PHONY: hardicon-test
+
+layout-test: ../tests/native/layout.c ../servers/springboard/layout.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/layout-test $^
+	../out/host/layout-test
+.PHONY: layout-test
 
 touch-calibration-test: ../tests/native/touch_calibration.c ../lib/libc/touch.c ../servers/springboard/calibration.c
 	@mkdir -p ../out/host

@@ -1,0 +1,25 @@
+# Home-screen editing across folders and pages:
+# 1. Unlock; hold Videos until the icons jiggle and drop it on Music: the
+#    new folder opens.
+# 2. Drag Videos out of the folder to Calculator's place: the folder, left
+#    with one app, turns back into Music.
+# 3. Drag App Store to the right edge and hold: the page turns to a new,
+#    empty one, and App Store lands there.
+# 4. Home ends editing: page 2 of 2 shows App Store alone.
+# Boot for ~16 s (tests/run.sh tests/ui/t_home_pages.txt 16).
+3000 drag 40 280 235 280 500
+4500 down 210 120
+5800 move 200 120
+6000 move 152 122
+6100 move 151 121
+6800 up 151 121
+7800 down 91 173
+8000 move 120 150
+8200 move 200 75
+8500 up 200 75
+9500 down 30 192
+9700 move 100 150
+9900 move 232 150
+10000 move 233 150
+11500 up 233 150
+12500 key home

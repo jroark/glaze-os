@@ -48,6 +48,7 @@ void sb_draw_init(void)
         sb_apps[n].present = true;
         icon_ok[n] = res_image(&icons[n], sb_apps[n].icon);
     }
+    layout_default(&sb_layout);         /* main.c loads the saved one */
     for (int i = 0; i < sb_num_wallpapers; i++)
         walls_ok[i] = res_image(&walls[i], sb_wallpapers[i]);
     res_image(&knob, "ui_knob.gzi");
@@ -450,70 +451,190 @@ void sb_draw_passcode(gfx_surface *s, const struct sb_view *v)
 
 /* ---- home screen -------------------------------------------------------- */
 
-static int grid_index(int app)
-{
-    int n = 0;
+#define FOLDER_TITLE_H  30
+#define FOLDER_CELL_W   57          /* 4 across the panel */
+#define FOLDER_THUMBS   9           /* 3x3 on the folder's icon */
+_Static_assert(FOLDER_MAX <= PER_PAGE && DOCK_SLOTS <= PER_PAGE, "groups fit a page's buffer");
 
-    for (int i = 0; i < app; i++)
-        n += sb_app_shown(i) && !sb_apps[i].dock;
-    return n;
+static const struct sb_layout *lay(const struct sb_view *v)
+{
+    return v->layout ? v->layout : &sb_layout;
 }
 
-static int dock_index(int app, int *count)
+static int clampi(int v, int lo, int hi)
 {
-    int n = 0, idx = 0;
-
-    for (int i = 0; i < sb_num_apps; i++) {
-        if (sb_app_shown(i) && sb_apps[i].dock) {
-            if (i == app)
-                idx = n;
-            n++;
-        }
-    }
-    *count = n;
-    return idx;
+    return v < lo ? lo : v > hi ? hi : v;
 }
 
-int sb_num_pages(void)
+static int floor_div(int a, int b)
 {
-    int n = 0;
-
-    for (int i = 0; i < sb_num_apps; i++)
-        n += sb_app_shown(i) && !sb_apps[i].dock;
-    return n ? (n + PER_PAGE - 1) / PER_PAGE : 1;
+    return a >= 0 ? a / b : -((-a + b - 1) / b);
 }
 
-gfx_rect sb_icon_rect(int app, int scroll_x)
+int sb_num_pages(const struct sb_layout *L)
 {
-    if (sb_apps[app].dock) {
-        int count, idx = dock_index(app, &count);
-        int span = count * CELL_W;
-        int x0 = (SCREEN_W - span) / 2;
-        return gfx_r(x0 + idx * CELL_W + (CELL_W - ICON_SIZE) / 2, DOCK_Y + 6, ICON_SIZE, ICON_SIZE);
-    }
-    int g = grid_index(app), page = g / PER_PAGE, cell = g % PER_PAGE;
+    return L->npages > 0 ? L->npages : 1;
+}
+
+static gfx_rect cell_rect(int page, int cell, int scroll_x)
+{
     int x = page * SCREEN_W - scroll_x + (cell % GRID_COLS) * CELL_W + (CELL_W - ICON_SIZE) / 2;
+
     return gfx_r(x, GRID_TOP + (cell / GRID_COLS) * ROW_PITCH, ICON_SIZE, ICON_SIZE);
 }
 
-int sb_hit_icon(int x, int y, int scroll_x)
+static gfx_rect dock_rect(int slot, int count)
 {
-    for (int i = 0; i < sb_num_apps; i++) {
-        if (!sb_app_shown(i))
-            continue;
-        gfx_rect r = sb_icon_rect(i, scroll_x);
-        r = gfx_r(r.x - 6, r.y - 4, r.w + 12, r.h + 18);
-        if (gfx_rect_contains(r, x, y))
+    int x0 = (SCREEN_W - count * CELL_W) / 2;
+
+    return gfx_r(x0 + slot * CELL_W + (CELL_W - ICON_SIZE) / 2, DOCK_Y + 6, ICON_SIZE, ICON_SIZE);
+}
+
+gfx_rect sb_folder_panel(const struct sb_view *v)
+{
+    sb_item items[PER_PAGE];
+    int n = v->open_folder >= 0 ? layout_visible(lay(v), LOC_FOLDER, v->open_folder, items, FOLDER_MAX) : 0;
+    int rows = n ? (n + GRID_COLS - 1) / GRID_COLS : 1;
+    int h = FOLDER_TITLE_H + rows * ROW_PITCH;
+    /* Renaming lifts it clear of the keyboard. */
+    int y = v->folder_edit ? SB_STATUS_H + 6 : SB_STATUS_H + (SCREEN_H - SB_STATUS_H - h) / 2;
+
+    return gfx_r(4, y, SCREEN_W - 8, h);
+}
+
+static gfx_rect folder_cell_rect(gfx_rect panel, int cell)
+{
+    return gfx_r(panel.x + 2 + (cell % GRID_COLS) * FOLDER_CELL_W + (FOLDER_CELL_W - ICON_SIZE) / 2,
+                 panel.y + FOLDER_TITLE_H + (cell / GRID_COLS) * ROW_PITCH + 4, ICON_SIZE, ICON_SIZE);
+}
+
+static gfx_rect item_rect(const struct sb_view *v, int where, int group, int cell, int count)
+{
+    if (where == LOC_DOCK)
+        return dock_rect(cell, count);
+    if (where == LOC_FOLDER)
+        return folder_cell_rect(sb_folder_panel(v), cell);
+    return cell_rect(group, cell, v->scroll_x);
+}
+
+static int find_cell(const sb_item *items, int n, sb_item it)
+{
+    for (int i = 0; i < n; i++) {
+        if (items[i] == it)
             return i;
     }
     return -1;
 }
 
-gfx_rect sb_delete_rect(int app, int scroll_x)
+gfx_rect sb_icon_rect(const struct sb_view *v, int app)
 {
-    gfx_rect r = sb_icon_rect(app, scroll_x);
+    const struct sb_layout *L = lay(v);
+    sb_item items[PER_PAGE], it = (sb_item)app;
+    struct sb_loc loc;
+    int f = layout_folder_of(L, app), n, c;
 
-    return gfx_r(r.x - 12, r.y - 12, 26, 26);
+    if (f >= 0) {
+        if (v->open_folder == f) {
+            n = layout_visible(L, LOC_FOLDER, f, items, FOLDER_MAX);
+            if ((c = find_cell(items, n, it)) >= 0)
+                return item_rect(v, LOC_FOLDER, f, c, n);
+        }
+        it = ITEM_FOLDER(f);
+    }
+    if (layout_find(L, it, &loc) && loc.where != LOC_FOLDER) {
+        n = layout_visible(L, loc.where, loc.group, items, PER_PAGE);
+        if ((c = find_cell(items, n, it)) >= 0)
+            return item_rect(v, loc.where, loc.group, c, n);
+    }
+    return gfx_r(SCREEN_W / 2, SCREEN_H / 2, 1, 1);
+}
+
+void sb_hit_test(const struct sb_view *v, int x, int y, struct sb_hit *h)
+{
+    const struct sb_layout *L = lay(v);
+    sb_item items[PER_PAGE];
+    int n;
+
+    *h = (struct sb_hit){ .where = LOC_NONE, .cell = -1, .item = ITEM_NONE };
+    if (v->open_folder >= 0) {
+        gfx_rect p = sb_folder_panel(v);
+        if (!gfx_rect_contains(p, x, y))
+            return;
+        h->where = LOC_FOLDER;
+        h->group = (int8_t)v->open_folder;
+        if (y < p.y + FOLDER_TITLE_H)
+            return;                     /* the title */
+        n = layout_visible(L, LOC_FOLDER, v->open_folder, items, FOLDER_MAX);
+        h->cell = (int8_t)(clampi((y - p.y - FOLDER_TITLE_H) / ROW_PITCH, 0, GRID_ROWS - 1) * GRID_COLS +
+                           clampi((x - p.x - 2) / FOLDER_CELL_W, 0, GRID_COLS - 1));
+    } else if (y >= DOCK_Y) {
+        h->where = LOC_DOCK;
+        n = layout_visible(L, LOC_DOCK, 0, items, DOCK_SLOTS);
+        h->cell = (int8_t)clampi(floor_div(x - (SCREEN_W - n * CELL_W) / 2, CELL_W), -1, DOCK_SLOTS);
+    } else if (y >= SB_STATUS_H) {
+        int ax = x + v->scroll_x, page = floor_div(ax, SCREEN_W);
+        if (page < 0 || page >= LAYOUT_PAGES)
+            return;                     /* rubber band past the ends */
+        h->where = LOC_PAGE;
+        h->group = (int8_t)page;
+        n = layout_visible(L, LOC_PAGE, page, items, PER_PAGE);
+        h->cell = (int8_t)(clampi((y - SB_STATUS_H) / ROW_PITCH, 0, GRID_ROWS - 1) * GRID_COLS +
+                           clampi((ax - page * SCREEN_W) / CELL_W, 0, GRID_COLS - 1));
+    } else {
+        return;
+    }
+    if (h->cell < 0 || h->cell >= n)
+        return;
+    h->item = items[h->cell];
+    gfx_rect r = item_rect(v, h->where, h->group, h->cell, n);
+    h->on_icon = gfx_rect_contains(gfx_r(r.x - 6, r.y - 4, r.w + 12, r.h + 18), x, y);
+    h->inner = gfx_rect_contains(gfx_r(r.x + 8, r.y + 8, r.w - 16, r.h - 16), x, y);
+}
+
+static gfx_rect delete_rect(gfx_rect icon)
+{
+    return gfx_r(icon.x - 12, icon.y - 12, 26, 26);
+}
+
+static int hit_delete_in(const struct sb_view *v, int where, int group, int x, int y)
+{
+    sb_item items[PER_PAGE];
+    int n = layout_visible(lay(v), where, group, items, PER_PAGE);
+
+    for (int i = 0; i < n; i++) {
+        if (!ITEM_IS_FOLDER(items[i]) && sb_apps[items[i]].installed && items[i] != v->drag_item &&
+            gfx_rect_contains(delete_rect(item_rect(v, where, group, i, n)), x, y))
+            return items[i];
+    }
+    return -1;
+}
+
+int sb_hit_delete(const struct sb_view *v, int x, int y)
+{
+    int app, page = floor_div(v->scroll_x, SCREEN_W);
+
+    if (v->open_folder >= 0)
+        return hit_delete_in(v, LOC_FOLDER, v->open_folder, x, y);
+    if ((app = hit_delete_in(v, LOC_DOCK, 0, x, y)) >= 0)
+        return app;
+    for (int p = page; p <= page + 1; p++) {
+        if (p >= 0 && p < lay(v)->npages && (app = hit_delete_in(v, LOC_PAGE, p, x, y)) >= 0)
+            return app;
+    }
+    return -1;
+}
+
+int sb_dock_insert_index(const struct sb_view *v, int x)
+{
+    sb_item items[PER_PAGE];
+    int n = layout_visible(lay(v), LOC_DOCK, 0, items, DOCK_SLOTS), k = 0;
+
+    for (int i = 0; i < n; i++) {
+        gfx_rect r = dock_rect(i, n);
+        if (items[i] != v->drag_item && r.x + r.w / 2 < x)
+            k++;
+    }
+    return k;
 }
 
 gfx_rect sb_switcher_icon_rect(int slot)
@@ -607,12 +728,8 @@ static void draw_badge(gfx_surface *s, gfx_rect icon, unsigned count)
     gfx_text_center(s, b.x, b.y + (h - f->line_height) / 2, b.w, f, buf, 0xFFFFFF, 255);
 }
 
-static void draw_icon(gfx_surface *s, const struct sb_view *v, int app, gfx_rect r)
+static void draw_app_image(gfx_surface *s, const struct sb_view *v, int app, gfx_rect r)
 {
-    const gfx_font *lab = ui_font(FONT_B9);
-
-    if (v->jiggle)                      /* neighbours wobble in opposition */
-        r.x += ((app + v->jiggle_phase) & 1) ? 1 : -1, r.y += ((app + v->jiggle_phase) & 2) ? 1 : 0;
     if (icon_ok[app])
         gfx_draw_image(s, r.x, r.y, &icons[app], 255);
     else
@@ -624,14 +741,85 @@ static void draw_icon(gfx_surface *s, const struct sb_view *v, int app, gfx_rect
         gfx_text_center(s, r.x, r.y + 1, r.w, ui_font(FONT_B8), v->clk.weekday, 0xFFFFFF, 255);
         gfx_text_center(s, r.x, r.y + 14, r.w, ui_font(FONT_B20), day, 0x1A1A1A, 255);
     }
-    if (v->pressed == app)
+}
+
+/* A dark glass tile with its first apps in miniature, like iPhone OS 4. */
+static void draw_folder_image(gfx_surface *s, const struct sb_view *v, int f, gfx_rect r)
+{
+    sb_item items[PER_PAGE];
+    int n = layout_visible(lay(v), LOC_FOLDER, f, items, FOLDER_MAX), k = 0;
+
+    gfx_round_rect(s, r, 9, 0x000000, 110);
+    gfx_round_rect(s, gfx_r(r.x + 1, r.y + 1, r.w - 2, r.h - 2), 8, 0xFFFFFF, 45);
+    for (int i = 0; i < n && k < FOLDER_THUMBS; i++) {
+        int app = items[i];
+        if (app == v->drag_item)
+            continue;
+        gfx_rect m = gfx_r(r.x + 3 + (k % 3) * 14, r.y + 3 + (k / 3) * 14, 12, 12);
+        if (icon_ok[app])
+            gfx_draw_image_scaled(s, m, &icons[app], 255);
+        else
+            gfx_round_rect_vgradient(s, m, 3, 0x9AA3AE, 0x4E5763, 255);
+        k++;
+    }
+}
+
+static unsigned item_badge(const struct sb_view *v, sb_item it)
+{
+    unsigned sum = 0;
+
+    if (!v->badges)
+        return 0;
+    if (!ITEM_IS_FOLDER(it))
+        return v->badges[it];
+    sb_item apps[PER_PAGE];
+    int n = layout_visible(lay(v), LOC_FOLDER, ITEM_FOLDER_OF(it), apps, FOLDER_MAX);
+    for (int i = 0; i < n; i++)
+        sum += v->badges[apps[i]];
+    return sum;
+}
+
+static void draw_item(gfx_surface *s, const struct sb_view *v, sb_item it, gfx_rect r)
+{
+    const gfx_font *lab = ui_font(FONT_B9);
+    bool folder = ITEM_IS_FOLDER(it);
+    char buf[FOLDER_NAME_MAX];
+    unsigned key = (unsigned)(uint16_t)it, badge;
+
+    if (v->jiggle)                      /* neighbours wobble in opposition */
+        r.x += ((key + v->jiggle_phase) & 1) ? 1 : -1, r.y += ((key + v->jiggle_phase) & 2) ? 1 : 0;
+    if (v->merge_onto == it)            /* a drop here makes or fills a folder */
+        gfx_round_rect(s, gfx_r(r.x - 5, r.y - 5, r.w + 10, r.h + 10), 13, 0xFFFFFF, 110);
+    if (folder)
+        draw_folder_image(s, v, ITEM_FOLDER_OF(it), r);
+    else
+        draw_app_image(s, v, it, r);
+    if (v->pressed == it)
         gfx_round_rect(s, r, 8, 0x000000, 110);
-    if (v->badges && v->badges[app])
-        draw_badge(s, r, v->badges[app]);
-    int tw = gfx_text_width(lab, sb_apps[app].label);
-    gfx_text_shadow(s, r.x + (r.w - tw) / 2, r.y + r.h + 2, lab, sb_apps[app].label, 0xFFFFFF, 0x000000, 1, 255);
-    if (v->jiggle && sb_apps[app].installed)
+    if ((badge = item_badge(v, it)) != 0)
+        draw_badge(s, r, badge);
+    const char *label = folder ? fit_text(lab, lay(v)->name[ITEM_FOLDER_OF(it)], CELL_W - 2, buf, sizeof(buf))
+                               : sb_apps[it].label;
+    int tw = gfx_text_width(lab, label);
+    gfx_text_shadow(s, r.x + (r.w - tw) / 2, r.y + r.h + 2, lab, label, 0xFFFFFF, 0x000000, 1, 255);
+    if (v->jiggle && !folder && sb_apps[it].installed)
         draw_delete_button(s, r);
+}
+
+/* A group's shown items; the dragged one leaves its gap. */
+static void draw_group(gfx_surface *s, const struct sb_view *v, int where, int group, int dy)
+{
+    sb_item items[PER_PAGE];
+    int n = layout_visible(lay(v), where, group, items, PER_PAGE);
+
+    for (int i = 0; i < n; i++) {
+        if (items[i] == v->drag_item)
+            continue;
+        gfx_rect r = item_rect(v, where, group, i, n);
+        r.y += dy;
+        if (r.x + r.w + 20 > 0 && r.x - 20 < SCREEN_W)
+            draw_item(s, v, items[i], r);
+    }
 }
 
 static void draw_dock(gfx_surface *s, const struct sb_view *v)
@@ -643,15 +831,12 @@ static void draw_dock(gfx_surface *s, const struct sb_view *v)
     gfx_fill_alpha(s, gfx_r(0, DOCK_Y + 30, SCREEN_W, d.h - 30), 0xFFFFFF, 35);
     gfx_fill_alpha(s, gfx_r(0, DOCK_Y, SCREEN_W, 1), 0xFFFFFF, 160);
     gfx_fill_alpha(s, gfx_r(0, DOCK_Y + 1, SCREEN_W, 1), 0x000000, 60);
-    for (int i = 0; i < sb_num_apps; i++) {
-        if (sb_app_shown(i) && sb_apps[i].dock)
-            draw_icon(s, v, i, sb_icon_rect(i, 0));
-    }
+    draw_group(s, v, LOC_DOCK, 0, 0);
 }
 
 static void draw_page_dots(gfx_surface *s, const struct sb_view *v)
 {
-    int pages = sb_num_pages();
+    int pages = sb_num_pages(lay(v));
 
     if (pages < 2)
         return;
@@ -659,6 +844,43 @@ static void draw_page_dots(gfx_surface *s, const struct sb_view *v)
     int x0 = SCREEN_W / 2 - (pages * 10) / 2 + 5;
     for (int p = 0; p < pages; p++)
         gfx_circle(s, x0 + p * 10, PAGE_DOTS_Y, 3, 0xFFFFFF, p == cur ? 255 : 90);
+}
+
+/* An open folder: a panel over the dimmed home screen. */
+static void draw_folder(gfx_surface *s, const struct sb_view *v)
+{
+    const gfx_font *tf = ui_font(FONT_B14);
+    gfx_rect p = sb_folder_panel(v);
+    char buf[FOLDER_NAME_MAX + 4];
+
+    gfx_fill_alpha(s, gfx_r(0, SB_STATUS_H, SCREEN_W, SCREEN_H - SB_STATUS_H), 0x000000, 120);
+    gfx_round_rect(s, gfx_r(p.x, p.y + 2, p.w, p.h), 12, 0x000000, 90);
+    gfx_round_rect_vgradient(s, p, 12, 0x687180, 0x343A45, 245);
+    gfx_fill_alpha(s, gfx_r(p.x + 10, p.y + FOLDER_TITLE_H - 1, p.w - 20, 1), 0xFFFFFF, 60);
+    int ty = p.y + (FOLDER_TITLE_H - tf->line_height) / 2;
+    if (v->folder_edit) {
+        gfx_rect field = gfx_r(p.x + 12, p.y + 4, p.w - 24, FOLDER_TITLE_H - 8);
+        gfx_round_rect(s, field, 5, 0xFFFFFF, 255);
+        const char *t = fit_text(tf, v->folder_name, field.w - 14, buf, sizeof(buf));
+        int tw = gfx_text_width(tf, t);
+        gfx_text(s, field.x + 6, ty, tf, t, 0x1A1A1A, 255);
+        gfx_fill(s, gfx_r(field.x + 7 + tw, field.y + 3, 2, field.h - 6), 0x2A6FE0);   /* caret */
+    } else {
+        gfx_text_center(s, p.x, ty, p.w, tf, fit_text(tf, lay(v)->name[v->open_folder], p.w - 20, buf, sizeof(buf)), 0xFFFFFF, 255);
+    }
+    draw_group(s, v, LOC_FOLDER, v->open_folder, 0);
+}
+
+/* The dragged icon follows the finger, lifted on a shadow. */
+static void draw_dragged(gfx_surface *s, const struct sb_view *v)
+{
+    struct sb_view dv = *v;
+    gfx_rect r = gfx_r(v->drag_x - ICON_SIZE / 2, v->drag_y - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+
+    dv.jiggle = false;
+    dv.pressed = dv.merge_onto = dv.drag_item = ITEM_NONE;
+    gfx_round_rect(s, gfx_r(r.x + 2, r.y + 4, r.w, r.h), 10, 0x000000, 80);
+    draw_item(s, &dv, v->drag_item, r);
 }
 
 static void draw_switcher(gfx_surface *s, const struct sb_view *v)
@@ -716,14 +938,10 @@ void sb_draw_home(gfx_surface *s, const struct sb_view *v)
     sb_draw_status(s, v, -1, false);
     if (gfx_rect_intersect(gfx_r(0, SB_STATUS_H, SCREEN_W, DOCK_Y - SB_STATUS_H), saved, &grid)) {
         s->clip = grid;
-        for (int i = 0; i < sb_num_apps; i++) {
-            if (sb_app_shown(i) && !sb_apps[i].dock) {
-                gfx_rect r = sb_icon_rect(i, v->scroll_x);
-                if (v->switcher_open)
-                    r.y -= 4;
-                if (r.x + r.w + 20 > 0 && r.x - 20 < SCREEN_W)
-                    draw_icon(s, v, i, r);
-            }
+        for (int p = 0; p < sb_num_pages(lay(v)); p++) {
+            int x = p * SCREEN_W - v->scroll_x;
+            if (x > -SCREEN_W && x < SCREEN_W)
+                draw_group(s, v, LOC_PAGE, p, v->switcher_open ? -4 : 0);
         }
         if (!v->switcher_open)
             draw_page_dots(s, v);
@@ -733,4 +951,8 @@ void sb_draw_home(gfx_surface *s, const struct sb_view *v)
         draw_switcher(s, v);
     else
         draw_dock(s, v);
+    if (layout_folder_size(lay(v), v->open_folder))
+        draw_folder(s, v);
+    if (v->drag_item != ITEM_NONE)
+        draw_dragged(s, v);
 }

@@ -55,6 +55,11 @@ enum state {
 #define MAX_CLIENTS     4
 #define HOLD_MS         1000    /* press on an icon to edit the home screen */
 #define JIGGLE_MS       100
+#define DRAG_SLOP       8       /* px a held icon moves before it is dragged */
+#define MERGE_MS        450     /* over an icon's centre this long: a folder */
+#define EDGE_MS         600     /* at a page edge this long: the page turns */
+#define EDGE_W          14
+#define KB_Y            (SCREEN_H - UI_KB_H)
 #define DOUBLE_HOME_MS  400     /* double-press Home opens the multitasking bar */
 #define CARD_POLL_MS    2000    /* look for apps on a card coming or going */
 #define SURFACE_BYTES   (SB_APP_W * GZ_FB_HEIGHT * 2)
@@ -132,6 +137,27 @@ static int down_x, down_y, grab_dx, last_x;
 static uint32_t last_move_ms;
 static int velocity;            /* px per 100 ms, smoothed */
 static int minute_shown = -1;
+
+/* Home-screen editing: an icon picked up in jiggle mode. `place` is where
+ * the preview puts it; view.merge_onto overrides it with a folder. */
+static struct {
+    bool armed, active, held;   /* held: picked up by the hold that began jiggling */
+    struct sb_loc from;
+    sb_item item;
+    struct sb_drop place;
+    sb_item merge_cand;
+    uint32_t merge_since, edge_since;
+    int edge_dir;
+    struct sb_layout preview;
+} drag;                         /* item and merge_cand are set when armed */
+static struct ui_keyboard folder_kb;    /* renaming a folder */
+static bool folder_kb_shown, kb_touch, folder_touch_outside, folder_title_down;
+static void finish_editing(void);
+static void folder_commit_name(void);
+static void close_folder(void);
+static void rename_char(int c);
+static void drag_update(int x, int y);
+static void drag_end(bool apply);
 static uint32_t shimmer_next;
 
 /* Notification banner over the top of the screen, and the app to open
@@ -308,6 +334,8 @@ static void render_track(void)
 static void render_home(void)
 {
     sb_draw_home(&bb, &view);
+    if (view.folder_edit && folder_kb_shown)
+        ui_draw_keyboard(&bb, &folder_kb, KB_Y);
     if (alert.open) {
         bool del = alert.app >= 0;
         ui_draw_alert(&bb, alert.title, alert.msg, del ? "Cancel" : "OK", del ? "Delete" : NULL,
@@ -332,7 +360,7 @@ static void render_grid(void)
 {
     gfx_rect r = gfx_r(0, SB_STATUS_H, SCREEN_W, DOCK_Y - SB_STATUS_H);
 
-    if (alert.open || view.jiggle || view.switcher_open) {  /* those cover the dock too */
+    if (alert.open || view.jiggle || view.switcher_open || view.open_folder >= 0) {  /* those cover the dock too */
         render_home();
         return;
     }
@@ -790,7 +818,7 @@ static void sync_switcher(void)
 static void open_switcher(void)
 {
     alert.open = false;
-    view.jiggle = false;
+    finish_editing();
     view.pressed = -1;
     view.switcher_open = true;
     view.switcher_edit = false;
@@ -875,6 +903,7 @@ static void begin_zoom_in(void)
     banner_visible = banner_touch = false;
     close_switcher();
     view.pressed = -1;
+    finish_editing();                   /* a folder closes behind the launch */
     sb_draw_home(&snap, &view);
     state = ST_ZOOM_IN;
     anim_start(0, 1024, ZOOM_MS);
@@ -987,7 +1016,8 @@ static void lock_device(void)
     if (state != ST_LOCK && state != ST_PASSCODE && state != ST_UNLOCK)
         lock_over_app = (state == ST_APP || state == ST_ZOOM_IN || state == ST_LAUNCH_WAIT);
     banner_visible = banner_touch = false;
-    view.jiggle = alert.open = false;
+    alert.open = false;
+    finish_editing();
     close_switcher();
     state = ST_LOCK;
     anim.active = false;
@@ -1341,7 +1371,238 @@ static void lock_touch(const struct gz_input_event *e)
 
 static int page_count(void)
 {
-    return sb_num_pages();
+    return sb_num_pages(view.layout ? view.layout : &sb_layout);
+}
+
+static void clamp_scroll(void)
+{
+    int max = (page_count() - 1) * SCREEN_W;
+
+    if (view.scroll_x > max)
+        view.scroll_x = max;
+    if (view.scroll_x < 0)
+        view.scroll_x = 0;
+}
+
+/* ---- home layout (layout.h) --------------------------------------------- */
+
+static char layout_text[LAYOUT_TEXT_MAX];
+
+static void load_layout(void)
+{
+    int n = pref_get(LAYOUT_PREF, layout_text, sizeof(layout_text));
+
+    if (n <= 0 || !layout_parse(&sb_layout, layout_text, n))
+        layout_default(&sb_layout);
+    bool changed = layout_sync(&sb_layout);
+    sb_layout_dirty = n > 0 && changed;     /* the default needs no saving */
+}
+
+static void save_layout(void)
+{
+    if (!sb_layout_dirty)
+        return;
+    int n = layout_format(&sb_layout, layout_text, sizeof(layout_text));
+    if (n > 0 && pref_put(LAYOUT_PREF, layout_text, (uint32_t)n) >= 0)
+        sb_layout_dirty = false;
+}
+
+static void folder_commit_name(void)
+{
+    if (!view.folder_edit)
+        return;
+    view.folder_edit = false;
+    kb_touch = false;
+    if (view.open_folder >= 0)
+        layout_rename(&sb_layout, view.open_folder, view.folder_name);
+}
+
+static void close_folder(void)
+{
+    folder_commit_name();
+    view.open_folder = -1;
+}
+
+static void open_folder(int f)
+{
+    view.pressed = ITEM_NONE;
+    view.open_folder = f;
+    render_home();
+}
+
+static void begin_rename(void)
+{
+    strlcpy(view.folder_name, sb_layout.name[view.open_folder], sizeof(view.folder_name));
+    ui_keyboard_init(&folder_kb);
+    ui_keyboard_set_method(&folder_kb, UI_INPUT_QWERTY);
+    int input = gz_input_status();
+    folder_kb_shown = input < 0 || !(input & GZ_INPUT_STOWAWAY);
+    view.folder_edit = true;
+    render_home();
+}
+
+static void rename_char(int c)
+{
+    size_t n = strlen(view.folder_name);
+
+    if (c == '\n') {
+        folder_commit_name();
+    } else if (c == '\b') {
+        if (n)
+            view.folder_name[n - 1] = 0;
+    } else if (c >= ' ' && c < 0x7f && n + 1 < sizeof(view.folder_name)) {
+        view.folder_name[n] = (char)c;
+        view.folder_name[n + 1] = 0;
+    }
+    render_home();
+}
+
+/* An icon under the finger in jiggle mode: dragged once it moves. */
+static bool drag_arm(sb_item it)
+{
+    struct sb_loc loc;
+
+    if (it == ITEM_NONE || !layout_find(&sb_layout, it, &loc))
+        return false;
+    drag.armed = true;
+    drag.active = drag.held = false;
+    drag.item = it;
+    drag.from = loc;
+    return true;
+}
+
+static void drag_begin(void)
+{
+    folder_commit_name();
+    drag.armed = false;
+    drag.active = true;
+    drag.place = (struct sb_drop){ .kind = DROP_NONE };
+    drag.merge_cand = ITEM_NONE;
+    drag.edge_dir = 0;
+    drag.preview = sb_layout;
+    view.layout = &drag.preview;
+    view.drag_item = drag.item;
+    view.merge_onto = ITEM_NONE;
+    view.pressed = ITEM_NONE;
+}
+
+/* The preview shows the item where `place` puts it; an impossible place
+ * (a full toolbar) leaves it where it was. */
+static void drag_place(const struct sb_drop *d)
+{
+    if (!memcmp(d, &drag.place, sizeof(*d)))
+        return;
+    drag.place = *d;
+    drag.preview = sb_layout;
+    if (!layout_move(&drag.preview, &drag.from, d)) {
+        drag.place.kind = DROP_NONE;
+        drag.preview = sb_layout;
+    }
+}
+
+static void drag_update(int x, int y)
+{
+    struct sb_hit h;
+    uint32_t t = now_ms();
+
+    view.drag_x = x;
+    view.drag_y = y;
+    sb_hit_test(&view, x, y, &h);
+    if (view.open_folder >= 0 && h.where == LOC_NONE) {
+        close_folder();                 /* dragged out onto the home screen */
+        sb_hit_test(&view, x, y, &h);
+    }
+    int dir = view.open_folder < 0 && y >= SB_STATUS_H && y < DOCK_Y
+            ? (x < EDGE_W ? -1 : x >= SCREEN_W - EDGE_W ? 1 : 0) : 0;
+    if (dir != drag.edge_dir) {
+        drag.edge_dir = dir;
+        drag.edge_since = t;
+    }
+    if (h.item != ITEM_NONE && h.item != drag.item && h.inner && !ITEM_IS_FOLDER(drag.item) &&
+        h.where != LOC_FOLDER) {
+        if (drag.merge_cand != h.item) {    /* folder after MERGE_MS (drag_timers) */
+            drag.merge_cand = h.item;
+            drag.merge_since = t;
+            view.merge_onto = ITEM_NONE;
+        }
+        return;
+    }
+    drag.merge_cand = view.merge_onto = ITEM_NONE;
+    if (h.item == drag.item)
+        return;                         /* over its own gap */
+    struct sb_drop d = { .kind = DROP_NONE, .onto = ITEM_NONE };
+    if (h.where == LOC_PAGE && h.group <= sb_layout.npages)
+        d = (struct sb_drop){ DROP_PAGE, h.group, (int8_t)(h.item == ITEM_NONE ? PER_PAGE : h.cell), ITEM_NONE };
+    else if (h.where == LOC_DOCK)
+        d = (struct sb_drop){ DROP_DOCK, 0, (int8_t)sb_dock_insert_index(&view, x), ITEM_NONE };
+    else if (h.where == LOC_FOLDER && h.cell >= 0 && !ITEM_IS_FOLDER(drag.item))
+        d = (struct sb_drop){ DROP_FOLDER, h.group, (int8_t)(h.item == ITEM_NONE ? FOLDER_MAX : h.cell), ITEM_NONE };
+    else
+        return;
+    drag_place(&d);
+}
+
+static void drag_timers(uint32_t t)
+{
+    if (drag.merge_cand != ITEM_NONE && view.merge_onto != drag.merge_cand && t - drag.merge_since >= MERGE_MS) {
+        sb_item c = drag.merge_cand;
+        if (!ITEM_IS_FOLDER(c) || layout_folder_size(&sb_layout, ITEM_FOLDER_OF(c)) < FOLDER_MAX) {
+            view.merge_onto = c;
+            render_home();
+        }
+    }
+    if (drag.edge_dir && t - drag.edge_since >= EDGE_MS) {
+        int cur = (view.scroll_x + SCREEN_W / 2) / SCREEN_W, to = cur + drag.edge_dir;
+        int last = MIN(sb_layout.npages, LAYOUT_PAGES - 1);    /* one empty page past the end */
+        drag.edge_since = t;
+        if (to >= 0 && to <= last) {        /* frame() retargets when it lands */
+            anim_start(view.scroll_x, to * SCREEN_W, PAGE_MS);
+            audio_sound(AUDIO_SND_SWIPE);
+        }
+    }
+}
+
+/* Dropped (apply) or cancelled: a drop the model refuses springs back. */
+static void drag_end(bool apply)
+{
+    sb_item it = drag.item;
+    bool merged = false;
+
+    if (apply && drag.active) {
+        struct sb_drop d = drag.place;
+        if (view.merge_onto != ITEM_NONE)
+            d = (struct sb_drop){ .kind = DROP_MERGE, .onto = view.merge_onto };
+        if (d.kind != DROP_NONE && layout_move(&sb_layout, &drag.from, &d))
+            merged = d.kind == DROP_MERGE && !ITEM_IS_FOLDER(d.onto);
+    }
+    bool was_active = drag.active;
+    drag.armed = drag.active = drag.held = false;
+    drag.item = drag.merge_cand = ITEM_NONE;
+    drag.edge_dir = 0;
+    view.layout = NULL;
+    view.drag_item = view.merge_onto = ITEM_NONE;
+    if (!was_active)
+        return;
+    if (view.open_folder >= 0 && !layout_folder_size(&sb_layout, view.open_folder))
+        view.open_folder = -1;
+    if (merged)
+        view.open_folder = layout_folder_of(&sb_layout, it);    /* a new folder opens */
+    clamp_scroll();
+    if (view.scroll_x % SCREEN_W)
+        anim_start(view.scroll_x, (view.scroll_x + SCREEN_W / 2) / SCREEN_W * SCREEN_W, PAGE_MS);
+}
+
+/* Jiggle mode ends: tidy away empty pages and keep the layout. */
+static void finish_editing(void)
+{
+    drag_end(false);
+    close_folder();
+    if (!view.jiggle)
+        return;
+    view.jiggle = false;
+    layout_tidy(&sb_layout, true);
+    clamp_scroll();
+    save_layout();
 }
 
 /* After the app list changed: keep the scroll position on a real page. */
@@ -1357,9 +1618,12 @@ static bool rescan(bool card_only)
     }
     if (!apps_changed())
         return false;
-    int max = (page_count() - 1) * SCREEN_W;
-    if (view.scroll_x > max)
-        view.scroll_x = max;
+    layout_sync(&sb_layout);
+    if (view.open_folder >= 0 && !layout_folder_size(&sb_layout, view.open_folder))
+        close_folder();
+    if (!view.jiggle)
+        save_layout();                  /* else when editing ends */
+    clamp_scroll();
     for (int i = 0; i < SB_MAX_RUNNING; i++) {
         if (running[i].pid > 0 && running[i].app_index >= 0 && !sb_app_shown(running[i].app_index))
             slot_kill(i);
@@ -1373,7 +1637,7 @@ static void end_jiggle(void)
 {
     if (!view.jiggle)
         return;
-    view.jiggle = false;
+    finish_editing();
     render_home();
 }
 
@@ -1422,15 +1686,6 @@ static bool alert_touch(const struct gz_input_event *e)
     else
         render_home();
     return true;
-}
-
-static int delete_hit(int x, int y)
-{
-    for (int i = 0; i < sb_num_apps; i++) {
-        if (sb_app_shown(i) && sb_apps[i].installed && gfx_rect_contains(sb_delete_rect(i, view.scroll_x), x, y))
-            return i;
-    }
-    return -1;
 }
 
 static int delete_pressed = -1;
@@ -1509,9 +1764,25 @@ static void switcher_touch(const struct gz_input_event *e)
     }
 }
 
+/* The rename keyboard takes touches that start on it. */
+static bool folder_kb_touch(const struct gz_input_event *e)
+{
+    if (!view.folder_edit || !folder_kb_shown || (!kb_touch && (e->type != GZ_EV_TOUCH_DOWN || e->y < KB_Y)))
+        return false;
+    bool changed = false;
+    kb_touch = e->type != GZ_EV_TOUCH_UP;
+    int c = ui_keyboard_event(&folder_kb, e, KB_Y, &changed);
+    if (c > 0 && c < 0x100)
+        rename_char(c);
+    else if (changed)
+        render_home();
+    return true;
+}
+
 static void home_touch(const struct gz_input_event *e)
 {
     int page = (view.scroll_x + SCREEN_W / 2) / SCREEN_W;
+    struct sb_hit h;
 
     if (alert_touch(e))
         return;
@@ -1519,6 +1790,8 @@ static void home_touch(const struct gz_input_event *e)
         switcher_touch(e);
         return;
     }
+    if (folder_kb_touch(e))
+        return;
     switch (e->type) {
     case GZ_EV_TOUCH_DOWN:
         anim.active = false;
@@ -1528,22 +1801,43 @@ static void home_touch(const struct gz_input_event *e)
         down_y = e->y;
         down_ms = now_ms();
         track_move(e, true);
+        sb_hit_test(&view, e->x, e->y, &h);
+        folder_touch_outside = view.open_folder >= 0 && h.where == LOC_NONE;
+        folder_title_down = view.open_folder >= 0 && h.where == LOC_FOLDER && h.cell < 0;
         if (view.jiggle) {
-            delete_pressed = delete_hit(e->x, e->y);
-            break;                      /* icons don't open while editing */
+            delete_pressed = sb_hit_delete(&view, e->x, e->y);
+            if (delete_pressed < 0 && h.on_icon)
+                drag_arm(h.item);       /* icons don't open while editing */
+            break;
         }
-        view.pressed = sb_hit_icon(e->x, e->y, view.scroll_x);
-        if (view.pressed >= 0)
+        view.pressed = h.on_icon ? h.item : ITEM_NONE;
+        if (view.pressed != ITEM_NONE)
             render_home();
         break;
     case GZ_EV_TOUCH_MOVE: {
         if (!touching)
             break;
         track_move(e, false);
+        if (drag.armed && (abs(e->x - down_x) > DRAG_SLOP || abs(e->y - down_y) > DRAG_SLOP))
+            drag_begin();
+        if (drag.active) {
+            drag_update(e->x, e->y);
+            render_home();
+            break;
+        }
+        if (view.open_folder >= 0) {    /* no paging under an open folder */
+            sb_hit_test(&view, e->x, e->y, &h);
+            if (view.pressed != ITEM_NONE && (!h.on_icon || h.item != view.pressed)) {
+                view.pressed = ITEM_NONE;
+                render_home();
+            }
+            break;
+        }
         if (!swiping && abs(e->x - down_x) > 8 && down_y < DOCK_Y) {
             swiping = true;
-            if (view.pressed >= 0) {
-                view.pressed = -1;
+            drag.armed = false;
+            if (view.pressed != ITEM_NONE) {
+                view.pressed = ITEM_NONE;
                 render_home();
             }
         }
@@ -1556,27 +1850,54 @@ static void home_touch(const struct gz_input_event *e)
                 sx = max + (sx - max) / 2;
             view.scroll_x = sx;
             render_grid();
-        } else if (view.pressed >= 0 && sb_hit_icon(e->x, e->y, view.scroll_x) != view.pressed) {
-            view.pressed = -1;
-            render_home();
+        } else if (view.pressed != ITEM_NONE) {
+            sb_hit_test(&view, e->x, e->y, &h);
+            if (!h.on_icon || h.item != view.pressed) {
+                view.pressed = ITEM_NONE;
+                render_home();
+            }
         }
         break;
     }
-    case GZ_EV_TOUCH_UP:
+    case GZ_EV_TOUCH_UP: {
         if (!touching)
             break;
         touching = false;
+        if (drag.active) {
+            audio_sound(AUDIO_SND_TAP);
+            drag_end(true);
+            render_home();
+            break;
+        }
         audio_sound(swiping ? AUDIO_SND_SWIPE : AUDIO_SND_TAP);
+        sb_item armed = drag.armed && !drag.held ? drag.item : ITEM_NONE;
+        drag.armed = drag.held = false;
+        drag.item = ITEM_NONE;
+        sb_hit_test(&view, e->x, e->y, &h);
+        if (view.open_folder >= 0 && folder_touch_outside && h.where == LOC_NONE) {
+            close_folder();             /* a tap outside closes it */
+            view.pressed = ITEM_NONE;
+            render_home();
+            break;
+        }
         if (view.jiggle && !swiping) {
             int app = delete_pressed;
             delete_pressed = -1;
-            if (app >= 0 && delete_hit(e->x, e->y) == app) {
+            if (app >= 0 && sb_hit_delete(&view, e->x, e->y) == app) {
                 char msg[96];
                 snprintf(msg, sizeof(msg), "Deleting this app will also\ndelete all of its data.");
                 char title[48];
                 snprintf(title, sizeof(title), "Delete \"%s\"?", sb_apps[app].label);
                 show_alert(app, title, msg);
-            } else if (sb_hit_icon(e->x, e->y, view.scroll_x) < 0 && e->y < DOCK_Y) {
+            } else if (folder_title_down && h.where == LOC_FOLDER && h.cell < 0) {
+                if (!view.folder_edit)
+                    begin_rename();
+            } else if (view.folder_edit) {
+                folder_commit_name();
+                render_home();
+            } else if (armed != ITEM_NONE && ITEM_IS_FOLDER(armed) && h.item == armed) {
+                open_folder(ITEM_FOLDER_OF(armed));
+            } else if (view.open_folder < 0 && h.item == ITEM_NONE && e->y < DOCK_Y) {
                 end_jiggle();           /* a tap on empty space ends editing */
             }
             break;
@@ -1592,16 +1913,20 @@ static void home_touch(const struct gz_input_event *e)
             if (target > page_count() - 1)
                 target = page_count() - 1;
             anim_start(view.scroll_x, target * SCREEN_W, PAGE_MS);
-        } else if (view.pressed >= 0) {
-            int app = view.pressed;
-            if (sb_hit_icon(e->x, e->y, view.scroll_x) == app)
-                launch(app);
-            else {
-                view.pressed = -1;
+        } else if (view.pressed != ITEM_NONE) {
+            sb_item it = view.pressed;
+            if (h.on_icon && h.item == it) {
+                if (ITEM_IS_FOLDER(it))
+                    open_folder(ITEM_FOLDER_OF(it));
+                else
+                    launch(it);
+            } else {
+                view.pressed = ITEM_NONE;
                 render_home();
             }
         }
         break;
+    }
     }
 }
 
@@ -1654,9 +1979,17 @@ static void handle_key(const struct gz_input_event *e)
                 render_home();
             } else {
                 last_home_ms = t;
-                if (view.jiggle || alert.open) {
+                if (alert.open) {
                     alert.open = false;
-                    view.jiggle = false;
+                    render_home();
+                } else if (view.folder_edit) {
+                    folder_commit_name();
+                    render_home();
+                } else if (view.open_folder >= 0) {
+                    close_folder();
+                    render_home();
+                } else if (view.jiggle) {
+                    finish_editing();
                     render_home();
                 } else if (view.scroll_x != 0) {
                     anim_start(view.scroll_x, 0, PAGE_MS);
@@ -1666,6 +1999,14 @@ static void handle_key(const struct gz_input_event *e)
         break;
     }
     case GZ_KEY_ESC:
+        if (state == ST_HOME && !view.switcher_open && view.open_folder >= 0) {
+            if (view.folder_edit)
+                folder_commit_name();
+            else
+                close_folder();
+            render_home();
+            break;
+        }
         if (state == ST_HOME && view.switcher_open) {
             if (view.switcher_edit)
                 view.switcher_edit = false;
@@ -1680,6 +2021,8 @@ static void handle_key(const struct gz_input_event *e)
     default:
         if (state == ST_APP)
             send_event(e);
+        else if (state == ST_HOME && view.folder_edit && ui_input_char(e))
+            rename_char(ui_input_char(e));      /* Stowaway Enter, Backspace */
         break;
     }
 }
@@ -1729,7 +2072,7 @@ static void hardicon_open(int app)
         return;
     if (state == ST_HOME) {
         alert.open = false;
-        view.jiggle = false;
+        finish_editing();
         launch(app);
     } else if (state == ST_APP && front_app() != app) {
         launch_after_home = app;
@@ -1839,6 +2182,8 @@ static void handle_input(void)
                 touching = dragging_knob = swiping = banner_touch = false;
                 card_icon_touch = SB_ICON_NONE;
                 view.pressed = -1; view.knob_x = 0;
+                drag_end(false);
+                kb_touch = false;
                 if (state == ST_LOCK) render_lock();
                 else if (state == ST_HOME) render_home();
                 continue;
@@ -1881,6 +2226,8 @@ static void handle_input(void)
                     send_event(e);
                 else if (state == ST_PASSCODE && e->code >= '0' && e->code <= '9')
                     passcode_key(e->code);
+                else if (state == ST_HOME && view.folder_edit && ui_input_char(e))
+                    rename_char(ui_input_char(e));
                 continue;
             }
             if (banner_touch_event(e))
@@ -2259,12 +2606,14 @@ static void frame(void)
         break;
     case ST_HOME:                       /* page snap */
         view.scroll_x = v;
+        if (done && drag.active)
+            drag_update(view.drag_x, view.drag_y);  /* a turned page under the finger */
         render_grid();
         break;
     case ST_ZOOM_IN:
     case ST_ZOOM_OUT: {
         int app = front_app();
-        gfx_rect icon = app >= 0 ? sb_icon_rect(app, view.scroll_x) : gfx_r(SCREEN_W / 2, SCREEN_H / 2, 1, 1);
+        gfx_rect icon = app >= 0 ? sb_icon_rect(&view, app) : gfx_r(SCREEN_W / 2, SCREEN_H / 2, 1, 1);
         gfx_rect full = gfx_r(0, app_top(), SB_APP_W, app_height());
         int q = state == ST_ZOOM_IN ? p : 1024 - p;
         gfx_rect r = lerp_rect(icon, full, q);
@@ -2416,7 +2765,10 @@ int main(void)
     apps_scan(false);                   /* before notify_load: it keys on bundles */
     apps_changed();
     notify_load();
+    load_layout();
     view.pressed = -1;
+    view.drag_item = view.merge_onto = ITEM_NONE;
+    view.open_folder = -1;
     view.badges = sb_badges;
     view.lock_notes = sb_delivered;
     sb_power_init(&power);
@@ -2467,8 +2819,12 @@ int main(void)
         if (state == ST_HOME && !anim.active) {
             if (view.jiggle || view.switcher_edit)
                 timeout = MIN(timeout, MAX((int)(jiggle_next - t), 0));
-            else if (touching && !swiping && (view.pressed >= 0 || view.switcher_pressed >= 0))
+            else if (touching && !swiping && (view.pressed != ITEM_NONE || view.switcher_pressed >= 0))
                 timeout = MIN(timeout, MAX((int)(down_ms + HOLD_MS - t), 0));
+            if (drag.active && drag.merge_cand != ITEM_NONE && view.merge_onto != drag.merge_cand)
+                timeout = MIN(timeout, MAX((int)(drag.merge_since + MERGE_MS - t), 0));
+            if (drag.active && drag.edge_dir)
+                timeout = MIN(timeout, MAX((int)(drag.edge_since + EDGE_MS - t), 0));
             if (!touching)
                 timeout = MIN(timeout, MAX((int)(card_poll_next - t), 0));
         }
@@ -2580,11 +2936,15 @@ int main(void)
                     jiggle_next = t + JIGGLE_MS;
                 }
             } else {
-                if (!view.jiggle && touching && !swiping && view.pressed >= 0 && t - down_ms >= HOLD_MS) {
+                if (!view.jiggle && touching && !swiping && view.pressed != ITEM_NONE && t - down_ms >= HOLD_MS) {
                     view.jiggle = true;     /* held: edit the home screen */
+                    if (drag_arm(view.pressed))
+                        drag.held = true;   /* and the same touch can drag it */
                     view.pressed = -1;
                     jiggle_next = t;
                 }
+                if (drag.active)
+                    drag_timers(t);
                 if (view.jiggle && (int)(t - jiggle_next) >= 0) {
                     view.jiggle_phase++;
                     render_home();
