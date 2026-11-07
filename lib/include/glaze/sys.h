@@ -111,6 +111,9 @@ static inline int gz_bt_io(uint32_t op, void *buffer, uint32_t size)
 /* Network server only: the CF modem's UART (glaze/modem.h). */
 static inline int gz_modem_io(uint32_t op, void *buffer, uint32_t size)
 { return GZ_SC3(SYS_MODEM_IO, op, buffer, size); }
+/* Any process: the GPS receiver's latest sentences or a command (glaze/gps.h). */
+static inline int gz_gps_io(uint32_t op, void *buffer, uint32_t size)
+{ return GZ_SC3(SYS_GPS_IO, op, buffer, size); }
 struct bt_card_info;
 static inline int gz_bt_card_info(struct bt_card_info *info, uint32_t size)
 { return GZ_SC2(SYS_BT_CARD_INFO, info, size); }

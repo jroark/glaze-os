@@ -388,15 +388,21 @@ static void capture_card(const struct cis *c)
      * entry decoding COM1 (verified card: Rockwell RC56LD, MODEM.md). */
     else if (c->function == FUNCID_SERIAL && c->modem && c->cor && c->uart_index >= 0)
         card_info.kind = BT_CARD_MODEM;
+    /* Any other serial card with a COM1 entry: GPS receivers (NMEA CF cards
+     * such as the AmbiCom GPS-CF, docs/hardware/GPS.md) are plain 16550s
+     * with no modem FUNCE. gps.c only listens until it hears NMEA. */
+    else if (c->function == FUNCID_SERIAL && c->cor && c->uart_index >= 0)
+        card_info.kind = BT_CARD_GPS;
     if (card_info.kind == BT_CARD_BLUETOOTH) bt_insert();
     if (card_info.kind == BT_CARD_MODEM) modem_insert(c->cor, (unsigned)c->uart_index);
+    if (card_info.kind == BT_CARD_GPS) gps_insert(c->cor, (unsigned)c->uart_index);
 }
 
 /* A serial card owns the socket: never ATA-probe or reset it. */
 static bool serial_card(void)
 {
     return card_info.kind == BT_CARD_SERIAL || card_info.kind == BT_CARD_BLUETOOTH ||
-           card_info.kind == BT_CARD_MODEM;
+           card_info.kind == BT_CARD_MODEM || card_info.kind == BT_CARD_GPS;
 }
 
 static void forget_card(void)
@@ -404,6 +410,7 @@ static void forget_card(void)
     cis_retry_at = 0; cis_retries = 0;
     bt_removed();
     modem_removed();
+    gps_removed();
     uint32_t generation = card_info.generation + 1;
     memset(&card_info, 0, sizeof(card_info));
     card_info.version = BT_CIS_VERSION;

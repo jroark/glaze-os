@@ -99,6 +99,7 @@ enum {
     SYS_BT_IO,             /* PROC_BLUETOOTH: raw UART operation, buffer, size */
     SYS_CAM_PROBE,         /* PROC_USB, VEO_PROBE=1 kernels: op, arg, buffer, size (glaze/veo.h) */
     SYS_MODEM_IO,          /* PROC_NET: CF modem UART operation, buffer, size (glaze/modem.h) */
+    SYS_GPS_IO,            /* any process: GPS snapshot or command, buffer, size (glaze/gps.h) */
     SYS_COUNT
 };
 
