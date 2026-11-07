@@ -32,6 +32,12 @@ void usb_poll(void) {}
 void net_irq(void) {}
 void bt_poll(void) {}
 void modem_poll(void) {}
+void gps_poll(void) {}
+bool gps_ready(void) { return false; }
+bool bt_ready(void) { return false; }
+bool modem_ready(void) { return false; }
+void pcmcia1_irq_arm(bool on) { (void)on; }
+bool net_up(void) { return false; }
 void audio_irq(void) {}
 void buzzer_poll(void) {}
 void splash_tick(void) {}

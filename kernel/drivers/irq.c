@@ -103,7 +103,8 @@ void irq_dispatch_ip2(void)
             net_irq();
             bt_poll();
             modem_poll();
-            if ((net_up() || bt_ready() || modem_ready()) &&
+            gps_poll();
+            if ((net_up() || bt_ready() || modem_ready() || gps_ready()) &&
                 PCMCIA_CARD_PRESENT())
                 KJ_SRC_PCMCIA |= KJ_SRC_ENABLE;
         }
@@ -111,7 +112,8 @@ void irq_dispatch_ip2(void)
             net_irq();
             bt_poll();
             modem_poll();
-            if ((net_up() || bt_ready() || modem_ready()) && PCMCIA_CARD_PRESENT())
+            gps_poll();
+            if ((net_up() || bt_ready() || modem_ready() || gps_ready()) && PCMCIA_CARD_PRESENT())
                 KJ_SRC_JACKET |= KJ_SRC_ENABLE;
         }
         if (pending & KJ_INT_AUDIO) {

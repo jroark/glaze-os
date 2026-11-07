@@ -35,15 +35,20 @@ static uint32_t source[17], girq_out;
 #define KJ_INT_AUDIO 256u
 #define KJ_INT_TOUCH 512u
 #define KJ_CF_CAUSE source[16]
+#define KJ_SRC_JACKET source[6]
+#define KJ_INT_JACKET 64u
 #define AUD_SRC_EN_BIT 8u
 #define PCMCIA_CARD_PRESENT() 0
 #include "../../kernel/drivers/irq.c"
 void input_irq(uint16_t bits) { (void)bits; }
 void net_irq(void) {}
+void pcmcia1_irq_ack(void) {}
 void bt_poll(void) {}
 bool bt_ready(void) { return false; }
 void modem_poll(void) {}
 bool modem_ready(void) { return false; }
+void gps_poll(void) {}
+bool gps_ready(void) { return false; }
 bool net_up(void) { return false; }
 void audio_irq(void) {}
 void kprintf(const char *s, ...) { (void)s; }

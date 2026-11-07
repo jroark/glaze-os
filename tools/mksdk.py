@@ -80,7 +80,7 @@ def main():
         # wolfSSL, configured as the system's libwolfssl.so.1 (WOLFSSL_USER_SETTINGS).
         copy(ROOT / "third_party/wolfssl/wolfssl", stage / "sysroot/usr/include/wolfssl")
         copy(ROOT / "apps/browser/tls/user_settings.h", stage / "sysroot/usr/include/user_settings.h")
-        for name in ("crt0.o", "start.o"):
+        for name in ("crt0.o", "start.o", "libgps.a"):
             copy(args.build_dir / "pic" / name, stage / "sysroot/usr/lib" / name)
         copy(ROOT / "sdk/glaze-sdk.py", stage / "bin/glaze-sdk")
         (stage / "bin/glaze-sdk").chmod(0o755)
@@ -106,7 +106,7 @@ def main():
         copy(ROOT / "LICENSE", stage / "LICENSE")
         # Corresponding source and an independent rebuild recipe accompany all
         # Glaze binaries in the SDK. No firmware, games or toolchain binaries.
-        for name in ("include", "libc", "gfx", "ui", "media", "ldso", "crt0_pic.S"):
+        for name in ("include", "libc", "gfx", "ui", "media", "gps", "ldso", "crt0_pic.S"):
             copy(ROOT / "lib" / name, stage / "src/lib" / name)
         copy(ROOT / "third_party/jitterentropy", stage / "src/third_party/jitterentropy")
         copy(ROOT / "third_party/wolfssl", stage / "src/third_party/wolfssl")

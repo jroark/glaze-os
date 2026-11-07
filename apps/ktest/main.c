@@ -6,7 +6,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <glaze/audio.h>
+#include <glaze/bluetooth.h>
 #include <glaze/fs.h>
+#include <glaze/gps.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
 #include <glaze/notify.h>
@@ -950,6 +952,41 @@ static void net_status_waiter(void *arg)
     gz_sem_post(p->done);
 }
 
+/* A GPS receiver: be300 --cf-gps tests/gps/track.nmea, a 60 m circle
+ * at 37.7955 N 122.3937 W with three seconds of no fix first. */
+static void test_gps(void)
+{
+    struct gps_fix fix;
+    struct bt_card_info card;
+    gps_read(&fix);
+    if (fix.state == GPS_ABSENT) {
+        CHECK(gps_command("PSRF103,00,00,01,01") == GZ_ENOENT, "GPS command refused without a receiver");
+        printf("ktest: SKIP gps (no GPS card; boot the emulator with --cf-gps tests/gps/track.nmea)\n");
+        return;
+    }
+    CHECK(gz_bt_card_info(&card, sizeof(card)) == 0 && card.kind == BT_CARD_GPS, "serial card handed to GPS");
+    int i;
+    for (i = 0; i < 100 && fix.state != GPS_STREAMING; i++) { gz_sleep_ms(100); gps_read(&fix); }
+    CHECK(fix.state == GPS_STREAMING && fix.baud == 4800, "GPS NMEA found at 4800 baud");
+    for (i = 0; i < 150 && !gps_read(&fix); i++) gz_sleep_ms(100);
+    CHECK(fix.fix == GPS_FIX_3D, "GPS 3D fix");
+    printf("ktest: gps %d.%07d %d.%07d alt %d dm, %u used of %u, hdop %u, %04u-%02u-%02u %02u:%02u:%02u\n",
+           (int)(fix.lat / 10000000), (int)(fix.lat < 0 ? -fix.lat : fix.lat) % 10000000,
+           (int)(fix.lon / 10000000), (int)(fix.lon < 0 ? -fix.lon : fix.lon) % 10000000,
+           (int)fix.altitude_dm, fix.sats_used, fix.sats_in_view, (unsigned)fix.hdop_c,
+           fix.year, fix.month, fix.day, fix.hour, fix.minute, fix.second);
+    CHECK(gps_distance_m(fix.lat, fix.lon, 377955000, -1223937000) < 200, "GPS position on the track");
+    CHECK(fix.sats_in_view == 8 && fix.sats_used == 6 && fix.hdop_c == 120 && fix.altitude_dm == 123,
+          "GPS satellites, HDOP and altitude");
+    CHECK(fix.year == 2026 && fix.month == 11 && fix.day == 6, "GPS date");
+    CHECK(fix.sats[0].prn == 7 && fix.sats[0].snr == 42 && fix.sats[0].used, "GPS satellite detail");
+    uint32_t seq = fix.sequence;
+    gz_sleep_ms(2500);
+    gps_read(&fix);
+    CHECK(fix.sequence > seq && fix.age_ms < 2000, "GPS sentences keep arriving");
+    CHECK(gps_command("PSRF103,00,00,01,01") > 0, "GPS command sent");
+}
+
 /* Dial-up through a CF modem (--cf-modem tcp:127.0.0.1:PORT in the emulator,
  * answered by tests/ppp_peer.py --user glaze --password ktest). */
 static int dial_wait(struct net_dial_status *ds, bool up, int seconds)
@@ -1418,6 +1455,7 @@ int main(void)
     test_time();
     test_audio();
     test_sounds();
+    test_gps();
     test_modem();
     test_net();
     test_ota();

@@ -140,6 +140,13 @@ bool modem_ready(void);
 bool modem_present(void);
 uint32_t modem_generation(void);
 int sys_modem_io(struct proc *, uint32_t, uint32_t, uint32_t);
+/* gps.c: an NMEA receiver on a CF serial card, readable by any process. */
+void gps_insert(uint32_t cor_address, unsigned config_index);
+void gps_removed(void);
+void gps_poll(void);
+bool gps_ready(void);
+uint32_t gps_generation(void);
+int sys_gps_io(struct proc *, uint32_t, uint32_t, uint32_t);
 int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);

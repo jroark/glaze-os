@@ -23,6 +23,7 @@ static uint8_t rx[RX_SIZE], tx[TX_SIZE];
 static uint32_t rh, rt, th, tt, io;
 static uint8_t mcr;
 static unsigned tx_fifo = 1;
+static bool io_logged;
 static int fault = GZ_ENOENT;
 static void fail(void) { fault = GZ_EIO; W(1, 0); KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE; }
 int cfuart_error(void) { return fault; }
@@ -47,8 +48,10 @@ int cfuart_init(const struct uart_config *c)
     W(1, 0); W(2, c->fcr); W(4, mcr = c->mcr);
     /* NS16550 IIR bits 6/7 report functioning FIFOs. A 16550A-compatible
      * FIFO holds at least 16 bytes; retain a one-byte fallback otherwise. */
-    tx_fifo = (R(2) & 0xc0) == 0xc0 ? 16 : 1;
-    kprintf("cfuart: transmit FIFO %u bytes\n", tx_fifo);
+    unsigned fifo = (R(2) & 0xc0) == 0xc0 ? 16 : 1;
+    if (fifo != tx_fifo || !io_logged)   /* once: the GPS search re-arms often */
+        kprintf("cfuart: transmit FIFO %u bytes\n", fifo);
+    tx_fifo = fifo; io_logged = true;
     rh = rt = th = tt = 0; fault = 0;
     if (R(5) == 0xff) return fault = GZ_EIO;
     for (unsigned n = 0; n < 64 && (R(5) & 1); n++)

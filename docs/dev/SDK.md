@@ -88,6 +88,8 @@ Build output:
 Add C source files to `SOURCES` in the project's Makefile; subdirectories
 are supported. `CPPFLAGS`, `CFLAGS`, `LDFLAGS` and `LDLIBS` accept additions.
 For example, `LDLIBS += -l:libmedia.so.1` adds the integer media parsers.
+`LDLIBS += -lgps` links the static `libgps.a`: `glaze/gps.h`'s NMEA parsing,
+Web Mercator projection and distances, for a CF GPS card (`docs/hardware/GPS.md`).
 
 For TLS, link the system's wolfSSL (TLS 1.2/1.3 client and the PSK server
 used by network debugging), configured by the SDK's `user_settings.h`:

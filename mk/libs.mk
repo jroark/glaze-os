@@ -32,6 +32,15 @@ $(eval $(call LIB_template,c,$(LIBC_SRCS)))
 $(eval $(call LIB_template,gfx,$(LIBGFX_SRCS)))
 $(eval $(call LIB_template,ui,$(LIBUI_SRCS)))
 
+# GPS parsing and projection (glaze/gps.h): a static library apps link
+# (LDLIBS += -lgps in the SDK), so it adds nothing to romfs's shared libc.
+$(OUT)/pic/libgps.a: $(OUT)/pic/gps/gps.o
+	rm -f $@
+	$(AR) rcs $@ $^
+$(OUT)/dyn/lib/gps/%.o: lib/gps/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(PIC_CFLAGS) -c -o $@ $<
+
 # littlefs and Dhara for the file server's flash, FatFs for CompactFlash
 # cards (third_party/README.md).
 FS_INC := -Ithird_party/littlefs -Ithird_party/dhara -Ithird_party/fatfs -DLFS_NO_DEBUG \

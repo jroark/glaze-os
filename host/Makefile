@@ -667,6 +667,12 @@ modem-chat-test:
 	../out/host/modem-chat-test
 .PHONY: modem-chat-test
 
+gps-test: ../tests/native/gps.c ../kernel/gps.c ../lib/gps/gps.c ../lib/gps/gps_tables.h ../lib/include/glaze/gps.h
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/gps.c -lm -o ../out/host/gps-test
+	../out/host/gps-test
+.PHONY: gps-test
+
 modem-driver-test:
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/modem_driver.c -o ../out/host/modem-driver-test
