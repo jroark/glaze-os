@@ -25,6 +25,8 @@ static uint8_t read_cis(unsigned i)
     return cis[i];
 }
 #define CF_CIS(i) read_cis(i)
+static uint64_t clock_us = 1;
+uint64_t time_us(void) { return clock_us; }
 #define NET_TEST
 #include "../../kernel/drivers/net.c"
 #include "../../kernel/drivers/usbnet.c"
@@ -134,10 +136,24 @@ void page_free(void *p)
     }
     abort();
 }
+/* kernel/hwfile.c: a package's file may still be on its way, or missing. */
+static int load_results[4];
+static unsigned load_results_n, trims, prefetches;
+static int prefetch_result;
+static uint32_t hw_generation;
+int hwfile_open(const char *path, struct hwfile *f)
+{
+    (void)path; memset(f, 0, sizeof(*f)); f->slot = -1; prefetches++;
+    return prefetch_result;
+}
+void hwfile_close(struct hwfile *f) { (void)f; }
+void hwfile_trim(void) { trims++; }
+uint32_t hwfile_generation(void) { return hw_generation; }
 int module_load(const char *path, const char *entry, struct module *m)
 {
     loads++;
     snprintf(last_path, sizeof(last_path), "%s", path);
+    if (load_results_n) return load_results[--load_results_n];
     if (load_fail) return GZ_ECORRUPT;
     const struct net_driver *d = strstr(path, "xi825") ? &fake_xi : strstr(path, "wl54cf") ? &fake_wl :
                                  strstr(path, "3c589") ? &fake_el3 : &fake_ne;
@@ -268,7 +284,22 @@ int main(void)
     assert(sys_net_bind(&p, 7) == 0);
     uint8_t frame[60] = {0};
     net_receive(frame, sizeof(frame));
+    /* Power accounting: a driver that never notes its state counts as full
+     * power; a noted state takes over; removal ends the card's time. */
+    struct gz_power_status ps = {0};
+    net_power_status(&ps);
+    unsigned irqs_before = ps.net_irqs, full_before = ps.card_full_ms;
+    socket_status = 4;
+    clock_us += 3000000; net_irq();
+    net_power_note(GZ_CARD_POWER_DOZE);
+    clock_us += 2000000; net_irq();
+    net_power_status(&ps);
+    assert(ps.net_irqs == irqs_before + 2 && ps.card_full_ms == full_before + 3000);
+    assert(ps.card_doze_ms == 2000 && ps.card_power == GZ_CARD_POWER_DOZE);
     net_removed();
+    clock_us += 1000000;
+    net_power_status(&ps);
+    assert(ps.card_power == GZ_CARD_POWER_NONE && ps.card_doze_ms == 2000);
     assert(removes == 1 && !net_present() && !net_up() && head == tail);
     assert(sys_net_send(&p, 0, 60) == GZ_EDEAD);
     assert(sys_wifi_ctl(&p, WIFI_STATUS, 0) == GZ_EDEAD);
@@ -340,7 +371,32 @@ int main(void)
     assert(!net_insert(0x149,0x200) && net_up() && net_driver_kind()==GZ_NET_USB);
     /* A working USB link must not turn a failed card probe into success. */
     reset(0);assert(!allocations);
+    usbnet_stop(); usbnet_collect();
+    /* A driver from an installed package: fetched over a few worker passes,
+     * with the socket claimed (never ATA) and no re-power in the meantime. */
+    reset(0); ne_ok = true; load_fail = false;
+    load_results[0] = GZ_EINPROGRESS; load_results[1] = GZ_EINPROGRESS; load_results_n = 2;
+    unsigned before = loads;
+    assert(net_insert(0x0101, 0x0589) && net_present() && !net_up() && pending);
+    net_retry(); assert(pending && !net_up() && loads == before + 2);
+    net_retry(); assert(!pending && net_up() && info.kind == GZ_NET_3C589 && loads == before + 3);
+    net_retry(); assert(loads == before + 3);              /* up: nothing more */
+    assert(trims);
+    /* Not installed: reserved, then loaded once a package registers. */
+    reset(0); ne_ok = true; load_results[0] = GZ_ENOENT; load_results_n = 1; before = loads;
+    assert(net_insert(0x0101, 0x0589) && net_present() && !net_up() && missing && !pending);
+    net_retry(); assert(loads == before + 1);              /* same packages: no retry */
+    hw_generation++;
+    net_retry(); assert(loads == before + 2 && !missing && net_up() && info.kind == GZ_NET_3C589);
+    net_removed(); assert(!missing && !pending && !net_present());
+    /* WL54-CF waits for its firmware before the driver loads. */
+    reset(1); prefetch_result = GZ_EINPROGRESS; before = loads; unsigned asked = prefetches;
+    assert(net_insert(0x02df, 0x8103) && pending && loads == before && prefetches == asked + 2);
+    prefetch_result = 0; wl_ok = true;
+    net_retry(); assert(!pending && loads == before + 1 && !strcmp(last_path, "drivers/wl54cf.ko"));
+    reset(0); wl_ok = false; assert(!allocations);
     puts("net driver: card/USB dispatch, queues, copy faults, allocation failure, precedence and removal OK");
+    puts("net driver: package drivers pending, missing then installed, firmware prefetch OK");
     return 0;
 }
 

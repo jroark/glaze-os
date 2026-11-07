@@ -6,7 +6,10 @@ Windows CE calls socket 1 (see "Socket 1" below). Glaze has drivers for
 three kinds of card, all working on a real BE-300 through the jacket
 (2026-11-05). The 3c589 and Hermes modules are in romfs with `PCCARDS=1`,
 the default for GlazeBoot builds; a NAND image needs `PCCARDS=1
-NAND_DROP=wince` for room. Dial-up needs `MODEM=1` likewise.
+NAND_DROP=wince` for room. Dial-up needs `MODEM=1` likewise. On a stock
+image, install the signed `hw-pccards` and `hw-modem` packages instead
+([hardware packages](../os/HARDWARE_PACKAGES.md)): a card already in the
+jacket comes up as soon as its driver is installed.
 
 | Card | CIS identity | Driver | Emulator |
 | --- | --- | --- | --- |

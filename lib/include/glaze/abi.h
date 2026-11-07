@@ -100,6 +100,7 @@ enum {
     SYS_CAM_PROBE,         /* PROC_USB, VEO_PROBE=1 kernels: op, arg, buffer, size (glaze/veo.h) */
     SYS_MODEM_IO,          /* PROC_NET: CF modem UART operation, buffer, size (glaze/modem.h) */
     SYS_GPS_IO,            /* any process: GPS snapshot or command, buffer, size (glaze/gps.h) */
+    SYS_HW_CTL,            /* hardware packages: GZ_HW_OP_*, three arguments (glaze/hwpkg.h) */
     SYS_COUNT
 };
 
@@ -149,6 +150,7 @@ struct gz_msg {
 #define GZ_NOTIFY_NET       0x20000000u     /* frames waiting (SYS_NET_RECV) */
 #define GZ_NOTIFY_AUDIO     0x10000000u     /* PCM ring below half full */
 #define GZ_NOTIFY_POWER     0x08000000u     /* to the input port: SYS_POWER_STATUS changed */
+#define GZ_NOTIFY_HW        0x04000000u     /* to the file server: a hardware file is wanted (glaze/hwpkg.h) */
 
 /* Input events (SYS_INPUT_READ). */
 enum {
@@ -212,7 +214,7 @@ struct gz_datetime {
 /* SYS_POWER_STATUS (glaze/battery.h, docs/hardware/POWER.md): battery, adapter and
  * charger as Windows CE's battery driver reads them. Pass sizeof(struct
  * gz_power_status); other sizes return GZ_EINVAL. */
-#define GZ_POWER_VERSION        1u
+#define GZ_POWER_VERSION        2u
 #define GZ_POWER_VALID          (1u << 0)   /* a battery sample has been taken */
 #define GZ_POWER_AC             (1u << 1)   /* adapter in */
 #define GZ_POWER_CHARGING       (1u << 2)   /* adapter in and charging */
@@ -233,7 +235,20 @@ struct gz_power_status {
     uint32_t samples;           /* battery samples taken since boot */
     uint32_t idle_ms;           /* time the CPU spent in STANDBY since boot */
     uint32_t standby_count;     /* STANDBY entries since boot */
+    /* Version 2: the network card's power state (GZ_CARD_POWER_*) and the
+     * time it spent at each level since boot, and the network IRQs served.
+     * A version 1 caller's smaller size still gets the fields above. */
+    uint32_t card_power;
+    uint32_t card_full_ms;      /* radio receiving all the time, or a wired card */
+    uint32_t card_save_ms;      /* 802.11 power save, awake */
+    uint32_t card_doze_ms;      /* 802.11 power save, asleep between beacons */
+    uint32_t card_off_ms;       /* radio off, or the socket powered down */
+    uint32_t net_irqs;          /* network driver services, tick and interrupt */
 };
+#define GZ_POWER_STATUS_V1_SIZE 32u
+/* Network card power, for gz_power_status and Settings → Battery. */
+enum { GZ_CARD_POWER_NONE, GZ_CARD_POWER_FULL, GZ_CARD_POWER_SAVE, GZ_CARD_POWER_DOZE,
+       GZ_CARD_POWER_RADIO_OFF, GZ_CARD_POWER_OFF };
 
 /* SYS_POWER_SLEEP (docs/hardware/POWER.md "Power off"): the LCD goes off and the CPU
  * sleeps until the Power button, or the alarm a1 seconds from now. It

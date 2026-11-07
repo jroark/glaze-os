@@ -151,6 +151,7 @@ int sys_cf_info(struct proc *p, uint32_t uout);
 /* Looks at the PCMCIA socket and handles an insertion or removal. */
 void pcmcia_poll(void);
 void pcmcia_resume(void);   /* after a HIBERNATE: everything inserted afresh */
+bool pcmcia_suspend(void);  /* before a sleep: a network card's socket off */
 /* A card in the CF socket or the PCMCIA jacket's (socket 1), and the card
  * windows of whichever holds it (hw.h). */
 bool pcmcia_card_present(void);
@@ -183,12 +184,18 @@ int usbnet_bind(int port);
 int usbnet_send(struct proc *p, uint32_t buf, uint32_t len);
 int usbnet_recv(struct proc *p, uint32_t buf, uint32_t max);
 int usbnet_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
-bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up */
+bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up, or its driver is
+                                                             * pending or not installed */
+void net_retry(void);       /* service worker: a pending or newly installed driver */
 void net_removed(void);
 void net_set_mac(const uint8_t mac[6]);
 void net_receive(const uint8_t *frame, uint32_t len);
 void net_rx_drop(void);
 void net_overrun(void);
+/* A driver's power state (GZ_CARD_POWER_*), from its IRQ path; drivers that
+ * never call it count as GZ_CARD_POWER_FULL while up. */
+void net_power_note(unsigned state);
+void net_power_status(struct gz_power_status *st);
 int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t buf);
 int sys_net_info(struct proc *p, uint32_t uout);
 int sys_net_bind(struct proc *p, int port);

@@ -21,7 +21,7 @@ static struct gz_service_snapshot observed;
 static struct gz_service_manifest catalog = {
     GZ_SERVICES_MAGIC, GZ_SERVICES_ABI, 5,
     { {"fs", "bin/fs", PROC_FLASH, GZ_SERVICE_REQUIRED, 0},
-      {"net", "bin/net", PROC_NET, GZ_SERVICE_NETWORK, 1},
+      {"net", "bin/net", PROC_NET, GZ_SERVICE_NETWORK | GZ_SERVICE_OVERRIDABLE, 1},
       {"audio", "bin/audio", PROC_AUDIO, 0, 1},
       {"usb", "bin/usb", PROC_USB | PROC_PRIVILEGED, 0, 1},
       {"bluetooth", "bin/bluetooth", PROC_BLUETOOTH, GZ_SERVICE_BLUETOOTH, 1} }
@@ -60,6 +60,28 @@ struct proc *proc_spawn(const char *path, int parent, uint32_t flags)
     struct proc *p = &processes[spawned++];
     p->pid = spawned + 32; p->flags = flags;
     return p;
+}
+/* kernel/hwfile.c: an installed package's bin/net, if any. */
+static int package_result = GZ_ENOENT;
+static unsigned verified_spawns, trims;
+static uint32_t hw_gen;
+static uint8_t package_elf[64];
+int hwfile_open_package(const char *path, struct hwfile *f)
+{
+    assert(!strcmp(path, "bin/net"));
+    memset(f, 0, sizeof(*f)); f->slot = -1;
+    if (!package_result) { f->buf = package_elf; f->size = sizeof(package_elf); }
+    return package_result;
+}
+void hwfile_close(struct hwfile *f) { f->buf = NULL; }
+void hwfile_trim(void) { trims++; }
+uint32_t hwfile_generation(void) { return hw_gen; }
+void net_retry(void) {}
+struct proc *proc_spawn_verified(const void *elf, uint32_t size, const char *name, uint32_t flags)
+{
+    assert(elf == package_elf && size == sizeof(package_elf) && !strcmp(name, "net"));
+    verified_spawns++;
+    return proc_spawn("bin/net", 0, flags);
 }
 void proc_exit(struct proc *p, int code) { p->dying = true; exited++; }
 struct thread *thread_create_kernel(void (*entry)(void), int prio)
@@ -135,6 +157,24 @@ int main(void)
     assert(!proc_by_pid(net_pid) && states[1].pid && states[1].pid != net_pid);
     net_pid = states[1].pid; modem_connected = false; modem_gen++; reconcile();
     assert(!states[1].pid && !proc_by_pid(net_pid));
+    /* An installed dial-up net: waited for while it is fetched, started
+     * with the catalog's privileges, restarted when packages change. */
+    package_result = GZ_EINPROGRESS; modem_connected = true; modem_gen++; clock_us += 1000000;
+    before = spawned; reconcile();
+    assert(!states[1].pid && spawned == before && !states[1].error);
+    reconcile(); assert(spawned == before);              /* asks again after 100 ms */
+    package_result = 0; clock_us += 100000; reconcile();
+    net_pid = states[1].pid;
+    assert(net_pid && verified_spawns == 1 && proc_by_pid(net_pid)->flags == PROC_NET && trims);
+    hw_gen++; package_result = GZ_ENOENT; reconcile();   /* package removed: romfs copy */
+    clock_us += 1000000; reconcile();
+    assert(!proc_by_pid(net_pid) && states[1].pid && verified_spawns == 1);
+    net_pid = states[1].pid;
+    package_result = GZ_ECORRUPT; hw_gen++; reconcile();
+    clock_us += 1000000; reconcile();
+    assert(!proc_by_pid(net_pid) && states[1].pid && verified_spawns == 1);  /* bad copy: romfs */
+    modem_connected = false; modem_gen++; reconcile(); assert(!states[1].pid);
     puts("services: capabilities, absent hardware, modem, start/stop, restart, backoff and dependency teardown PASS");
+    puts("services: installed service replacement, pending fetch and fallback PASS");
     return 0;
 }

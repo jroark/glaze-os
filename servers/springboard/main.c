@@ -1053,6 +1053,7 @@ static void screen_sleep(void)
     screen_lock_dark();
     gfx_fill(&fb, gfx_r(0, 0, SCREEN_W, SCREEN_H), 0);
     gz_display_power(false);
+    net_power(false);           /* the radio dozes longer, retries less */
     puts("springboard: screen off");
 }
 
@@ -1062,6 +1063,7 @@ static void screen_wake(void)
     render_lock();             /* paint before restoring illumination */
     shimmer_next = now_ms() + 60;
     gz_display_power(true);
+    net_power(true);
     puts("springboard: screen on");
 }
 

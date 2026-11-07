@@ -13,6 +13,9 @@ static uint32_t source_enable;
 #define KJ_SRC_PCMCIA source_enable
 #define KJ_SRC_ENABLE 8
 static wl54cf_t card;
+static bool firmware_ticks;
+static unsigned sent;
+static void count_tx(void *o, const uint8_t *p, size_t n) { (void)o; (void)p; (void)n; sent++; }
 static unsigned mode, drops, frames;
 static uint64_t clock_us;
 static uint8_t received[1600], station_mac[6];
@@ -24,6 +27,8 @@ static uint16_t wl_read16(unsigned r)
         return 65534;
     if (r == 0x22 && mode == 2)
         return 0; /* command response timeout */
+    if (r == 0x22 && firmware_ticks)
+        wl54cf_ps_tick(&card); /* the firmware's time passes while the host polls */
     return wl54cf_read(&card, r, 2);
 }
 static void wl_write8(unsigned r, uint8_t v) { wl54cf_write(&card, r, 1, v); }
@@ -39,6 +44,8 @@ static void wl_write16(unsigned r, uint16_t v)
             card.response.data[2] = 0xff; /* header past FIFO */
         if (mode == 6 && card.response.data[0] == 6)
             card.response.data[11] = 0xff; /* truncated beacon */
+        if (mode == 9 && card.response.data[0] == 0x21)
+            card.response.data[6] = 2; /* firmware without power save */
     }
 }
 static void wl_set_cor(uint8_t v)
@@ -62,6 +69,19 @@ int romfs_read(const struct romfs_entry *e, uint32_t off, void *p, uint32_t n)
     memcpy(p, (e == &helper ? helper_data : firmware_data) + off, n);
     return 0;
 }
+/* kernel/hwfile.c: romfs only here (hwfile-test covers packages). */
+int hwfile_open(const char *name, struct hwfile *f)
+{
+    memset(f, 0, sizeof(*f));
+    f->slot = -1;
+    f->rom = romfs_lookup(name);
+    if (!f->rom)
+        return GZ_ENOENT;
+    f->size = f->rom->size;
+    return 0;
+}
+int hwfile_read(const struct hwfile *f, uint32_t off, void *p, uint32_t n) { return romfs_read(f->rom, off, p, n); }
+void hwfile_close(struct hwfile *f) { f->rom = NULL; }
 bool pcmcia_node_id(uint8_t mac[6]) { (void)mac; return false; }
 uint64_t time_us(void)
 {
@@ -72,6 +92,8 @@ void kputs(const char *s) {}
 void kprintf(const char *fmt, ...) {}
 void net_set_mac(const uint8_t p[6]) { memcpy(station_mac, p, 6); }
 void net_rx_drop(void) { drops++; }
+static unsigned power_state;
+void net_power_note(unsigned state) { power_state = state; }
 void net_receive(const uint8_t *p, uint32_t n)
 {
     frames++;
@@ -145,5 +167,84 @@ int main(void)
     config.key[0]^=1;assert(wl54cf_control(WIFI_CONFIGURE,&config)==WIFI_EAUTH);
     assert(!authorized && !card.security.authorized);
     puts("wl54cf driver: open/WEP, slots, wrong key, disconnect and malformed firmware PASS");
+
+    /* 802.11 power save (libertas): ENTER_PS after a quiet second, confirm at
+     * PS_SLEEP, frames held for PS_AWAKE, commands wait for it. */
+    initialize(0);
+    card.transmit = count_tx;
+    assert(wl54cf_init());
+    assert(!wl54cf_control(WIFI_CONNECT, &request));
+    wl54cf_irq();
+    assert(!card.ps && ps_state == PS_CAM && power_state == GZ_CARD_POWER_FULL);
+    clock_us += 2000000;
+    wl54cf_irq();
+    assert(card.ps && card.ps_dtim == 1 && ps_state == PS_AWAKE && power_state == GZ_CARD_POWER_SAVE);
+    for (unsigned i = 0; i < WL54CF_PS_IDLE_TICKS && !card.asleep; i++) {
+        wl54cf_ps_tick(&card);
+        wl54cf_irq();
+    }
+    assert(card.asleep && ps_state == PS_SLEEP && power_state == GZ_CARD_POWER_DOZE);
+    assert(!wl54cf_receive(&card, packet, sizeof(packet)));  /* the AP buffers it */
+    sent = 0;
+    assert(wl54cf_send(packet, sizeof(packet)) == 61);
+    assert(!sent && txq_n == 1);
+    for (unsigned i = 0; i < 100 && card.asleep; i++) {
+        wl54cf_ps_tick(&card);
+        wl54cf_irq();
+    }
+    assert(sent == 1 && !txq_n && !card.ps && ps_state == PS_CAM && card.ps_wakes == 1);
+    /* RX in power save delivers without leaving it; TX at full power stays. */
+    clock_us += 2000000;
+    wl54cf_irq();
+    assert(card.ps && ps_state == PS_AWAKE);
+    assert(wl54cf_receive(&card, packet, sizeof(packet)));
+    frames = 0;
+    wl54cf_irq();
+    assert(frames == 1 && card.ps);
+    assert(wl54cf_send(packet, sizeof(packet)) == 61 && !card.ps && ps_state == PS_CAM);
+    /* A command while asleep waits for PS_AWAKE, then leaves power save. */
+    clock_us += 2000000;
+    wl54cf_irq();
+    for (unsigned i = 0; i < WL54CF_PS_IDLE_TICKS && !card.asleep; i++) {
+        wl54cf_ps_tick(&card);
+        wl54cf_irq();
+    }
+    assert(card.asleep);
+    firmware_ticks = true;
+    assert(!wl54cf_control(WIFI_SCAN, NULL) && wifi.count);
+    firmware_ticks = false;
+    assert(!card.ps && ps_state == PS_CAM && card.associated);
+    /* Screen off: every third DTIM, sooner after traffic. */
+    struct wifi_power power = {WIFI_POWER_SAVE};
+    assert(!wl54cf_control(WIFI_POWER, &power));
+    clock_us += 300000;
+    wl54cf_irq();
+    assert(card.ps && card.ps_dtim == 3);
+    power.mode = WIFI_POWER_OFF;
+    assert(wl54cf_control(WIFI_POWER, &power) == GZ_EBUSY);  /* not while connected */
+    assert(card.ps_violations == 0);
+    /* Disconnected, the radio can go off; a scan brings it back. */
+    assert(!wl54cf_control(WIFI_DISCONNECT, NULL));
+    assert(!card.ps && ps_state == PS_CAM);
+    assert(!wl54cf_control(WIFI_POWER, &power) && !card.radio && !radio_on);
+    wl54cf_irq();
+    assert(power_state == GZ_CARD_POWER_RADIO_OFF);
+    assert(!wl54cf_control(WIFI_SCAN, NULL) && card.radio && wifi.count);
+    power.mode = WIFI_POWER_OFF;
+    assert(!wl54cf_control(WIFI_POWER, &power));
+    assert(!wl54cf_control(WIFI_CONNECT, &request) && card.radio && card.associated);
+    /* Firmware without power save stays at full power and doesn't ask again. */
+    mode = 9;
+    clock_us += 2000000;
+    wl54cf_irq();
+    assert(ps_unsupported && ps_state == PS_CAM);
+    card.ps = false;   /* the model took it; a refusing firmware would not */
+    unsigned enters = ps_count.enters;
+    clock_us += 2000000;
+    wl54cf_irq();
+    assert(ps_count.enters == enters);
+    mode = 0;
+    assert(card.ps_violations == 0);
+    puts("wl54cf driver: power save, held frames, wake for commands, radio off PASS");
     return 0;
 }

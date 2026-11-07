@@ -25,6 +25,7 @@ Start with the [top-level README](../README.md) for building and running.
 ## Operating system
 
 - [Loadable drivers and hardware-dependent services](os/DRIVERS_SERVICES.md)
+- [Hardware-support packages: drivers, firmware and dial-up as installable packages](os/HARDWARE_PACKAGES.md)
 - [Native shared libraries](os/DYNAMIC_LIBRARIES.md)
 - [Over-the-air OS updates](os/OTA.md)
 - [Copy, cut and paste](os/CLIPBOARD.md)

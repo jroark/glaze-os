@@ -7,6 +7,7 @@
 
 #define WIFI_RETRY_MIN_MS 2000u
 #define WIFI_RETRY_MAX_MS 30000u
+#define WIFI_RETRY_SCREEN_OFF_MS 300000u   /* in a pocket, every five minutes */
 struct wifi_retry {
     uint32_t at, delay;
     bool scheduled;
@@ -15,7 +16,7 @@ static inline void wifi_retry_reset(struct wifi_retry *r)
 {
     *r = (struct wifi_retry){.delay = WIFI_RETRY_MIN_MS};
 }
-static inline void wifi_retry_poll(struct wifi_retry *r, uint32_t now,
+static inline void wifi_retry_poll(struct wifi_retry *r, uint32_t now, uint32_t max_ms,
                                    bool enabled, bool connected, bool connecting,
                                    bool auth_failed, void (*connect)(void *), void *ctx)
 {
@@ -27,9 +28,14 @@ static inline void wifi_retry_poll(struct wifi_retry *r, uint32_t now,
         r->at = now + r->delay;
         r->scheduled = true;
     }
+    if (r->delay > max_ms) {    /* the screen came back on: retry sooner */
+        r->delay = max_ms;
+        if ((int32_t)(r->at - (now + max_ms)) > 0)
+            r->at = now + max_ms;
+    }
     if (connecting || (int32_t)(now - r->at) < 0)
         return;
-    r->delay = r->delay < WIFI_RETRY_MAX_MS / 2 ? r->delay * 2 : WIFI_RETRY_MAX_MS;
+    r->delay = r->delay < max_ms / 2 ? r->delay * 2 : max_ms;
     r->at = now + r->delay;
     connect(ctx);
 }

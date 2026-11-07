@@ -14,6 +14,7 @@
  */
 #include <glaze/wifi.h>
 #include "../module.h"
+#include "../hwfile.h"
 #ifndef NET_TEST
 #include "../drivers.h"
 #include "../hw.h"
@@ -24,6 +25,12 @@
 #define QUEUE_LEN 8
 static unsigned kind;           /* GZ_NET_*: the card that owns the socket */
 static bool claimed, online;
+/* A driver or firmware file from an installed hardware package is still
+ * coming from the file server (hwfile.c): the service worker asks again. Or
+ * no one has the driver: look again when the installed packages change. */
+static bool pending, missing;
+static uint32_t missing_generation;
+static unsigned card_manufacturer, card_product;
 static int bound_port;
 static struct gz_netif_info info;
 static struct module image;
@@ -100,14 +107,22 @@ static void free_queue(void)
     tx_buf = NULL;
 }
 
-static void select_card(unsigned manufacturer, unsigned product)
+/* Files a driver needs before init, which must never wait for them. */
+static int prefetch(const char *path)
 {
-    if (claimed) net_removed();
-    claimed = true;
-    generation++;
-    head = tail = 0;
-    memset(&info, 0, sizeof(info));
+    struct hwfile f;
+    int error = hwfile_open(path, &f);
+    if (!error) hwfile_close(&f);
+    return error;
+}
+
+/* Loads and starts the driver for the card select_card() claimed. */
+static void attach(void)
+{
+    unsigned manufacturer = card_manufacturer, product = card_product;
     const char *path;
+    bool was_pending = pending;
+    pending = missing = false;
     if (manufacturer == 0xd601 && product == 5) {
         kind = GZ_NET_XI825; path = "drivers/xi825.ko";
     } else if (manufacturer == 0x02df && product == 0x8103) {
@@ -129,7 +144,18 @@ static void select_card(unsigned manufacturer, unsigned product)
     } else {
         kind = GZ_NET_NE2000; path = "drivers/ne2000.ko";
     }
-    int error = module_load(path, "glaze_driver", &image);
+    int error = 0;
+    if (kind == GZ_NET_WL54CF) {
+        /* A missing pair is the driver's to report; a pending one is waited for. */
+        int a = prefetch("firmware/cf8385_helper.bin"), b = prefetch("firmware/cf8385.bin");
+        if (a == GZ_EINPROGRESS || b == GZ_EINPROGRESS) error = GZ_EINPROGRESS;
+    }
+    if (!error) error = module_load(path, "glaze_driver", &image);
+    if (error == GZ_EINPROGRESS) {
+        if (!was_pending) kprintf("net: %s waits for an installed package\n", path);
+        pending = true;
+        return;
+    }
     if (error) goto failed;
     const struct net_driver *d = image.entry;
     if (((uintptr_t)d & 3u) || !module_contains(&image, d, sizeof(*d)) || d->magic != NET_DRIVER_MAGIC ||
@@ -163,13 +189,39 @@ static void select_card(unsigned manufacturer, unsigned product)
     }
     info.present = true;
     info.kind = (uint16_t)kind;
+    hwfile_trim();
     return;
 failed:
     driver = NULL;
     online = false;
     free_queue();
     module_unload(&image);
+    hwfile_trim();
+    if (error == GZ_ENOENT) {
+        missing = true;
+        missing_generation = hwfile_generation();
+    }
     kprintf("net: %s unavailable (%d); socket reserved\n", path, error);
+}
+
+static void select_card(unsigned manufacturer, unsigned product)
+{
+    if (claimed) net_removed();
+    claimed = true;
+    generation++;
+    head = tail = 0;
+    memset(&info, 0, sizeof(info));
+    card_manufacturer = manufacturer;
+    card_product = product;
+    attach();
+}
+
+/* The service worker's pass: a driver that was being fetched, or one that
+ * a newly installed package may now supply. */
+void net_retry(void)
+{
+    if (claimed && !driver && (pending || (missing && missing_generation != hwfile_generation())))
+        attach();
 }
 
 void net_init(void)
@@ -207,16 +259,51 @@ bool net_insert(unsigned manufacturer, unsigned product)
 {
     select_card(manufacturer, product);
     /* The socket power-up caller needs the card's result, even if USB
-     * independently supplies a working network connection. */
-    return online && driver && driver->present();
+     * independently supplies a working network connection. A driver still
+     * on its way, or not installed, won't come from powering up again. */
+    return (online && driver && driver->present()) || pending || missing;
+}
+
+/* Time at each GZ_CARD_POWER_* level, for Settings → Battery. */
+static uint8_t power_noted, power_now;
+static uint64_t power_at, power_us[GZ_CARD_POWER_OFF + 1];
+static uint32_t irqs;
+static void power_account(void);
+void net_power_note(unsigned state)
+{
+    if (state > GZ_CARD_POWER_OFF || state == power_noted) return;
+    power_account();            /* the time so far was in the old state */
+    power_noted = (uint8_t)state;
+    power_account();
+}
+static void power_account(void)
+{
+    uint64_t now = time_us();
+    if (power_at) power_us[power_now] += now - power_at;
+    power_at = now;
+    power_now = !driver ? GZ_CARD_POWER_NONE : !online ? GZ_CARD_POWER_OFF :
+                power_noted ? power_noted : GZ_CARD_POWER_FULL;
+}
+void net_power_status(struct gz_power_status *st)
+{
+    power_account();
+    st->card_power = power_now;
+    st->card_full_ms = (uint32_t)(power_us[GZ_CARD_POWER_FULL] / 1000u);
+    st->card_save_ms = (uint32_t)(power_us[GZ_CARD_POWER_SAVE] / 1000u);
+    st->card_doze_ms = (uint32_t)(power_us[GZ_CARD_POWER_DOZE] / 1000u);
+    st->card_off_ms = (uint32_t)((power_us[GZ_CARD_POWER_RADIO_OFF] + power_us[GZ_CARD_POWER_OFF]) / 1000u);
+    st->net_irqs = irqs;
 }
 
 /* The card was pulled: its driver forgets it, and its frames go. */
 void net_removed(void)
 {
     if (driver) driver->stop();
+    power_account();
     driver = NULL;
-    online = claimed = false;
+    online = claimed = pending = missing = false;
+    power_noted = 0;
+    power_account();            /* from now on, no card */
     generation++;
     kind = GZ_NET_NONE;
     head = tail = 0;
@@ -225,6 +312,7 @@ void net_removed(void)
     bound_port = 0;
     free_queue();
     module_unload(&image);
+    hwfile_trim();          /* anything fetched for it */
 }
 
 /* Claimed stays true if a recognized card failed initialization: the ATA
@@ -238,7 +326,11 @@ void net_irq(void)
      * notices the removal itself. */
     if (!PCMCIA_CARD_PRESENT())
         return;
-    if (driver && online) driver->irq();
+    if (driver && online) {
+        irqs++;
+        driver->irq();
+    }
+    power_account();
 }
 
 static int check(struct proc *p)
@@ -330,8 +422,9 @@ int sys_wifi_ctl(struct proc *p, uint32_t op, uint32_t address)
     if (!driver || !driver->control || !info.present)
         return GZ_ENOENT;
     union { struct wifi_status status; struct wifi_config config; struct wifi_request request;
-            struct wifi_key key; } data;
+            struct wifi_key key; struct wifi_power power; } data;
     unsigned n = op == WIFI_CONFIGURE ? sizeof(data.config) :
+                 op == WIFI_POWER ? sizeof(data.power) :
                  op == WIFI_SET_KEY ? sizeof(data.key) :
                  op == WIFI_CONNECT ? sizeof(data.request) : 0;
     memset(&data, 0, sizeof(data));

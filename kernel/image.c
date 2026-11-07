@@ -91,6 +91,17 @@ static int validate(struct image *im)
     return 0;
 }
 
+/* A byte image's source: the spawner's memory, or (as == NULL) kernel pages
+ * holding a hardware package's verified service (hwfile.c, service.c). */
+static int copy_src(struct addrspace *as, void *dst, uint32_t src, uint32_t n)
+{
+    if (!as) {
+        memcpy(dst, (const void *)(uintptr_t)src, n);
+        return 0;
+    }
+    return copy_from_as(as, dst, src, n);
+}
+
 /* Input remains stable throughout a syscall: the kernel is non-preemptive.
  * A romfs image is shared by its entry, without reading it; byte images are
  * shared by content. */
@@ -103,7 +114,7 @@ static struct image *image_get(struct addrspace *as, const struct romfs_entry *r
     } else {
         for (uint32_t off = 0; off < size;) {
             uint32_t n = MIN(size - off, sizeof(buf));
-            if (copy_from_as(as, buf, src + off, n)) return NULL;
+            if (copy_src(as, buf, src + off, n)) return NULL;
             for (uint32_t i = 0; i < n; i++) hash = (hash ^ buf[i]) * 16777619u;
             off += n;
         }
@@ -112,7 +123,7 @@ static struct image *image_get(struct addrspace *as, const struct romfs_entry *r
             bool equal = true;
             for (uint32_t off = 0; off < size && equal;) {
                 uint32_t n = MIN(MIN(size - off, sizeof(buf)), PAGE_SIZE - off % PAGE_SIZE);
-                if (copy_from_as(as, buf, src + off, n)) return NULL;
+                if (copy_src(as, buf, src + off, n)) return NULL;
                 equal = !memcmp(buf, file_ptr(im, off), n); off += n;
             }
             if (equal) { im->refs++; return im; }
@@ -131,7 +142,7 @@ static struct image *image_get(struct addrspace *as, const struct romfs_entry *r
             }
             im->frames[i] = PHYS(page);
             uint32_t n = MIN(PAGE_SIZE, size - i * PAGE_SIZE);
-            if (copy_from_as(as, page, src + i * PAGE_SIZE, n)) {
+            if (copy_src(as, page, src + i * PAGE_SIZE, n)) {
                 for (uint32_t j = 0; j <= i; j++) page_free((void *)KSEG0(im->frames[j]));
                 page_free(im); return NULL;
             }

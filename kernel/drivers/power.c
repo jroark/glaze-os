@@ -353,6 +353,7 @@ int power_sleep(int mode, uint32_t alarm_s)
     battery_suspend();
     input_suspend();
     display_sleep();
+    bool card_off = pcmcia_suspend();
     bool watchdog = cmcu_stop();
     uint64_t asleep = timer_suspend();
     uint64_t alarm = alarm_ticks ? asleep + alarm_ticks : 0;
@@ -384,7 +385,7 @@ int power_sleep(int mode, uint32_t alarm_s)
     input_resume(cold);
     battery_resume();
     audio_resume(cold);
-    if (cold)
+    if (cold || card_off)
         pcmcia_resume();
     kprintf("power: awake (%s) after %u s%s\n", wake == GZ_WAKE_ALARM ? "alarm" : "power",
             (uint32_t)(((timer_etime() - asleep) & 0xFFFFFFFFFFFFull) / RTC_HZ),

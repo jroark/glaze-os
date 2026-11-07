@@ -27,6 +27,12 @@ def build(entries):
         if any(r not in ('network', 'bluetooth') for r in required):
             raise ValueError('unknown hardware requirement')
         policy = int('network' in required) | (2 if e.get('required', False) else 0) | (4 if 'bluetooth' in required else 0)
+        # An installed hardware package may replace it (glaze/hwpkg.h): never a
+        # required service, which must start from romfs before the file server.
+        if e.get('overridable', False):
+            if policy & 2:
+                raise ValueError('a required service cannot be overridable')
+            policy |= 8
         if privileges & 4 and not policy & 1:
             raise ValueError('network privileges require a network dependency')
         if privileges & 128 and not policy & 4:

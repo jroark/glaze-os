@@ -644,6 +644,10 @@ static int handle(const struct gz_msg *m, struct gz_msg *r, int token)
         memcpy(&r->w[1], &st, sizeof(st));
         return 0;
     }
+    if (op == NET_POWER && sess == -1) {
+        net_if_power(m->w[2] != 0);
+        return 0;
+    }
     if (sess < 0 || sess >= MAX_SESSIONS || !sessions[sess].pid)
         return GZ_EPERM;
     if (op == NET_STATUS) {

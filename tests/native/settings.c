@@ -101,6 +101,8 @@ int gz_power_status(struct gz_power_status *st)
     st->version = GZ_POWER_VERSION;
     st->flags = GZ_POWER_VALID | GZ_POWER_AC;
     st->percent = st->level = 100;
+    st->card_power = GZ_CARD_POWER_DOZE;      /* a Wi-Fi card asleep 90 % of its time */
+    st->card_full_ms = 600; st->card_save_ms = 400; st->card_doze_ms = 8000; st->card_off_ms = 1000;
     return 0;
 }
 int gz_port_lookup(const char *name)
@@ -214,6 +216,25 @@ int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_i
     fn("/Card/Applications/doom.app", &doom, arg);
     fn("/Card/Applications/gmail.app", &gmail, arg);
     return 2;
+}
+/* One hardware package (glaze/hwpkg.h) the kernel accepted. */
+int pkg_list_hardware(void (*fn)(const char *bundle, const struct pkg_info *info, void *arg), void *arg)
+{
+    struct pkg_info cards = { .id = "hw-pccards", .name = "PC Card Drivers", .version = "1.2" };
+    fn("/Applications/hw-pccards.app", &cards, arg);
+    return 1;
+}
+int pkg_uninstall(const char *bundle) { (void)bundle; return 0; }
+int gz_hw_ctl(uint32_t op, const void *a1, uint32_t a2)
+{
+    if (op != GZ_HW_OP_STATUS || a2 != sizeof(struct gz_hw_status)) return GZ_EINVAL;
+    struct gz_hw_status *st = (void *)a1;
+    memset(st, 0, sizeof(*st));
+    st->loaded = 1;
+    st->count = 2;
+    strcpy(st->files[0].id, "hw-pccards"); strcpy(st->files[0].path, "drivers/3c589.ko"); st->files[0].size = 4500;
+    strcpy(st->files[1].id, "hw-pccards"); strcpy(st->files[1].path, "drivers/hermes.ko"); st->files[1].size = 12464;
+    return 0;
 }
 int pkg_find(const char *id, char bundle[PKG_BUNDLE_MAX])
 {
@@ -659,6 +680,33 @@ static void reboot_tests(void)
     require(gfx_rect_empty(hit_rect(R_REBOOT_CE)), "NAND reboot row returned after scrolling");
 }
 
+/* Settings > About > Hardware Support: the list, a package's files and Remove. */
+static void hardware_tests(void)
+{
+    view = V_ROOT; load(); redraw();
+    activate(R_ABOUT);
+    require(view == V_ABOUT && hw_count == 1, "About counts hardware packages");
+    redraw(); compare_full();
+    require(!gfx_rect_empty(hit_rect(R_HARDWARE)), "About has a Hardware Support row");
+    activate(R_HARDWARE);
+    require(view == V_HARDWARE, "Hardware Support page");
+    redraw(); compare_full(); press_all();
+    require(!strcmp(hw_state("hw-pccards"), "Ready") && !strcmp(hw_state("hw-other"), "Not accepted"),
+            "kernel status per package");
+    host_write_bmp("../out/host/settings-hardware.bmp", &ui.surf);
+    activate(R_HW_PKG0);
+    require(view == V_HW_PKG && hw_sel == 0, "package page");
+    redraw(); compare_full();
+    require(!gfx_rect_empty(hit_rect(R_HW_REMOVE)), "Remove button");
+    host_write_bmp("../out/host/settings-hardware-package.bmp", &ui.surf);
+    activate(R_BACK); require(view == V_HARDWARE, "back to the list");
+    activate(R_HW_PKG0); activate(R_HW_REMOVE);
+    require(view == V_HARDWARE && hw_msg && !strcmp(hw_msg, "Removed."), "removed");
+    redraw(); compare_full();
+    activate(R_BACK); require(view == V_ABOUT, "back to About");
+    hw_msg = NULL;
+}
+
 /* Settings > Dial-up with a CF modem: the row, editing, Connect keeping the
  * saved password, the status line and Hang Up. */
 static void dialup_tests(void)
@@ -905,6 +953,7 @@ int main(void)
     test_wifi_error = GZ_ENOENT;
     wifi_available = false;
     dialup_tests();
+    hardware_tests();
     calibration_tests();
     icon_tests();
     display_tests();
@@ -928,6 +977,14 @@ int main(void)
     activate(R_INPUT_KEYS);require(input_disk==UI_INPUT_QWERTY && input_preview.method==UI_INPUT_QWERTY,"keyboard default persistence");
     input_error=GZ_EIO;activate(R_INPUT_WRITE);require(input_message && input_disk==UI_INPUT_QWERTY,"save error was hidden");input_error=0;
     activate(R_BACK);require(view==V_ROOT,"input method back navigation");
+    char card_text[24]; struct gz_power_status ps; gz_power_status(&ps);
+    battery_card_text(&ps, card_text, sizeof card_text);
+    require(!strcmp(card_text, "Dozing 90%"), "network card power text");
+    ps.card_power = GZ_CARD_POWER_FULL; battery_card_text(&ps, card_text, sizeof card_text);
+    require(!strcmp(card_text, "Always On"), "wired card power text");
+    activate(R_BATTERY); redraw();
+    host_write_bmp("../out/host/settings-battery.bmp", &ui.surf);
+    activate(R_BACK); require(view == V_ROOT, "battery back navigation");
     puts("settings: rendering, navigation, scrolling, sliders, calibration, display and input methods PASS");
     return 0;
 }

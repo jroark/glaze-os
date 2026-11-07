@@ -51,6 +51,11 @@ static bool wireless, associated;
 static struct wifi_preference saved;
 static int auth_error, auth_failure;
 static struct wifi_retry retry = {.delay = WIFI_RETRY_MIN_MS};
+/* Power (NET_POWER, docs/hardware/POWER.md "Network cards"): the screen's
+ * state, and when the radio went idle while disconnected. */
+#define RADIO_IDLE_MS 30000u
+static bool screen_off, radio_off;
+static uint32_t idle_since;
 static void seed_from_card(void);
 static int connect_network(const struct wifi_credentials *c);
 static int save_choice(const struct wifi_preference *choice)
@@ -394,7 +399,10 @@ int net_if_wifi(uint32_t op, void *buf)
         if (!rv && auth_error) { struct wifi_status *st = buf; st->state = WIFI_FAILED; st->error = auth_error; }
         return rv;
     }
-    if (op == WIFI_SCAN) return gz_wifi_ctl(op, buf);
+    if (op == WIFI_SCAN) {
+        radio_off = false; idle_since = gz_time_ms();   /* the driver turns it on */
+        return gz_wifi_ctl(op, buf);
+    }
     if (op == WIFI_FORGET) {
         int rv = pref_delete(WIFI_PREF);
         if (rv && rv != GZ_ENOENT) return rv;
@@ -437,6 +445,31 @@ static void retry_saved_network(void *ctx)
     net_log("wifi: retry saved network %d\n", rv);
 }
 
+/* Disconnected with nothing to join for a while: the radio off. A scan or
+ * a connect turns it on again in the driver. */
+static void radio_power(uint32_t now)
+{
+    bool idle = state == NET_DISCONNECTED && !saved.reconnect;
+    if (!idle) {
+        idle_since = now;
+        radio_off = false;
+        return;
+    }
+    if (!radio_off && now - idle_since >= RADIO_IDLE_MS) {
+        struct wifi_power p = {WIFI_POWER_OFF};
+        radio_off = gz_wifi_ctl(WIFI_POWER, &p) == 0;
+        if (radio_off) net_log("wifi: radio off while disconnected\n");
+    }
+}
+
+void net_if_power(bool on)
+{
+    screen_off = !on;
+    if (net_modem_present() || !wireless || state == NET_NO_CARD) return;
+    struct wifi_power p = {on ? WIFI_POWER_ACTIVE : WIFI_POWER_SAVE};
+    gz_wifi_ctl(WIFI_POWER, &p);    /* GZ_EINVAL from drivers without it */
+}
+
 void net_if_poll(void)
 {
     int n;
@@ -463,6 +496,8 @@ void net_if_poll(void)
         if (state == NET_NO_CARD && present) {
             net_log("net: network card inserted\n");
             attach();
+            radio_off = false; idle_since = now;
+            if (screen_off) net_if_power(false);    /* a new card starts active */
         } else if (state != NET_NO_CARD && !present) {
             detach();
         }
@@ -502,7 +537,9 @@ void net_if_poll(void)
         }
         UNLOCK_TCPIP_CORE();
     }
-    wifi_retry_poll(&retry, gz_time_ms(), wireless && saved.reconnect,
+    if (wireless) radio_power(now);
+    wifi_retry_poll(&retry, gz_time_ms(), screen_off ? WIFI_RETRY_SCREEN_OFF_MS : WIFI_RETRY_MAX_MS,
+                    wireless && saved.reconnect,
                     associated, state == NET_ASSOCIATING, auth_error || auth_failure,
                     retry_saved_network, NULL);
 }
