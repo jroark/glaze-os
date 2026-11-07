@@ -1,0 +1,5 @@
+# After tests/ui/t_home_edit.txt, boot its file system again
+# (FS_FROM=out/shots/t_home_edit/glaze.bin tests/run.sh
+# tests/ui/t_home_edit_reboot.txt 8): the home screen keeps the Utilities
+# folder where Clock was and Calendar in the toolbar after Settings.
+3000 drag 40 280 235 280 500

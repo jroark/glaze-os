@@ -6,6 +6,10 @@
 #include <glaze/sb.h>
 #include <glaze/ui.h>
 
+/* SpringBoard's own symbols stay out of its dynamic symbol table (the
+ * Makefile links programs with --export-dynamic): smaller, and romfs is full. */
+#pragma GCC visibility push(hidden)
+
 /* Layout (240 x 320 screen). */
 #define SCREEN_W        240
 #define SCREEN_H        320
@@ -49,6 +53,8 @@ struct sb_app_info {
 };
 
 #define SB_MAX_APPS     32
+
+#include "layout.h"
 #define SWITCHER_SLOTS  4           /* icons shown in the multitasking bar */
 #define SB_MAX_RUNNING  SWITCHER_SLOTS  /* running apps (front + background), all in the bar */
 #define SWITCHER_H      74          /* height of the bottom multitasking tray */
@@ -91,7 +97,14 @@ struct sb_view {
     int knob_x;                 /* 0..KNOB_TRAVEL */
     int shimmer_x;              /* centre of the slide-to-unlock highlight */
     int scroll_x;               /* home pages scroll position in pixels */
-    int pressed;                /* app index under the finger, or -1 */
+    int pressed;                /* sb_item under the finger, or ITEM_NONE */
+    const struct sb_layout *layout; /* drawn instead of sb_layout (a drag's preview) */
+    sb_item drag_item;          /* dragged: drawn at drag_x/y, not in its place */
+    int drag_x, drag_y;
+    sb_item merge_onto;         /* the drop would make or fill this folder */
+    int open_folder;            /* folder shown over the home screen, or -1 */
+    bool folder_edit;           /* renaming it: folder_name is the text */
+    char folder_name[FOLDER_NAME_MAX];
     const uint16_t *badges;     /* per app, or NULL */
     const struct sb_note *lock_notes;   /* delivered while locked, newest first */
     int num_lock_notes;
@@ -137,11 +150,24 @@ void sb_draw_lock_track(gfx_surface *s, const struct sb_view *v);
 void sb_draw_passcode(gfx_surface *s, const struct sb_view *v);
 gfx_rect sb_passcode_area(void);
 void sb_draw_home(gfx_surface *s, const struct sb_view *v);
-int sb_num_pages(void);
-gfx_rect sb_icon_rect(int app, int scroll_x);
-int sb_hit_icon(int x, int y, int scroll_x);
-/* Jiggle mode: the delete button of an installed app's icon. */
-gfx_rect sb_delete_rect(int app, int scroll_x);
+int sb_num_pages(const struct sb_layout *L);
+/* What is drawn at a point: the group and visible cell (pages: by grid
+ * cell; dock: by slot, maybe out of range; open folder: -1 on its title),
+ * the item there, and whether the point is on the icon or its centre.
+ * where is LOC_NONE outside an open folder's panel or on the status bar. */
+struct sb_hit {
+    int8_t where, group, cell;
+    bool on_icon, inner;
+    sb_item item;
+};
+void sb_hit_test(const struct sb_view *v, int x, int y, struct sb_hit *h);
+/* An app's icon where it shows now (its folder's, if closed in one). */
+gfx_rect sb_icon_rect(const struct sb_view *v, int app);
+gfx_rect sb_folder_panel(const struct sb_view *v);
+/* Jiggle mode: the installed app whose delete button is at x, y, or -1. */
+int sb_hit_delete(const struct sb_view *v, int x, int y);
+/* Toolbar insertion index for x among its shown items (the drag's gap not counted). */
+int sb_dock_insert_index(const struct sb_view *v, int x);
 /* Multitasking switcher bar at the bottom of the home screen. */
 gfx_rect sb_switcher_icon_rect(int slot);
 gfx_rect sb_switcher_minus_rect(int slot);
@@ -188,5 +214,7 @@ void notify_clear_delivered(void);
 void timesync_start(int port);
 void hwdump_start(void);
 void timesync_wake(void);           /* SB_NOTIFY_TIME: settings changed */
+
+#pragma GCC visibility pop
 
 #endif

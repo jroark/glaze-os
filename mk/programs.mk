@@ -54,6 +54,9 @@ $(patsubst %.c,$(OUT)/%.o,$(SBC_SRCS)): TP_INC := $(SBC_INC) -Os
 PROG_CFLAGS_bluetooth += $(SBC_INC) -Os $(if $(BT_DEBUG),-DBT_DEBUG) $(if $(BT_SERIAL_DEBUG),-DBT_SERIAL_DEBUG)
 PROG_CFLAGS_usb += -Os
 PROG_CFLAGS_springboard += -Os
+# The VR4131's TLB has no execute-inhibit bit, so separate code pages only
+# pad SpringBoard to more romfs pages; the loader still refuses W+X.
+PROG_LDFLAGS_springboard += -z noseparate-code
 PROG_CFLAGS_files += -Os
 PROG_CFLAGS_appstore += -Os
 # Keep space for the SBC encoder without shrinking the application set.

@@ -1,0 +1,34 @@
+# Home-screen editing (servers/springboard/layout.c):
+# 1. Unlock; hold Calendar until the icons jiggle, then drag it, with the
+#    same touch, into the toolbar after Settings.
+# 2. Drag Photos onto Clock's centre and hold: a folder forms and opens.
+# 3. Tap the folder's title to rename it: Backspace, then type "Utilities"
+#    on the on-screen keyboard and a scripted text event, Enter.
+# 4. Home closes the folder, Home again ends editing (saving sb.layout).
+# 5. Tap the folder: it opens with Clock and Photos under "Utilities".
+# Boot for ~20 s (tests/run.sh tests/ui/t_home_edit.txt 20). Then
+# FS_FROM=out/shots/t_home_edit/glaze.bin tests/run.sh
+# tests/ui/t_home_edit_reboot.txt 8 shows the layout kept across a reboot.
+3000 drag 40 280 235 280 500
+4500 down 30 48
+5800 move 40 60
+6000 move 100 200
+6200 move 200 286
+6600 up 200 286
+7500 down 30 48
+7700 move 50 48
+7900 move 90 48
+8000 move 91 48
+8800 up 91 48
+9800 tap 120 130
+10500 key backspace
+10600 key backspace
+10700 key backspace
+10800 key backspace
+10900 key backspace
+11000 key backspace
+11300 text Utilities
+11800 key enter
+12500 key home
+13500 key home
+15000 tap 30 48

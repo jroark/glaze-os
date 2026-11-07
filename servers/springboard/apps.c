@@ -117,6 +117,7 @@ void apps_scan(bool card_only)
             }
         } else {
             notify_forget(i);                   /* deleted behind our back */
+            layout_forget_app(&sb_layout, i);
             a->path[0] = 0;
             a->present = false;
             reinstalled_mask |= 1u << i;
@@ -230,6 +231,7 @@ int apps_uninstall(int app)
     if (rv && rv != GZ_ENOENT)
         return rv;
     notify_forget(app);
+    layout_forget_app(&sb_layout, app);
     free(icon_data[app]);
     icon_data[app] = NULL;
     sb_set_icon(app, NULL);
