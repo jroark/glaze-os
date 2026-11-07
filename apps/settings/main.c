@@ -826,11 +826,28 @@ static const char *battery_summary(char *buf, size_t cap)
     return buf;
 }
 
+/* The network card's power (docs/hardware/POWER.md "Network cards"): how
+ * much of its time a Wi-Fi radio spent dozing or off. */
+static void battery_card_text(const struct gz_power_status *st, char *out, size_t n)
+{
+    uint64_t quiet = (uint64_t)st->card_doze_ms + st->card_off_ms;
+    uint64_t total = quiet + st->card_full_ms + st->card_save_ms;
+    unsigned pct = total ? (unsigned)(quiet * 100 / total) : 0;
+    switch (st->card_power) {
+    case GZ_CARD_POWER_FULL: snprintf(out, n, "Always On"); break;
+    case GZ_CARD_POWER_SAVE:
+    case GZ_CARD_POWER_DOZE: snprintf(out, n, "Dozing %u%%", pct); break;
+    case GZ_CARD_POWER_RADIO_OFF: snprintf(out, n, "Radio Off"); break;
+    case GZ_CARD_POWER_OFF: snprintf(out, n, "Off"); break;
+    default: snprintf(out, n, "None"); break;
+    }
+}
+
 static void draw_battery(gfx_surface *s)
 {
     struct gz_power_status st;
     struct gz_sysinfo si;
-    char level[24], reading[24], range[24], idle[16];
+    char level[24], reading[24], range[24], idle[16], card[24];
     const char *state = "Unknown";
 
     nhits = 0;
@@ -875,7 +892,9 @@ static void draw_battery(gfx_surface *s)
     snprintf(idle, sizeof(idle), "%u%%", si.uptime_ms ? (uint32_t)((uint64_t)st.idle_ms * 100 / si.uptime_ms) : 0);
     cell(s, 1, "Reading", reading, false, 0);
     cell(s, 2, "Calibration", range, false, 0);
-    cell(s, 3, "CPU Idle", idle, false, 0);
+    battery_card_text(&st, card, sizeof(card));
+    cell(s, 2, "CPU Idle", idle, false, 0);
+    cell(s, 3, "Network Card", card, false, 0);
 }
 
 /* ---- Sleep (glaze/power.h, docs/hardware/POWER.md "Power off") ------------------- */

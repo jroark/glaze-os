@@ -41,7 +41,11 @@ the averaging/bands in `glaze/battery.h`. `gz_power_status()` is
 size-checked; SpringBoard draws and warns (`servers/springboard/power.c`).
 The idle thread runs VR4131 STANDBY (`IDLE_STANDBY=0` disables it). Use
 `make -C host battery-test settings-test` and be300's `--battery`,
-`--battery-state`, `--battery-drain` through `BE300_ARGS`.
+`--battery-state`, `--battery-drain` through `BE300_ARGS`. Network card power
+(802.11 power save, radio off, the socket cut before a sleep, and the card's
+time at each level in `gz_power_status` version 2) is `docs/hardware/POWER.md`
+"Network cards": `net.c`'s `net_power_note`, `wl54cf.c`, `cf.c`'s
+`pcmcia_suspend`; test with `make -C host wl54cf-driver-test net-driver-test`.
 
 Power off (`docs/hardware/POWER.md` "Power off") follows Windows CE's OEMPowerOff:
 holding Power (or the Settings → Battery → Sleep delay after the screen goes

@@ -9,7 +9,7 @@
 enum { WIFI_STATUS, WIFI_SCAN, WIFI_CONNECT, WIFI_DISCONNECT,
        WIFI_CONNECT_SECURE, WIFI_FORGET,
        /* Private PROC_NET driver operations. */
-       WIFI_CONFIGURE, WIFI_SET_KEY, WIFI_AUTHORIZE };
+       WIFI_CONFIGURE, WIFI_SET_KEY, WIFI_AUTHORIZE, WIFI_POWER };
 enum { WIFI_ABSENT, WIFI_DISCONNECTED, WIFI_CONNECTING, WIFI_CONNECTED, WIFI_FAILED, WIFI_AUTHENTICATING };
 struct wifi_ap {
     uint8_t ssid[WIFI_SSID_MAX];
@@ -46,6 +46,12 @@ struct wifi_config {
     uint32_t security, key_len, key_index, shared_auth, ie_len;
     uint8_t key[13], bssid[6], ie[WIFI_IE_MAX];
 };
+/* WIFI_POWER: how hard the radio saves power. ACTIVE uses 802.11 power save
+ * once the link has been idle a moment; SAVE (the screen is off) also sleeps
+ * through more beacons; OFF turns the radio off, only while disconnected. A
+ * scan or connect turns it back on. Drivers without it answer GZ_EINVAL. */
+enum { WIFI_POWER_ACTIVE, WIFI_POWER_SAVE, WIFI_POWER_OFF };
+struct wifi_power { uint32_t mode; };
 enum { WIFI_KEY_NONE, WIFI_KEY_TKIP, WIFI_KEY_CCMP };
 struct wifi_key {
     uint32_t cipher, index, pairwise, length, sequence_len;

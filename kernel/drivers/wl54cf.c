@@ -21,6 +21,27 @@ static bool online;
 static struct wifi_status wifi;
 static bool authorized, pairwise_key, group_key;
 static uint16_t ap_capability[WIFI_AP_MAX];
+/* 802.11 power save, as Linux libertas (cmd.c lbs_set_ps_mode, cmdresp.c's
+ * PS events, main.c lbs_send_confirmsleep). Once the link has been idle for
+ * PS_IDLE_US, ENTER_PS lets the firmware doze between beacons: it raises
+ * PS_SLEEP when it could sleep, sleeps once the host confirms, and raises
+ * PS_AWAKE at its next listen interval. Asleep, the card takes no commands
+ * or frames, so frames wait in txq for PS_AWAKE, and a command first waits
+ * for it. Traffic or a command returns the card to full power (EXIT_PS). */
+enum { PS_CAM, PS_AWAKE, PS_SLEEP };
+enum { PS_ENTER = 0x30, PS_EXIT = 0x31, PS_CONFIRM = 0x34 };
+enum { EVENT_LINK_LOST = 3, EVENT_PS_AWAKE = 0x0a, EVENT_PS_SLEEP = 0x0b };
+#define PS_IDLE_US 1000000u
+#define PS_SAVE_IDLE_US 200000u
+#define PS_WAKE_US 1500000u
+#define TXQ 4
+static uint8_t ps_state, power_mode;
+static bool ps_unsupported, radio_on;
+static uint64_t last_activity;
+static uint8_t txq[TXQ][GZ_ETH_FRAME_MAX];
+static uint16_t txq_len[TXQ];
+static unsigned txq_n;
+static struct { unsigned enters, sleeps, wakes; } ps_count;
 static uint8_t ap_rates[WIFI_AP_MAX][14], ap_rates_len[WIFI_AP_MAX];
 static uint16_t get16(const uint8_t *p) { return p[0] | ((uint16_t)p[1] << 8); }
 static uint32_t get32(const uint8_t *p) { return get16(p) | ((uint32_t)get16(p + 2) << 16); }
@@ -178,6 +199,76 @@ static unsigned command(uint16_t op, unsigned n)
     }
     return length;
 }
+static unsigned ps_command(uint16_t action)
+{
+    memset(cmd, 0, 18);
+    put16(cmd + 8, action);
+    /* multipledtim: wake for every DTIM, or every third with the screen off.
+     * The association asks for a listen interval of 10 beacons. */
+    if (action == PS_ENTER)
+        put16(cmd + 12, power_mode == WIFI_POWER_SAVE ? 3 : 1);
+    return command(0x21, 18);
+}
+/* SLEEP_CONFIRMED goes down the command FIFO but has no response. */
+static void confirm_sleep(void)
+{
+    if (!wait_bits(0x20, COMMAND))
+        return;
+    memset(cmd, 0, 18);
+    put16(cmd, 0x21);
+    put16(cmd + 2, 18);
+    put16(cmd + 4, ++sequence);
+    put16(cmd + 8, PS_CONFIRM);
+    wl_write16(0x18, 18);
+    write_fifo(0x1a, cmd, 18);
+    signal(COMMAND);
+    ps_state = PS_SLEEP;
+    ps_count.sleeps++;
+}
+static void ps_reset(void)
+{
+    ps_state = PS_CAM;
+    txq_n = 0;
+}
+static int transmit(const uint8_t *frame, uint32_t len);
+/* Full power again (the card must be awake). */
+static void leave_ps(void)
+{
+    for (unsigned i = 0; i < txq_n; i++)
+        transmit(txq[i], txq_len[i]);
+    txq_n = 0;
+    if (ps_state != PS_CAM && !ps_command(PS_EXIT))
+        kputs("wl54cf: EXIT_PS got no answer\n");
+    ps_state = PS_CAM;
+    last_activity = time_us();
+}
+static void service(void);
+/* Before a command: wait out a sleep, then leave power save. */
+static void wake(void)
+{
+    for (uint64_t t0 = time_us(); ps_state == PS_SLEEP && online;) {
+        service();
+        if (time_us() - t0 > PS_WAKE_US) {
+            kputs("wl54cf: no PS_AWAKE; waking anyway\n");
+            ps_state = PS_AWAKE;
+        }
+    }
+    if (online && ps_state != PS_CAM)
+        leave_ps();
+}
+static bool set_radio(bool on)
+{
+    if (radio_on == on)
+        return true;
+    memset(cmd, 0, 12);
+    put16(cmd + 8, 1);
+    put16(cmd + 10, on);
+    if (!command(0x1c, 12))
+        return false;
+    radio_on = on;
+    kprintf("wl54cf: radio %s\n", on ? "on" : "off");
+    return true;
+}
 /* Parse standard SCAN response, including all bounds before dereferencing IEs. */
 /* One SCAN command (CMD_802_11_SCAN) over `count` channels from `first`,
  * as Linux libertas lbs_scan sends it: any BSS type and BSSID, then a
@@ -244,6 +335,8 @@ static bool scan_channels(unsigned first, unsigned count)
 static bool scan(void)
 {
     bool any = false;
+    if (!set_radio(true))
+        return false;
     wifi.count = 0;
     for (unsigned c = 1; c <= 13; c += 4)
         any |= scan_channels(c, MIN(4u, 14 - c));
@@ -278,6 +371,7 @@ static int clear_keys(void)
 static int disconnect(void)
 {
     authorized = pairwise_key = group_key = false;
+    ps_reset();
     memset(cmd, 0, 16); memcpy(cmd + 8, wifi.current.bssid, 6); put16(cmd + 14, 3);
     bool ok = command(0x24, 16) != 0;
     memset(&wifi.current, 0, sizeof(wifi.current)); wifi.state = WIFI_DISCONNECTED;
@@ -337,12 +431,27 @@ static int associate(const struct wifi_config *c)
     wifi.current = *ap; wifi.current.rate = 22; wifi.security = c->security;
     authorized = c->security < WIFI_WPA_PSK;
     wifi.state = authorized ? WIFI_CONNECTED : WIFI_AUTHENTICATING;
+    last_activity = time_us();  /* DHCP follows: full power for a moment */
     return 0;
 }
 int wl54cf_control(uint32_t op, void *data)
 {
     if (!online) return GZ_ENOENT;
     if (op == WIFI_STATUS) { memcpy(data, &wifi, sizeof(wifi)); return 0; }
+    if (op == WIFI_POWER) {
+        uint32_t mode = ((const struct wifi_power *)data)->mode;
+        if (mode > WIFI_POWER_OFF) return GZ_EINVAL;
+        if (mode == WIFI_POWER_OFF) {
+            if (wifi.state == WIFI_CONNECTED || wifi.state == WIFI_AUTHENTICATING) return GZ_EBUSY;
+            return set_radio(false) ? 0 : GZ_EIO;
+        }
+        if (mode != power_mode) {
+            power_mode = (uint8_t)mode;
+            wake();     /* ENTER_PS again with the new DTIM count */
+        }
+        return 0;
+    }
+    wake();
     if (op == WIFI_SCAN) { wifi.error = scan() ? 0 : GZ_EIO; return wifi.error; }
     if (op == WIFI_DISCONNECT) return disconnect();
     if (op == WIFI_SET_KEY) {
@@ -356,7 +465,7 @@ int wl54cf_control(uint32_t op, void *data)
     }
     if (op == WIFI_AUTHORIZE) {
         if (!pairwise_key || !group_key || (wifi.state != WIFI_AUTHENTICATING && wifi.state != WIFI_CONNECTED)) return GZ_EPERM;
-        authorized = true; wifi.state = WIFI_CONNECTED; return 0;
+        authorized = true; wifi.state = WIFI_CONNECTED; last_activity = time_us(); return 0;
     }
     if (op == WIFI_CONNECT || op == WIFI_CONFIGURE) {
         struct wifi_config c = {0};
@@ -431,6 +540,10 @@ bool wl54cf_init(void)
     put16(cmd + 8, 1);
     put16(cmd + 10, 1);
     if (!command(0x1c, 12)) goto fail;
+    radio_on = true;
+    ps_reset();
+    ps_unsupported = false;
+    power_mode = WIFI_POWER_ACTIVE;
     memset(&wifi, 0, sizeof(wifi)); wifi.state = WIFI_DISCONNECTED;
     wifi.capabilities = WIFI_CAP(WIFI_OPEN) | WIFI_CAP(WIFI_WEP) | WIFI_CAP(WIFI_WPA_PSK) | WIFI_CAP(WIFI_WPA2_PSK);
     if (clear_keys()) goto fail;
@@ -445,10 +558,8 @@ fail:
     kputs("wl54cf: initialization failed\n");
     return false;
 }
-void wl54cf_irq(void)
+static void service(void)
 {
-    if (!online)
-        return;
     for (unsigned budget = 0; budget < 8; budget++) {
         uint16_t cause = wl_read16(0x22);
         if (cause == 0xffff) {
@@ -468,8 +579,10 @@ void wl54cf_irq(void)
                     /* Strip the length and SNAP prefix; retain dst/src/type. */
                     memmove(buf + off + 8, buf + off, 12);
                     uint8_t *frame = buf + off + 8;
-                    if (authorized || (frame[12] == 0x88 && frame[13] == 0x8e))
+                    if (authorized || (frame[12] == 0x88 && frame[13] == 0x8e)) {
                         net_receive(frame, len - 8);
+                        if (ps_state == PS_CAM) last_activity = time_us();
+                    }
                     else net_rx_drop();
                 } else
                     net_rx_drop();
@@ -480,7 +593,17 @@ void wl54cf_irq(void)
         if (cause & EVENT) {
             unsigned event = (wl_read16(0x20) >> 8) & 0x7f;
             signal(EVENT);
-            if (event == 3) {
+            if (event == EVENT_PS_SLEEP && ps_state != PS_CAM) {
+                /* Frames to send: the card is still awake, so send them and
+                 * stay at full power; otherwise let it sleep. */
+                if (txq_n) leave_ps();
+                else confirm_sleep();
+            } else if (event == EVENT_PS_AWAKE && ps_state != PS_CAM) {
+                ps_state = PS_AWAKE;
+                ps_count.wakes++;
+                if (txq_n) leave_ps();
+            } else if (event == EVENT_LINK_LOST) {
+                ps_reset();
                 authorized = pairwise_key = group_key = false;
                 wifi.state = WIFI_FAILED; wifi.error = GZ_ENETDOWN;
                 memset(&wifi.current, 0, sizeof(wifi.current));
@@ -490,11 +613,49 @@ void wl54cf_irq(void)
         wl_write16(0x22, cause & (RX | EVENT));
     }
 }
+void wl54cf_irq(void)
+{
+    if (!online)
+        return;
+    service();
+    /* From the tick as well: power save after a quiet moment. */
+    uint32_t idle = power_mode == WIFI_POWER_SAVE ? PS_SAVE_IDLE_US : PS_IDLE_US;
+    if (online && ps_state == PS_CAM && !ps_unsupported && authorized &&
+        wifi.state == WIFI_CONNECTED && time_us() - last_activity > idle) {
+        if (ps_command(PS_ENTER)) {
+            ps_state = PS_AWAKE;
+            if (!ps_count.enters++)
+                kprintf("wl54cf: power save on (DTIM x%u)\n", power_mode == WIFI_POWER_SAVE ? 3 : 1);
+        } else {
+            ps_unsupported = true;
+            kputs("wl54cf: the firmware refused power save\n");
+        }
+    }
+    net_power_note(!radio_on ? GZ_CARD_POWER_RADIO_OFF : ps_state == PS_CAM ? GZ_CARD_POWER_FULL :
+                   ps_state == PS_SLEEP ? GZ_CARD_POWER_DOZE : GZ_CARD_POWER_SAVE);
+}
 int wl54cf_send(const uint8_t *frame, uint32_t len)
 {
     if (!online || (wifi.state != WIFI_CONNECTED && wifi.state != WIFI_AUTHENTICATING) ||
         (!authorized && (len < 14 || frame[12] != 0x88 || frame[13] != 0x8e))) return GZ_ENETDOWN;
-    if (len < 14 || len > GZ_ETH_FRAME_MAX || !wait_bits(0x20, TX))
+    if (len < 14 || len > GZ_ETH_FRAME_MAX)
+        return GZ_EIO;
+    if (ps_state == PS_SLEEP) {
+        /* Sent at PS_AWAKE; past a full queue the frame is lost, as on a
+         * busy link (TCP retransmits). */
+        if (txq_n == TXQ) return GZ_EIO;
+        memcpy(txq[txq_n], frame, len);
+        txq_len[txq_n++] = (uint16_t)len;
+        return (int)len;
+    }
+    int rv = transmit(frame, len);
+    if (ps_state != PS_CAM) leave_ps();
+    last_activity = time_us();
+    return rv;
+}
+static int transmit(const uint8_t *frame, uint32_t len)
+{
+    if (!wait_bits(0x20, TX))
         return GZ_EIO;
     memset(buf, 0, 24);
     put32(buf + 8, 24);
@@ -516,6 +677,7 @@ void wl54cf_removed(void)
 {
     KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE;
     online = authorized = pairwise_key = group_key = false;
+    ps_reset();
     memset(&wifi, 0, sizeof(wifi));
     memset(cmd, 0, sizeof(cmd)); memset(buf, 0, sizeof(buf));
 }
