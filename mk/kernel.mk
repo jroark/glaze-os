@@ -54,8 +54,10 @@ $(OUT)/kernel/hwfile.o: $(OUT)/gen/ota_key.h
 $(OUT)/kernel/hwfile.o: KERNEL_CFLAGS += $(KCRYPTO_INC) -I$(OUT)/gen
 # The flat kernel must fit its 176 KiB slot (0x14000-0x40000, tools/mk_nand.py),
 # and scripted test builds come within a few KiB of it: code that runs only
-# when a card or package changes, or an update is staged, is built for size.
-KERNEL_COLD := hwfile module service ota_stage drivers/net
+# when a card or package changes, or an update is staged, is built for size,
+# as are the CF socket driver (CIS and insertion; its ATA transfers are
+# bound by 8-bit PIO) and the 4800-baud GPS reader.
+KERNEL_COLD := hwfile module service ota_stage drivers/net drivers/cf gps
 $(foreach o,$(KERNEL_COLD),$(OUT)/kernel/$(o).o): KERNEL_CFLAGS += -Os
 
 # These bake in INIT/BUILD_ID/INPUT_SCRIPT/VERSION/STOWAWAY_TRACE; rebuild them every time.
