@@ -37,6 +37,15 @@ $(eval $(call LIB_template,ui,$(LIBUI_SRCS)))
 $(OUT)/pic/libgps.a: $(OUT)/pic/gps/gps.o
 	rm -f $@
 	$(AR) rcs $@ $^
+
+# Software floating-point builtins for SDK apps (LDLIBS += -l:libsoftfp.a), so an
+# app with float code links them itself instead of libgcc. The 64-bit shifts they
+# call are included: libc has its own but does not export them. Only the members
+# an app needs are linked.
+SOFTFP_SDK_SRCS := $(wildcard third_party/compiler-rt/*.c)
+$(OUT)/pic/libsoftfp.a: $(patsubst %.c,$(OUT)/pic/%.o,$(SOFTFP_SDK_SRCS))
+	rm -f $@
+	$(AR) rcs $@ $^
 $(OUT)/dyn/lib/gps/%.o: lib/gps/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(PIC_CFLAGS) -c -o $@ $<
