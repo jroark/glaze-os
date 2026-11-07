@@ -1,9 +1,11 @@
-/* Load trusted, non-PIC ELF32/MIPS ET_REL drivers from romfs. No user-provided
- * paths or executable bytes enter this loader. All failures release the image.
+/* Load trusted, non-PIC ELF32/MIPS ET_REL drivers from romfs, or from a
+ * hardware package whose signed manifest vouches for the bytes (hwfile.c). No
+ * user-provided paths or unverified executable bytes enter this loader. All failures release the image.
  * Relocation formulas follow the MIPS ELF ABI (REL implicit addends).
  */
 #include "kernel.h"
 #include "module.h"
+#include "hwfile.h"
 #include "drivers.h"
 #include <glaze/elf.h>
 
@@ -28,6 +30,7 @@ static uintptr_t module_resolve(const char *name)
     EXPORT(memcpy); EXPORT(memmove); EXPORT(memset); EXPORT(memcmp);
     EXPORT(kputs); EXPORT(kprintf); EXPORT(time_us);
     EXPORT(romfs_lookup); EXPORT(romfs_read);
+    EXPORT(hwfile_open); EXPORT(hwfile_read); EXPORT(hwfile_close);
     EXPORT(copy_to_as); EXPORT(copy_from_as); EXPORT(ipc_notify);
     EXPORT(pcmcia_node_id); EXPORT(net_set_mac); EXPORT(net_receive);
     EXPORT(net_rx_drop); EXPORT(net_overrun);
@@ -113,32 +116,26 @@ static bool relocate(uint32_t *at, uint32_t type, uint32_t value, uint32_t low)
     }
 }
 
-int module_load(const char *path, const char *entry_name, struct module *m)
+/* The ELF file is in `file` (romfs pages read in, or a verified package file). */
+static int load_image(const char *path, const uint8_t *file, uint32_t size, const char *entry_name,
+                      struct module *m)
 {
-    const struct romfs_entry *rom = romfs_lookup(path);
-    uint8_t *file = NULL;
-    uint32_t file_pages = 0, offsets[SECTIONS] = {0}, bytes = 0;
+    uint32_t offsets[SECTIONS] = {0}, bytes = 0;
     struct section sh[SECTIONS];
     int result = GZ_ECORRUPT;
-    if (m->base) return GZ_EBUSY;
-    if (!rom) return GZ_ENOENT;
-    if (rom->size < sizeof(struct gz_elf_ehdr) || rom->size > FILE_MAX) return GZ_ECORRUPT;
-    file_pages = ALIGN_UP(rom->size, PAGE_SIZE) / PAGE_SIZE;
-    file = page_alloc_n(file_pages);
-    if (!file) return GZ_ENOMEM;
-    if (romfs_read(rom, 0, file, rom->size)) goto out;
+    if (size < sizeof(struct gz_elf_ehdr) || size > FILE_MAX) return GZ_ECORRUPT;
     const struct gz_elf_ehdr *e = (const void *)file;
     if (memcmp(e->ident, "\177ELF\1\1\1", 7) || e->type != 1 || e->machine != 8 || e->version != 1 ||
         e->ehsize != sizeof(*e) || e->phnum || e->shentsize != sizeof(sh[0]) || !e->shnum ||
         e->shnum > SECTIONS || (e->shoff & 3u) ||
-        !gz_elf_range(e->shoff, e->shnum * sizeof(sh[0]), rom->size) ||
+        !gz_elf_range(e->shoff, e->shnum * sizeof(sh[0]), size) ||
         (e->flags & 0xf0000000u) > 0x20000000u || (e->flags & 0x06000066u) ||
         ((e->flags & 0xf000u) && (e->flags & 0xf000u) != 0x1000u)) goto out;
     memcpy(sh, file + e->shoff, e->shnum * sizeof(sh[0]));
     int symtab = -1;
     for (unsigned i = 0; i < e->shnum; i++) {
         struct section *s = &sh[i];
-        if (s->type != 8 && !gz_elf_range(s->offset, s->size, rom->size)) goto out;
+        if (s->type != 8 && !gz_elf_range(s->offset, s->size, size)) goto out;
         if (s->type == 2) { if (symtab >= 0) goto out; symtab = (int)i; }
         if ((s->flags & SH_ALLOC) &&
             ((s->type != 1 && s->type != 8) || s->align > PAGE_SIZE ||
@@ -217,6 +214,30 @@ int module_load(const char *path, const char *entry_name, struct module *m)
     kprintf("module: loaded %s (%u pages)\n", path, m->pages);
 out:
     if (result) module_unload(m);
+    return result;
+}
+
+/* From romfs, or from an installed hardware package (hwfile.c), which may
+ * answer GZ_EINPROGRESS while its bytes are fetched: ask again later. */
+int module_load(const char *path, const char *entry_name, struct module *m)
+{
+    struct hwfile hf;
+    uint8_t *file = NULL;
+    uint32_t file_pages = 0;
+    if (m->base) return GZ_EBUSY;
+    int result = hwfile_open(path, &hf);
+    if (result) return result;
+    if (hf.size < sizeof(struct gz_elf_ehdr) || hf.size > FILE_MAX) { result = GZ_ECORRUPT; goto out; }
+    if (hf.rom) {
+        file_pages = ALIGN_UP(hf.size, PAGE_SIZE) / PAGE_SIZE;
+        file = page_alloc_n(file_pages);
+        if (!file) { result = GZ_ENOMEM; goto out; }
+        if (hwfile_read(&hf, 0, file, hf.size)) { result = GZ_ECORRUPT; goto out; }
+        result = load_image(path, file, hf.size, entry_name, m);
+    } else
+        result = load_image(path, hf.buf, hf.size, entry_name, m);
+out:
     for (uint32_t i = 0; i < file_pages; i++) page_free(file + i * PAGE_SIZE);
+    hwfile_close(&hf);
     return result;
 }

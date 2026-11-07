@@ -178,6 +178,9 @@ static inline int gz_ota_status(struct gz_ota_status *st) { return GZ_SC2(SYS_OT
 static inline int gz_ota_stage(uint32_t op, const void *a1, uint32_t a2, uint32_t a3)
 { return GZ_SC4(SYS_OTA_STAGE, op, a1, a2, a3); }
 static inline int gz_reboot_ce(void) { return GZ_SC0(SYS_REBOOT_CE); }
+/* Hardware packages (glaze/hwpkg.h): STATUS for anyone, the rest the file server's. */
+static inline int gz_hw_ctl(uint32_t op, const void *a1, uint32_t a2)
+{ return GZ_SC3(SYS_HW_CTL, op, a1, a2); }
 static inline int gz_task_snapshot(struct gz_task_snapshot *s)
 { return GZ_SC2(SYS_TASK_SNAPSHOT, s, sizeof(*s)); }
 /* Cannot stop the caller or system services. PIDs include a generation. */

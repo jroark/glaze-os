@@ -16,7 +16,7 @@ Read with the root CLAUDE.md, which covers building, testing and toolchain rules
 - Syscall numbers and the ABI are in `lib/include/glaze/abi.h` (shared with userspace); user wrappers are in `glaze/sys.h`.
 - Device access is gated by process flags. `PROC_PRIVILEGED` (framebuffer, input) can be passed down by a privileged spawner. `PROC_FLASH` (raw NAND and the CF card's sectors), `PROC_NET` (Ethernet frames) and `PROC_AUDIO` (wave output) are granted only by the kernel, to `bin/fs`, `bin/net` and `bin/audio`; `sys_spawn` masks other flags.
 - The trusted `config/services.json` catalog starts `bin/fs` and `bin/audio`; `bin/net` starts only when a network driver is up. A deferred kernel worker handles hardware dependencies and service restarts. `INIT` (default `bin/springboard`) remains the compositor/test entry point.
-- Network backends are separate romfs `drivers/*.ko` ELF32/MIPS ET_REL modules, loaded by CIS identity and released on removal; they are excluded from the linked kernel. See `docs/os/DRIVERS_SERVICES.md`. Use `make -C host module-test net-driver-test service-test`, `python3 tests/services_catalog.py`, and `SERVICE_TESTS=1 INIT=bin/service_hotplug` for lifecycle validation. PC Cards in a PCMCIA jacket (3c589, Hermes, and modems through `kernel/modem.c`) are on a second socket controller (CE's socket 1, windows at 0x0B200000/0x0B600000); `cf.c` selects the socket and drivers address cards through `pcmcia_io_base`/`pcmcia_attr_base` (hw.h), never fixed 0x0A00C000/D000 addresses. Their modules are in romfs only with `PCCARDS=1` (GlazeBoot builds' default). See `docs/hardware/PCCARDS.md`; the emulator models them (`--3c589`, `--hermes`, `--hermes-firmware 6.4`) in the CF socket or, with `--jacket`, in socket 1, which exercises the socket 1 power-up.
+- Network backends are separate romfs `drivers/*.ko` ELF32/MIPS ET_REL modules, loaded by CIS identity and released on removal; they are excluded from the linked kernel. See `docs/os/DRIVERS_SERVICES.md`. Use `make -C host module-test net-driver-test service-test`, `python3 tests/services_catalog.py`, and `SERVICE_TESTS=1 INIT=bin/service_hotplug` for lifecycle validation. PC Cards in a PCMCIA jacket (3c589, Hermes, and modems through `kernel/modem.c`) are on a second socket controller (CE's socket 1, windows at 0x0B200000/0x0B600000); `cf.c` selects the socket and drivers address cards through `pcmcia_io_base`/`pcmcia_attr_base` (hw.h), never fixed 0x0A00C000/D000 addresses. Their modules are in romfs only with `PCCARDS=1` (GlazeBoot builds' default), or come from the signed `hw-pccards` package. See `docs/hardware/PCCARDS.md`; the emulator models them (`--3c589`, `--hermes`, `--hermes-firmware 6.4`) in the CF socket or, with `--jacket`, in socket 1, which exercises the socket 1 power-up.
 - Managed apps have three `SYS_PROC_BG` states (`GZ_PROC_FG`, `GZ_PROC_BG` at `PRIO_LOW`, `GZ_PROC_SUSPENDED`): a suspended process's runnable threads stay off the run queue until another state thaws them (`sched_freeze_proc`). Only a privileged caller sets them, except that an app in the background may suspend itself. A parent that registers a port with `SYS_CHILD_NOTIFY` gets `GZ_NOTIFY_CHILD` when a child exits. `SYS_SHM_UNMAP` drops a mapping (the object is freed with its last one), and shm mappings reuse freed address ranges.
 - `SYS_SPAWN_IMAGE` (`gz_spawn_image`) starts an installed app from an ELF in the caller's memory: `image_map_exec` copies it into shared image frames like a `GZ_IMAGE_BYTES` library, `elf_load` serves both it and romfs, and the result is always unprivileged and must use `/lib/ld-glaze.so.1`.
 - `tests/bench.py LABEL` boots a launch-script image and ktest a few times headless and writes medians to `out/bench/LABEL.txt` (boot time, free memory, cold/warm app launch, ktest), from SpringBoard's `sb: ...` lines and ktest's `done` line; compare two labels around a change that affects memory or speed.
@@ -64,6 +64,18 @@ resets; the SPL (`boot/ota_apply.c`, read-only `ftl.c` with
 never updated over the air. `VERSION` is the OS version; bump it per
 release. `make ota` signs `out/ota/os/` natively with
 `~/.config/glaze/ota-ed25519.pem` (never commit it); `OTA_PUBKEY=` builds
-an image trusting a test key. Use `make -C host ota-test boot-init-test`,
+an image trusting a test key (hardware packages trust the same key).
+Use `make -C host ota-test boot-init-test`,
 `out/host/fstest` after `ftl.c` changes, and `tests/run_ota.py` (emulator, power
 cuts).
+
+Hardware packages (`docs/os/HARDWARE_PACKAGES.md`, `glaze/hwpkg.h`,
+`kernel/hwfile.c`): the file server registers installed packages' signed
+manifests (`SYS_HW_CTL`). `hwfile_open()` looks in romfs first, then asks the
+file server for a package's file (`GZ_NOTIFY_HW`) and returns `GZ_EINPROGRESS`
+until its SHA-256 checks out; callers (`module_load`, `net.c`, `service.c` for
+the overridable `net`) retry on the worker's next pass and never wait. The
+flat kernel must fit the 0x2C000-byte slot before romfs, and scripted builds
+come within about 2 KiB of it: `KERNEL_COLD` in `mk/kernel.mk` builds cold
+files `-Os`. Use `make -C host hwfile-test` (natively, OpenSSL 3) and
+`net-driver-test service-test module-test`.

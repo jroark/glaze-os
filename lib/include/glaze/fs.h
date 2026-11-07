@@ -40,6 +40,7 @@ enum {
     FS_NAND_READ,           /* read-only CE logical NAND: w2 byte offset, w3 bytes <= FS_IO_MAX */
     FS_CARD_FORMAT,         /* CF-only FAT16 superfloppy: w2 generation, w3 sector count */
     FS_OS_UPDATE,           /* OTA (docs/os/OTA.md): w2 = FS_OTA_*; BEGIN takes buf: path */
+    FS_HW_RESCAN,           /* re-register installed hardware packages (glaze/hwpkg.h) -> count */
 };
 
 /* FS_OS_UPDATE steps. BEGIN checks a staged update file's header with the
@@ -117,6 +118,8 @@ int fs_ota_begin(const char *path);         /* its size, or an error */
 int fs_ota_step(void);                      /* bytes verified so far, or an error */
 int fs_ota_arm(void);                       /* resets on success */
 int fs_ota_cancel(void);
+/* After installing or removing a hardware package (pkg.c does this). */
+int fs_hw_rescan(void);
 
 /* Whole-file helpers: bytes read (up to max) or written, or an error. */
 int fs_read_file(const char *path, void *buf, uint32_t max);

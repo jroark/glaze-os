@@ -34,6 +34,10 @@ The fetcher verifies every download against the pinned manifest before writing
 anything. Binary files remain ignored under `firmware/wl54cf/`.
 `WL54CF_FW_DIR` overrides their build location. Ordinary builds do not need
 firmware; `WL54CF=1` requires both files and packs them under `firmware/`.
+Without it, `make hwpkg-wl54cf` packs the same pair as an unsigned
+`out/pkg/hw-wl54cf.gzp` that installs from Files on a stock image
+([hardware packages](../os/HARDWARE_PACKAGES.md)); like the files, keep it
+private.
 Redistributed builds must include the full license notice and provenance;
 `tools/package_glazeboot.py` enforces the exact pair and adds these notices.
 The public emulator NAND omits firmware: this license is limited to Marvell

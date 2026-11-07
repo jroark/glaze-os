@@ -100,6 +100,7 @@ enum {
     SYS_CAM_PROBE,         /* PROC_USB, VEO_PROBE=1 kernels: op, arg, buffer, size (glaze/veo.h) */
     SYS_MODEM_IO,          /* PROC_NET: CF modem UART operation, buffer, size (glaze/modem.h) */
     SYS_GPS_IO,            /* any process: GPS snapshot or command, buffer, size (glaze/gps.h) */
+    SYS_HW_CTL,            /* hardware packages: GZ_HW_OP_*, three arguments (glaze/hwpkg.h) */
     SYS_COUNT
 };
 
@@ -149,6 +150,7 @@ struct gz_msg {
 #define GZ_NOTIFY_NET       0x20000000u     /* frames waiting (SYS_NET_RECV) */
 #define GZ_NOTIFY_AUDIO     0x10000000u     /* PCM ring below half full */
 #define GZ_NOTIFY_POWER     0x08000000u     /* to the input port: SYS_POWER_STATUS changed */
+#define GZ_NOTIFY_HW        0x04000000u     /* to the file server: a hardware file is wanted (glaze/hwpkg.h) */
 
 /* Input events (SYS_INPUT_READ). */
 enum {

@@ -63,6 +63,7 @@ include mk/romfs.mk
 include mk/kernel.mk
 include mk/spl.mk
 include mk/packages.mk
+include mk/hwpkgs.mk
 include mk/fs.mk
 include mk/nand.mk
 include mk/glazeboot.mk

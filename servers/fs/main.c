@@ -9,6 +9,7 @@
  */
 
 #include <glaze/fs.h>
+#include <glaze/hwpkg.h>
 #include <glaze/ota.h>
 #include <glaze/sys.h>
 #include <stdio.h>
@@ -49,6 +50,7 @@ static struct {
 } ota = { .session = -1 };
 
 static void ota_cancel(void);
+static int hw_register(void);
 static struct session sessions[MAX_SESSIONS];
 static struct file files[MAX_FILES];
 
@@ -536,6 +538,8 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
         return op_statfs(s, m->w[2]);
     if (op == FS_OS_UPDATE)
         return op_os_update(sess, s, m->w[2]);
+    if (op == FS_HW_RESCAN)
+        return hw_register();
     if (op == FS_FORMAT) {
         ota_cancel();
         return op_format();
@@ -639,6 +643,143 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
     }
 }
 
+/* ---- hardware packages (glaze/hwpkg.h) -------------------------------------- */
+
+/* The kernel keeps the manifests of the installed hardware packages, and asks
+ * for a file's bytes when it needs them (GZ_NOTIFY_HW). It checks them against
+ * the manifest, so all this does is find and stream them, a step at a time
+ * like an OTA update so other clients are served in between. */
+#define HW_STEP_BYTES   (16u * 1024u)
+
+static int hw_port;
+static struct {
+    bool active;
+    lfs_file_t f;
+    uint32_t size, done;
+} hw;
+
+static int read_small(const char *path, void *buf, uint32_t max)
+{
+    static lfs_file_t f;
+    int rv = lfs_file_open(&lfs, &f, path, LFS_O_RDONLY);
+    if (rv < 0)
+        return gz_err(rv);
+    lfs_ssize_t n = lfs_file_read(&lfs, &f, buf, max);
+    lfs_soff_t size = lfs_file_size(&lfs, &f);
+    lfs_file_close(&lfs, &f);
+    if (n < 0)
+        return gz_err((int)n);
+    return size > (lfs_soff_t)max ? GZ_EFULL : (int)n;
+}
+
+/* Info says type=hardware (lib/libc/pkg.c reads the rest of it). */
+static bool hardware_info(const char *text)
+{
+    for (const char *line = text; line; line = strchr(line, '\n')) {
+        if (*line == '\n')
+            line++;
+        if (!strncmp(line, "type=hardware", 13) && (!line[13] || line[13] == '\n' || line[13] == '\r'))
+            return true;
+    }
+    return false;
+}
+
+static void hw_cancel(void)
+{
+    if (hw.active)
+        lfs_file_close(&lfs, &hw.f);
+    hw.active = false;
+}
+
+/* Tells the kernel what is installed; it forgets anything it was fetching. */
+static int hw_register(void)
+{
+    static uint8_t manifest[GZ_HW_MANIFEST_MAX];
+    static char path[FS_PATH_MAX], text[512];
+    lfs_dir_t dir;
+    struct lfs_info info;
+    char line[96];
+
+    hw_cancel();
+    if (gz_hw_ctl(GZ_HW_OP_BEGIN, (void *)(uintptr_t)hw_port, 0) < 0)
+        return GZ_EPERM;
+    if (!mount_err && lfs_dir_open(&lfs, &dir, "/Applications") == 0) {
+        while (lfs_dir_read(&lfs, &dir, &info) > 0) {
+            size_t len = strlen(info.name);
+            if (info.type != LFS_TYPE_DIR || len <= 4 || len - 4 >= GZ_HW_ID_MAX ||
+                strcmp(info.name + len - 4, ".app"))
+                continue;
+            snprintf(path, sizeof(path), "/Applications/%s/Info", info.name);
+            int n = read_small(path, text, sizeof(text) - 1);
+            if (n < 0)
+                continue;
+            text[n] = 0;
+            if (!hardware_info(text))
+                continue;
+            snprintf(path, sizeof(path), "/Applications/%s/Manifest", info.name);
+            n = read_small(path, manifest, sizeof(manifest));
+            const struct gz_hw_manifest *h = (const void *)manifest;
+            int rv = n < 0 ? n : (uint32_t)n < sizeof(*h) ? GZ_ECORRUPT : 0;
+            /* The kernel fetches files by id: it must name this bundle. */
+            if (!rv && (strncmp(h->id, info.name, len - 4) || h->id[len - 4]))
+                rv = GZ_ECORRUPT;
+            if (!rv)
+                rv = gz_hw_ctl(GZ_HW_OP_ADD, manifest, (uint32_t)n);
+            if (rv < 0) {
+                snprintf(line, sizeof(line), "fs: hardware package %s not accepted (%d)\n", info.name, rv);
+                gz_log(line, (uint32_t)strlen(line));
+            }
+        }
+        lfs_dir_close(&lfs, &dir);
+    }
+    return gz_hw_ctl(GZ_HW_OP_END, NULL, 0);
+}
+
+/* Starts the kernel's request, or streams the next part of it. */
+static void hw_step(void)
+{
+    static uint8_t chunk[2048];
+    static char path[FS_PATH_MAX];
+
+    if (!hw.active) {
+        struct gz_hw_request r;
+        if (gz_hw_ctl(GZ_HW_OP_FETCH, &r, 0) != 1)
+            return;
+        r.id[sizeof(r.id) - 1] = r.path[sizeof(r.path) - 1] = 0;
+        snprintf(path, sizeof(path), "/Applications/%s.app/hw/%s", r.id, r.path);
+        if (mount_err || lfs_file_open(&lfs, &hw.f, path, LFS_O_RDONLY) < 0) {
+            gz_hw_ctl(GZ_HW_OP_FAIL, NULL, 0);
+            return;
+        }
+        if (lfs_file_size(&lfs, &hw.f) != (lfs_soff_t)r.size) {
+            lfs_file_close(&lfs, &hw.f);
+            gz_hw_ctl(GZ_HW_OP_FAIL, NULL, 0);
+            return;
+        }
+        hw.active = true;
+        hw.size = r.size;
+        hw.done = 0;
+    }
+    for (uint32_t budget = HW_STEP_BYTES; hw.done < hw.size && budget;) {
+        uint32_t n = MIN(MIN(hw.size - hw.done, (uint32_t)sizeof(chunk)), budget);
+        lfs_ssize_t got = lfs_file_read(&lfs, &hw.f, chunk, n);
+        if (got != (lfs_ssize_t)n) {
+            hw_cancel();
+            gz_hw_ctl(GZ_HW_OP_FAIL, NULL, 0);
+            return;
+        }
+        /* An error: the kernel gave up on this file (or found it corrupt). */
+        if (gz_hw_ctl(GZ_HW_OP_SUPPLY, chunk, n) < 0) {
+            hw_cancel();
+            return;
+        }
+        hw.done += n;
+        budget -= n;
+    }
+    if (hw.done >= hw.size)
+        hw_cancel();
+}
+
 /* ---- new volumes ----------------------------------------------------------- */
 
 /* A blank or erased volume gets the standard folders and nothing else. The
@@ -673,13 +814,22 @@ int main(void)
     int port = gz_port_create();
     if (port < 0 || gz_port_register(port, FS_PORT_NAME) < 0)
         return 1;
+    hw_port = port;
+    hw_register();
     for (;;) {
-        int token = gz_recv(port, &m, -1);
+        /* While a hardware file streams, come back between requests. */
+        int token = gz_recv(port, &m, hw.active ? 0 : -1);
+        if (token == GZ_RECV_NOTIFY && (m.w[0] & GZ_NOTIFY_HW))
+            hw_step();
+        else if (token == GZ_ETIMEDOUT && hw.active)
+            hw_step();
         if (token <= 0)
             continue;
         memset(&r, 0, sizeof(r));
         r.w[0] = (uint32_t)dispatch(&m, &r);
         card_sync();            /* NAND writes are on the flash before the reply */
         gz_reply(token, &r);
+        if (hw.active)
+            hw_step();
     }
 }
