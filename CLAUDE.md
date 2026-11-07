@@ -21,6 +21,8 @@ make -C host nand-ecc-test        # Windows CE's NAND ECC (kernel/drivers/nand_e
 make -C host modem-chat-test modem-driver-test  # the CF modem's Hayes dialer and kernel UART
 make -j8 MODEM=1 NAND_DROP=wince  # dial-up PPP in a NAND image (GlazeBoot builds have it by default)
 make -j8 PCCARDS=1 NAND_DROP=wince  # PCMCIA jacket drivers (3c589, Hermes) in a NAND image (likewise)
+./build.sh hwpkg-files && make hwpkgs  # or as signed packages for a stock image (docs/os/HARDWARE_PACKAGES.md)
+make -C host hwfile-test          # hardware packages' manifests, fetch and signature checks (natively, OpenSSL 3)
 tests/run_modem.sh                # dial-up end to end: be300 --cf-modem and tests/ppp_peer.py
 tests/run_ramboot.sh 90 INIT=bin/ktest  # RAM boot through GlazeBoot's trampoline in the emulator
 tests/run_ceboot.sh 90            # GlazeBoot from a CF card under the emulator's stock Windows CE

@@ -16,7 +16,7 @@ class CatalogTest(unittest.TestCase):
         data = catalog.build(json.loads((ROOT / 'config/services.json').read_text()))
         self.assertEqual(struct.unpack_from('<III', data), (0x475a5356, 1, 5))
         self.assertEqual(len(data), 12 + 5 * 76)
-        self.assertEqual(struct.unpack_from('<III', data, 12 + 76 + 64), (4, 1, 1))
+        self.assertEqual(struct.unpack_from('<III', data, 12 + 76 + 64), (4, 9, 1))
         self.assertEqual(struct.unpack_from('<III', data, 12 + 3 * 76 + 64), (65, 0, 1))
         self.assertEqual(struct.unpack_from('<III', data, 12 + 4 * 76 + 64), (128, 4, 1))
 
@@ -29,7 +29,8 @@ class CatalogTest(unittest.TestCase):
                  [{'name': 'x', 'path': 'bin/x', 'privileges': ['network']}],
                  [{'name': 'x', 'path': 'bin/x', 'requires': ['unknown']}],
                  [{'name': 'x', 'path': 'bin/x', 'privileges': ['unknown']}],
-                 [{'name': 'x', 'path': 'bin/x'}] * 2]
+                 [{'name': 'x', 'path': 'bin/x'}] * 2,
+                 [{'name': 'x', 'path': 'bin/x', 'required': True, 'overridable': True}]]
         for entries in cases:
             with self.subTest(entries=entries), self.assertRaises((ValueError, KeyError)):
                 catalog.build(entries)

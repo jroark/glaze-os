@@ -13,6 +13,10 @@
  * ("/Card"). The bundle path is the app's identity for SpringBoard; an app
  * keeps its own data under <bundle>/data, which updates preserve and
  * uninstalling removes. Packages cannot supply entries in data/.
+ *
+ * A hardware-support package (glaze/hwpkg.h) says "type=hardware" in Info
+ * and carries a Manifest and hw/... instead of an executable. It installs
+ * the same way, on the flash only, and pkg_list leaves it out.
  */
 #ifndef GLAZE_PKG_H
 #define GLAZE_PKG_H
@@ -43,6 +47,8 @@ int pkg_read_entry(const char *gzp, const char *name, void *buf, uint32_t max);
  * with the same id on either volume. Writes the bundle path to `bundle`. */
 int pkg_install(const char *gzp, const char *root, char bundle[PKG_BUNDLE_MAX]);
 int pkg_uninstall(const char *bundle);
+/* 1 if a package file is hardware support, 0 if it is an app, or an error. */
+int pkg_hardware(const char *gzp);
 /* The installed bundle of an id on either volume, or GZ_ENOENT. */
 int pkg_find(const char *id, char bundle[PKG_BUNDLE_MAX]);
 /* A bundle's install number, or 0 (no bundle, or installed before them). */
@@ -50,5 +56,7 @@ uint32_t pkg_install_id(const char *bundle);
 /* Calls fn for each app installed under root, in name order; returns the
  * count. Interrupted installs found on the way are removed. */
 int pkg_list(const char *root, void (*fn)(const char *bundle, const struct pkg_info *info, void *arg), void *arg);
+/* The same for the installed hardware-support packages (all on the flash). */
+int pkg_list_hardware(void (*fn)(const char *bundle, const struct pkg_info *info, void *arg), void *arg);
 
 #endif

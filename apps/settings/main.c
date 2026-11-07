@@ -6,6 +6,7 @@
 #include <glaze/debug_net.h>
 #include <glaze/fs.h>
 #include <glaze/hardicon.h>
+#include <glaze/hwpkg.h>
 #include <glaze/display.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
@@ -24,7 +25,8 @@
 
 enum view { V_BLUETOOTH, V_ROOT, V_WALLPAPER, V_PREVIEW, V_DATETIME, V_ABOUT, V_NETWORK, V_PASSCODE, V_PIN, V_SOUNDS, V_TONE, V_ZONE,
             V_TOUCH, V_TOUCH_SAMPLE, V_TOUCH_TEST, V_DISPLAY, V_TIMEOUT, V_WIFI, V_WIFI_CREDENTIALS, V_REBOOT, V_DEBUG, V_INPUT_METHOD, V_BATTERY,
-            V_SLEEP, V_SLEEP_MODE, V_ICONS, V_ICON_ACTION, V_DIALUP, V_DIALUP_EDIT, V_BT_PAIR };
+            V_SLEEP, V_SLEEP_MODE, V_ICONS, V_ICON_ACTION, V_DIALUP, V_DIALUP_EDIT, V_BT_PAIR,
+            V_HARDWARE, V_HW_PKG };
 
 #define ICON_CHOICES    64      /* what V_ICON_ACTION lists */
 
@@ -54,6 +56,7 @@ enum {
     R_DIAL_DONE,
     R_BT_DISCONNECT, R_BT_PIN, R_BT_DONE, R_BT_CONNECT, R_BT_CHANNEL_DOWN, R_BT_CHANNEL_UP, R_BT_PROFILE, R_BT_AUDIO_DISCONNECT, R_BT_TONE,
     R_BT_DEVICE0,
+    R_HARDWARE = R_BT_DEVICE0 + 32, R_HW_PKG0, R_HW_REMOVE = R_HW_PKG0 + 8,
 };
 
 struct hit {
@@ -73,6 +76,14 @@ static bool modem_available;            /* a CF modem: Settings > Dial-up */
 static struct net_dial_status dial_status;
 static struct net_dial_config dial_config;
 static bool dial_loaded, dial_password_edited;
+
+/* Settings > About > Hardware Support: installed hardware packages
+ * (glaze/hwpkg.h) and what the kernel made of them. */
+#define HW_LISTED 8
+static struct { char bundle[PKG_BUNDLE_MAX]; struct pkg_info info; } hw_pkgs[HW_LISTED];
+static unsigned hw_count, hw_sel;
+static struct gz_hw_status hw_status;
+static const char *hw_msg;
 static int dial_error, dial_field, dial_cursor;
 static char dial_text[NET_DIAL_USER_MAX];
 static int wifi_error;
@@ -1003,6 +1014,91 @@ static void draw_about(gfx_surface *s)
     cell(s, 2, "Available", avail, false, 0);
     cell(s, 2, "Processes", procs, false, 0);
     cell(s, 3, "Uptime", up, false, 0);
+    section_gap();
+    char installed[8];
+    snprintf(installed, sizeof(installed), "%u", hw_count);
+    cell(s, 0, "Hardware Support", installed, true, R_HARDWARE);
+}
+
+static void hw_add(const char *bundle, const struct pkg_info *info, void *arg)
+{
+    (void)arg;
+    if (hw_count == HW_LISTED) return;
+    strlcpy(hw_pkgs[hw_count].bundle, bundle, sizeof(hw_pkgs[0].bundle));
+    hw_pkgs[hw_count++].info = *info;
+}
+
+static void hw_load(void)
+{
+    hw_count = 0;
+    pkg_list_hardware(hw_add, NULL);
+    if (gz_hw_ctl(GZ_HW_OP_STATUS, &hw_status, sizeof(hw_status)) < 0) memset(&hw_status, 0, sizeof(hw_status));
+}
+
+/* The kernel registers a package only if its manifest checks out. */
+static const char *hw_state(const char *id)
+{
+    bool listed = false;
+    for (unsigned i = 0; i < hw_status.count; i++) {
+        if (strcmp(hw_status.files[i].id, id)) continue;
+        listed = true;
+        if (hw_status.files[i].state == GZ_HW_FILE_BAD) return "Damaged";
+    }
+    return listed ? "Ready" : hw_status.loaded ? "Not accepted" : "Loading" GFX_CH_ELLIPSIS;
+}
+
+static void draw_note(gfx_surface *s, const char *note)
+{
+    const gfx_font *f = ui_font(FONT_R12);
+    int starts[4], lines = ui_wrap(f, note, UI_W - 32, starts, 4);
+    for (int i = 0; i < lines; i++) {
+        int end = i + 1 < lines ? starts[i + 1] : (int)strlen(note);
+        gfx_text_n(s, 16, section_y + 6 + i * f->line_height, f, note + starts[i], end - starts[i], UI_TEXT_DETAIL, 255);
+    }
+}
+
+static void draw_hardware(gfx_surface *s)
+{
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, "Hardware Support", "About", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    for (unsigned i = 0; i < hw_count; i++)
+        cell(s, ui_group_pos((int)i, (int)hw_count), hw_pkgs[i].info.name, hw_state(hw_pkgs[i].info.id), true,
+             R_HW_PKG0 + (int)i);
+    if (hw_count) section_gap();
+    draw_note(s, hw_msg ? hw_msg : hw_count ? "Drivers and firmware for cards that aren't built in."
+                                            : "No hardware support is installed. Open a hardware package in "
+                                              "Files to install it.");
+}
+
+static void draw_hw_pkg(gfx_surface *s)
+{
+    const struct pkg_info *info = &hw_pkgs[hw_sel].info;
+    unsigned files = 0;
+    nhits = 0;
+    ui_draw_pinstripes(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H));
+    ui_draw_navbar(s, info->name, "Hardware", &back_rect, 0);
+    add_hit(back_rect, R_BACK);
+    section_y = UI_NAV_H + 12;
+    cell(s, 1, "Version", info->version[0] ? info->version : "1.0", false, 0);
+    cell(s, 3, "Status", hw_state(info->id), false, 0);
+    section_gap();
+    for (unsigned i = 0; i < hw_status.count; i++)
+        if (!strcmp(hw_status.files[i].id, info->id)) files++;
+    for (unsigned i = 0, n = 0; i < hw_status.count; i++) {
+        if (strcmp(hw_status.files[i].id, info->id)) continue;
+        char size[16];
+        snprintf(size, sizeof(size), "%u KB", (unsigned)(hw_status.files[i].size + 1023) / 1024);
+        cell(s, ui_group_pos((int)n++, (int)files), hw_status.files[i].path, size, false, 0);
+    }
+    if (files) section_gap();
+    gfx_rect remove = gfx_r(20, section_y, UI_W - 40, 32);
+    ui_draw_button(s, remove, "Remove", pressed == R_HW_REMOVE);
+    add_hit(remove, R_HW_REMOVE);
+    section_y += 40;
+    draw_note(s, "A card already in use keeps its driver until it is removed.");
 }
 
 static void draw_debug(gfx_surface *s)
@@ -1628,6 +1724,8 @@ static void draw_view(gfx_surface *s, enum view v)
     case V_ICONS: draw_icons(s); break;
     case V_ICON_ACTION: draw_icon_action(s); break;
     case V_REBOOT: draw_reboot(s); break;
+    case V_HARDWARE: draw_hardware(s); break;
+    case V_HW_PKG: draw_hw_pkg(s); break;
     }
 }
 
@@ -2172,6 +2270,19 @@ static void activate(int id)
         redraw();
         return;
     }
+    if (id == R_HARDWARE) { hw_msg = NULL; hw_load(); go(V_HARDWARE, true); return; }
+    if (view == V_HARDWARE && id >= R_HW_PKG0 && id < R_HW_PKG0 + (int)hw_count) {
+        hw_sel = (unsigned)(id - R_HW_PKG0);
+        go(V_HW_PKG, true);
+        return;
+    }
+    if (view == V_HW_PKG && id == R_HW_REMOVE) {
+        int rv = pkg_uninstall(hw_pkgs[hw_sel].bundle);
+        hw_msg = rv ? fs_strerror(rv) : "Removed.";
+        hw_load();
+        go(V_HARDWARE, false);
+        return;
+    }
     if (id == R_BACK || id == R_PIN_CANCEL) {
         if (view == V_DIALUP) {
             memset(&dial_config, 0, sizeof(dial_config)); dial_loaded = false;
@@ -2179,7 +2290,8 @@ static void activate(int id)
         go(view == V_PREVIEW ? V_WALLPAPER : view == V_PIN ? V_PASSCODE : view == V_TONE ? V_SOUNDS
            : view == V_ZONE ? V_DATETIME : (view == V_WALLPAPER || view == V_TIMEOUT) ? V_DISPLAY
            : view == V_SLEEP ? V_BATTERY : view == V_SLEEP_MODE ? V_SLEEP
-           : view == V_ICON_ACTION ? V_ICONS : V_ROOT, false);
+           : view == V_ICON_ACTION ? V_ICONS : view == V_HARDWARE ? V_ABOUT
+           : view == V_HW_PKG ? V_HARDWARE : V_ROOT, false);
         return;
     }
     switch (id) {
@@ -2334,7 +2446,7 @@ static void activate(int id)
         volatile uint8_t *p=key; for (unsigned i=0;i<sizeof key;i++) p[i]=0;
         break;
     }
-    case R_ABOUT: go(V_ABOUT, true); return;
+    case R_ABOUT: hw_load(); go(V_ABOUT, true); return;
     case R_PASSCODE: go(V_PASSCODE, true); return;
     case R_PIN_ON:
     case R_PIN_OFF:

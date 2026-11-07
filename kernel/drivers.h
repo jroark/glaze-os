@@ -183,7 +183,9 @@ int usbnet_bind(int port);
 int usbnet_send(struct proc *p, uint32_t buf, uint32_t len);
 int usbnet_recv(struct proc *p, uint32_t buf, uint32_t max);
 int usbnet_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len);
-bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up */
+bool net_insert(unsigned manufacturer, unsigned product);  /* hot: true if up, or its driver is
+                                                             * pending or not installed */
+void net_retry(void);       /* service worker: a pending or newly installed driver */
 void net_removed(void);
 void net_set_mac(const uint8_t mac[6]);
 void net_receive(const uint8_t *frame, uint32_t len);

@@ -538,6 +538,17 @@ ota-test: ../out/host/ota-test $(O)/mkfsimg
 	python3 ../tests/ota_test.py $(O)/mkfsimg ../out/host/ota-test
 .PHONY: ota-test
 
+# Hardware packages (glaze/hwpkg.h): kernel/hwfile.c's registry, fetch and
+# Ed25519/SHA-256 checks over packages tools/mkhwpkg.py signs with a test key.
+# Natively (OpenSSL 3), like ota-test.
+HWFILE_CRYPTO := $(filter %ed25519.o %ge_low_mem.o %fe_low_mem.o %sha512.o %sha256.o,$(OTA_TP_OBJS))
+../out/host/hwfile-test: ../tests/native/hwfile.c ../kernel/hwfile.c ../kernel/hwfile.h ../lib/include/glaze/hwpkg.h $(HWFILE_CRYPTO)
+	$(CC) $(CFLAGS) -O1 -fsanitize=address,undefined $(OTA_DEFS) -DHWFILE_TEST -DGLAZE_VERSION='"9.0"' -o $@ \
+	    ../tests/native/hwfile.c ../kernel/hwfile.c $(HWFILE_CRYPTO)
+hwfile-test: ../out/host/hwfile-test
+	python3 ../tests/hwfile_test.py ../out/host/hwfile-test
+.PHONY: hwfile-test
+
 # Production early boot I/O with fake registers and failure injection.
 boot-init-test: ../tests/native/spl_io.c ../boot/spl.c ../kernel/drivers/nand.c ../tests/native/timer_boot.c ../kernel/timer.c ../tests/native/irq_boot.c ../kernel/drivers/irq.c ../tests/native/rtc_boot.c ../kernel/drivers/rtc.c
 	@mkdir -p ../out/host

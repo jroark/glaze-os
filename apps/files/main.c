@@ -76,6 +76,7 @@ static int pkg_err;                 /* the package can't be read */
 static char pkg_replaces[16];       /* version already installed, or "" */
 static bool pkg_card;               /* a card is in */
 static bool pkg_busy;
+static bool pkg_hw;                 /* hardware support (glaze/hwpkg.h): flash only */
 static uint8_t pkg_icon_buf[16 * 1024];
 static gfx_image pkg_icon;
 static bool pkg_icon_ok;
@@ -538,6 +539,20 @@ static void draw_package(gfx_surface *s)
     if (pkg_replaces[0]) {
         snprintf(line, sizeof(line), "Replaces the installed version %s.", pkg_replaces);
         gfx_text_center(s, 0, y, UI_W, df, line, 0x4C566C, 255);
+        y += df->line_height;
+    }
+    if (pkg_hw) {
+        /* Drivers or firmware: the kernel loads them from the flash. */
+        y += 8;
+        gfx_text_center(s, 0, y, UI_W, df, "Hardware support. It is used the next", 0x4C566C, 255);
+        gfx_text_center(s, 0, y + df->line_height, UI_W, df, "time its card is inserted.", 0x4C566C, 255);
+        flash_rect = gfx_r(20, UI_H - 52, UI_W - 40, 36);
+        card_rect = gfx_r(0, 0, 0, 0);
+        if (pkg_busy)
+            gfx_text_center(s, 0, UI_H - 70, UI_W, ui_font(FONT_B14), "Installing" GFX_CH_ELLIPSIS, UI_TEXT, 255);
+        else
+            ui_draw_button(s, flash_rect, "Install", pressed == P_FLASH);
+        return;
     }
     flash_rect = gfx_r(20, UI_H - 96, UI_W - 40, 36);
     card_rect = gfx_r(20, UI_H - 52, UI_W - 40, 36);
@@ -624,6 +639,7 @@ static void load_package(int row)
     if (!pkg_err && pkg_find(pkg.id, bundle) == 0 && pkg_bundle_info(bundle, &old) == 0)
         strlcpy(pkg_replaces, old.version[0] ? old.version : "1.0", sizeof(pkg_replaces));
     pkg_card = fs_stat("/Card", &card) == 0;     /* statvfs would fall back to the flash */
+    pkg_hw = !pkg_err && pkg_hardware(path) == 1;
     pkg_busy = false;
 }
 
@@ -640,8 +656,13 @@ static void install_package(bool card)
         show_alert("Cannot Install", fs_strerror(rv));
         return;
     }
-    snprintf(msg, sizeof(msg), "\"%s\" is on the Home screen.", pkg.name);
-    show_alert("App Installed", msg);
+    if (pkg_hw) {
+        snprintf(msg, sizeof(msg), "\"%s\" is ready for its card.", pkg.name);
+        show_alert("Hardware Support Installed", msg);
+    } else {
+        snprintf(msg, sizeof(msg), "\"%s\" is on the Home screen.", pkg.name);
+        show_alert("App Installed", msg);
+    }
     load_package(open_row);         /* now "replaces" the installed copy */
     if (card || !strcmp(cwd, "/"))
         load_dir();

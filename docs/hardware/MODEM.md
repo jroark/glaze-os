@@ -11,7 +11,9 @@ PPP and the Hayes dialer to `bin/net` (36 KiB). GlazeBoot builds
 (`make glazeboot`) default to it. NAND images need `MODEM=1 NAND_DROP=wince`,
 because the default NAND romfs is within a few KiB of its 0x4C0000 slot.
 Without `MODEM=1`, a modem card still gets its kernel driver, and Settings says
-dial-up isn't included in the build.
+dial-up isn't included in the build, unless the signed `hw-modem` package is
+installed: it supplies a PPP `bin/net` that the service worker starts in place
+of the romfs one ([hardware packages](../os/HARDWARE_PACKAGES.md)).
 
 ## Verified hardware
 

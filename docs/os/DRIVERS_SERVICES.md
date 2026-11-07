@@ -52,8 +52,11 @@ relocation types are unsupported. Modules use the kernel's freestanding
 MIPS2/soft-float flags, with `-G0 -mno-abicalls -fno-pic`; they never link libc
 or libgcc. Rebuild modules with their matching kernel and bump the private
 driver ABI if its structures or contracts change. These are kernel-privileged
-images from the factory ROM archive; there is no syscall to load an arbitrary
-app or writable filesystem image into the kernel.
+images from the factory ROM archive, or from an installed
+[hardware package](HARDWARE_PACKAGES.md) whose manifest carries the OTA
+release key's signature for exactly this OS version, and whose bytes the
+kernel hashes before loading them. There is no syscall to load an arbitrary
+app or unsigned filesystem image into the kernel.
 
 To add another card backend, build its object and `glaze_driver` wrapper,
 include its `.ko` in `DRIVER_NAMES`, and add its CIS match to the dispatcher.
@@ -69,7 +72,7 @@ kernel imports must be explicitly exported by the loader.
 [
   {"name":"fs", "path":"bin/fs", "privileges":["flash"], "required":true},
   {"name":"net", "path":"bin/net", "privileges":["network"],
-   "requires":["network"], "after":["fs"]},
+   "requires":["network"], "after":["fs"], "overridable":true},
   {"name":"audio", "path":"bin/audio", "privileges":["audio"], "after":["fs"]},
   {"name":"usb", "path":"bin/usb", "privileges":["usb","privileged"], "after":["fs"]},
   {"name":"bluetooth", "path":"bin/bluetooth", "privileges":["bluetooth"],
@@ -89,7 +92,10 @@ letters/digits/underscores/hyphens, and paths to `bin/<program>` (47 bytes).
 `requires:["bluetooth"]` waits for the matched UART module; its service owns
 BCSP/HCI and binds to its own socket generation. See [Bluetooth](../hardware/BLUETOOTH.md).
 `after` names live service dependencies: they start first, and their dependents
-stop first if they go away. Missing dependencies, cycles, duplicate names,
+stop first if they go away. `overridable` lets a signed hardware package
+replace the program (`net` with dial-up PPP, [HARDWARE_PACKAGES.md](HARDWARE_PACKAGES.md));
+it still runs with the catalog's privileges, and a required service can't be
+overridable. Missing dependencies, cycles, duplicate names,
 unknown capabilities and invalid paths fail catalog generation. The kernel
 also validates the binary catalog before granting any capabilities.
 

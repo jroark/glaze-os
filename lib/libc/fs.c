@@ -335,6 +335,14 @@ int fs_ota_cancel(void)
     return rv ? rv : call(FS_OS_UPDATE, FS_OTA_CANCEL, 0, 0, NULL);
 }
 
+int fs_hw_rescan(void)
+{
+    SESSION_LOCKED();
+    int rv = connect();
+
+    return rv ? rv : call(FS_HW_RESCAN, 0, 0, 0, NULL);
+}
+
 int fs_read_file(const char *path, void *dst, uint32_t max)
 {
     SESSION_LOCKED();
