@@ -83,6 +83,7 @@ enum {
      * which runs once no debugger holds it off), w3 = client pid. */
     SB_DEBUG_POWER,
     SB_DEBUG_RECLAIM,       /* development client: end background apps before a reload; w3 = client pid */
+    SB_GO_HOME,             /* the foreground app returns to the home screen, as Home does; w3 = its pid */
 };
 #define SB_DEBUG_POWER_IDLE 0x100u
 
@@ -113,7 +114,8 @@ struct sb_note_req {
 };
 
 /* Fits in the existing client request page without changing sb_shared ABI. */
-struct sb_wince_req { char path[128]; };
+/* args, if any, become the CE command line of a newly started instance. */
+struct sb_wince_req { char path[128]; char args[48]; };
 
 #define SB_CLIPBOARD_MAX 8192
 

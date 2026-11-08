@@ -48,6 +48,8 @@ static inline void gz_secs_to_dt(uint32_t secs, struct gz_datetime *dt)
  * for the app whose romfs binary is `path`. 0 or a negative GZ_E* code. */
 /* Launch a supported CE application directly from the read-only /NAND mount. */
 int sb_wince_launch(const char *path);
+/* As sb_wince_launch, giving a new instance a command line (at most 47 bytes). */
+int sb_wince_launch_args(const char *path, const char *args);
 int sb_badge_set_for(const char *path, int count);
 int sb_note_post_for(const char *path, uint32_t id, uint32_t when, const char *title, const char *body,
                      int badge);

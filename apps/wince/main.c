@@ -120,6 +120,8 @@ static void *native_symbol(const char *dll, const char *name)
                 fn = ce_resolve_gdi(name);
         }
         if (!fn)
+            fn = ce_resolve_process(dll, name);
+        if (!fn)
             fn = ce_resolve_property(name);
         if (!fn)
             fn = ce_resolve_shell(dll, name);
@@ -466,9 +468,8 @@ int main(void)
         ce_fatal("Expected a WinCE application");
     if (published != bridge_count)
         publish_bridges();
-    static WCHAR command[1];
     printf("wince: entering original executable\n");
-    CW result = ce_call(ce_main.base + ce_main.pe.entry, ce_main.base, 0, WORD(command), 1);
+    CW result = ce_call(ce_main.base + ce_main.pe.entry, ce_main.base, 0, WORD(ce_command_line()), 1);
     ce_shutdown();
     printf("wince: original executable returned %u\n", result);
     return (int)result;

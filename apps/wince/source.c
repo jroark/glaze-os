@@ -218,6 +218,15 @@ static bool source_path(const char *canonical,char out[FS_PATH_MAX])
     else n=snprintf(out,FS_PATH_MAX,"/NAND%s",canonical);
     return n>0&&n<FS_PATH_MAX;
 }
+/* An executable for CreateProcess: its CE path on the original volume, or
+ * a bare or \Windows name found as libraries are. */
+bool ce_source_executable(const char *canonical,char out[FS_PATH_MAX])
+{
+    char path[FS_PATH_MAX];
+    if(source_path(canonical,path)&&find_file(path,out))return true;
+    const char *leaf=strrchr(canonical,'/');
+    return find_module(leaf?leaf+1:canonical,out);
+}
 bool ce_source_directory(const char *canonical,char out[FS_PATH_MAX])
 {
     struct fs_stat st;

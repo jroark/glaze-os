@@ -13,5 +13,6 @@ void *ce_source_rom_library(const char *, uint32_t *);
 void *ce_source_image(const char *, uint32_t *);
 const char *ce_source_ordinals(uint32_t *);
 bool ce_source_file(const char *, char [FS_PATH_MAX]);
+bool ce_source_executable(const char *, char [FS_PATH_MAX]);
 bool ce_source_directory(const char *, char [FS_PATH_MAX]);
 #endif

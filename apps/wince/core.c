@@ -147,7 +147,7 @@ void ce_widen(WCHAR *dst, uint32_t capacity, const char *src)
         dst[n] = 0;
 }
 
-static bool ce_canonical_path(char canonical[FS_PATH_MAX], const WCHAR *input)
+bool ce_canonical_path(char canonical[FS_PATH_MAX], const WCHAR *input)
 {
     char raw[FS_PATH_MAX+16], norm[FS_PATH_MAX+16];
     ce_narrow(raw, sizeof(raw), input);
@@ -977,6 +977,17 @@ bool ce_registry_set_dword(const char *key, const char *name, uint32_t value)
     ce_put32(bytes, value);
     return !ce_reg_create(&registry, key) && !ce_reg_set(&registry, key, name, 4, bytes, 4) && reg_save();
 }
+bool ce_registry_string(const char *key, const char *name, WCHAR *out, uint32_t capacity)
+{
+    reg_load();
+    struct ce_reg_value *v = ce_reg_find(&registry, key, name);
+    if (!v || (v->type != 1 && v->type != 2) || !capacity)
+        return false;
+    uint32_t n = MIN(v->size / 2, capacity - 1);
+    memcpy(out, v->bytes, n * 2);
+    out[n] = 0;
+    return true;
+}
 bool ce_registry_binary(const char *key, const char *name, void *out, uint32_t size)
 {
     reg_load();
@@ -1683,6 +1694,9 @@ CE_API(CloseHandle)
     if (handled)
         return closed;
     closed = ce_database_close(a0, &handled);
+    if (handled)
+        return closed;
+    closed = ce_process_close(a0, &handled);
     if (handled)
         return closed;
     struct file_handle *f = file_handle(a0);

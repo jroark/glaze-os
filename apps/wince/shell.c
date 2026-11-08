@@ -715,13 +715,6 @@ CE_API(CoshGetCommandLine)
         *PTR(WCHAR, a2) = 0;
     return a1 == 0xffffffffu ? 1 : 0;
 }
-CE_API(CoshExecute)
-{
-    /* HWND, executable, arguments. The original service forwards the launch
-     * to COShell. There is no COShell process in a private Glaze app bundle. */
-    ce_error = 2;
-    return 0;
-}
 CE_API(MessageBuzzer)
 {
     audio_sound(AUDIO_SND_NOTIFY);
@@ -1224,7 +1217,6 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CSOBar_AddAdornments),
     CE_EXPORT(CSOBar_Destroy),
     CE_EXPORT(CoshGetCommandLine),
-    CE_EXPORT(CoshExecute),
     CE_EXPORT(MessageBuzzer),
     CE_EXPORT(StopBuzzer),
     CE_EXPORT(sndPlaySoundW), CE_EXPORT(PlaySoundW),

@@ -2496,6 +2496,16 @@ static void handle_msg(int token, struct gz_msg *m)
             s && s->shared ? &s->shared->req : NULL, s ? s->pid : 0, now_ms());
         break;
     }
+    case SB_GO_HOME:
+        /* A CE app's main-menu command (CoshMainMenuExec); only the app in
+         * front may send itself home. */
+        r.w[0] = (uint32_t)GZ_EPERM;
+        if (state == ST_APP && front() && front()->pid == (int)m->w[3]) {
+            struct gz_input_event e = { .type = GZ_EV_KEY_DOWN, .code = GZ_KEY_HOME, .time_ms = now_ms() };
+            handle_key(&e);
+            r.w[0] = 0;
+        }
+        break;
     case SB_REBOOT_CE:
         r.w[0] = settings_request_allowed((int)m->w[3]) ?
             (uint32_t)gz_reboot_ce() : (uint32_t)GZ_EPERM;
@@ -2572,8 +2582,15 @@ static void handle_msg(int token, struct gz_msg *m)
         if(!req||!memchr(req->path,0,sizeof req->path))break;
         if(state!=ST_HOME&&state!=ST_APP){r.w[0]=(uint32_t)GZ_EBUSY;break;}
         char path[sizeof req->path];memcpy(path,req->path,sizeof path);
+        char args[sizeof req->args];memcpy(args,req->args,sizeof args);args[sizeof args-1]=0;
         int index=apps_wince(path);
         if(index<0){r.w[0]=(uint32_t)index;break;}
+        /* A new instance reads (and removes) its command line; a running one
+         * is only brought forward, as CE apps find their earlier window. */
+        if(find_slot_by_app(index)<0){
+            char cmdline[FS_PATH_MAX];snprintf(cmdline,sizeof cmdline,"%s/cmdline",sb_apps[index].path);
+            if(args[0])fs_write_file(cmdline,args,strlen(args));else fs_remove(cmdline);
+        }
         launch(index);int slot=find_slot_by_app(index);
         r.w[0]=slot>=0?0:(uint32_t)GZ_ENOMEM;break;
     }

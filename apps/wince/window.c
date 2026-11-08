@@ -42,6 +42,7 @@ static CW builtin_proc(CW, CW, CW, CW);
 static void draw_control(struct ce_window *);
 CW ce_GetActiveWindow(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
 static void click_button(struct ce_window *);
+static bool is_button(const struct ce_window *w);
 static unsigned handle_index(CW handle)
 {
     return handle - 0x70000000u;
@@ -137,11 +138,15 @@ static CW change_focus(CW handle)
     if (previous) {
         previous->dirty = true;
         ce_send(old, 8, handle, 0); /* WM_KILLFOCUS */
+        if (is_button(previous) && (previous->style & 0x4000u)) /* BS_NOTIFY: BN_KILLFOCUS */
+            ce_send(previous->parent, 0x111, previous->id | 7u << 16, old);
     }
     struct ce_window *next = ce_window(handle);
     if (next && focus == handle) {
         next->dirty = true;
         ce_send(handle, 7, old, 0); /* WM_SETFOCUS */
+        if (is_button(next) && (next->style & 0x4000u)) /* BN_SETFOCUS */
+            ce_send(next->parent, 0x111, next->id | 6u << 16, handle);
     }
     return old;
 }
