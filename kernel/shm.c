@@ -35,7 +35,7 @@ int shm_create(uint32_t len)
         if (s->refs)
             continue;
         for (uint32_t i = 0; i < npages; i++) {
-            void *page = page_alloc_colour_raw(i * PAGE_SIZE);
+            void *page = page_alloc_colour(i * PAGE_SIZE); /* zeroed: no other process's data */
             if (!page) {
                 while (i--)
                     page_free((void *)KSEG0(s->frames[i]));

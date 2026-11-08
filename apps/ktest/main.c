@@ -473,6 +473,35 @@ static void test_packages(void)
     CHECK(pkg_find("hello", bundle) == GZ_ENOENT, "pkg gone after uninstall");
 }
 
+/* Running memory out sweeps the page allocator over the top frame of SDRAM;
+ * the next search used to start past the end of its table and hand out a
+ * frame beyond RAM, corrupting kernel data (kernel/mm.c, hint_after). A
+ * request bigger than RAM fails, and everything taken comes back. */
+static void test_memory_exhaustion(void)
+{
+    enum { CHUNK = 16 * 4096, MAXCHUNKS = 16 * 1024 * 1024 / CHUNK };
+    static void *chunks[MAXCHUNKS];
+    struct gz_sysinfo before, after;
+
+    gz_sysinfo(&before);
+    CHECK(!gz_mmap_anon(before.total_pages * 4096 + 4096), "mmap larger than RAM refused");
+    bool ok = true;
+    for (int pass = 0; pass < 2; pass++) {
+        unsigned n = 0;
+        while (n < MAXCHUNKS && (chunks[n] = gz_mmap_anon(CHUNK)))
+            memset(chunks[n++], 0xA5, CHUNK);
+        ok &= n > 0 && n < MAXCHUNKS;
+        for (unsigned i = 0; i < n; i++) {
+            const uint8_t *c = chunks[i];
+            ok &= c[0] == 0xA5 && c[CHUNK - 1] == 0xA5;
+            ok &= gz_munmap_anon(chunks[i]) == 0;
+        }
+        printf("ktest: exhaustion pass %d took %u KiB\n", pass, n * CHUNK / 1024);
+    }
+    gz_sysinfo(&after);
+    CHECK(ok && after.free_pages + 16 >= before.free_pages, "memory exhaustion fails cleanly and frees all");
+}
+
 /* romfs lives in NAND and is paged in (kernel/romfs.c): a mapped file reads
  * on touch, also when a syscall reads it first, and cache pages nothing maps
  * are given back when memory runs out. */
@@ -1461,6 +1490,7 @@ int main(void)
     test_modem();
     test_net();
     test_ota();
+    test_memory_exhaustion();
 
     struct gz_sysinfo si;
     gz_sysinfo(&si);
