@@ -1,0 +1,5 @@
+# Direct NAND Contacts (times after the launch tap): create a contact.
+20000 tap 20 12
+26000 tap 100 75
+27000 text Compatibility Contact
+31000 tap 20 40

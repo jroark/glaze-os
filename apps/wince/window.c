@@ -23,6 +23,7 @@ static CW focus, capture, modal, pressed;
 static CW window_serial;
 
 static bool quitting;
+static bool keyboard_auto; /* opened by tapping an edit, not by SipShowIM */
 static CW exit_code;
 static uint8_t key_state[256];
 static struct {
@@ -873,6 +874,14 @@ bool ce_screen_dirty = true;
  * through a DC; explicit renders (UpdateWindow, popups, keyboard) always do. */
 static void render(bool force)
 {
+    /* A keyboard the runtime opened for an edit closes once no edit has
+     * the focus (an editor window closed), as CE's SIP does for its apps. */
+    struct ce_window *typing = ce_window(focus);
+    if (keyboard_auto && ce_keyboard_open && (!typing || !is_edit(typing) || !ce_window_visible(focus))) {
+        ce_keyboard_open = keyboard_auto = false;
+        ce_redraw_all();
+        force = true;
+    }
     bool drawn = force || ce_screen_dirty;
     for (unsigned i = 0; i < WINDOWS; i++) {
         struct ce_window *w = &windows[i];
@@ -1099,11 +1108,15 @@ static void input(const struct gz_input_event *e)
     if (e->type == GZ_EV_TOUCH_DOWN) {
         change_focus(w->handle);
         pressed = is_button(w) ? w->handle : 0;
-        if (ce_keyboard_open && w->dialog_proc && e->y < r.y + 24) {
-            ce_keyboard_open = false;
+        /* CE's SIP has its own button; Glaze's keyboard closes when a tap
+         * lands outside any edit, as in Glaze's own apps. */
+        if (ce_keyboard_open && ((w->dialog_proc && e->y < r.y + 24) || !is_edit(w))) {
+            ce_keyboard_open = keyboard_auto = false;
             ce_redraw_all();
         }
         if (is_edit(w) && !(w->style & 0x800)) {
+            if (!ce_keyboard_open)
+                keyboard_auto = true;
             ce_keyboard_open = true;
             w->dirty = true;
         }
@@ -2308,6 +2321,7 @@ CE_API(SipShowIM)
     if (open != ce_keyboard_open)
         ce_redraw_all(); /* uncover or cover the keyboard area */
     ce_keyboard_open = open;
+    keyboard_auto = false; /* the app manages the input panel */
     ui_keyboard_init(&ce_keyboard);
     for (unsigned i = 0; i < WINDOWS; i++)
         if (windows[i].handle && !windows[i].parent)
