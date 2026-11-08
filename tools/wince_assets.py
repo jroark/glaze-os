@@ -70,6 +70,62 @@ def lzss(data, size=None, limit=32 * 1024 * 1024):
     return bytes(out)
 
 
+def rom_decompress(data, capacity=4 * 1024 * 1024):
+    """Windows CE BinaryDecompress (romimage's compressed ROM sections), as
+    apps/wince/assets.c decodes it: a 24-bit size and block end offsets, then
+    flag-byte LZ blocks whose match offsets are absolute within 4 KiB."""
+    if len(data) < 6:
+        raise AssetError("truncated compressed ROM section")
+    total = data[0] | data[1] << 8 | data[2] << 16
+    entries = (total >> 12) + 2
+    start = 3 * entries
+    if total > capacity or start > len(data):
+        raise AssetError("invalid compressed ROM section size")
+    out = bytearray()
+    for k in range(1, entries):
+        if len(out) >= total:
+            break
+        end = data[3 * k] | data[3 * k + 1] << 8 | data[3 * k + 2] << 16
+        if not start <= end <= len(data):
+            raise AssetError("invalid compressed ROM block")
+        src, block, i, limit = data[start:end], bytearray(), 0, min(4096, total - len(out))
+        while i < len(src) and len(block) < limit:
+            flags = src[i]
+            i += 1
+            bit = 1
+            while bit < 0x100 and i < len(src) and len(block) < limit:
+                v = src[i]
+                i += 1
+                bit, matched = bit << 1, flags & bit
+                if not matched:
+                    block.append(v)
+                    continue
+                low = v & 15
+                if low == 1:
+                    origin, length = len(block) - (v >> 4) - 2, 2
+                else:
+                    if i >= len(src) or (not low and i + 1 >= len(src)):
+                        raise AssetError("truncated compressed ROM match")
+                    origin = v >> 4 | src[i] << 4
+                    i += 1
+                    if low:
+                        length = low + 1
+                    else:
+                        length = src[i] + 17
+                        i += 1
+                if not 0 <= origin < len(block):
+                    raise AssetError("invalid compressed ROM match")
+                for n in range(length):
+                    if len(block) >= limit:
+                        break
+                    block.append(block[origin + n])
+        out += block
+        start = end
+    if len(out) != total:
+        raise AssetError("truncated compressed ROM data")
+    return bytes(out)
+
+
 class Fat16:
     def __init__(self, image):
         self.image = image

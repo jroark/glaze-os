@@ -15,7 +15,7 @@ def literal(data):return b''.join(b'\xff'+data[i:i+8] for i in range(0,len(data)
 def synthetic_nk():
     """Small standard ROMHDR with two export modules and an original dictionary."""
     base=0x80060000;flat=bytearray(0x6000)
-    put(flat,0x40,0x43454345);put(flat,0x44,base+0x100);put(flat,0x110,3)
+    put(flat,0x40,0x43454345);put(flat,0x44,base+0x100);put(flat,0x110,4)
     for i,name in enumerate(('coredll.dll','commctrl.dll','CCFS.DLL')):
         entry=0x150+i*32;meta=0x300+i*0x80;raw=0x1000+i*0x1000
         flat[meta:meta+len(name)+1]=name.encode()+b'\0';put(flat,entry+20,base+meta)
@@ -32,8 +32,27 @@ def synthetic_nk():
             # A complete small four-bit dictionary, not copied from a ROM.
             t=raw+0x100;put(flat,t,0xffff);put(flat,t+4+5*4,-2);put(flat,t+4+6*4,-7)
             put(flat,t+0x84+4*4,2);struct.pack_into('<HH',flat,t+0x104,0x1234,0x5678)
+    add_rom_module(flat,base)
     stream=b'B000FF\n'+struct.pack('<II',base,len(flat))+struct.pack('<III',base,len(flat),sum(flat)&0xffffffff)+flat+struct.pack('<III',0,base,0)
     return literal(stream)
+# A ROM DLL whose data section uses romimage compression: four literals, an
+# absolute 8-byte match, a short 2-byte match, a long match and a literal.
+ROM_BLOCK=bytes([0x70])+b'ABCD'+bytes([0x07,0x00,0x01,0x00,0x00,0x03])+b'Z'
+ROM_DATA=b'ABCDABCDABCDCDABCDABCDABCDCDABCDABZ'
+def rom_compressed(block=ROM_BLOCK,total=len(ROM_DATA)):
+    end=6+len(block);return bytes([total&255,total>>8&255,total>>16,end&255,end>>8&255,end>>16])+block
+def add_rom_module(flat,base):
+    entry=0x1b0;meta=0x500;code=0x4000;data=0x5000;packed=rom_compressed()
+    flat[meta:meta+10]=b'pimdb.dll\0';put(flat,entry+20,base+meta);put(flat,entry+24,base+meta+32);put(flat,entry+28,base+meta+0x90)
+    e32=meta+32;struct.pack_into('<HH',flat,e32,2,0x210e);put(flat,e32+4,0x1010);put(flat,e32+8,0x01b40000);put(flat,e32+20,0x3000)
+    put(flat,e32+32,0x1100);put(flat,e32+36,0x60)
+    for i,v in enumerate((0x1000,0x1000,0x1000,base+code,0x03b41000,0x60000020)):put(flat,meta+0x90+i*4,v)
+    for i,v in enumerate((0x800,0x2000,len(packed),base+data,0x03b42000,0xc0002040)):put(flat,meta+0xa8+i*4,v)
+    struct.pack_into('<II',flat,code+0x10,0x03e00008,0)
+    for i,v in enumerate((0,0,0,0x1180,1,1,1,0x1140,0x1144,0x1148)):put(flat,code+0x100+i*4,v)
+    put(flat,code+0x140,0x1010);put(flat,code+0x144,0x1150);struct.pack_into('<H',flat,code+0x148,0)
+    flat[code+0x150:code+0x161]=b'pim_OpenDatabase\0';flat[code+0x180:code+0x18a]=b'pimdb.dll\0'
+    flat[data:data+len(packed)]=packed
 def nand_fixture(packed):
     count=(len(packed)+511)//512;out=bytearray(512+count*512)
     put(out,40,1);put(out,44,count);out[512:512+len(packed)]=packed;return out
@@ -77,6 +96,22 @@ class Assets(unittest.TestCase):
             self.decode(kind,raw,bytes([0xaa if nibble else 0xab])*512)
         self.decode(15,bytes(128),b'\x34\x12'*256)
         self.decode(16,literal(b'Z'*512),b'Z'*512)
+    def test_rom_module(self):
+        pe=self.path/'pimdb.img';out=self.run_cli('rom',self.nand,'pimdb.dll',pe).stdout.decode()
+        self.assertIn('base 01b40000 size 3000 entry 1010 sections 2',out)
+        image=pe.read_bytes();self.assertEqual(image[0x1010:0x1014],struct.pack('<I',0x03e00008))
+        self.assertEqual(image[0x2000:0x2000+len(ROM_DATA)],ROM_DATA);self.assertEqual(image[0x2000+len(ROM_DATA):0x2800],bytes(0x800-len(ROM_DATA)))
+        self.assertIn(b'pim_OpenDatabase',image[0x1150:0x1170])
+        self.run_cli('rom',self.nand,'NFC.dll',pe,success=False)
+    def test_rom_decompress(self):
+        src=self.path/'rom.bin';dst=self.path/'rom.out'
+        src.write_bytes(rom_compressed());self.run_cli('romdec',src,dst,4096);self.assertEqual(dst.read_bytes(),ROM_DATA)
+        sys.path.insert(0,str(ROOT/'tools'));from wince_assets import rom_decompress
+        self.assertEqual(rom_decompress(rom_compressed()),ROM_DATA)
+        for bad in (rom_compressed(bytes([0x01,0x07,0x00])),rom_compressed(bytes([0x01,0x13])),rom_compressed(total=len(ROM_DATA)+1),
+                    rom_compressed()[:4],rom_compressed(bytes([0x01,0x00,0x00]))):
+            src.write_bytes(bad);self.run_cli('romdec',src,dst,4096,success=False)
+        src.write_bytes(rom_compressed());self.run_cli('romdec',src,dst,8,success=False)
     def test_reject_bad_bounds(self):
         b=nand_fixture(synthetic_nk());put(b,44,0xffffffff);self.nand.write_bytes(b)
         self.run_cli('recover',self.nand,self.names,self.dictionary,success=False)
@@ -95,5 +130,7 @@ class Assets(unittest.TestCase):
             self.run_cli('decode',source,self.dictionary,target)
             self.assertEqual(target.read_bytes(),decoder.unpack(data))
             self.assertTrue(target.read_bytes().startswith(b'MZ'))
+        for name in ('pimdb.dll','NFC.dll','MailData.dll','CS.dll','CSO.dll'):
+            self.run_cli('rom',self.nand,name,self.path/(name+'.img'))
 
 if __name__=='__main__':unittest.main()

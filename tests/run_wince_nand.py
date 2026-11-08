@@ -25,7 +25,16 @@ def main():
     ap.add_argument('--emulator',type=Path,default=ROOT.parent/'be300/build-host-service/be300')
     ap.add_argument('--seconds',type=int,default=65)
     ap.add_argument('--relaunch',action='store_true',help='exercise Calculator input and cached metadata on a second launch')
+    ap.add_argument('--app',help='original executable in Program Files (default calc.exe); its DLLs come from the image')
+    ap.add_argument('--input',type=Path,help='timed events appended after the launch taps (start at 14000 ms)')
+    ap.add_argument('--expect',action='append',default=[],help='serial log text that must appear (repeatable)')
+    ap.add_argument('--allow-unresolved',action='store_true',help='do not fail on statically unresolved imports')
+    ap.add_argument('--no-build',action='store_true',help='reuse the previous build (and its input script)')
     args=ap.parse_args()
+    if not args.emulator.exists():
+        for candidate in ('build-host-service','build-host','build-host-headless','build-ci'):
+            if (ROOT.parent/'be300'/candidate/'be300').exists() or (Path.home()/'src/be300'/candidate/'be300').exists():
+                args.emulator=next(p for p in (ROOT.parent/'be300'/candidate/'be300',Path.home()/'src/be300'/candidate/'be300') if p.exists());break
     work=ROOT/('out/wince-nand-original' if args.image else 'out/wince-nand-synthetic');work.mkdir(parents=True,exist_ok=True)
     programs=work/'Program Files';programs.mkdir(exist_ok=True)
     for p in programs.iterdir():p.unlink()
@@ -33,8 +42,30 @@ def main():
         original=args.image.read_bytes();start,count=u32(original,40),u32(original,44)
         packed=original[start*512:(start+count)*512]
         volume=Fat16(original)
-        for name in ('calc.exe.cpk','LC.dll.cpk'):(programs/name).write_bytes(volume.read('Program Files/'+name))
-        expected='calc.exe'
+        expected=args.app or 'calc.exe'
+        windows=work/'Windows';documents=work/'My Documents'
+        for d in (windows,documents):
+            if d.exists():shutil.rmtree(d)
+            d.mkdir()
+        # The application is alone in Program Files, so it is the first row in
+        # Files; its libraries are found through \\Windows, as on the device.
+        listing=list(volume.entries(volume.chain(next(e[3] for e in volume.entries(volume.root) if e[0]=='Program Files'))))
+        for name,_,attr,_,_ in listing:
+            if attr&16:continue
+            low=name.lower()
+            if low in (expected.lower(),expected.lower()+'.cpk'):(programs/name).write_bytes(volume.read('Program Files/'+name))
+            elif low.endswith(('.dll','.dll.cpk')):(windows/name).write_bytes(volume.read('Program Files/'+name))
+        if not any(programs.iterdir()):ap.error(f'{expected} is not in the image\'s Program Files')
+        def copy_tree(fat_dir,host):
+            for name,_,attr,cluster,_ in volume.entries(volume.chain(cluster_of(fat_dir))):
+                if attr&16:(host/name).mkdir(exist_ok=True);copy_tree(fat_dir+'/'+name,host/name)
+                else:(host/name).write_bytes(volume.read(fat_dir+'/'+name))
+        def cluster_of(path):
+            d=volume.root;cl=None
+            for part in path.split('/'):
+                cl=next(e[3] for e in volume.entries(d) if e[0]==part);d=volume.chain(cl)
+            return cl
+        copy_tree('My Documents',documents)
     else:
         from make_wince_abi import executable
         pe=bytearray(executable())
@@ -43,16 +74,33 @@ def main():
         (programs/'Fixture.exe').write_bytes(pe)
         packed=synthetic_nk();expected='Fixture.exe'
     script=work/'input.txt'
-    script.write_text('3000 drag 40 280 235 280 500\n4500 tap 30 50\n6500 tap 120 222\n8500 tap 120 78\n10500 tap 120 78\n')
+    # Unlock, open Files, NAND, Program Files (after My Documents when the
+    # image supplies it), then the application.
+    folder_row=114 if args.image else 78
+    script.write_text(f'3000 drag 40 280 235 280 500\n4500 tap 30 50\n6500 tap 120 222\n8500 tap 120 {folder_row}\n10500 tap 120 78\n')
+    if args.input:
+        with script.open('a') as f:f.write(args.input.read_text())
     if args.relaunch:
         if not args.image:ap.error('--relaunch requires --image')
         with script.open('a') as f:f.write('36000 tap 120 232\n37000 tap 207 265\n38000 tap 164 232\n39000 tap 164 265\n40000 tap 224 12\n42000 tap 30 50\n44000 tap 120 78\n50000 tap 120 232\n51000 tap 207 265\n52000 tap 164 232\n53000 tap 164 265\n')
-    with (work/'build.log').open('wb') as log:
-        subprocess.run(['make','-j4','INPUT_SCRIPT='+str(script),'glazeboot','ramboot'],cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True)
+    # Natively in the cross environment, otherwise through ./build.sh's
+    # container, which sees the repository at /work.
+    native=shutil.which('mipsel-linux-gnu-gcc')
+    relative=script.resolve().relative_to(ROOT)
+    command=(['make','-j4','INPUT_SCRIPT='+str(script)] if native else
+             ['./build.sh','INPUT_SCRIPT=/work/'+str(relative)])+['glazeboot','ramboot']
+    if not args.no_build:
+        with (work/'build.log').open('wb') as log:
+            subprocess.run(command,cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True)
     fat=work/'fat.img'
     fat.unlink(missing_ok=True)
-    subprocess.run(['mkfs.fat','-F','16','-s','1','-n','CETEST','-C',str(fat),'6144'],stdout=subprocess.DEVNULL,check=True)
-    subprocess.run(['mcopy','-s','-i',str(fat),str(programs),'::/'],stdout=subprocess.DEVNULL,check=True)
+    if shutil.which('mkfs.fat'):
+        subprocess.run(['mkfs.fat','-F','16','-s','1','-n','CETEST','-C',str(fat),'6144'],stdout=subprocess.DEVNULL,check=True)
+    else:
+        fat.write_bytes(bytes(6144*1024))
+        subprocess.run(['mformat','-i',str(fat),'-T',str(6144*2),'-h','16','-s','32','-c','1','-v','CETEST','::'],stdout=subprocess.DEVNULL,check=True)
+    for d in (programs,work/'My Documents',work/'Windows'):
+        if d.exists():subprocess.run(['mcopy','-s','-i',str(fat),str(d),'::/'],stdout=subprocess.DEVNULL,check=True)
     data=bytearray((ROOT/'out/glaze-ramboot.bin').read_bytes())
     # Model the default GlazeBoot app selection, leaving enough RAM for NK's
     # temporary metadata recovery. SPL reads this partition's explicit length.
@@ -77,6 +125,10 @@ def main():
     assert 'fs: NAND FAT volume mounted' in log
     assert 'wince: entering original executable' in log
     assert expected in log
+    for text in args.expect:assert text in log,f'missing from serial log: {text}'
+    unresolved=sorted({line.split('import ',1)[1] for line in log.splitlines() if 'wince: unresolved import ' in line})
+    if unresolved:print('Unresolved imports:',', '.join(unresolved))
+    assert args.allow_unresolved or not unresolved,'statically unresolved imports'
     if not args.image:assert 'wince: original executable returned 37' in log
     if args.relaunch:
         assert log.count('wince: entering original executable')==2, 'second launch did not enter CE'

@@ -7,7 +7,7 @@
 static bool active, metadata_loaded;
 static char program[FS_PATH_MAX], directory[FS_PATH_MAX], ce_name[FS_PATH_MAX+16];
 static struct ce_nk_assets metadata;
-static char loaded_names[16][32], loaded_paths[16][FS_PATH_MAX+16];
+static char loaded_names[32][32], loaded_paths[32][FS_PATH_MAX+16];
 static unsigned loaded_count;
 static uint32_t last_progress;
 
@@ -69,6 +69,11 @@ static bool cache_key(uint32_t *key)
     if(fs_nand_read((start+count-1)*512,page,sizeof page)!=sizeof page)return false;
     *key=hash_bytes(h,page,sizeof page);return true;
 }
+static uint32_t cache_hash(uint32_t names,uint32_t dict,uint32_t mods)
+{
+    uint32_t h=hash_bytes(hash_bytes(2166136261u,metadata.ordinals,names),metadata.dictionary,dict);
+    return mods?hash_bytes(h,metadata.modules,mods):h;
+}
 static void load_metadata(void)
 {
     if(metadata_loaded)return;
@@ -76,16 +81,17 @@ static void load_metadata(void)
     uint32_t key=0;cache_key(&key);
     const char *cache="/Library/WinCE/rom.cache";
     char tmp[64];snprintf(tmp,sizeof tmp,"/Library/WinCE/rom.%u.tmp",(unsigned)gz_getpid());
+    /* Version 2 adds the cached Casio ROM library records. */
     uint8_t header[24];int fd=fs_open(cache,FS_O_READ);
     if(fd>=0){
-        if(fs_read(fd,header,sizeof header)==sizeof header&&ce_u32(header)==0x31414357u&&ce_u32(header+4)==key&&key){
-            uint32_t names=ce_u32(header+8),dict=ce_u32(header+12);
-            if(names&&names<=CE_ORDINAL_MAX&&dict>=0x104&&dict<=CE_DICT_MAX){
-                metadata.ordinals=malloc(names);metadata.dictionary=malloc(dict);
-                if(metadata.ordinals&&metadata.dictionary&&fs_read(fd,metadata.ordinals,names)==(int)names&&
-                    fs_read(fd,metadata.dictionary,dict)==(int)dict&&
-                    hash_bytes(hash_bytes(2166136261u,metadata.ordinals,names),metadata.dictionary,dict)==ce_u32(header+16)){
-                    metadata.ordinal_bytes=names;metadata.dictionary_bytes=dict;fs_close(fd);return;
+        if(fs_read(fd,header,sizeof header)==sizeof header&&ce_u32(header)==0x32414357u&&ce_u32(header+4)==key&&key){
+            uint32_t names=ce_u32(header+8),dict=ce_u32(header+12),mods=ce_u32(header+20);
+            if(names&&names<=CE_ORDINAL_MAX&&dict>=0x104&&dict<=CE_DICT_MAX&&mods<=CE_ROM_MODULES_MAX){
+                metadata.ordinals=malloc(names);metadata.dictionary=malloc(dict);metadata.modules=mods?malloc(mods):NULL;
+                if(metadata.ordinals&&metadata.dictionary&&(!mods||metadata.modules)&&fs_read(fd,metadata.ordinals,names)==(int)names&&
+                    fs_read(fd,metadata.dictionary,dict)==(int)dict&&(!mods||fs_read(fd,metadata.modules,mods)==(int)mods)&&
+                    cache_hash(names,dict,mods)==ce_u32(header+16)){
+                    metadata.ordinal_bytes=names;metadata.dictionary_bytes=dict;metadata.module_bytes=mods;fs_close(fd);return;
                 }
                 ce_nk_assets_free(&metadata);
             }
@@ -98,13 +104,16 @@ static void load_metadata(void)
     if(metadata.checksum_mismatches)printf("wince: metadata recovery audited %u NK record checksum mismatches\n",metadata.checksum_mismatches);
     printf("wince: recovered %u bytes of matching CE ordinal names and %u CCFS dictionary bytes\n",
            metadata.ordinal_bytes,metadata.dictionary_bytes);
-    memset(header,0,sizeof header);ce_put32(header,0x31414357u);ce_put32(header+4,key);
+    printf("wince: cached %u bytes of original CE application libraries\n",metadata.module_bytes);
+    memset(header,0,sizeof header);ce_put32(header,0x32414357u);ce_put32(header+4,key);
     ce_put32(header+8,metadata.ordinal_bytes);ce_put32(header+12,metadata.dictionary_bytes);
-    ce_put32(header+16,hash_bytes(hash_bytes(2166136261u,metadata.ordinals,metadata.ordinal_bytes),metadata.dictionary,metadata.dictionary_bytes));
+    ce_put32(header+16,cache_hash(metadata.ordinal_bytes,metadata.dictionary_bytes,metadata.module_bytes));
+    ce_put32(header+20,metadata.module_bytes);
     fs_mkdirs("/Library/WinCE");fd=fs_open(tmp,FS_O_WRITE|FS_O_CREATE|FS_O_TRUNC);
     if(fd>=0){
         bool ok=fs_write(fd,header,sizeof header)==sizeof header&&fs_write(fd,metadata.ordinals,metadata.ordinal_bytes)==(int)metadata.ordinal_bytes&&
-                fs_write(fd,metadata.dictionary,metadata.dictionary_bytes)==(int)metadata.dictionary_bytes;
+                fs_write(fd,metadata.dictionary,metadata.dictionary_bytes)==(int)metadata.dictionary_bytes&&
+                (!metadata.module_bytes||fs_write(fd,metadata.modules,metadata.module_bytes)==(int)metadata.module_bytes);
         if(fs_close(fd))ok=false;
         if(!ok||fs_rename(tmp,cache))fs_remove(tmp);
     }
@@ -168,6 +177,21 @@ void *ce_source_library(const char *name,uint32_t *size)
         return data;
     }
     return NULL;
+}
+/* Casio application libraries exist only in NK. They are loaded from the
+ * cached records after Program Files and Windows, at their ROM addresses. */
+void *ce_source_rom_library(const char *name,uint32_t *size)
+{
+    if(!active||!name||!*name)return NULL;
+    load_metadata();
+    void *pe=NULL;
+    if(ce_rom_module_pe(metadata.modules,metadata.module_bytes,name,&pe,size))return NULL;
+    if(loaded_count<ARRAY_SIZE(loaded_names)){
+        strlcpy(loaded_names[loaded_count],name,sizeof loaded_names[0]);
+        snprintf(loaded_paths[loaded_count],sizeof loaded_paths[0],"\\Windows\\%s",name);
+        loaded_count++;
+    }
+    return pe;
 }
 /* Map CE file paths to the original volume. Writes keep using ce_path's
  * private drive; the existing copy-on-write file handling consumes this. */

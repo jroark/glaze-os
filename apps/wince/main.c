@@ -7,7 +7,7 @@
 #include <glaze/vm.h>
 
 struct ce_module ce_main;
-#define CE_MAX_LIBRARIES 16
+#define CE_MAX_LIBRARIES 32
 static struct ce_module libraries[CE_MAX_LIBRARIES];
 static char library_names[CE_MAX_LIBRARIES][32];
 static bool library_initialized[CE_MAX_LIBRARIES];
@@ -281,6 +281,10 @@ CW ce_load_library(const char *name)
     char mapped[48];
     if (!file && ce_bundled_res_name(base, mapped))
         file = res_map(mapped, &size);
+    /* Casio application DLLs ship only inside NK; their XIP images are
+     * rebuilt from the cached records and bound like any other library. */
+    if (!file && ce_source_active() && (owned = ce_source_rom_library(base, &size)))
+        file = owned;
     if (!file) {
         ce_error = 126;
         return 0;
