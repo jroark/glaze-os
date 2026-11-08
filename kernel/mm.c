@@ -475,9 +475,11 @@ int as_fault(struct addrspace *as, uint32_t va, bool write)
 
 /* A separate allocation kind keeps publication/release from affecting a
  * stack, ELF image, device, shared surface, or libc's anonymous heap. */
+/* Page 0 stays unmapped; above it a loader may place what its format
+ * requires, such as Windows CE's user KData page at 0x5000. */
 int as_loader_map(struct addrspace *as, uint32_t va, uint32_t len)
 {
-    if (va < 0x10000u || va >= GZ_LD_BASE || !len || len > 4u * 1024u * 1024u ||
+    if (va < PAGE_SIZE || va >= GZ_LD_BASE || !len || len > 4u * 1024u * 1024u ||
         (va | len) & (PAGE_SIZE - 1) || len > GZ_LD_BASE - va) return GZ_EINVAL;
     for (struct region_page *p = as->regions; p; p = p->next)
         for (unsigned i = 0; i < ARRAY_SIZE(p->entry); i++) {

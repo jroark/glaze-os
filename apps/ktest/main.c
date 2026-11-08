@@ -39,6 +39,8 @@ static void test_loader_vm(void)
     CHECK(gz_vm_map(0, 4096) == GZ_EINVAL && gz_vm_map(base + 1, 4096) == GZ_EINVAL &&
           gz_vm_map(0x0efff000u, 8192) == GZ_EINVAL && gz_vm_map(base, 0) == GZ_EINVAL,
           "loader VM rejects null, unaligned, empty, and interpreter-crossing regions");
+    CHECK(gz_vm_map(0x5000, 4096) == 0 && gz_vm_release(0x5000) == 0,
+          "loader VM maps a low page above page 0 (CE's KData page)");
     CHECK(gz_vm_map(base, 8192) == 0, "loader VM allocates private pages");
     uint32_t *code = (uint32_t *)(uintptr_t)base;
     code[0] = 0x2402002au; /* addiu v0,zero,42 */

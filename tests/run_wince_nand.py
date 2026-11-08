@@ -24,7 +24,7 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--image',type=Path)
     ap.add_argument('--emulator',type=Path,default=ROOT.parent/'be300/build-host-service/be300')
-    ap.add_argument('--seconds',type=int,default=65)
+    ap.add_argument('--seconds',type=int,default=55,help='emulated seconds after the launch tap')
     ap.add_argument('--relaunch',action='store_true',help='exercise Calculator input and cached metadata on a second launch')
     ap.add_argument('--app',help='original executable in Program Files (default calc.exe); its DLLs come from the image')
     ap.add_argument('--input',type=Path,help='timed events, in milliseconds after the launch tap')
@@ -77,15 +77,18 @@ def main():
         packed=synthetic_nk();expected='Fixture.exe';folder_row=app_row=0
     # Unlock, open Files and NAND (the fifth row), open Program Files, then
     # scroll its 36-pixel rows (260 visible below the bar, first centred at
-    # y 78) with slow drags that rest before lifting, so nothing flings.
+    # y 78) with slow drags that rest before lifting.
     rows=len(names) if args.image else 1
-    scroll=max(0,min(36*app_row-150,36*rows-260))
+    scroll=max(0,min(36*app_row-150,36*rows+34-260)) # Files has a 34-pixel footer
     lines=['3000 drag 40 280 235 280 500','4500 tap 30 50','6500 tap 120 222',f'8500 tap 120 {78+36*folder_row}']
-    t,left=10500,scroll
+    # Equal steps: a drag of 6 pixels or less would be a tap on a row.
+    if scroll<24:scroll=0
+    drags=-(-scroll//200);t,left=10500,scroll
     while left>0:
-        step=min(200,left);lines.append(f'{t} down 120 290')
+        step=-(-left//drags);drags-=1;lines.append(f'{t} down 120 290')
         for i in range(1,21):lines.append(f'{t+i*50} move 120 {290-step*i//20}')
-        lines.append(f'{t+1250} up 120 {290-step}');t+=1600;left-=step
+        # Resting over Files' 100 ms before the lift leaves no fling.
+        lines.append(f'{t+1600} up 120 {290-step}');t+=1900;left-=step
     app_y=78+36*app_row-scroll
     launch=t;lines.append(f'{launch} tap 120 {app_y}')
     script=work/'input.txt'
@@ -145,10 +148,12 @@ def main():
     struct.pack_into('<II',data,56,0xa00000//512,len(fat_data)//512)
     nand=work/'nand.img';nand.write_bytes(data)
     before=hashlib.sha256(data[0x500000:]).hexdigest()
-    env=dict(os.environ,SDL_VIDEODRIVER='dummy',SDL_AUDIODRIVER='dummy',BE300_AUTOSTOP_SEC=str(args.seconds))
+    # --seconds of emulation follow the launch tap.
+    seconds=launch//1000+args.seconds
+    env=dict(os.environ,SDL_VIDEODRIVER='dummy',SDL_AUDIODRIVER='dummy',BE300_AUTOSTOP_SEC=str(seconds))
     with (work/'stdout.log').open('wb') as out,(work/'stderr.log').open('wb') as err:
         proc=subprocess.Popen([str(args.emulator),'--nand',str(nand),'--rtc-host-time','--speed','166'],cwd=work,env=env,stdout=out,stderr=err)
-        try:proc.wait(timeout=args.seconds+25)
+        try:proc.wait(timeout=seconds+25)
         except subprocess.TimeoutExpired:proc.terminate();proc.wait(timeout=15)
     log=(work/'stdout.log').read_text(errors='replace');print(log[-6000:])
     assert 'PANIC' not in log and 'fault: ' not in log and 'wince: error:' not in log
