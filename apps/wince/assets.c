@@ -218,19 +218,35 @@ static bool toc_entry(const struct nk *nk, const char *name, const uint8_t **e32
 /* Record: u32 bytes, name[32], vbase, vsize, entry, imageflags, count,
  * nine e32 units (rva, size), then count {rva, vsize, psize, flags} and the
  * section bytes as stored. Layout of e32_rom/o32_rom: Windows CE romldr.h. */
+static uint32_t rom_record_bytes(const struct nk *nk, const uint8_t *e32, const uint8_t *o32)
+{
+    unsigned count = ce_u16(e32);
+    uint32_t bytes = CE_ROM_RECORD_HEADER + count * 16u;
+    for (unsigned s = 0; s < count; s++) {
+        uint32_t psize = ce_u32(o32 + s * 24 + 8);
+        if (psize > CE_PE_MAX_SIZE || !nk_at(nk, ce_u32(o32 + s * 24 + 12), psize)) return 0;
+        bytes += ALIGN_UP(psize, 4u);
+    }
+    return bytes;
+}
+/* Sized first: recovery already holds the whole decompressed NK. */
 static bool rom_records(const struct nk *nk, struct ce_nk_assets *out)
 {
+    uint32_t total = 0;
+    for (unsigned i = 0; i < ARRAY_SIZE(rom_libraries); i++) {
+        const uint8_t *e32, *o32;
+        if (!toc_entry(nk, rom_libraries[i], &e32, &o32)) continue;
+        uint32_t bytes = rom_record_bytes(nk, e32, o32);
+        if (!bytes || bytes > CE_ROM_MODULES_MAX - total) return false;
+        total += bytes;
+    }
+    if (!total) return true;
+    if (!(out->modules = malloc(total))) return false;
     for (unsigned i = 0; i < ARRAY_SIZE(rom_libraries); i++) {
         const uint8_t *e32, *o32;
         if (!toc_entry(nk, rom_libraries[i], &e32, &o32)) continue;
         unsigned count = ce_u16(e32);
-        uint32_t bytes = CE_ROM_RECORD_HEADER + count * 16u;
-        for (unsigned s = 0; s < count; s++) {
-            uint32_t psize = ce_u32(o32 + s * 24 + 8);
-            if (psize > CE_PE_MAX_SIZE || !nk_at(nk, ce_u32(o32 + s * 24 + 12), psize)) return false;
-            bytes += ALIGN_UP(psize, 4u);
-        }
-        if (bytes > CE_ROM_MODULES_MAX - out->module_bytes) return false;
+        uint32_t bytes = rom_record_bytes(nk, e32, o32);
         uint8_t *r = out->modules + out->module_bytes, *p = r + CE_ROM_RECORD_HEADER + count * 16u;
         memset(r, 0, bytes);
         ce_put32(r, bytes);
@@ -450,18 +466,10 @@ const char *ce_nk_recover(ce_asset_reader read, void *arg, ce_asset_progress pro
     if (!ended) goto done;
     error = "Cannot recover matching CE export names or CCFS dictionary";
     assets->ordinals = malloc(CE_ORDINAL_MAX);
-    assets->modules = malloc(CE_ROM_MODULES_MAX);
-    if (!assets->ordinals || !assets->modules || !export_names(&nk, "coredll.dll", assets) ||
+    if (!assets->ordinals || !export_names(&nk, "coredll.dll", assets) ||
         !export_names(&nk, "commctrl.dll", assets) || !dictionary(&nk, assets)) goto done;
-    error = "Invalid CE ROM library table";
+    error = "Not enough free RAM to recover CE ROM libraries";
     if (!rom_records(&nk, assets)) goto done;
-    if (!assets->module_bytes) {
-        free(assets->modules);
-        assets->modules = NULL;
-    } else {
-        uint8_t *shrunk = realloc(assets->modules, assets->module_bytes);
-        if (shrunk) assets->modules = shrunk;
-    }
     error = NULL;
     if (progress) progress(arg, nk.size, nk.size);
 done:

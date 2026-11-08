@@ -5,6 +5,7 @@
  * Glaze's sans and mono faces. Resource bitmaps are drawn from the original
  * PE resource data. */
 #include "runtime.h"
+#include "source.h"
 
 struct ce_bitmap {
     int w, h, bpp;
@@ -307,13 +308,30 @@ static CW resource_bitmap(CW module, CW id)
 }
 /* An RT_GROUP_ICON's first entry names its RT_ICON image: a DIB of twice the
  * icon's height, the colour rows and then the AND mask, used in place. */
-static CW resource_icon(CW module, CW id)
+struct icon_source {
+    CW module;
+    const struct ce_pe *pe; /* another executable's image, for ExtractIconEx */
+    void *image;
+};
+static const uint8_t *icon_resource(const struct icon_source *src, uint16_t type, uint16_t id, uint32_t *size)
+{
+    return src->pe ? ce_pe_resource(src->pe, src->image, type, id, size) : ce_resource(src->module, type, id, size);
+}
+/* `want` picks the group entry nearest that width (0: the first entry);
+ * GRPICONDIR entries are 14 bytes from offset 6, width first, ID last. */
+static CW icon_from(const struct icon_source *src, CW id, unsigned want)
 {
     uint32_t size;
-    const uint8_t *group = ce_resource(module, 14, (uint16_t)id, &size);
+    const uint8_t *group = icon_resource(src, 14, (uint16_t)id, &size);
     if (!group || size < 20 || ce_u16(group + 2) != 1 || !ce_u16(group + 4))
         return 0;
-    const uint8_t *data = ce_resource(module, 3, ce_u16(group + 18), &size);
+    unsigned count = MIN(ce_u16(group + 4), (size - 6) / 14), best = 0;
+    for (unsigned i = 1; want && i < count; i++) {
+        int w = group[6 + i * 14] ? group[6 + i * 14] : 256, b = group[6 + best * 14] ? group[6 + best * 14] : 256;
+        if (abs(w - (int)want) < abs(b - (int)want))
+            best = i;
+    }
+    const uint8_t *data = icon_resource(src, 3, ce_u16(group + 6 + best * 14 + 12), &size);
     if (!data || size < 40)
         return 0;
     uint32_t header = ce_u32(data), bpp = ce_u16(data + 14), used = ce_u32(data + 32);
@@ -338,6 +356,11 @@ static CW resource_icon(CW module, CW id)
     if (!handle)
         bitmap_free(b);
     return handle;
+}
+static CW resource_icon(CW module, CW id, unsigned want)
+{
+    struct icon_source src = {module, NULL, NULL};
+    return icon_from(&src, id, want);
 }
 static bool icon_transparent(const struct ce_bitmap *b, int x, int y)
 {
@@ -588,25 +611,48 @@ CE_API(GetDeviceCaps)
         return 0;
     }
 }
+/* The 27 system colours (COLORREFs) live where GWE keeps them,
+ * HKLM\SYSTEM\GWE\SysColor; the defaults are the BE-300's Standard scheme.
+ * CE flags colour indices with SYS_COLOR_INDEX_FLAG (0x40000000) and adds
+ * COLOR_STATIC (25) and COLOR_STATICTEXT (26). */
+#define SYS_COLORS 27
+static const CW standard_colors[SYS_COLORS] = {
+    0xa8a8a8, 0xc8c8c8, 0x404040, 0xa0a0a0, 0xd8d8d8, 0xffffff, 0x000000, 0x000000, 0x000000,
+    0xffffff, 0x000000, 0x000000, 0xffffff, 0xb16327, 0xffffff, 0xc8c8c8, 0xa8a8a8, 0x787878,
+    0x000000, 0xd8d8d8, 0xffffff, 0x191919, 0xffffff, 0x000000, 0xc8c8c8, 0xc8c8c8, 0x000000};
+static CW sys_colors[SYS_COLORS];
+static bool sys_colors_loaded;
+static void load_sys_colors(void)
+{
+    uint8_t raw[SYS_COLORS * 4];
+    bool stored = ce_registry_binary("HKLM\\SYSTEM\\GWE", "SysColor", raw, sizeof(raw));
+    for (unsigned i = 0; i < SYS_COLORS; i++)
+        sys_colors[i] = stored ? ce_u32(raw + i * 4) & 0xffffff : standard_colors[i];
+    sys_colors_loaded = true;
+}
 CE_API(GetSysColor)
 {
-    switch (a0) {
-    case 0:
-    case 1:
-    case 15:
-        return 0xc0c0c0;
-    case 5:
-    case 14:
-    case 20:
-        return 0xffffff;
-    case 2:
-    case 13:
-        return 0x800000;
-    case 16:
-        return 0x808080;
-    default:
-        return 0;
+    unsigned index = a0 & ~0x40000000u;
+    if (!sys_colors_loaded)
+        load_sys_colors();
+    return index < SYS_COLORS ? sys_colors[index] : 0;
+}
+/* SetSysColors(count, indices, colours) saves and repaints every window. */
+CE_API(SetSysColors)
+{
+    if (!sys_colors_loaded)
+        load_sys_colors();
+    for (CW i = 0; i < a0; i++) {
+        unsigned index = PTR(CW, a1)[i] & ~0x40000000u;
+        if (index < SYS_COLORS)
+            sys_colors[index] = PTR(CW, a2)[i] & 0xffffff;
     }
+    uint8_t raw[SYS_COLORS * 4];
+    for (unsigned i = 0; i < SYS_COLORS; i++)
+        ce_put32(raw + i * 4, sys_colors[i]);
+    bool ok = ce_registry_set_binary("HKLM\\SYSTEM\\GWE", "SysColor", raw, sizeof(raw));
+    ce_redraw_all();
+    return ok;
 }
 static CW stock(CW handle)
 {
@@ -617,13 +663,17 @@ static CW stock(CW handle)
 }
 CE_API(GetSysColorBrush)
 {
-    static CW brushes[32];
-    if (a0 >= ARRAY_SIZE(brushes))
+    static CW brushes[SYS_COLORS];
+    unsigned index = a0 & ~0x40000000u;
+    if (index >= ARRAY_SIZE(brushes))
         return 0;
-    if (!ce_object(brushes[a0], CE_OBJ_BRUSH))
-        brushes[a0] = stock(ce_new_object(CE_OBJ_BRUSH,
-            ce_color(ce_GetSysColor(a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)), NULL, 0));
-    return brushes[a0];
+    uint32_t rgb = ce_color(ce_GetSysColor(index, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+    struct ce_object *brush = ce_object(brushes[index], CE_OBJ_BRUSH);
+    if (brush)
+        brush->value = rgb; /* follows SetSysColors */
+    else
+        brushes[index] = stock(ce_new_object(CE_OBJ_BRUSH, rgb, NULL, 0));
+    return brushes[index];
 }
 CE_API(GetStockObject)
 {
@@ -1043,7 +1093,7 @@ CE_API(LoadImageW)
         return handle;
     }
     if (a2 == 1) {
-        CW handle = resource_icon(a0, a1);
+        CW handle = resource_icon(a0, a1, a3 <= 256 ? a3 : 0); /* cxDesired */
         if (!handle)
             ce_error = 1813;
         return handle;
@@ -1380,14 +1430,81 @@ CE_API(CreateDIBPatternBrushPt)
         bitmap_free(b);
     return ce_new_object(CE_OBJ_BRUSH, rgb, NULL, 0);
 }
-/* ExtractIconExW: other executables' icons are not read; report none. */
+/* ExtractIconExW(file, index, large[], small[], count) for direct NAND
+ * launches: the executable is found as libraries are (its folder, \Windows,
+ * \Program Files) and its icons stay loaded, since icon objects point into
+ * its resources. A negative index names a resource ID; -1 with no arrays
+ * counts the icons. Large and small icons are the group's 32 and 16 pixel entries. */
+static struct {
+    char name[32];
+    struct ce_pe pe;
+    void *image;
+} icon_files[16];
+static struct icon_source *icon_file(const WCHAR *path, struct icon_source *src)
+{
+    char name[FS_PATH_MAX];
+    ce_narrow(name, sizeof(name), path);
+    const char *leaf = name;
+    for (const char *p = name; *p; p++)
+        if (*p == '\\' || *p == '/')
+            leaf = p + 1;
+    unsigned slot = ARRAY_SIZE(icon_files);
+    for (unsigned i = 0; i < ARRAY_SIZE(icon_files); i++) {
+        if (icon_files[i].image && !strcasecmp(icon_files[i].name, leaf)) {
+            *src = (struct icon_source){0, &icon_files[i].pe, icon_files[i].image};
+            return src;
+        }
+        if (!icon_files[i].image && slot == ARRAY_SIZE(icon_files))
+            slot = i;
+    }
+    uint32_t size = 0;
+    void *file = slot < ARRAY_SIZE(icon_files) && strlen(leaf) < 32 ? ce_source_image(leaf, &size) : NULL;
+    if (!file)
+        return NULL;
+    struct ce_pe *pe = &icon_files[slot].pe;
+    void *image = NULL;
+    if (!ce_pe_parse(pe, file, size) && (image = calloc(1, pe->size)) && !ce_pe_copy(pe, image)) {
+        pe->file = NULL;
+        icon_files[slot].image = image;
+        strlcpy(icon_files[slot].name, leaf, sizeof(icon_files[slot].name));
+        *src = (struct icon_source){0, pe, image};
+    } else {
+        free(image);
+        src = NULL;
+    }
+    free(file);
+    return src;
+}
 CE_API(ExtractIconExW)
 {
-    if (a2)
-        *PTR(CW, a2) = 0;
-    if (a3)
-        *PTR(CW, a3) = 0;
-    return 0;
+    struct icon_source src;
+    CW *large = PTR(CW, a2), *small = PTR(CW, a3);
+    if (!a0 || !icon_file(PTR(WCHAR, a0), &src))
+        return 0;
+    if ((int32_t)a1 == -1 && !large && !small) {
+        unsigned n = 0;
+        uint16_t id;
+        while (ce_pe_resource_id(src.pe, src.image, 14, n, &id))
+            n++;
+        return n;
+    }
+    CW extracted = 0;
+    for (CW i = 0; i < a4; i++) {
+        uint16_t id;
+        if ((int32_t)a1 < 0)
+            id = (uint16_t)(-(int32_t)a1 + (int32_t)i);
+        else if (!ce_pe_resource_id(src.pe, src.image, 14, a1 + i, &id))
+            break;
+        CW big = large ? icon_from(&src, id, 32) : 0, little = small ? icon_from(&src, id, 16) : 0;
+        if ((large && !big) || (small && !little))
+            break;
+        if (large)
+            large[i] = big;
+        if (small)
+            small[i] = little;
+        extracted++;
+    }
+    return extracted;
 }
 CE_API(GetPixel)
 {
@@ -1456,10 +1573,9 @@ CE_API(SetROP2)
 
 /* ---- text --------------------------------------------------------------- */
 
-/* Glyphs are Latin-1; other characters draw as '?'. */
 static char glyph(WCHAR c)
 {
-    return (char)(c < 256 ? c : '?');
+    return ce_glyph(c);
 }
 static int text_width(const gfx_font *f, const WCHAR *text, unsigned n)
 {
@@ -2020,7 +2136,7 @@ CE_API(ImageList_GetImageCount)
 /* uType (a5) IMAGE_ICON loads an icon; a cx (a2) of 0 takes its width. */
 CE_API(ImageList_LoadImage)
 {
-    CW bm = a5 == 1 ? resource_icon(a0, a1) : resource_bitmap(a0, a1);
+    CW bm = a5 == 1 ? resource_icon(a0, a1, a2 <= 256 ? a2 : 0) : resource_bitmap(a0, a1);
     struct ce_object *o = ce_object(bm, 0);
     const struct ce_bitmap *b = o ? o->data : NULL;
     if (!b) {
@@ -2105,6 +2221,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(Polyline),
     CE_EXPORT(DrawFrameControl),
     CE_EXPORT(DrawIconEx),
+    CE_EXPORT(SetSysColors),
     CE_EXPORT(DrawEdge),
     CE_EXPORT(GetTextColor),
     CE_EXPORT(CreateDIBPatternBrushPt),

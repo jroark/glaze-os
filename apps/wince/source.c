@@ -157,26 +157,39 @@ const char *ce_source_module_name(const char *name)
     for(unsigned i=0;i<loaded_count;i++)if(!strcasecmp(name,loaded_names[i]))return loaded_paths[i];
     return NULL;
 }
-void *ce_source_library(const char *name,uint32_t *size)
+/* A module's file in the program's folder, \Windows or \Program Files. */
+static bool find_module(const char *name,char found[FS_PATH_MAX])
 {
-    if(!active||!name||!*name||strlen(name)>=32||strchr(name,'/')||strchr(name,'\\')||strchr(name,':')||strstr(name,".."))return NULL;
+    if(!active||!name||!*name||strlen(name)>=32||strchr(name,'/')||strchr(name,'\\')||strchr(name,':')||strstr(name,".."))return false;
     const char *folders[]={directory,"/NAND/Windows","/NAND/Program Files"};
     for(unsigned i=0;i<ARRAY_SIZE(folders);i++){
-        char path[FS_PATH_MAX],found[FS_PATH_MAX];
+        char path[FS_PATH_MAX];
         int n=snprintf(path,sizeof path,"%s/%s",folders[i],name);
-        if(n<0||n>=FS_PATH_MAX||!find_file(path,found))continue;
-        if(suffix(found,".cpk"))load_metadata();
-        void *data=read_file(found,size);if(!data)return NULL;
-        if(loaded_count<ARRAY_SIZE(loaded_names)){
-            strlcpy(loaded_names[loaded_count],name,sizeof loaded_names[0]);
-            snprintf(loaded_paths[loaded_count],sizeof loaded_paths[0],"\\Nand Disk%s",found+5);
-            char *p=loaded_paths[loaded_count];if(suffix(p,".cpk"))p[strlen(p)-4]=0;
-            for(;*p;p++)if(*p=='/')*p='\\';
-            loaded_count++;
-        }
-        return data;
+        if(n>0&&n<FS_PATH_MAX&&find_file(path,found))return true;
     }
-    return NULL;
+    return false;
+}
+void *ce_source_image(const char *name,uint32_t *size)
+{
+    char found[FS_PATH_MAX];
+    if(!find_module(name,found))return NULL;
+    if(suffix(found,".cpk"))load_metadata();
+    return read_file(found,size);
+}
+void *ce_source_library(const char *name,uint32_t *size)
+{
+    char found[FS_PATH_MAX];
+    if(!find_module(name,found))return NULL;
+    if(suffix(found,".cpk"))load_metadata();
+    void *data=read_file(found,size);if(!data)return NULL;
+    if(loaded_count<ARRAY_SIZE(loaded_names)){
+        strlcpy(loaded_names[loaded_count],name,sizeof loaded_names[0]);
+        snprintf(loaded_paths[loaded_count],sizeof loaded_paths[0],"\\Nand Disk%s",found+5);
+        char *p=loaded_paths[loaded_count];if(suffix(p,".cpk"))p[strlen(p)-4]=0;
+        for(;*p;p++)if(*p=='/')*p='\\';
+        loaded_count++;
+    }
+    return data;
 }
 /* Casio application libraries exist only in NK. They are loaded from the
  * cached records after Program Files and Windows, at their ROM addresses. */

@@ -613,6 +613,22 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
     }
 }
 
+CW ce_GetDC(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
+CW ce_ReleaseDC(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
+/* WM_DRAWITEM (0x2b) to an owner-drawn control's parent: a DRAWITEMSTRUCT
+ * (type, ID, item, ODA_DRAWENTIRE, state, window, DC, item rectangle, data)
+ * with a DC on the control. States: ODS_SELECTED 1, ODS_DISABLED 4,
+ * ODS_FOCUS 0x10. */
+static void owner_draw(struct ce_window *w, CW type, CW item, CW data)
+{
+    gfx_rect r = ce_window_rect(w->handle);
+    CW dc = ce_GetDC(w->handle, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    CW dis[12] = {type, w->id, item, 1,
+                  (pressed == w->handle ? 1u : 0) | (w->enabled ? 0 : 4u) | (focus == w->handle ? 0x10u : 0),
+                  w->handle, dc, 0, 0, (CW)r.w, (CW)r.h, data};
+    ce_send(w->parent, 0x2b, w->id, WORD(dis));
+    ce_ReleaseDC(w->handle, dc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
 static void draw_control(struct ce_window *w)
 {
     gfx_rect r = ce_window_rect(w->handle);
@@ -621,14 +637,14 @@ static void draw_control(struct ce_window *w)
         if (w->property_page || (w->style & 0x40000000u))
             return;
         char title[256];
-        ce_narrow(title, sizeof(title), w->text);
+        ce_display(title, sizeof(title), w->text);
         gfx_fill(&ui.surf, gfx_r(r.x, r.y, r.w, 24), 0x305080);
         gfx_text(&ui.surf, r.x + 3, r.y + 4, ui_font(FONT_R12), title, 0xffffff, 255);
     } else if (!strcasecmp(w->klass, "SysDateTimePick32")) {
         WCHAR wide[128];
         char text[128];
         ce_date_text(w, wide, ARRAY_SIZE(wide));
-        ce_narrow(text, sizeof(text), wide);
+        ce_display(text, sizeof(text), wide);
         gfx_fill(&ui.surf, r, 0xffffff);
         gfx_text(&ui.surf, r.x + 2, r.y + 3, ui_font(FONT_R12), text, 0, 255);
     } else if (w->view) {
@@ -640,7 +656,7 @@ static void draw_control(struct ce_window *w)
         int width = r.w / MAX(1u, w->tabs->count);
         for (unsigned i = 0; i < w->tabs->count; i++) {
             char text[192];
-            ce_narrow(text, sizeof(text), w->tabs->text[i]);
+            ce_display(text, sizeof(text), w->tabs->text[i]);
             gfx_rect tab = gfx_r(r.x + (int)i * width, r.y, width, 24);
             gfx_fill(&ui.surf, tab, (int)i == w->tabs->selected ? 0xeeeeee : 0xaaaaaa);
             gfx_text_center(&ui.surf, tab.x, tab.y + 4, tab.w, ui_font(FONT_R12), text, 0, 255);
@@ -663,13 +679,15 @@ static void draw_control(struct ce_window *w)
                 if (ch == '\n')
                     continue;
             }
-            char s[2] = {(char)((w->style & 0x20) ? '*' : ch < 256 ? ch : '?'), 0};
+            char s[2] = {(w->style & 0x20) ? '*' : ce_glyph(ch), 0};
             x += gfx_text(&ui.surf, x, y, ui_font(FONT_R12), s, 0, 255);
         }
         gfx_reset_clip(&ui.surf);
+    } else if ((!strcasecmp(w->klass, "Button") || !strcasecmp(w->klass, "CSOButton")) && (w->style & 15) == 11) {
+        owner_draw(w, 4, 0, 0); /* BS_OWNERDRAW: the parent paints, as ODT_BUTTON */
     } else if (!strcasecmp(w->klass, "Button") || !strcasecmp(w->klass, "CSOButton")) {
         char text[128];
-        ce_narrow(text, sizeof(text), w->text);
+        ce_display(text, sizeof(text), w->text);
         if ((w->style & 15) == 7) {
             gfx_line(&ui.surf, r.x, r.y + 6, r.x + r.w - 1, r.y + 6, 0x808080, 255);
             gfx_line(&ui.surf, r.x, r.y + 6, r.x, r.y + r.h - 1, 0x808080, 255);
@@ -698,7 +716,7 @@ static void draw_control(struct ce_window *w)
         gfx_text_center(&ui.surf, r.x, r.y + r.h / 2 - 2, r.w, ui_font(FONT_R12), "-", 0, 255);
     } else if (!strcasecmp(w->klass, "msctls_statusbar32")) {
         char text[256];
-        ce_narrow(text, sizeof(text), w->text);
+        ce_display(text, sizeof(text), w->text);
         gfx_fill(&ui.surf, r, 0xc0c0c0);
         gfx_text(&ui.surf, r.x + 2, r.y + 2, ui_font(FONT_R12), text, 0, 255);
     } else if (!strcasecmp(w->klass, "Static")) {

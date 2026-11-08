@@ -1,7 +1,9 @@
-/* App-private registry model. No Glaze or original-OS registry is shared.
- * GZCE value records remain readable; a GZCK suffix preserves empty keys. */
+/* CE registry model: app-private for packages, shared by direct NAND
+ * launches. GZCE value records remain readable; a GZCK suffix preserves
+ * empty keys. Key paths are heap strings so a full device registry fits. */
 #include "registry.h"
 #include "pe.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -43,8 +45,12 @@ static bool valid_key(const char *s)
 }
 void ce_reg_clear(struct ce_registry *r)
 {
-    for (unsigned i = 0; i < r->value_count; i++)
+    for (unsigned i = 0; i < r->value_count; i++) {
         free(r->values[i].bytes);
+        free(r->values[i].key);
+    }
+    for (unsigned i = 0; i < r->key_count; i++)
+        free(r->keys[i]);
     memset(r, 0, sizeof(*r));
 }
 bool ce_reg_exists(const struct ce_registry *r, const char *key)
@@ -84,7 +90,11 @@ int ce_reg_create(struct ce_registry *r, const char *key)
         char saved = *p;
         *p = 0;
         if (!ce_reg_exists(r, path)) {
-            memcpy(r->keys[r->key_count++], path, strlen(path) + 1);
+            char *copy = malloc(strlen(path) + 1);
+            if (!copy)
+                return 8;
+            memcpy(copy, path, strlen(path) + 1);
+            r->keys[r->key_count++] = copy;
         }
         *p = saved;
         if (!saved)
@@ -133,14 +143,20 @@ int ce_reg_set(struct ce_registry *r, const char *key, const char *name, uint32_
     if (next > CE_REG_FILE_MAX)
         return 8;
     uint8_t *copy = malloc(size ? size : 1);
-    if (!copy)
+    char *path = v ? NULL : malloc(strlen(key) + 1);
+    if (!copy || (!v && !path)) {
+        free(copy);
+        free(path);
         return 8;
+    }
     if (size)
         memcpy(copy, data, size);
-    if (!v)
+    if (!v) {
         v = &r->values[r->value_count++];
+        memcpy(path, key, strlen(key) + 1);
+        v->key = path;
+    }
     free(v->bytes);
-    memcpy(v->key, key, strlen(key) + 1);
     memcpy(v->name, name, strlen(name) + 1);
     v->type = type;
     v->size = size;
@@ -153,6 +169,7 @@ int ce_reg_remove_value(struct ce_registry *r, const char *key, const char *name
     if (!v)
         return 2;
     free(v->bytes);
+    free(v->key);
     *v = r->values[--r->value_count];
     memset(&r->values[r->value_count], 0, sizeof(*v));
     return 0;
@@ -172,9 +189,11 @@ int ce_reg_delete(struct ce_registry *r, const char *key)
     }
     for (unsigned i = 0; i < r->key_count; i++)
         if (!strcasecmp(r->keys[i], key)) {
+            free(r->keys[i]);
             r->key_count--;
             if (i < r->key_count)
-                memmove(r->keys[i], r->keys[i + 1], (r->key_count - i) * sizeof(r->keys[0]));
+                memmove(&r->keys[i], &r->keys[i + 1], (r->key_count - i) * sizeof(r->keys[0]));
+            r->keys[r->key_count] = NULL;
             return 0;
         }
     return 2;
@@ -317,4 +336,80 @@ uint8_t *ce_reg_encode(const struct ce_registry *r, uint32_t *size)
     }
     *size = pos;
     return p;
+}
+
+/* Casio's registry backup (RegCopyFile's \Backup\System.reg on the BE-300):
+ * a magic word and the total size, then records of a u16 length (excluding
+ * this four-byte header) and a u16 kind. A key (1) holds its root (0 HKCR,
+ * 1 HKCU, 2 HKLM), its UTF-16 path length in units with the terminator, a
+ * reserved word and the path. A value (2) follows its key: type, name length
+ * in units, data bytes, the UTF-16 name and the data. "Default" names the
+ * key's default value. Layout read from the local device's own backup. */
+static bool utf16_utf8(char *out, size_t capacity, const uint8_t *in, unsigned units)
+{
+    size_t n = 0;
+    for (unsigned i = 0; i < units; i++) {
+        unsigned c = in[i * 2] | in[i * 2 + 1] << 8;
+        if (!c)
+            break;
+        if (c >= 0xd800 && c < 0xe000)
+            c = '?';
+        unsigned bytes = c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+        if (n + bytes >= capacity)
+            return false;
+        if (bytes == 1)
+            out[n++] = (char)c;
+        else if (bytes == 2) {
+            out[n++] = (char)(0xc0 | c >> 6);
+            out[n++] = (char)(0x80 | (c & 63));
+        } else {
+            out[n++] = (char)(0xe0 | c >> 12);
+            out[n++] = (char)(0x80 | (c >> 6 & 63));
+            out[n++] = (char)(0x80 | (c & 63));
+        }
+    }
+    out[n] = 0;
+    return true;
+}
+bool ce_reg_import_casio(struct ce_registry *r, const void *data, size_t size)
+{
+    const uint8_t *p = data;
+    static const char *const roots[] = {"HKCR", "HKCU", "HKLM"};
+    if (size < 8 || ce_u32(p) != 0x1d8374b2u || ce_u32(p + 4) != size)
+        return false;
+    char key[256] = "";
+    bool skip = true;
+    for (size_t pos = 8; pos < size;) {
+        if (size - pos < 10)
+            return false;
+        uint32_t length = ce_u16(p + pos), kind = ce_u16(p + pos + 2);
+        if (length < 6 || length > size - pos - 4)
+            return false;
+        const uint8_t *rec = p + pos + 4;
+        if (kind == 1) {
+            unsigned root = ce_u16(rec), units = ce_u16(rec + 2);
+            char path[250];
+            if (root > 2 || units * 2u > length - 6 || !utf16_utf8(path, sizeof(path), rec + 6, units))
+                return false;
+            snprintf(key, sizeof(key), "%s%s%s", roots[root], *path ? "\\" : "", path);
+            /* Device drivers are not CE apps' settings, and Glaze has none. */
+            skip = !strncasecmp(key, "HKLM\\Drivers", 12) && (!key[12] || key[12] == '\\');
+            if (!skip && ce_reg_create(r, key))
+                skip = true; /* full, or a path the model rejects */
+        } else if (kind == 2) {
+            uint32_t type = ce_u16(rec), units = ce_u16(rec + 2), bytes = ce_u16(rec + 4);
+            char name[128];
+            if (units * 2u > length - 6 || bytes > length - 6 - units * 2u ||
+                !utf16_utf8(name, sizeof(name), rec + 6, units))
+                return false;
+            if (!strcmp(name, "Default"))
+                name[0] = 0;
+            if (!skip)
+                ce_reg_set(r, key, name, type, rec + 6 + units * 2, bytes);
+        } else {
+            return false;
+        }
+        pos += 4 + length;
+    }
+    return true;
 }

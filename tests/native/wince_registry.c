@@ -102,6 +102,68 @@ int main(int argc, char **argv)
         free(buf);
         ce_reg_clear(r);
     }
+    /* A synthetic Casio System.reg: HKCU\ControlPanel\Menu\Volume with a
+     * default value and a DWORD, and an HKLM\Drivers key that is skipped. */
+    {
+        uint8_t backup[512] = {0};
+        size_t at = 8;
+        const char *keys[] = {"ControlPanel\\Menu\\Volume", "Drivers\\BuiltIn"};
+        const unsigned roots[] = {1, 2};
+        for (unsigned k = 0; k < 2; k++) {
+            unsigned units = (unsigned)strlen(keys[k]) + 1;
+            backup[at] = (uint8_t)(6 + units * 2);
+            backup[at + 2] = 1;
+            backup[at + 4] = (uint8_t)roots[k];
+            backup[at + 6] = (uint8_t)units;
+            for (unsigned i = 0; i < units; i++)
+                backup[at + 10 + i * 2] = (uint8_t)keys[k][i];
+            at += 10 + units * 2;
+            const char *names[] = {"Default", "ListNO"};
+            for (unsigned v = 0; v < 2; v++) {
+                unsigned nunits = (unsigned)strlen(names[v]) + 1, bytes = 4; /* "Hi" or DWORD 1 */
+                backup[at] = (uint8_t)(6 + nunits * 2 + bytes);
+                backup[at + 2] = 2;
+                backup[at + 4] = v ? 4 : 1;
+                backup[at + 6] = (uint8_t)nunits;
+                backup[at + 8] = (uint8_t)bytes;
+                for (unsigned i = 0; i < nunits; i++)
+                    backup[at + 10 + i * 2] = (uint8_t)names[v][i];
+                uint8_t *payload = backup + at + 10 + nunits * 2;
+                if (v)
+                    payload[0] = 1;
+                else
+                    payload[0] = 'H', payload[2] = 'i';
+                at += 10 + nunits * 2 + bytes;
+            }
+        }
+        backup[0] = 0xb2, backup[1] = 0x74, backup[2] = 0x83, backup[3] = 0x1d;
+        backup[4] = (uint8_t)at, backup[5] = (uint8_t)(at >> 8);
+        ce_reg_clear(r);
+        assert(ce_reg_import_casio(r, backup, at));
+        struct ce_reg_value *v = ce_reg_find(r, "HKCU\\ControlPanel\\Menu\\Volume", "");
+        assert(v && v->type == 1 && v->size == 4 && v->bytes[0] == 'H');
+        v = ce_reg_find(r, "HKCU\\ControlPanel\\Menu\\Volume", "ListNO");
+        assert(v && v->type == 4 && v->bytes[0] == 1);
+        assert(!ce_reg_exists(r, "HKLM\\Drivers") && !ce_reg_exists(r, "HKLM\\Drivers\\BuiltIn"));
+        assert(!ce_reg_import_casio(r, backup, at - 1)); /* size word must match */
+        ce_reg_clear(r);
+        const char *path = getenv("WINCE_SYSTEM_REG");
+        if (path) { /* a locally supplied \Backup\System.reg */
+            FILE *f = fopen(path, "rb");
+            assert(f);
+            static uint8_t file[CE_REG_FILE_MAX];
+            size_t n = fread(file, 1, sizeof(file), f);
+            fclose(f);
+            assert(ce_reg_import_casio(r, file, n));
+            assert(ce_reg_find(r, "HKCU\\ControlPanel\\Menu\\Memory", "AppPath"));
+            uint32_t size;
+            uint8_t *encoded = ce_reg_encode(r, &size);
+            assert(encoded && ce_reg_decode(copy, encoded, size));
+            printf("System.reg: %u keys, %u values, %u bytes encoded\n", r->key_count, r->value_count, size);
+            free(encoded);
+            ce_reg_clear(r);
+        }
+    }
     ce_reg_clear(copy);
     free(r);
     free(copy);

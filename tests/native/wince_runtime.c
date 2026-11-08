@@ -125,6 +125,14 @@ void ce_narrow(char *p, uint32_t cap, const WCHAR *s)
         }
     p[n] = 0;
 }
+char ce_glyph(WCHAR c)
+{
+    return (char)(c < 256 ? c : '?');
+}
+void ce_display(char *p, uint32_t cap, const WCHAR *s)
+{
+    ce_narrow(p, cap, s);
+}
 static unsigned notifications;
 static CW last_notification;
 static CW activation_data, activation_item;

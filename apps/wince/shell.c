@@ -37,7 +37,7 @@ static struct menu *menu(CW handle)
 }
 static void text(char *out, unsigned max, const WCHAR *w)
 {
-    ce_narrow(out, max, w);
+    ce_display(out, max, w);
     unsigned n = 0;
     for (unsigned i = 0; out[i]; i++)
         if (out[i] != '&' && out[i] != '\t')
@@ -443,7 +443,7 @@ CE_API(CSOBar_AddButtons)
         const WCHAR *caption = label >= 65536 && label < 0x80000000u ? PTR(WCHAR, label) :
             id == 1 ? ok : id == 2 ? cancel : empty;
         char text[192];
-        ce_narrow(text, sizeof(text), caption);
+        ce_display(text, sizeof(text), caption);
         int x = (int)ce_u32(p + 36), y = (int)ce_u32(p + 40);
         int width = (int)ce_u32(p + 44), height = (int)ce_u32(p + 48);
         if (width <= 0)
@@ -948,8 +948,8 @@ static void repaint(void)
 CE_API(MessageBoxW)
 {
     char title[128], message[1024];
-    ce_narrow(title, sizeof(title), PTR(WCHAR, a2));
-    ce_narrow(message, sizeof(message), PTR(WCHAR, a1));
+    ce_display(title, sizeof(title), PTR(WCHAR, a2));
+    ce_display(message, sizeof(message), PTR(WCHAR, a1));
     printf("wince: message box from %08x: %s: %s\n", WORD(__builtin_return_address(0)), title, message);
     unsigned style = a3 & 15;
     const char *left = "OK", *right = NULL, *third = NULL;

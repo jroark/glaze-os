@@ -445,6 +445,16 @@ int main(void)
     }
     if (gz_vm_map(CE_BRIDGE_BASE, CE_BRIDGE_BYTES))
         ce_fatal("Cannot allocate WinCE call bridges");
+    /* CE's user KData page (PUserKData = 0x5800): the loader rewrites the
+     * usual constant-address reads, and this page answers those made through
+     * a base register (NFC's debug output). SH_CURTHREAD holds the main
+     * thread's token, as the rewritten reads compute it; SH_CURPROC 0x42. */
+    if (!gz_vm_map(0x5000, 4096)) {
+        CW stack;
+        ce_put32(PTR(uint8_t, 0x5808), WORD(&stack) >> 16);
+        ce_put32(PTR(uint8_t, 0x580c), 0x42);
+        gz_vm_publish(0x5000, 4096, 0);
+    }
     bridges = PTR(uint32_t, CE_BRIDGE_BASE);
     if(direct){
         uint32_t size=0;void *file=ce_source_program(&size);

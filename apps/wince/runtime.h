@@ -139,6 +139,9 @@ CW ce_call(CW proc, CW a0, CW a1, CW a2, CW a3);
 
 unsigned ce_wlen(const WCHAR *);
 void ce_narrow(char *, uint32_t, const WCHAR *);
+/* Latin-1 for Glaze's fonts, with ASCII stand-ins for common symbols. */
+char ce_glyph(WCHAR);
+void ce_display(char *, uint32_t, const WCHAR *);
 void ce_widen(WCHAR *, uint32_t, const char *);
 int ce_wcmp(const WCHAR *, const WCHAR *);
 bool ce_path(char path[FS_PATH_MAX], const WCHAR *);
@@ -151,6 +154,9 @@ void ce_destroy_window(CW);
 void *ce_resolve_property(const char *);
 uint32_t ce_registry_dword(const char *, const char *, uint32_t);
 bool ce_registry_set_dword(const char *, const char *, uint32_t);
+/* A REG_BINARY value of exactly `size` bytes; false if absent or another size. */
+bool ce_registry_binary(const char *, const char *, void *, uint32_t size);
+bool ce_registry_set_binary(const char *, const char *, const void *, uint32_t size);
 void ce_post(CW window, CW message, CW wparam, CW lparam);
 CW ce_send(CW window, CW message, CW wparam, CW lparam);
 CW ce_dialog_proc(CW, CW, CW, CW);
