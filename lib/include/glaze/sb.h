@@ -77,7 +77,14 @@ enum {
     SB_CLIPBOARD_READ,
     SB_CLIPBOARD_CLEAR,
     SB_INSTALL_STATUS,      /* installer RAM session: w1 stage, w2 current, w4 total; w3 client pid */
+    /* Development client: power off as the Power button does, waking by the
+     * alarm. w1 = GZ_SLEEP_* | SB_DEBUG_POWER_IDLE, w2 = alarm seconds,
+     * w4 = idle ms (with SB_DEBUG_POWER_IDLE: arm the idle power off instead,
+     * which runs once no debugger holds it off), w3 = client pid. */
+    SB_DEBUG_POWER,
+    SB_DEBUG_RECLAIM,       /* development client: end background apps before a reload; w3 = client pid */
 };
+#define SB_DEBUG_POWER_IDLE 0x100u
 
 enum {
     SB_STATUS_GRAY = 0,     /* light gray gradient, dark text */

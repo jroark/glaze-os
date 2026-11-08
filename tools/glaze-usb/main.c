@@ -88,7 +88,11 @@ static int usage(void)
           "  boot [ARTIFACT_DIR]            CE -> Glaze; default out/glazeboot\n"
           "  reload [ARTIFACT_DIR]          fresh Glaze RAM boot\n"
           "  reboot [--ce|--glaze]          restart current OS, or select the target\n"
-          "  logs [--once]                 stream/drain Glaze console\n", stderr);
+          "  logs [--once]                 stream/drain Glaze console\n"
+          "  power status                  battery, adapter and network-card power\n"
+          "  power suspend|hibernate SECS  power off; the RTC alarm wakes it SECS later\n"
+          "  power idle SECS [IDLE_MS]     arm the idle power off (after this disconnects), alarm SECS\n"
+          "  usb-detach MS                 the device's USB unit goes dead for MS ms (100-10000)\n", stderr);
     fputs("  nand-backup OUTPUT.raw         two-pass physical NAND backup (read-only)\n"
           "  nand-status                   read chip ready/failure/write-protect bits\n"
           "  nand-apply SOURCE TARGET PLAN --execute [--keep-filesystem] [--allow-mismatch]\n"
@@ -157,6 +161,8 @@ int main(int argc, char **argv)
                                                   !strcmp(argv[i+4],argv[i+5])))) :
         (!strcmp(cmd, "screenshot") || !strcmp(cmd,"net-enable") || !strcmp(cmd,"nand-backup")) ? left != 1 :
         !strcmp(cmd, "script") ? (left < 1 || left > 2) :
+        !strcmp(cmd, "usb-detach") ? left != 1 :
+        !strcmp(cmd, "power") ? (left < 1 || left > 3 || (left == 1 && strcmp(argv[i], "status"))) :
         !strcmp(cmd, "usb-net") ? left > 1 :
         !strcmp(cmd, "mirror") ? 0 :
         !strcmp(cmd, "reboot") ? (left > 1 || (left == 1 && strcmp(argv[i], "--ce") && strcmp(argv[i], "--glaze"))) :
@@ -413,6 +419,8 @@ int main(int argc, char **argv)
             }
             else if (!strcmp(cmd, "screenshot")) r = gu_screenshot(&c, argv[i]);
             else if (!strcmp(cmd, "script")) r = gu_script(&c, argv[i], left == 2 ? argv[i+1] : NULL);
+            else if (!strcmp(cmd, "power")) r = gu_power(&c, left, argv + i);
+            else if (!strcmp(cmd, "usb-detach")) r = gu_usb_detach(&c, argv[i]);
             else if (!strcmp(cmd, "connect")) {
                 if (!(c.caps & GU_CAP_STATUS)) r = -1;
                 unsigned previous = ~0u;

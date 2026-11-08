@@ -185,10 +185,14 @@ boot, changing only the stale kernel-header block and three SPL blocks.
 
 - Updating the SPL or the manifest over the air isn't supported. A bad SPL
   write would need CF recovery, so those stay on the USB path.
-- The staged file needs about 2 MB free on the flash. The App Store checks
-  space before downloading.
-- The SPL runs uncached, so an install takes minutes on hardware. Confirm
-  the watchdog reload on a real BE-300 with an install longer than 150 s
-  before relying on it (`BOOT_BEEP=1` places hangs).
+- The staged file needs about 2.5 MB free on the flash. The App Store checks
+  space before downloading; the desktop installer's companion gets `ENOSPC`
+  from the upload. SpringBoard removes a spent staged file at the first boot
+  after the SPL ran (`clear_installed_update`), as the App Store does when it
+  opens.
+- The SPL runs uncached, so an install is slow on hardware: 1.2.0.1 to 1.2.0.2
+  (207 blocks written) took about 22 minutes on a real BE-300 on 2026-11-07,
+  against about a minute in the emulator. The SPL's watchdog reloads held
+  through it. Keep the adapter in.
 - Kernel verification runs with interrupts off. The Ed25519 check takes a
   moment, and each 8 KiB data call takes a few milliseconds.

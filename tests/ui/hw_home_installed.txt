@@ -1,0 +1,13 @@
+# Hardware variant of t_home_installed.txt (tools/hwtest): Hello was already
+# installed and launched over USB (glaze-usb put + run), so this starts in
+# Hello at the t_home_installed 18000 ms mark: Home, then hold Hello and drop
+# it on Files, delete it inside the folder and confirm.
+500 key home
+2000 down 90 192
+3300 move 80 180
+3500 move 32 122
+3600 move 31 121
+4300 up 31 121
+5500 tap 62 144
+6500 tap 170 187
+12000 key home

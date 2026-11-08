@@ -2,7 +2,7 @@
 """OTA update end to end in the emulator (docs/os/OTA.md).
 
 Builds a ktest image (INIT=bin/ktest) that trusts a throwaway key, and an
-update to "1.1" with the same kernel and a different romfs (NAND_DROP adds
+update to VERSION + ".1" with the same kernel and a different romfs (NAND_DROP adds
 calculator, so nearly every romfs block moves). The update goes into the
 factory volume of a physical NAND image (tools/physical_nand.py, from a
 synthetic backup), where ktest verifies it through the file server and arms
@@ -31,7 +31,9 @@ import mkota  # noqa: E402
 import physical_nand as phys  # noqa: E402
 
 ART = ROOT / "out/ota-test"
-INSTALLED = "ota: the SPL installed 1.1"
+# The update must be newer than the running OS (kernel/ota_stage.c).
+UPDATE = (ROOT / "VERSION").read_text().strip() + ".1"
+INSTALLED = "ota: the SPL installed " + UPDATE
 
 
 def build(*args):
@@ -108,7 +110,7 @@ def main():
         for name in ("glaze.bin", "kernel.elf", "romfs.img"):
             shutil.copy(ROOT / "out" / name, ART / f"old-{name}")
         update = mkota.build_update((ART / "old-kernel.elf").read_bytes(), (ART / "new-romfs.img").read_bytes(),
-                                    "1.1", "ota-test", key)
+                                    UPDATE, "ota-test", key)
         userdata = ART / "userdata"
         shutil.copytree(ROOT / "userdata", userdata)
         (userdata / "Library/Updates").mkdir(parents=True, exist_ok=True)
@@ -126,9 +128,9 @@ def main():
     run.mkdir()
     shutil.copy(ART / "candidate.raw", run / "nand.raw")
     t0 = time.monotonic()
-    log = boot(emulator, run / "nand.raw", run, "ktest: ota installed 1.1", a.timeout)
+    log = boot(emulator, run / "nand.raw", run, "ktest: ota installed " + UPDATE, a.timeout)
     for want in ("ktest: PASS ota verified", "ktest: arming the OTA update", INSTALLED,
-                 "ktest: ota installed 1.1"):
+                 "ktest: ota installed " + UPDATE):
         if want not in log:
             sys.exit(f"run_ota: straight run: missing {want!r} (see {run}/stdout.log)")
     files = [l for l in log.splitlines() if l.startswith("romfs: ")]
@@ -145,7 +147,7 @@ def main():
     armed.mkdir()
     shutil.copy(ART / "candidate.raw", armed / "nand.raw")
     boot(emulator, armed / "nand.raw", armed, None, a.timeout, stop_after=0.0,
-         after_text="ota: journal for 1.1")
+         after_text="ota: journal for " + UPDATE)
     # How long the install takes: from the journal to the next kernel's banner.
     timing = ART / "timing"
     shutil.rmtree(timing, ignore_errors=True)
@@ -156,7 +158,7 @@ def main():
     if INSTALLED not in log:
         sys.exit(f"run_ota: no install from the armed image (see {timing}/stdout.log)")
     span = time.monotonic() - t0
-    full = int(re.search(r"installed 1\.1 \((\d+) blocks", log).group(1))
+    full = int(re.search(r"installed " + re.escape(UPDATE) + r" \((\d+) blocks", log).group(1))
     print(f"run_ota: an uninterrupted install takes {span:.0f} s and writes {full} blocks")
     # Spread over the install: the first half checks every block, the rest writes.
     partial = 0
@@ -169,9 +171,9 @@ def main():
         log = boot(emulator, cut / "nand.raw", cut, None, a.timeout, stop_after=stop, after_text="")
         if INSTALLED in log:
             sys.exit(f"run_ota: the install finished before the stop at {stop:.1f} s")
-        log = boot(emulator, cut / "nand.raw", cut / "resume", "ktest: ota installed 1.1", a.timeout)
-        found = re.search(r"installed 1\.1 \((\d+) blocks", log)
-        if "ktest: ota installed 1.1" not in log or not found:
+        log = boot(emulator, cut / "nand.raw", cut / "resume", "ktest: ota installed " + UPDATE, a.timeout)
+        found = re.search(r"installed " + re.escape(UPDATE) + r" \((\d+) blocks", log)
+        if "ktest: ota installed " + UPDATE not in log or not found:
             sys.exit(f"run_ota: stopped {stop:.1f} s in, the install didn't resume (see {cut}/resume)")
         written = int(found.group(1))
         partial += written < full

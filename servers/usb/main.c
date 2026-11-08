@@ -75,6 +75,19 @@ static int debugger_state(unsigned *flags, unsigned *pid)
     if (pid) *pid = r.w[2];
     return 0;
 }
+/* A development-client request to SpringBoard (glaze/sb.h SB_DEBUG_*). */
+static int sb_debug_call(uint32_t what, uint32_t w1, uint32_t w2, uint32_t w4)
+{
+    int sb = gz_port_lookup(SB_PORT_NAME);
+    if (sb < 0) return sb;
+    struct gz_msg m = {{0}}, r;
+    m.w[0] = SB_CLIENT_OPEN; m.w[3] = (uint32_t)gz_getpid();
+    int err = gz_send(sb, &m, &r);
+    if (err || (int)r.w[0] < 0) return err ? err : (int)r.w[0];
+    m.w[0] = what; m.w[1] = w1; m.w[2] = w2; m.w[4] = w4;
+    err = gz_send(sb, &m, &r);
+    return err ? err : (int)r.w[0] < 0 ? (int)r.w[0] : 0;
+}
 static void copying(void)
 {
     copy_until = gz_time_ms() + 350;
@@ -164,7 +177,7 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         int r = gz_sysinfo(&si); if (r) return r;
         gu_put32(payload, GU_VERSION);
         gu_put32(payload + 4, GU_CAP_FILES | GU_CAP_RUN | GU_CAP_LOGS | GU_CAP_RELOAD |
-                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ | GU_CAP_BT_CARD_INFO | GU_CAP_BT_DISCOVERY | GU_CAP_BT_SERIAL | GU_CAP_BT_AUDIO | GU_CAP_CAM_PROBE);
+                             GU_CAP_SCREEN | GU_CAP_SCRIPT | GU_CAP_STATUS | GU_CAP_REBOOT_CE | GU_CAP_ENTROPY | GU_CAP_NETWORK | GU_CAP_USB_NET | GU_CAP_MIRROR | GU_CAP_NAND_BACKUP | GU_CAP_CF_READ | GU_CAP_BT_CARD_INFO | GU_CAP_BT_DISCOVERY | GU_CAP_BT_SERIAL | GU_CAP_BT_AUDIO | GU_CAP_CAM_PROBE | GU_CAP_POWER | GU_CAP_DETACH);
         if (!gz_nand_repair(GZ_NAND_REPAIR_AVAILABLE,NULL,0))
             gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_NAND_REPAIR);
         if (installer_session) gu_put32(payload+4,gu_get32(payload+4)|GU_CAP_INSTALL_STATUS);
@@ -362,6 +375,25 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
         }
         *out=48+status.count*52; return 0;
     }
+    case GU_USB_DETACH:
+        if (network || n != 4) return network ? GZ_EPERM : GZ_EINVAL;
+        return gz_usb_ctl(GZ_USB_DETACH, (void *)b, 4);
+    case GU_POWER: {
+        if (n < 4) return GZ_EINVAL;
+        uint32_t op = gu_get32(b);
+        if (op == GU_POWER_STATUS) {
+            struct gz_power_status st;
+            memset(&st, 0, sizeof(st));
+            int r = gz_power_status(&st);
+            if (r < 0) return r;
+            memcpy(payload, &st, sizeof(st)); *out = sizeof(st); return 0;
+        }
+        if (op > GU_POWER_IDLE || n != 12) return GZ_EINVAL;
+        uint32_t mode = op == GU_POWER_IDLE ? (GZ_SLEEP_SUSPEND | SB_DEBUG_POWER_IDLE)
+                      : op == GU_POWER_HIBERNATE ? GZ_SLEEP_HIBERNATE : GZ_SLEEP_SUSPEND;
+        printf("usb: power op %u, alarm %u s\n", op, gu_get32(b + 4));
+        return sb_debug_call(SB_DEBUG_POWER, mode, gu_get32(b + 4), gu_get32(b + 8));
+    }
     case GU_CAM_PROBE: {
         /* op, arg, wanted bytes -> kernel result, then the op's data
          * (VEO_PROBE=1 kernels; docs/hardware/VEO.md). */
@@ -510,6 +542,11 @@ static int dispatch(uint32_t op, const uint8_t *b, uint32_t n, uint32_t *out)
     case GU_BOOT_BEGIN: {
         if (upload >= 0) return GZ_EINVAL;
         int r = gz_usb_ctl(GZ_USB_RELOAD_BEGIN, (void *)b, n);
+        if (r == GZ_ENOMEM) {
+            /* Background apps hold the memory the staged image needs. */
+            sb_debug_call(SB_DEBUG_RECLAIM, 0, 0, 0);
+            r = gz_usb_ctl(GZ_USB_RELOAD_BEGIN, (void *)b, n);
+        }
         if (!r) { reloading = true; copying(); }
         return r;
     }

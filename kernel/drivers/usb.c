@@ -26,6 +26,10 @@ static uint8_t diagnostic;
 static uint32_t peek_addr;      /* diagnostics 3-5: KSEG1 address to read or write */
 static uint32_t poke_value;     /* loaded by vendor request 0x5b */
 static uint32_t generation;
+/* GZ_USB_DETACH: leave the bus once the reply has gone, then come back. */
+static bool detach_pending, detached;
+static uint32_t detach_ms;
+static uint64_t detach_until, detach_after;
 
 void usb_log_putc(char c)
 {
@@ -96,7 +100,28 @@ void usb_resume(void)
 
 void usb_poll(void)
 {
+    if (detached) {
+        if (time_us() < detach_until) return;
+        detached = false;
+        kprintf("usb: back on the bus after %u ms\n", detach_ms);
+        clear_session();
+        hw_init();
+        return;
+    }
     if (!active) return;
+    if (detach_pending && time_us() >= detach_after && tt == th && !tx_busy && !short_pending && !zlp && (R(0x1464) & 4)) {
+        detach_pending = false;
+        clear_session();
+        W(0x132c, 0); W(0x1488, 0); W(0x130c, 0x10);
+        /* The unit off. On a real BE-300 the D+ pull-up stays, so the host
+         * keeps the device and sees its transfers fail: a dead link rather
+         * than an unplug (docs/dev/HWTEST.md). */
+        W(0x1308, 0);
+        active = false;
+        detached = true;
+        detach_until = time_us() + (uint64_t)detach_ms * 1000u;
+        return;
+    }
     uint32_t s1 = R(0x1468), s2 = R(0x146c);
     if (s2 & 2) { clear_session(); W(0x1484, ~2u); }
     if (s2 & 4) {
@@ -241,6 +266,15 @@ int sys_usb_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
     }
     if ((op >= GZ_USB_RELOAD_BEGIN && op <= GZ_USB_RELOAD_ABORT) ||
         op == GZ_USB_RELOAD_DEBUG || op == GZ_USB_DEBUG_RESTORE) return usb_reload_ctl(p, op, buf, len);
+    if (op == GZ_USB_DETACH) {
+        uint32_t ms;
+        if (len != 4 || copy_from_as(&p->as, &ms, buf, 4) || ms < 100 || ms > 10000) return GZ_EINVAL;
+        if (network_debugger) return GZ_EPERM;   /* only a USB session's reply can be waited for */
+        /* The reply is queued after this returns: give it time to be. */
+        detach_ms = ms; detach_pending = true; detach_after = time_us() + 200000u;
+        kprintf("usb: leaving the bus for %u ms\n", ms);
+        return 0;
+    }
     if (op == GZ_USB_DEBUG_TRANSPORT) {
         uint32_t value;
         if (len!=4 || copy_from_as(&p->as,&value,buf,4) || value>1) return GZ_EINVAL;

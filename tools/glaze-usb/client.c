@@ -84,7 +84,14 @@ int gu_call(struct gu_client *c, uint32_t op, const void *data, uint32_t n)
             if (reply_op != (op | GU_REPLY) || gu_get32(p + 8) != id) continue;
             memcpy(c->frame, p, GU_HEADER + gu_get32(p + 12));
             int32_t status = (int32_t)gu_get32(p + 16);
-            if (status) { fprintf(stderr, "Glaze USB op %u failed (%d)\n", op, status); return -1; }
+            if (status) {
+                if (op == GU_BOOT_BEGIN && status == -2)
+                    fputs("The device lacks free memory for this image, even after ending background apps;\n"
+                          "quit apps or boot with a smaller ramfs_kb.\n", stderr);
+                else
+                    fprintf(stderr, "Glaze USB op %u failed (%d)\n", op, status);
+                return -1;
+            }
             return (int)gu_get32(p + 12);
         }
     }
