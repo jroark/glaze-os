@@ -6,6 +6,8 @@
  * PE resource data. */
 #include "runtime.h"
 #include "source.h"
+#include <glaze/display.h>
+#include <glaze/sb.h>
 
 struct ce_bitmap {
     int w, h, bpp;
@@ -1344,6 +1346,71 @@ CE_API(DrawFrameControl)
     end(&t);
     return 1;
 }
+/* ExtEscape(dc, escape, in bytes, in, out bytes, out). The display's escapes
+ * reach Glaze's own brightness and contrast (SpringBoard's SB_DISPLAY_*),
+ * which use the stock ddi.dll's levels (glaze/display.h):
+ * - CONTRASTCOMMAND (0x1805), CONTRASTCMDINPUTPARM {command, parameter}:
+ *   GET 0, SET 1, INCREASE 2, DECREASE 3, DEFAULT 4, MAX 5; out: the level.
+ * - Casio's escape 100000 (Contrast.exe's backlight page) takes {command,
+ *   value}: for each setting base (0, 10, 20, 30) +0 gets, +1 sets and +5
+ *   reports the maximum. Bases 0 and 10 (on battery, on external power)
+ *   are Glaze's one brightness; 20 and 30, two of the applet's options, are
+ *   kept in the shared registry.
+ * - QUERYESCSUPPORT (8) reports which of these exist. */
+static int display_call(CW op, int brightness, int contrast, int *now_brightness, int *now_contrast)
+{
+    struct gz_msg m = {{0}}, r = {{0}};
+    m.w[0] = op;
+    m.w[1] = (uint32_t)brightness;
+    m.w[2] = (uint32_t)contrast;
+    m.w[3] = (uint32_t)gz_getpid();
+    if (gz_send(ui.sb_port, &m, &r) < 0 || (int)r.w[0] < 0)
+        return -1;
+    *now_brightness = (int)r.w[1];
+    *now_contrast = (int)r.w[2];
+    return 0;
+}
+CE_API(ExtEscape)
+{
+    const uint8_t *in = PTR(uint8_t, a3);
+    uint8_t *out = PTR(uint8_t, a5);
+    int brightness, contrast;
+    if (a1 == 8) /* QUERYESCSUPPORT */
+        return a2 >= 4 && in && (ce_u32(in) == 0x1805 || ce_u32(in) == 100000 || ce_u32(in) == 8);
+    if ((a1 != 0x1805 && a1 != 100000) || a2 < 8 || !in)
+        return 0; /* not implemented */
+    if (display_call(SB_DISPLAY_GET, 0, 0, &brightness, &contrast))
+        return (CW)-1;
+    int command = (int)ce_u32(in), value = (int)ce_u32(in + 4), result;
+    if (a1 == 0x1805) {
+        int next = command == 1 ? value : command == 2 ? contrast + 1 : command == 3 ? contrast - 1 :
+                   command == 4 ? DISPLAY_CONTRAST_DEFAULT : contrast;
+        next = MAX(0, MIN(DISPLAY_CONTRAST_MAX, next));
+        if (command >= 1 && command <= 4 && display_call(SB_DISPLAY_SAVE, brightness, next, &brightness, &contrast))
+            return (CW)-1;
+        result = command == 5 ? DISPLAY_CONTRAST_MAX : contrast;
+    } else {
+        int base = command / 10 * 10, op = command % 10;
+        if (base > 30 || (op != 0 && op != 1 && op != 5))
+            return 0;
+        if (base <= 10) {
+            if (op == 1 && display_call(SB_DISPLAY_SAVE, MAX(DISPLAY_BRIGHTNESS_MIN, MIN(DISPLAY_BRIGHTNESS_MAX, value)),
+                                        contrast, &brightness, &contrast))
+                return (CW)-1;
+            result = op == 5 ? DISPLAY_BRIGHTNESS_MAX : brightness;
+        } else {
+            char name[8];
+            snprintf(name, sizeof(name), "%d", base);
+            const char *key = "HKCU\\ControlPanel\\Glaze\\Backlight";
+            if (op == 1)
+                ce_registry_set_dword(key, name, (uint32_t)value);
+            result = op == 5 ? 1 : (int)ce_registry_dword(key, name, 0);
+        }
+    }
+    if (out && a4 >= 4)
+        ce_put32(out, (CW)result);
+    return 1;
+}
 /* DrawIconEx(dc, x, y, icon, cx, cy, step, brush, flags): an icon resource
  * (colour and AND mask), scaled to cx x cy when given; DI_NORMAL only. */
 CE_API(DrawIconEx)
@@ -2221,6 +2288,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(Polyline),
     CE_EXPORT(DrawFrameControl),
     CE_EXPORT(DrawIconEx),
+    CE_EXPORT(ExtEscape),
     CE_EXPORT(SetSysColors),
     CE_EXPORT(DrawEdge),
     CE_EXPORT(GetTextColor),

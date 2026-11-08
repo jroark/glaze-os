@@ -2432,6 +2432,17 @@ static bool settings_request_allowed(int pid)
            !sb_apps[app].installed && !strcmp(sb_apps[app].path, "bin/settings");
 }
 
+/* The display's brightness and contrast, and touch calibration, are also
+ * the stock Windows CE settings applets' (Contrast.exe's ExtEscape and
+ * TapAdjust.exe's TouchCalibrate, through the WinCE runtime), when such an
+ * app is in front. */
+static bool display_request_allowed(int pid)
+{
+    int app = front_app();
+    return settings_request_allowed(pid) ||
+           (state == ST_APP && front() && front()->pid == pid && app >= 0 && sb_apps[app].wince);
+}
+
 static void handle_msg(int token, struct gz_msg *m)
 {
     struct gz_msg r;
@@ -2515,7 +2526,7 @@ static void handle_msg(int token, struct gz_msg *m)
     case SB_DISPLAY_SAVE:
     case SB_DISPLAY_CANCEL:
     case SB_DISPLAY_RESET:
-        r.w[0] = settings_request_allowed((int)m->w[3]) ?
+        r.w[0] = display_request_allowed((int)m->w[3]) ?
             (uint32_t)sb_display_request(&display_controls, m->w[0], (int)m->w[3], (int)m->w[1], (int)m->w[2]) :
             (uint32_t)GZ_EPERM;
         r.w[1] = (uint32_t)display_controls.current.brightness;
@@ -2527,7 +2538,7 @@ static void handle_msg(int token, struct gz_msg *m)
     case SB_TOUCH_CANCEL:
     case SB_TOUCH_RESET: {
         int pid = (int)m->w[3];
-        if (!settings_request_allowed(pid)) {
+        if (!display_request_allowed(pid)) { /* Settings, or a CE app's TouchCalibrate */
             r.w[0] = (uint32_t)GZ_EPERM;
             break;
         }

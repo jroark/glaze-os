@@ -977,6 +977,28 @@ bool ce_registry_set_dword(const char *key, const char *name, uint32_t value)
     ce_put32(bytes, value);
     return !ce_reg_create(&registry, key) && !ce_reg_set(&registry, key, name, 4, bytes, 4) && reg_save();
 }
+bool ce_registry_child(const char *key, unsigned index, char *out, uint32_t capacity)
+{
+    reg_load();
+    const char *child = ce_reg_child(&registry, key, index);
+    return child && strlcpy(out, child, capacity) < capacity;
+}
+int ce_registry_get(const char *key, const char *name, CW *type, void *out, uint32_t capacity)
+{
+    reg_load();
+    struct ce_reg_value *v = ce_reg_find(&registry, key, name);
+    if (!v)
+        return -1;
+    if (type)
+        *type = v->type;
+    memcpy(out, v->bytes, MIN(v->size, capacity));
+    return (int)v->size;
+}
+bool ce_registry_put(const char *key, const char *name, CW type, const void *data, uint32_t size)
+{
+    reg_load();
+    return !ce_reg_create(&registry, key) && !ce_reg_set(&registry, key, name, type, data, size) && reg_save();
+}
 bool ce_registry_string(const char *key, const char *name, WCHAR *out, uint32_t capacity)
 {
     reg_load();

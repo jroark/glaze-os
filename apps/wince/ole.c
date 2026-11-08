@@ -29,12 +29,34 @@ CE_API(SysFreeString)
 CE_API(SysStringLen) { return a0 ? ce_u32(PTR(uint8_t, a0) - 4) / 2 : 0; }
 static const struct ce_export exports[] = {CE_EXPORT(SysAllocString), CE_EXPORT(SysAllocStringLen),
                                            CE_EXPORT(SysFreeString), CE_EXPORT(SysStringLen)};
+/* COM: the runtime registers no COM servers, and the original OS's (OLE32
+ * in NK) are not loaded, so every class is unregistered. Initialization
+ * itself succeeds, as it does on CE. */
+CE_API(CoInitializeEx)
+{
+    return 0; /* S_OK */
+}
+CE_API(CoUninitialize)
+{
+    return 0;
+}
+CE_API(CoCreateInstance)
+{
+    if (a4)
+        *PTR(CW, a4) = 0;
+    return 0x80040154u; /* REGDB_E_CLASSNOTREG */
+}
+static const struct ce_export com[] = {CE_EXPORT(CoInitializeEx), CE_EXPORT(CoUninitialize),
+                                       CE_EXPORT(CoCreateInstance)};
 void *ce_resolve_ole(const char *dll, const char *name)
 {
-    if (strcasecmp(dll, "oleaut32.dll"))
+    bool automation = !strcasecmp(dll, "oleaut32.dll");
+    if (!automation && strcasecmp(dll, "ole32.dll"))
         return NULL;
-    for (unsigned i = 0; i < ARRAY_SIZE(exports); i++)
-        if (!strcmp(name, exports[i].name))
-            return exports[i].address;
+    const struct ce_export *table = automation ? exports : com;
+    unsigned count = automation ? ARRAY_SIZE(exports) : ARRAY_SIZE(com);
+    for (unsigned i = 0; i < count; i++)
+        if (!strcmp(name, table[i].name))
+            return table[i].address;
     return NULL;
 }

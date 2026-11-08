@@ -120,6 +120,10 @@ static void *native_symbol(const char *dll, const char *name)
                 fn = ce_resolve_gdi(name);
         }
         if (!fn)
+            fn = ce_resolve_system(dll, name);
+        if (!fn)
+            fn = ce_resolve_ras(dll, name);
+        if (!fn)
             fn = ce_resolve_process(dll, name);
         if (!fn)
             fn = ce_resolve_property(name);

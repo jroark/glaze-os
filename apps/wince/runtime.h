@@ -121,6 +121,7 @@ void *ce_resolve_timezone(const char *);
 void *ce_resolve_window(const char *);
 void *ce_resolve_gdi(const char *);
 void *ce_resolve_fpe(const char *);
+void *ce_resolve_system(const char *dll, const char *name);
 void *ce_resolve_data(const char *dll, const char *name);
 void *ce_resolve_shell(const char *, const char *);
 void ce_shell_draw(void);
@@ -160,6 +161,11 @@ bool ce_registry_set_binary(const char *, const char *, const void *, uint32_t s
 /* A REG_SZ or REG_EXPAND_SZ value, truncated to `capacity` units with its terminator. */
 bool ce_registry_string(const char *, const char *, WCHAR *, uint32_t capacity);
 bool ce_canonical_path(char canonical[FS_PATH_MAX], const WCHAR *input);
+/* The index-th subkey's name; a value's size (or -1), its type and bytes; a typed store. */
+bool ce_registry_child(const char *key, unsigned index, char *out, uint32_t capacity);
+int ce_registry_get(const char *key, const char *name, CW *type, void *out, uint32_t capacity);
+bool ce_registry_put(const char *key, const char *name, CW type, const void *data, uint32_t size);
+void *ce_resolve_ras(const char *dll, const char *name);
 bool ce_process_close(CW, bool *);
 void *ce_resolve_process(const char *dll, const char *name);
 const WCHAR *ce_command_line(void);
