@@ -91,13 +91,21 @@ void mm_init(void)
  * (romfs.c) and look again. */
 #define RECLAIM_BATCH   16
 
+/* The search starts at alloc_hint, so it must stay below NPAGES: a hint of
+ * NPAGES after taking the last frame read and set page_used[NPAGES], kernel
+ * data beyond the array, and handed out a "page" past the end of SDRAM. */
+static void hint_after(uint32_t i)
+{
+    alloc_hint = i + 1 < NPAGES ? i + 1 : 0;
+}
+
 static void *try_page_alloc(void)
 {
     for (uint32_t n = 0, i = alloc_hint; n < NPAGES; n++, i = i + 1 < NPAGES ? i + 1 : 0) {
         if (!page_used[i]) {
             page_used[i] = 1;
             free_count--;
-            alloc_hint = i + 1;
+            hint_after(i);
             void *kva = (void *)KSEG0(i * PAGE_SIZE);
             memset(kva, 0, PAGE_SIZE);
             return kva;
@@ -137,7 +145,7 @@ static void *try_page_alloc_colour(uint32_t va)
 {
     for (uint32_t n = 0, i = alloc_hint; n < NPAGES; n++, i = i + 1 < NPAGES ? i + 1 : 0) {
         if (!page_used[i] && !((i * PAGE_SIZE ^ va) & 0x1000u)) {
-            page_used[i] = 1; free_count--; alloc_hint = i + 1;
+            page_used[i] = 1; free_count--; hint_after(i);
             return (void *)KSEG0(i * PAGE_SIZE);
         }
     }
