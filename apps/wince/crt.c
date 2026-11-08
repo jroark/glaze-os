@@ -195,6 +195,21 @@ CE_API(strtol)
     }
     return negative ? 0u - value : value;
 }
+CE_API(atol)
+{
+    return ce_strtol(a0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+/* GetTempPathW(capacity, buffer): CE's \Temp\, which the runtime keeps in
+ * the app's private drive. Returns the length, or the size needed. */
+CE_API(GetTempPathW)
+{
+    static const WCHAR temp[] = u"\\Temp\\";
+    unsigned n = ARRAY_SIZE(temp) - 1;
+    if (a0 <= n || !a1)
+        return n + 1;
+    memcpy(PTR(WCHAR, a1), temp, sizeof(temp));
+    return n;
+}
 CE_API(strrchr)
 {
     return WORD(strrchr(PTR(char, a0), (int)(a1 & 255)));
@@ -310,7 +325,7 @@ CW ce_CloseHandle(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
 CW ce_SetFilePointer(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
 struct ce_stream {
     CW handle;
-    bool binary;
+    bool binary, console; /* console: _getstdfilex's stdin/out/err, the serial log */
 };
 CE_API(_wfopen)
 {
@@ -349,8 +364,8 @@ CE_API(_wfopen)
 CE_API(fclose)
 {
     struct ce_stream *s = PTR(struct ce_stream, a0);
-    if (!s)
-        return (CW)-1;
+    if (!s || s->console)
+        return s ? 0 : (CW)-1;
     CW ok = ce_CloseHandle(s->handle, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     free(s);
     return ok ? 0 : (CW)-1;
@@ -359,8 +374,81 @@ CE_API(fflush)
 {
     return 0;
 }
+/* fopen(path, mode): _wfopen with Windows-1252 names. */
+CE_API(fopen)
+{
+    WCHAR path[FS_PATH_MAX], mode[8];
+    const char *p = PTR(char, a0), *m = PTR(char, a1);
+    if (!p || !m) {
+        ce_error = 87;
+        return 0;
+    }
+    unsigned i = 0;
+    for (; p[i] && i + 1 < ARRAY_SIZE(path); i++)
+        path[i] = ce_cp1252_decode((uint8_t)p[i]);
+    path[i] = 0;
+    for (i = 0; m[i] && i + 1 < ARRAY_SIZE(mode); i++)
+        mode[i] = (uint8_t)m[i];
+    mode[i] = 0;
+    return ce__wfopen(WORD(path), WORD(mode), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+/* _getstdfilex(0 stdin, 1 stdout, 2 stderr): writes go to the serial log. */
+CE_API(_getstdfilex)
+{
+    static struct ce_stream console[3] = {{0, true, true}, {0, true, true}, {0, true, true}};
+    return a0 < 3 ? WORD(&console[a0]) : 0;
+}
+/* fread/fwrite(buffer, size, count, stream) return whole items. */
+CE_API(fread)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a3);
+    CW bytes = a1 * a2, got = 0;
+    if (!s || s->console || !a1 || (a2 && bytes / a2 != a1))
+        return 0;
+    if (!ce_ReadFile(s->handle, a0, bytes, WORD(&got), 0, 0, 0, 0, 0, 0, 0, 0))
+        return 0;
+    return got / a1;
+}
+CE_API(fwrite)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a3);
+    CW bytes = a1 * a2, wrote = 0;
+    if (!s || !a1 || (a2 && bytes / a2 != a1))
+        return 0;
+    if (s->console) {
+        printf("wince: stdout: %.*s\n", (int)MIN(bytes, 256u), PTR(char, a0));
+        return a2;
+    }
+    if (!ce_WriteFile(s->handle, a0, bytes, WORD(&wrote), 0, 0, 0, 0, 0, 0, 0, 0))
+        return 0;
+    return wrote / a1;
+}
+/* fseek(stream, offset, SEEK_SET 0 / CUR 1 / END 2); ftell. */
+CE_API(fseek)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a0);
+    if (!s || s->console || a2 > 2)
+        return (CW)-1;
+    return ce_SetFilePointer(s->handle, a1, 0, a2, 0, 0, 0, 0, 0, 0, 0, 0) == 0xffffffffu ? (CW)-1 : 0;
+}
+CE_API(ftell)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a0);
+    if (!s || s->console)
+        return (CW)-1;
+    return ce_SetFilePointer(s->handle, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0);
+}
 static int stream_write(struct ce_stream *s, const WCHAR *text, unsigned n)
 {
+    if (s->console) {
+        char line[1024];
+        unsigned k = 0;
+        for (; k < n && k + 1 < sizeof(line); k++)
+            line[k] = ce_glyph(text[k]);
+        line[k] = 0;
+        printf("wince: stdout: %s\n", line);
+        return (int)n;
+    }
     char out[2048];
     unsigned used = 0;
     for (unsigned i = 0; i < n; i++) {
@@ -377,6 +465,30 @@ static int stream_write(struct ce_stream *s, const WCHAR *text, unsigned n)
     }
     CW wrote = 0;
     return !used || ce_WriteFile(s->handle, WORD(out), used, WORD(&wrote), 0, 0, 0, 0, 0, 0, 0, 0) ? (int)n : -1;
+}
+/* fprintf(stream, format, ...): a narrow format is widened, with %s and %c
+ * naming narrow arguments (%hs and %hc in wsprintf's terms). */
+CE_API(fprintf)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a0);
+    const char *f = PTR(char, a1);
+    WCHAR format[512], text[1024];
+    unsigned n = 0;
+    for (unsigned i = 0; f && f[i] && n + 2 < ARRAY_SIZE(format); i++) {
+        format[n++] = ce_cp1252_decode((uint8_t)f[i]);
+        if (f[i] != '%')
+            continue;
+        while (f[i + 1] && strchr("-+ #0123456789.*l", f[i + 1]) && n + 2 < ARRAY_SIZE(format))
+            format[n++] = (uint8_t)f[++i];
+        if (f[i + 1] == 's' || f[i + 1] == 'c')
+            format[n++] = 'h';
+    }
+    format[n] = 0;
+    uintptr_t words[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
+    int len = s && f ? ce_wformat(text, ARRAY_SIZE(text), format, words, ARRAY_SIZE(words)) : -1;
+    if (len < 0)
+        return (CW)-1;
+    return (CW)stream_write(s, text, (unsigned)len);
 }
 CE_API(fwprintf)
 {
@@ -401,6 +513,8 @@ static const struct ce_export exports[] = {
     {"??_V@YAXPAX@Z", (void *)ce_operator_delete},
     CE_EXPORT(_ltow),
     CE_EXPORT(strtol),
+    CE_EXPORT(atol),
+    CE_EXPORT(GetTempPathW),
     CE_EXPORT(strrchr),
     CE_EXPORT(toupper),
     CE_EXPORT(tolower),
@@ -412,6 +526,13 @@ static const struct ce_export exports[] = {
     CE_EXPORT(LCMapStringW),
     CE_EXPORT(_vsnwprintf),
     CE_EXPORT(_wfopen),
+    CE_EXPORT(fopen),
+    CE_EXPORT(_getstdfilex),
+    CE_EXPORT(fread),
+    CE_EXPORT(fwrite),
+    CE_EXPORT(fseek),
+    CE_EXPORT(ftell),
+    CE_EXPORT(fprintf),
     CE_EXPORT(fclose),
     CE_EXPORT(fflush),
     CE_EXPORT(fwprintf),

@@ -313,6 +313,128 @@ static void replace_selection(struct ce_window *w, const WCHAR *text)
     edited(w);
 }
 
+/* Trackbars and progress bars keep their range and position in scroll[0];
+ * both default to 0-100. Trackbar: TBM_* (0x400-0x417), and a touch moves
+ * the thumb, sending the parent WM_HSCROLL (WM_VSCROLL with TBS_VERT) with
+ * TB_THUMBTRACK, then TB_THUMBPOSITION and TB_ENDTRACK. Progress: PBM_*.
+ * https://learn.microsoft.com/en-us/windows/win32/controls/trackbar-control-reference */
+static bool is_trackbar(const struct ce_window *w)
+{
+    return !strcasecmp(w->klass, "msctls_trackbar32");
+}
+static bool is_progress(const struct ce_window *w)
+{
+    return !strcasecmp(w->klass, "msctls_progress32");
+}
+static void range_defaults(struct ce_window *w)
+{
+    if (!w->scroll[0].minimum && !w->scroll[0].maximum && !w->scroll[0].page) {
+        w->scroll[0].maximum = 100;
+        w->scroll[0].page = 10;
+    }
+}
+static int32_t clamp_position(struct ce_window *w, int32_t pos)
+{
+    return MAX(w->scroll[0].minimum, MIN(w->scroll[0].maximum, pos));
+}
+static bool range_proc(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
+{
+    range_defaults(w);
+    int32_t *lo = &w->scroll[0].minimum, *hi = &w->scroll[0].maximum, *pos = &w->scroll[0].position;
+    CW old = (CW)*pos;
+    *result = 0;
+    if (is_progress(w)) {
+        switch (msg) {
+        case 0x401: /* PBM_SETRANGE */
+            *result = (CW)(uint16_t)*lo | (CW)(uint16_t)*hi << 16;
+            *lo = (int16_t)lp, *hi = (int16_t)(lp >> 16);
+            break;
+        case 0x406: /* PBM_SETRANGE32 */
+            *result = (CW)(uint16_t)*lo | (CW)(uint16_t)*hi << 16;
+            *lo = (int32_t)wp, *hi = (int32_t)lp;
+            break;
+        case 0x402: *result = old; *pos = (int32_t)wp; break;               /* PBM_SETPOS */
+        case 0x403: *result = old; *pos += (int32_t)wp; break;              /* PBM_DELTAPOS */
+        case 0x404: *result = (CW)w->scroll[0].page; w->scroll[0].page = wp; break; /* PBM_SETSTEP */
+        case 0x405: *result = old; *pos += (int32_t)w->scroll[0].page; break; /* PBM_STEPIT */
+        case 0x407: /* PBM_GETRANGE */
+            if (lp) {
+                PTR(int32_t, lp)[0] = *lo;
+                PTR(int32_t, lp)[1] = *hi;
+            }
+            *result = (CW)(wp ? *lo : *hi);
+            return true;
+        case 0x408: *result = old; return true;                             /* PBM_GETPOS */
+        case 0x409: case 0x2001: return true;                               /* bar and background colours */
+        default: return false;
+        }
+        *pos = clamp_position(w, *pos);
+        w->dirty = true;
+        return true;
+    }
+    switch (msg) {
+    case 0x400: *result = old; return true;                                 /* TBM_GETPOS */
+    case 0x401: *result = (CW)*lo; return true;                             /* TBM_GETRANGEMIN */
+    case 0x402: *result = (CW)*hi; return true;                             /* TBM_GETRANGEMAX */
+    case 0x405: *pos = (int32_t)lp; break;                                  /* TBM_SETPOS */
+    case 0x406: *lo = (int16_t)lp, *hi = (int16_t)(lp >> 16); break;        /* TBM_SETRANGE */
+    case 0x407: *lo = (int32_t)lp; break;                                   /* TBM_SETRANGEMIN */
+    case 0x408: *hi = (int32_t)lp; break;                                   /* TBM_SETRANGEMAX */
+    case 0x403: case 0x404: case 0x409: case 0x40a: case 0x40b: case 0x40c: case 0x414:
+        return true; /* tics and selection ranges are not drawn */
+    case 0x415: *result = (CW)w->scroll[0].page; w->scroll[0].page = lp; return true; /* TBM_SETPAGESIZE */
+    case 0x416: *result = (CW)w->scroll[0].page; return true;               /* TBM_GETPAGESIZE */
+    case 0x417: case 0x418: return true;                                    /* line size */
+    case 0x201: case 0x200: case 0x202: {                                   /* touch */
+        if (msg == 0x200 && !(wp & 1))
+            return false;
+        gfx_rect r = ce_window_rect(w->handle);
+        bool vertical = w->style & 2;
+        int at = vertical ? (int16_t)(lp >> 16) : (int16_t)lp, span = MAX(1, (vertical ? r.h : r.w) - 12);
+        int32_t next = *lo + (int32_t)((int64_t)(MAX(0, MIN(span, at - 6))) * (*hi - *lo) / span);
+        *pos = clamp_position(w, next);
+        w->dirty = true;
+        CW bar = vertical ? 0x115 : 0x114;
+        if (msg != 0x202)
+            ce_send(w->parent, bar, 5 | (CW)(uint16_t)*pos << 16, w->handle); /* TB_THUMBTRACK */
+        else {
+            ce_send(w->parent, bar, 4 | (CW)(uint16_t)*pos << 16, w->handle); /* TB_THUMBPOSITION */
+            ce_send(w->parent, bar, 8, w->handle);                           /* TB_ENDTRACK */
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+    *pos = clamp_position(w, *pos);
+    w->dirty = true;
+    return true;
+}
+static void draw_range(struct ce_window *w, gfx_rect r)
+{
+    range_defaults(w);
+    int32_t lo = w->scroll[0].minimum, hi = w->scroll[0].maximum, pos = w->scroll[0].position;
+    int64_t span = MAX(1, hi - lo);
+    if (is_progress(w)) {
+        gfx_fill(&ui.surf, r, 0xffffff);
+        gfx_fill(&ui.surf, gfx_r(r.x, r.y, r.w, 1), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x, r.y + r.h - 1, r.w, 1), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x, r.y, 1, r.h), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x + r.w - 1, r.y, 1, r.h), 0x808080);
+        int filled = (int)((int64_t)(r.w - 2) * (pos - lo) / span);
+        gfx_fill(&ui.surf, gfx_r(r.x + 1, r.y + 1, MAX(0, filled), r.h - 2), 0x305080);
+        return;
+    }
+    bool vertical = w->style & 2;
+    int length = (vertical ? r.h : r.w) - 12, offset = 6 + (int)((int64_t)length * (pos - lo) / span);
+    if (vertical) {
+        gfx_fill(&ui.surf, gfx_r(r.x + r.w / 2 - 2, r.y + 6, 4, length), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x + 2, r.y + offset - 4, r.w - 4, 9), 0x305080);
+    } else {
+        gfx_fill(&ui.surf, gfx_r(r.x + 6, r.y + r.h / 2 - 2, length, 4), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x + offset - 4, r.y + 2, 9, r.h - 4), 0x305080);
+    }
+}
 static CW spin_proc(struct ce_window *w, CW msg, CW wp, CW lp)
 {
     switch (msg) {
@@ -449,6 +571,8 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
         (message == 0x202 || (message >= 0x465 && message <= 0x472)))
         return spin_proc(w, message, wp, lp);
     CW list_result;
+    if ((is_trackbar(w) || is_progress(w)) && range_proc(w, message, wp, lp, &list_result))
+        return list_result;
     if (ce_date_message(w, message, wp, lp, &list_result))
         return list_result;
     if (ce_view_message(w, message, wp, lp, &list_result))
@@ -715,6 +839,8 @@ static void draw_control(struct ce_window *w)
             gfx_line(&ui.surf, r.x, r.y, r.x + r.w - 1, r.y, 0x808080, 255);
             gfx_text_center(&ui.surf, r.x, r.y + 3, r.w, ui_font(FONT_R12), text, 0, 255);
         }
+    } else if (is_trackbar(w) || is_progress(w)) {
+        draw_range(w, r);
     } else if (!strcasecmp(w->klass, "msctls_updown32")) {
         gfx_fill(&ui.surf, r, 0xaaaaaa);
         gfx_text_center(&ui.surf, r.x, r.y - 2, r.w, ui_font(FONT_R12), "+", 0, 255);
@@ -1047,7 +1173,7 @@ CE_API(UnregisterClassW)
 static bool system_class(CW name)
 {
     static const char *const names[] = {"Button", "Edit", "Static", "ListBox", "ComboBox", "ScrollBar",
-        "msctls_updown32", "msctls_statusbar32", "SysTabControl32", "SysListView32", "SysTreeView32",
+        "msctls_updown32", "msctls_statusbar32", "msctls_trackbar32", "msctls_progress32", "SysTabControl32", "SysListView32", "SysTreeView32",
         "SysDateTimePick32", "SysMonthCal32"};
     char text[64];
     if (name < 65536)
