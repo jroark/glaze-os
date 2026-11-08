@@ -120,6 +120,8 @@ void *ce_resolve_time(const char *);
 void *ce_resolve_timezone(const char *);
 void *ce_resolve_window(const char *);
 void *ce_resolve_gdi(const char *);
+void *ce_resolve_fpe(const char *);
+void *ce_resolve_data(const char *dll, const char *name);
 void *ce_resolve_shell(const char *, const char *);
 void ce_shell_draw(void);
 bool ce_shell_input(const struct gz_input_event *);

@@ -36,6 +36,10 @@ $(OUT)/servers/%.o: servers/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_CFLAGS) -c -o $@ $<
 
+# The WinCE runtime's COREDLL floating-point helpers and C math (apps/wince/fpe.c).
+PROG_EXTRA_wince := third_party/jerryscript/jerryscript-math.c $(wildcard third_party/compiler-rt/*.c)
+$(patsubst %.c,$(OUT)/dyn/%.o,$(PROG_EXTRA_wince)): TP_INC := -Os -w -fno-strict-aliasing
+
 # ktest checks the GPS receiver through libgps's parser (glaze/gps.h).
 PROG_EXTRA_ktest := lib/gps/gps.c
 

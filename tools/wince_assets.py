@@ -39,8 +39,9 @@ def cstr(data, off):
         raise AssetError("non-ASCII asset string") from exc
 
 
-def lzss(data, size=None, limit=32 * 1024 * 1024):
-    """Casio SPL/CPK LZSS, zero history, absolute 12-bit ring references."""
+def lzss(data, size=None, limit=32 * 1024 * 1024, partial=False):
+    """Casio SPL/CPK LZSS, zero history, absolute 12-bit ring references.
+    partial stops at a truncated final item (NK streams end in page padding)."""
     ring = bytearray(4096)
     out = bytearray()
     cursor, flags, pos = 0xfee, 0, 0
@@ -49,6 +50,8 @@ def lzss(data, size=None, limit=32 * 1024 * 1024):
         if not flags & 0x100:
             flags = data[pos] | 0xff00
             pos += 1
+        if partial and pos + (1 if flags & 1 else 2) > len(data):
+            break
         if flags & 1:
             values = span(data, pos, 1)
             pos += 1
@@ -211,9 +214,12 @@ class Fat16:
 class NkImage:
     """Local ROM module metadata, used for CCFS tables and export names."""
 
-    def __init__(self, nand):
+    def __init__(self, nand, strict=True):
+        """strict rejects stale record checksums; otherwise they are counted
+        in checksum_mismatches, as apps/wince/assets.c audits them."""
         start, count = u32(nand, 40), u32(nand, 44)
-        logical = lzss(span(nand, start * 512, count * 512))
+        logical = lzss(span(nand, start * 512, count * 512), partial=not strict)
+        self.checksum_mismatches = 0
         if span(logical, 0, 7) != b"B000FF\n":
             raise AssetError("NK partition does not contain a Casio B000FF stream")
         records = []
@@ -225,7 +231,9 @@ class NkImage:
                 break
             payload = span(logical, off, length)
             if sum(payload) & 0xffffffff != checksum:
-                raise AssetError("NK record checksum mismatch")
+                if strict:
+                    raise AssetError("NK record checksum mismatch")
+                self.checksum_mismatches += 1
             records.append((addr, payload))
             off += length
         if not records:
@@ -268,6 +276,37 @@ class NkImage:
                     return bytes(result)
                 except AssetError:
                     pos = b.find(pointer, pos + 1)
+
+    def toc(self):
+        """ROMHDR module entries: {lowercase name: (e32 offset, o32 offset)}."""
+        b = self.flat
+        if u32(b, 0x40) != 0x43454345:
+            raise AssetError("NK has no ROM header")
+        toc = u32(b, 0x44) - self.base
+        out = {}
+        for i in range(u32(b, toc + 16)):
+            entry = toc + 80 + i * 32
+            out[cstr(b, u32(b, entry + 20) - self.base).lower()] = (u32(b, entry + 24) - self.base,
+                                                                     u32(b, entry + 28) - self.base)
+        return out
+
+    def rom_module(self, name):
+        """A ROM module laid out at its base, with compressed sections decoded
+        as the runtime loads it: {'base', 'entry', 'image', 'units'}. The nine
+        e32 units (exports, imports, resources, ...) are (rva, size) pairs."""
+        e32, o32 = self.toc()[name.lower()]
+        b = self.flat
+        entry, base, size = u32(b, e32 + 4), u32(b, e32 + 8), u32(b, e32 + 20)
+        image = bytearray(size)
+        for i in range(u16(b, e32)):
+            vs, rva, ps, ptr, _, flags = struct.unpack("<6I", span(b, o32 + i * 24, 24))
+            raw = span(b, ptr - self.base, ps)
+            data = rom_decompress(raw, vs) if flags & 0x2000 else raw[:vs]
+            if rva + len(data) > size:
+                raise AssetError("ROM section exceeds image")
+            image[rva:rva + len(data)] = data
+        units = [struct.unpack("<II", span(b, e32 + 32 + i * 8, 8)) for i in range(9)]
+        return {"base": base, "entry": entry, "image": bytes(image), "units": units}
 
 
 class CpkDecoder:

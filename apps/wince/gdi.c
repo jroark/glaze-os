@@ -1294,6 +1294,101 @@ CE_API(DrawFrameControl)
     end(&t);
     return 1;
 }
+/* DrawIconEx(dc, x, y, icon, cx, cy, step, brush, flags): an icon resource
+ * (colour and AND mask), scaled to cx x cy when given; DI_NORMAL only. */
+CE_API(DrawIconEx)
+{
+    struct ce_object *icon = ce_object(a3, CE_OBJ_ICON);
+    struct ce_bitmap *b = icon ? icon->data : NULL;
+    struct target t;
+    if (!b || !begin(a0, &t))
+        return 0;
+    int w = (int)a4 > 0 ? (int)a4 : b->w, h = (int)a5 > 0 ? (int)a5 : b->h;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int sx = x * b->w / w, sy = y * b->h / h;
+            if (!icon_transparent(b, sx, sy))
+                plot(&t, t.x + (int)a1 + x, t.y + (int)a2 + y, read_pixel(b, sx, sy), 13);
+        }
+    end(&t);
+    return 1;
+}
+/* DrawEdge(dc, rect, edge, flags): BDR_* outer/inner pairs and BF_* sides,
+ * with BF_MIDDLE, BF_ADJUST, BF_FLAT and BF_MONO. */
+CE_API(DrawEdge)
+{
+    struct target t;
+    if (!a1 || !begin(a0, &t))
+        return 0;
+    struct ce_rect *r = PTR(struct ce_rect, a1), q = *r;
+    static const uint32_t light = 0xffffff, face = 0xc0c0c0, shadow = 0x808080, dark = 0x404040;
+    for (int pass = 0; pass < 2; pass++) {
+        unsigned edge = (a2 >> (pass * 2)) & 3; /* raised 1, sunken 2 */
+        if (!edge || q.right - q.left < 2 || q.bottom - q.top < 2)
+            continue;
+        uint32_t tl, br;
+        if (a3 & 0x8000u)
+            tl = br = dark;
+        else if (a3 & 0x4000u)
+            tl = br = shadow;
+        else if (edge == 1)
+            tl = pass ? light : face, br = pass ? shadow : dark;
+        else
+            tl = pass ? dark : shadow, br = pass ? face : light;
+        if (a3 & 2) line(&t, q.left, q.top, q.right - 1, q.top, tl, 13, true);
+        if (a3 & 1) line(&t, q.left, q.top, q.left, q.bottom - 1, tl, 13, true);
+        if (a3 & 8) line(&t, q.left, q.bottom - 1, q.right - 1, q.bottom - 1, br, 13, true);
+        if (a3 & 4) line(&t, q.right - 1, q.top, q.right - 1, q.bottom - 1, br, 13, true);
+        q.left += (a3 & 1) != 0;
+        q.top += (a3 & 2) != 0;
+        q.right -= (a3 & 4) != 0;
+        q.bottom -= (a3 & 8) != 0;
+    }
+    if ((a3 & 0x800u) && q.right > q.left && q.bottom > q.top)
+        fill(&t, q.left, q.top, q.right - q.left, q.bottom - q.top, face);
+    end(&t);
+    if (a3 & 0x2000u)
+        *r = q;
+    return 1;
+}
+CE_API(GetTextColor)
+{
+    struct dc *d = dc_get(a0);
+    return d ? colorref(d->text) : 0xffffffffu;
+}
+/* Brushes are solid here: a packed-DIB pattern brush paints its top-left
+ * pixel's colour. */
+CE_API(CreateDIBPatternBrushPt)
+{
+    const uint8_t *dib = PTR(uint8_t, a0);
+    if (!dib || ce_u32(dib) < 40) {
+        ce_error = 87;
+        return 0;
+    }
+    uint32_t header = ce_u32(dib), bpp = ce_u16(dib + 14), used = ce_u32(dib + 32);
+    uint32_t colors = bpp <= 8 ? (used ? used : 1u << bpp) : 0;
+    int32_t h = (int32_t)ce_u32(dib + 8);
+    if (a1 != 0 || colors > 256) { /* DIB_RGB_COLORS only */
+        ce_error = 87;
+        return 0;
+    }
+    struct ce_bitmap *b = bitmap_from_dib(dib, header + colors * 4, dib + header + colors * 4,
+                                          ALIGN_UP((uint32_t)ce_u32(dib + 4) * bpp, 32u) / 8 * (uint32_t)(h < 0 ? -h : h),
+                                          NULL, false);
+    uint32_t rgb = b ? read_pixel(b, 0, 0) : 0;
+    if (b)
+        bitmap_free(b);
+    return ce_new_object(CE_OBJ_BRUSH, rgb, NULL, 0);
+}
+/* ExtractIconExW: other executables' icons are not read; report none. */
+CE_API(ExtractIconExW)
+{
+    if (a2)
+        *PTR(CW, a2) = 0;
+    if (a3)
+        *PTR(CW, a3) = 0;
+    return 0;
+}
 CE_API(GetPixel)
 {
     struct dc *d = dc_get(a0);
@@ -2009,6 +2104,11 @@ static const struct ce_export exports[] = {
     CE_EXPORT(Ellipse),
     CE_EXPORT(Polyline),
     CE_EXPORT(DrawFrameControl),
+    CE_EXPORT(DrawIconEx),
+    CE_EXPORT(DrawEdge),
+    CE_EXPORT(GetTextColor),
+    CE_EXPORT(CreateDIBPatternBrushPt),
+    CE_EXPORT(ExtractIconExW),
     CE_EXPORT(GetPixel),
     CE_EXPORT(SetPixel),
     CE_EXPORT(SetTextColor),

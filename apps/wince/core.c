@@ -1884,6 +1884,119 @@ CE_API(FreeLibrary)
 {
     return a0 != 0;
 }
+CE_API(NKDbgPrintfW)
+{
+    WCHAR text[512];
+    uintptr_t args[] = {a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
+    char message[512];
+    /* Debug output must not stop the app on a conversion the runtime lacks. */
+    if (!a0 || ce_wformat(text, ARRAY_SIZE(text), PTR(WCHAR, a0), args, ARRAY_SIZE(args)) < 0)
+        return 0;
+    ce_narrow(message, sizeof(message), text);
+    printf("wince: debug: %s\n", message);
+    return 0;
+}
+/* The runtime never dispatches structured exceptions, so frame handlers only
+ * run if called directly; they continue the search (ExceptionContinueSearch). */
+CE_API(__C_specific_handler)
+{
+    return 1;
+}
+CE_API(RaiseException)
+{
+    char reason[64];
+    snprintf(reason, sizeof(reason), "WinCE exception %08x raised", (unsigned)a0);
+    ce_fatal(reason);
+}
+/* Every API set the runtime implements is ready from the first call. */
+CE_API(IsAPIReady)
+{
+    return 1;
+}
+/* No CE device drivers exist in Glaze; callers see the driver refuse. */
+CE_API(DeviceIoControl)
+{
+    if (a6)
+        *PTR(CW, a6) = 0;
+    ce_error = 50; /* ERROR_NOT_SUPPORTED */
+    return 0;
+}
+CE_API(KernelIoControl)
+{
+    ce_error = 50;
+    return 0;
+}
+/* The private registry is already saved on every change. */
+CE_API(RegCopyFile)
+{
+    return 1;
+}
+CE_API(FlushFileBuffers)
+{
+    return 1;
+}
+CE_API(SetThreadPriority)
+{
+    return 1;
+}
+CE_API(GetThreadPriority)
+{
+    return 3; /* THREAD_PRIORITY_NORMAL */
+}
+/* Object store against program memory: the BE-300 has 16 MiB in 4 KiB pages.
+ * Glaze's file system is separate flash, so a change is accepted unchanged. */
+CE_API(GetSystemMemoryDivision)
+{
+    if (a0)
+        *PTR(CW, a0) = 1024;
+    if (a1)
+        *PTR(CW, a1) = 3072;
+    if (a2)
+        *PTR(CW, a2) = 4096;
+    return 1;
+}
+CE_API(SetSystemMemoryDivision)
+{
+    return 0; /* SYSMEM_CHANGED */
+}
+/* SYSTEM_POWER_STATUS_EX(2) from Glaze's battery driver, which follows CE's
+ * own (glaze/battery.h). Lifetimes are unknown (BATTERY_LIFE_UNKNOWN). */
+static unsigned power_status(uint8_t *p, unsigned size)
+{
+    struct gz_power_status st = {0};
+    bool valid = !gz_power_status(&st) && (st.flags & GZ_POWER_VALID);
+    unsigned n = MIN(size, 56u);
+    memset(p, 0, n);
+    uint8_t out[56] = {0};
+    out[0] = st.flags & GZ_POWER_AC ? 1 : valid ? 0 : 255;
+    out[1] = !valid ? 255 : st.flags & GZ_POWER_CRITICAL ? 4 : st.flags & GZ_POWER_LOW ? 2 : 1;
+    if (valid && (st.flags & GZ_POWER_CHARGING))
+        out[1] |= 8;
+    out[2] = valid ? st.level : 255;
+    ce_put32(out + 4, 0xffffffffu);
+    ce_put32(out + 8, 0xffffffffu);
+    out[13] = 8; /* no backup battery */
+    out[14] = 255;
+    ce_put32(out + 16, 0xffffffffu);
+    ce_put32(out + 20, 0xffffffffu);
+    ce_put32(out + 24, valid ? (CW)st.adc_avg * 4200u / MAX(1u, st.cal_max) : 0); /* mV */
+    out[52] = 4; /* BATTERY_CHEMISTRY_LION */
+    memcpy(p, out, n);
+    return n;
+}
+CE_API(GetSystemPowerStatusEx)
+{
+    if (!a0)
+        return 0;
+    power_status(PTR(uint8_t, a0), 24);
+    return 1;
+}
+CE_API(GetSystemPowerStatusEx2)
+{
+    if (!a0 || a1 < 24)
+        return 0;
+    return power_status(PTR(uint8_t, a0), a1);
+}
 CE_API(GetVersionEx)
 {
     uint8_t *p = PTR(uint8_t, a0);
@@ -2017,6 +2130,20 @@ static const struct ce_export exports[] = {
     CE_EXPORT(GetProcAddressA),
     CE_EXPORT(FreeLibrary),
     CE_EXPORT(GetVersionEx),
+    CE_EXPORT(NKDbgPrintfW),
+    CE_EXPORT(__C_specific_handler),
+    CE_EXPORT(RaiseException),
+    CE_EXPORT(IsAPIReady),
+    CE_EXPORT(DeviceIoControl),
+    CE_EXPORT(KernelIoControl),
+    CE_EXPORT(RegCopyFile),
+    CE_EXPORT(FlushFileBuffers),
+    CE_EXPORT(SetThreadPriority),
+    CE_EXPORT(GetThreadPriority),
+    CE_EXPORT(GetSystemMemoryDivision),
+    CE_EXPORT(SetSystemMemoryDivision),
+    CE_EXPORT(GetSystemPowerStatusEx),
+    CE_EXPORT(GetSystemPowerStatusEx2),
     {"GetVersionExW", (void *)ce_GetVersionEx},
     CE_EXPORT(GlobalMemoryStatus),
 };

@@ -40,6 +40,7 @@ static bool is_edit(const struct ce_window *w)
 }
 static CW builtin_proc(CW, CW, CW, CW);
 static void draw_control(struct ce_window *);
+CW ce_GetActiveWindow(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
 static void click_button(struct ce_window *);
 static unsigned handle_index(CW handle)
 {
@@ -1521,6 +1522,118 @@ CE_API(BringWindowToTop)
     w->dirty = true;
     return 1;
 }
+CE_API(UnionRect)
+{
+    if (!a0 || !a1 || !a2)
+        return 0;
+    struct ce_rect a = *PTR(struct ce_rect, a1), b = *PTR(struct ce_rect, a2);
+    bool ea = a.left >= a.right || a.top >= a.bottom, eb = b.left >= b.right || b.top >= b.bottom;
+    struct ce_rect r = ea ? b : eb ? a :
+        (struct ce_rect){MIN(a.left, b.left), MIN(a.top, b.top), MAX(a.right, b.right), MAX(a.bottom, b.bottom)};
+    bool empty = r.left >= r.right || r.top >= r.bottom;
+    *PTR(struct ce_rect, a0) = empty ? (struct ce_rect){0, 0, 0, 0} : r;
+    return !empty;
+}
+CE_API(CopyRect)
+{
+    if (!a0 || !a1)
+        return 0;
+    *PTR(struct ce_rect, a0) = *PTR(struct ce_rect, a1);
+    return 1;
+}
+/* MapWindowPoints(from, to, points, count): either window may be 0 for the
+ * screen. Returns the horizontal offset in the low word, vertical in the high. */
+CE_API(MapWindowPoints)
+{
+    if ((a0 && !ce_window(a0)) || (a1 && !ce_window(a1))) {
+        ce_error = 1400;
+        return 0;
+    }
+    gfx_rect from = a0 ? ce_client_rect(a0) : (gfx_rect){0, 0, 0, 0};
+    gfx_rect to = a1 ? ce_client_rect(a1) : (gfx_rect){0, 0, 0, 0};
+    int dx = from.x - to.x, dy = from.y - to.y;
+    int32_t *p = PTR(int32_t, a2);
+    for (CW i = 0; p && i < a3 * 2; i += 2) {
+        p[i] += dx;
+        p[i + 1] += dy;
+    }
+    return (CW)(uint16_t)dx | (CW)(uint16_t)dy << 16;
+}
+/* CheckRadioButton(dialog, first, last, checked) sends BM_SETCHECK to each. */
+CE_API(CheckRadioButton)
+{
+    if (!ce_window(a0) || a1 > a2)
+        return 0;
+    for (struct ce_window *w = windows; w < windows + WINDOWS; w++)
+        if (w->handle && w->parent == a0 && w->id >= a1 && w->id <= a2)
+            ce_send(w->handle, 0xf1, w->id == a3, 0);
+    return 1;
+}
+/* All CE windows share the runtime's thread, so notifications are sends. */
+CE_API(SendNotifyMessageW)
+{
+    if (!ce_window(a0) && a0 != 0xffff)
+        return 0;
+    ce_send(a0, a1, a2, a3);
+    return 1;
+}
+/* RegisterWindowMessageW: one message number in 0xC000-0xFFFF per name. */
+CE_API(RegisterWindowMessageW)
+{
+    static WCHAR names[32][64];
+    static unsigned count;
+    const WCHAR *name = PTR(WCHAR, a0);
+    if (!name || !*name) {
+        ce_error = 87;
+        return 0;
+    }
+    for (unsigned i = 0; i < count; i++) {
+        unsigned j = 0;
+        while (names[i][j] && (names[i][j] | 32) == (name[j] | 32))
+            j++;
+        if (!names[i][j] && !name[j])
+            return 0xc000u + i;
+    }
+    if (count == ARRAY_SIZE(names) || ce_wlen(name) >= ARRAY_SIZE(names[0])) {
+        ce_error = 8;
+        return 0;
+    }
+    memcpy(names[count], name, (ce_wlen(name) + 1) * 2);
+    return 0xc000u + count++;
+}
+CE_API(GetCapture)
+{
+    return capture;
+}
+CE_API(SetActiveWindow)
+{
+    CW old = ce_GetActiveWindow(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    struct ce_window *w = ce_window(a0);
+    if (!w)
+        return 0;
+    while (w->parent && ce_window(w->parent))
+        w = ce_window(w->parent);
+    if (old != w->handle)
+        change_focus(w->handle);
+    return old;
+}
+/* Glaze's keyboard composes text itself: no input context is ever open. */
+CE_API(ImmGetContext)
+{
+    return 0;
+}
+CE_API(ImmReleaseContext)
+{
+    return 1;
+}
+CE_API(ImmGetCompositionStringW)
+{
+    return (CW)-2; /* IMM_ERROR_GENERAL */
+}
+CE_API(ImmNotifyIME)
+{
+    return 0;
+}
 CE_API(IntersectRect)
 {
     if (!a0 || !a1 || !a2)
@@ -2069,6 +2182,18 @@ static const struct ce_export exports[] = {
     CE_EXPORT(EndDialog),
     CE_EXPORT(MessageBeep),
     CE_EXPORT(CreateWindowExW),
+    CE_EXPORT(UnionRect),
+    CE_EXPORT(CopyRect),
+    CE_EXPORT(MapWindowPoints),
+    CE_EXPORT(CheckRadioButton),
+    CE_EXPORT(SendNotifyMessageW),
+    CE_EXPORT(RegisterWindowMessageW),
+    CE_EXPORT(GetCapture),
+    CE_EXPORT(SetActiveWindow),
+    CE_EXPORT(ImmGetContext),
+    CE_EXPORT(ImmReleaseContext),
+    CE_EXPORT(ImmGetCompositionStringW),
+    CE_EXPORT(ImmNotifyIME),
     CE_EXPORT(DefWindowProcW),
     CE_EXPORT(CallWindowProcW),
     CE_EXPORT(SendMessageW),

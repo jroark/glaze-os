@@ -323,6 +323,40 @@ static struct menu_item *find_item(CW h, CW id, bool position, unsigned depth)
     }
     return NULL;
 }
+/* RemoveMenu/DeleteMenu(menu, item, MF_BYPOSITION 0x400 or command): only
+ * the menu itself is searched, as on CE; DeleteMenu also destroys a submenu. */
+static CW remove_item(CW h, CW id, CW flags, bool destroy)
+{
+    struct menu *m = menu(h);
+    if (!m) {
+        ce_error = 1401;
+        return 0;
+    }
+    unsigned i = 0;
+    if (flags & 0x400)
+        i = id;
+    else
+        while (i < m->count && (m->item[i].command != id || (m->item[i].flags & 16)))
+            i++;
+    if (i >= m->count) {
+        ce_error = 1456; /* ERROR_MENU_ITEM_NOT_FOUND */
+        return 0;
+    }
+    CW sub = m->item[i].flags & 16 ? m->item[i].submenu : 0;
+    memmove(&m->item[i], &m->item[i + 1], (m->count - i - 1) * sizeof(m->item[0]));
+    m->count--;
+    if (destroy && sub)
+        ce_DestroyMenu(sub, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    return 1;
+}
+CE_API(RemoveMenu)
+{
+    return remove_item(a0, a1, a2, false);
+}
+CE_API(DeleteMenu)
+{
+    return remove_item(a0, a1, a2, true);
+}
 CE_API(EnableMenuItem)
 {
     struct menu_item *it = find_item(a0, a1, (a2 & 0x400) != 0, 0);
@@ -839,6 +873,11 @@ CE_API(GetClipboardData)
 {
     return clipboard_open && a0 == 13 ? clipboard : 0;
 }
+/* Only CF_UNICODETEXT (13) is ever stored. */
+CE_API(IsClipboardFormatAvailable)
+{
+    return a0 == 13 && clipboard;
+}
 CE_API(LoadAcceleratorsW)
 {
     uint32_t size;
@@ -1195,6 +1234,9 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CSGetUserDiskName),
     CE_EXPORT(CSGetTempFolder),
     CE_EXPORT(OpenClipboard),
+    CE_EXPORT(IsClipboardFormatAvailable),
+    CE_EXPORT(RemoveMenu),
+    CE_EXPORT(DeleteMenu),
     CE_EXPORT(EmptyClipboard),
     CE_EXPORT(CloseClipboard),
     CE_EXPORT(SetClipboardData),

@@ -112,6 +112,8 @@ static void *native_symbol(const char *dll, const char *name)
                 fn = ce_resolve_window(name);
             if (!fn)
                 fn = ce_resolve_gdi(name);
+            if (!fn)
+                fn = ce_resolve_fpe(name);
         } else if (!strcasecmp(dll, "commctrl.dll") || !strcasecmp(dll, "CSO.dll")) {
             fn = ce_resolve_window(name);
             if (!fn)
@@ -137,6 +139,9 @@ static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, vo
     if (!name && ordinals && ce_ordinal_find(ordinals, ordinal_size, dll, ordinal,
             ordinal_symbol, sizeof(ordinal_symbol)))
         name = ordinal_symbol;
+    void *data = name ? ce_resolve_data(dll, name) : NULL;
+    if (data)
+        return WORD(data);
     void *fn = name ? native_symbol(dll, name) : NULL;
     if (fn)
         return bridge(fn, NULL);
@@ -163,6 +168,9 @@ CW ce_import_address(const char *dll, const char *name)
 {
     /* Capability probes must see NULL for absent APIs. Only static imports
      * receive a diagnostic trap, since execution cannot safely continue. */
+    void *data = ce_resolve_data(dll, name);
+    if (data)
+        return WORD(data);
     void *fn = native_symbol(dll, name);
     CW address = fn ? bridge(fn, NULL) : 0;
     if (!address) {
