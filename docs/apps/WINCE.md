@@ -57,6 +57,12 @@ unsaved. The other pages remain unvalidated. In particular, Font and File Types
 require additional font/image-list APIs, and input-method management is not
 implemented. Decorative resource icons are not drawn.
 
+Launched directly from the original NAND after a GlazeBoot start, every stock
+application runs, including the PIM suite, Mail and the settings applets, on
+Casio's libraries from the NK ROM and the device's own registry; see
+[WINCE_NAND.md](WINCE_NAND.md). The packaged imports below keep their
+narrower, private environment.
+
 This is a selected-app milestone, not general Windows CE compatibility.
 PocketNotepad's Search, Font and About dialogs remain unvalidated; process creation,
 general vendor DLL compatibility, original installers and multimedia APIs are
@@ -69,7 +75,10 @@ Calling an unimplemented import shows its DLL/function name and a
 reported on the serial console without preventing supported app functions.
 `GetProcAddress` returns NULL with `ERROR_PROC_NOT_FOUND` for COREDLL names the
 runtime does not implement, so applications that probe for optional APIs can
-fall back.
+fall back. COREDLL's floating-point emulation helpers (`__dpadd`, `__ltd`,
+`__litodp` and the rest) use compiler-rt with O32's soft-float convention, the C
+math functions are fdlibm's, and `_setjmp`/`longjmp` save the CE caller's
+registers (`apps/wince/fpe.c`).
 Physical-device behavior has not been validated.
 
 ## Importing your local apps
