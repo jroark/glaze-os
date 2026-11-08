@@ -16,6 +16,7 @@
 #include <glaze/audio.h>
 #include <glaze/bluetooth.h>
 #include <glaze/fs.h>
+#include <glaze/ota.h>
 #include <glaze/pkg.h>
 #include <glaze/net.h>
 #include <glaze/wifi.h>
@@ -94,6 +95,14 @@ static struct {
 } goodbye;
 static unsigned debug_activity;
 static uint32_t debug_until;
+/* SB_DEBUG_POWER (tools/hwtest): an alarm for the next power off, and the
+ * idle timings it overrode until then. */
+static struct {
+    bool armed, idle;
+    int idle_mode;
+    uint32_t wake_at, saved_timeout, saved_after;
+    bool saved_sleep;
+} debug_power;
 static int debug_app_pid;
 
 /* Running app slots (one foreground + background apps, each with its own shm). */
@@ -1152,6 +1161,12 @@ static void power_off_now(void)
     gz_display_power(false);
     int due = notify_next_ms(now_secs());
     uint32_t alarm = due < 0 ? 0 : MAX(1u, ((uint32_t)due + 999u) / 1000u);
+    if (debug_power.armed) {
+        int32_t left = (int32_t)(debug_power.wake_at - now_ms());
+        uint32_t s = left <= 0 ? 1u : ((uint32_t)left + 999u) / 1000u;
+        alarm = alarm ? MIN(alarm, s) : s;
+        debug_power.armed = false;
+    }
     int rv = gz_power_sleep(goodbye.mode, alarm);
     if (rv < 0) {
         printf("springboard: cannot power off (%d); the screen stays off\n", rv);
@@ -1167,6 +1182,13 @@ static void power_off_now(void)
     goodbye.app_paused = false;
     power_refresh();
     sleep_apply();
+    if (debug_power.idle) {
+        idle.timeout_ms = debug_power.saved_timeout;
+        idle.sleep = debug_power.saved_sleep;
+        idle.sleep_after_ms = debug_power.saved_after;
+        debug_power.idle = false;
+        debug_power.idle_mode = 0;
+    }
     screen_wake();
 }
 
@@ -2416,6 +2438,46 @@ static void handle_msg(int token, struct gz_msg *m)
 
     memset(&r, 0, sizeof(r));
     switch (m->w[0]) {
+    case SB_DEBUG_POWER: {
+        int mode = (int)(m->w[1] & 0xFF);
+        bool idle_off = m->w[1] & SB_DEBUG_POWER_IDLE;
+        if (!client_req((int)m->w[3], false, NULL)) { r.w[0] = (uint32_t)GZ_EPERM; break; }
+        if ((mode != GZ_SLEEP_SUSPEND && mode != GZ_SLEEP_HIBERNATE) || !m->w[2] || m->w[2] > 86400 ||
+            (idle_off && (m->w[4] < 2000 || m->w[4] > 600000)) || goodbye.pending) {
+            r.w[0] = (uint32_t)GZ_EINVAL;
+            break;
+        }
+        debug_power.armed = true;
+        debug_power.wake_at = now_ms() + m->w[2] * 1000u;
+        if (idle_off) {
+            if (!debug_power.idle) {
+                debug_power.saved_timeout = idle.timeout_ms;
+                debug_power.saved_sleep = idle.sleep;
+                debug_power.saved_after = idle.sleep_after_ms;
+            }
+            debug_power.idle = true;
+            debug_power.idle_mode = mode;
+            idle.timeout_ms = m->w[4] / 2;
+            idle.sleep = true;
+            idle.sleep_after_ms = m->w[4] - m->w[4] / 2;
+            idle.last_activity = now_ms();
+            printf("springboard: debugger armed idle power off after %u ms, alarm %u s\n", m->w[4], m->w[2]);
+        } else {
+            power_off(mode, "debugger");
+        }
+        r.w[0] = 0;
+        break;
+    }
+    case SB_DEBUG_RECLAIM: {
+        if (!client_req((int)m->w[3], false, NULL)) { r.w[0] = (uint32_t)GZ_EPERM; break; }
+        int ended = 0;
+        while (evict_lru_background(-1))
+            ended++;
+        printf("springboard: ended %d background apps for the debugger\n", ended);
+        r.w[0] = 0;
+        r.w[1] = (uint32_t)ended;
+        break;
+    }
     case SB_INSTALL_STATUS:
         r.w[0] = (uint32_t)GZ_EPERM;
         if (client_req((int)m->w[3], false, NULL) &&
@@ -2546,7 +2608,12 @@ static void handle_msg(int token, struct gz_msg *m)
             idle.last_activity = now_ms();
         }
         debug_activity = m->w[1] & (GU_DEBUG_CONNECTED | GU_DEBUG_COPY | GU_DEBUG_SCRIPT | GU_DEBUG_NETWORK | GU_DEBUG_MIRROR);
-        debug_until = now_ms() + 2000;
+        /* A lease the USB server renews every 500 ms between requests, and
+         * ends itself (activity 0) when the session does. It must outlast one
+         * slow request: at 2 s, a NAND read that stalled during
+         * `glaze-usb nand-backup` let the idle power off suspend the device
+         * mid-session on a real BE-300. */
+        debug_until = now_ms() + 10000;
         if (debug_app_pid && !gz_proc_alive(debug_app_pid)) debug_app_pid = 0;
         r.w[1] = debug_activity | (debug_app_pid ? GU_DEBUG_RUN : 0);
         r.w[2] = (uint32_t)debug_app_pid;
@@ -2751,6 +2818,31 @@ static void load_settings(void)
     update_clock(true);
 }
 
+/* The SPL applied (or rejected) an update in this boot: what was staged in
+ * /Library/Updates is spent. The App Store also clears it when it opens, but
+ * an update staged by the desktop installer's companion otherwise keeps its
+ * 2-3 MB of a 6.4 MB volume until someone does. */
+static void clear_installed_update(void)
+{
+    struct gz_ota_status st;
+    struct fs_dirent entry;
+    uint32_t skip = 0;
+    int removed = 0;
+
+    if (gz_ota_status(&st) || !st.last_result)
+        return;
+    while (fs_list("/Library/Updates", skip, &entry, 1) == 1) {
+        char path[FS_PATH_MAX];
+        snprintf(path, sizeof(path), "/Library/Updates/%s", entry.name);
+        if (fs_remove(path))
+            skip++;
+        else
+            removed++;
+    }
+    if (removed)
+        printf("springboard: removed %d spent update file(s)\n", removed);
+}
+
 int main(void)
 {
     init_surfaces();
@@ -2793,6 +2885,7 @@ int main(void)
     }
     timesync_start(sb_port);
     hwdump_start();
+    clear_installed_update();
     idle.last_activity = now_ms();
     puts("springboard: ready");
     bench_log("ready", NULL, now_ms());
@@ -2903,7 +2996,7 @@ int main(void)
         } else if (!installer.active && !debug_activity && sb_idle_sleep_wait(&idle, t) == 0) {
             /* A debugger session (USB or network) holds off the idle power
              * off: on battery over Wi-Fi a reload's upload outlasts it. */
-            power_off(sleep_mode(), "idle");
+            power_off(debug_power.idle_mode ? debug_power.idle_mode : sleep_mode(), "idle");
         }
         if (!installer.active && sb_idle_wait(&idle, t) == 0)
             screen_sleep();

@@ -305,24 +305,34 @@ static void test_threads(void)
     CHECK(gz_sem_wait(sem_done, 1000) == 0 && woke == GZ_EDEAD, "sem destroy wakes waiters");
     sem_go = gz_sem_create(0);
 
-    /* A process exiting with threads blocked on semaphores is reaped. */
-    struct gz_sysinfo si0, si1;
-    gz_sysinfo(&si0);
-    int pong = gz_spawn("bin/ktest_pong", 0);
-    int port;
-    for (int i = 0; (port = gz_port_lookup("pong")) < 0 && i < 500; i++)
-        gz_sleep_ms(2);
-    struct gz_msg m, r;
-    memset(&m, 0, sizeof(m));
-    m.w[0] = 0xFFFFFFFC;
-    rv = gz_send(port, &m, &r);
-    for (int i = 0; gz_proc_alive(pong) && i < 100; i++)
-        gz_sleep_ms(5);
-    gz_sysinfo(&si1);
-    printf("ktest: blocked-exit rv %d threads %u alive %d pages %u -> %u\n", rv, r.w[0], gz_proc_alive(pong),
-           si0.free_pages, si1.free_pages);
-    CHECK(rv == 0 && r.w[0] == 3 && !gz_proc_alive(pong) && si1.free_pages + 2 >= si0.free_pages,
-          "exit with blocked threads");
+    /* A process exiting with threads blocked on semaphores is reaped, and
+     * its pages come back. Another process may allocate during the window (on
+     * a real BE-300 the host's first USB HELLO writes a preference, growing the
+     * fs server's heap by 64 KiB), so a shortfall is retried: a leak in the
+     * exit path loses pages on every attempt. */
+    bool reaped = false, returned = false;
+    for (int attempt = 0; attempt < 3 && !returned; attempt++) {
+        struct gz_sysinfo si0, si1;
+        gz_sysinfo(&si0);
+        int pong = gz_spawn("bin/ktest_pong", 0);
+        int port;
+        for (int i = 0; (port = gz_port_lookup("pong")) < 0 && i < 500; i++)
+            gz_sleep_ms(2);
+        struct gz_msg m, r;
+        memset(&m, 0, sizeof(m));
+        m.w[0] = 0xFFFFFFFC;
+        rv = gz_send(port, &m, &r);
+        for (int i = 0; gz_proc_alive(pong) && i < 100; i++)
+            gz_sleep_ms(5);
+        gz_sysinfo(&si1);
+        printf("ktest: blocked-exit rv %d threads %u alive %d pages %u -> %u\n", rv, r.w[0], gz_proc_alive(pong),
+               si0.free_pages, si1.free_pages);
+        reaped = rv == 0 && r.w[0] == 3 && !gz_proc_alive(pong);
+        if (!reaped)
+            break;
+        returned = si1.free_pages + 2 >= si0.free_pages;
+    }
+    CHECK(reaped && returned, "exit with blocked threads");
 }
 
 /* Booted from RAM by GlazeBoot (glaze/bootinfo.h): / is a RAM disk smaller

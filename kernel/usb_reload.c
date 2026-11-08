@@ -158,6 +158,9 @@ int usb_reload_ctl(struct proc *p, uint32_t op, uint32_t buf, uint32_t len)
             (manifest.flags!=0 && manifest.flags!=GZ_BOOT_NAND_OFF && manifest.flags!=GZ_BOOT_NAND_REPAIR)) return GZ_EINVAL;
         total = ALIGN_UP(manifest.kernel_bytes, PAGE_SIZE) + manifest.romfs_bytes;
         uint32_t want = ALIGN_UP(total, PAGE_SIZE) / PAGE_SIZE;
+        /* romfs cache frames nothing maps are free for the taking. */
+        if (want + 32 > mm_free_pages())
+            romfs_reclaim(want + 32 - mm_free_pages());
         if (want + 32 > mm_free_pages()) { total = 0; return GZ_ENOMEM; }
         /* Reserve staging pages as DATA arrives. A multi-megabyte BEGIN
          * allocation otherwise monopolizes the non-preemptive kernel;

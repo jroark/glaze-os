@@ -47,6 +47,7 @@ Start with the [top-level README](../README.md) for building and running.
 - [GlazeBoot: booting Glaze from Windows CE](dev/GLAZEBOOT.md)
 - [Network development debugging](dev/NETWORK_DEBUG.md)
 - [Screen mirroring and remote control](dev/MIRRORING.md)
+- [Automated tests on a real BE-300 (tools/hwtest)](dev/HWTEST.md)
 
 ## Other repositories
 

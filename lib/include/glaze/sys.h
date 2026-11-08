@@ -170,7 +170,20 @@ static inline int gz_net_handle(void) { return GZ_SC0(SYS_NET_HANDLE); }
 
 static inline int gz_sysinfo(struct gz_sysinfo *si) { return GZ_SC1(SYS_SYSINFO, si); }
 static inline int gz_boot_mode(void) { return GZ_SC0(SYS_BOOT_MODE); }
-static inline int gz_power_status(struct gz_power_status *st) { return GZ_SC2(SYS_POWER_STATUS, st, sizeof(*st)); }
+/* Kernels before version 2 of the struct (Glaze 1.2 and earlier) accept only
+ * the version 1 size: ask again for that, with the newer fields zero, so apps
+ * built now still read the battery there. */
+static inline int gz_power_status(struct gz_power_status *st)
+{
+    int r = GZ_SC2(SYS_POWER_STATUS, st, sizeof(*st));
+    if (r == GZ_EINVAL) {
+        r = GZ_SC2(SYS_POWER_STATUS, st, GZ_POWER_STATUS_V1_SIZE);
+        if (!r)
+            for (unsigned i = GZ_POWER_STATUS_V1_SIZE; i < sizeof(*st); i++)
+                ((volatile unsigned char *)st)[i] = 0;
+    }
+    return r;
+}
 static inline int gz_power_sleep(int mode, uint32_t alarm_s) { return GZ_SC2(SYS_POWER_SLEEP, mode, alarm_s); }
 /* OTA updates (glaze/ota.h, docs/os/OTA.md); staging is the file server's. */
 #include <glaze/ota.h>

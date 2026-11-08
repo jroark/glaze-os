@@ -34,6 +34,8 @@ int gu_mirror(struct gu_client *, int argc, char **argv);
 int gu_screenshot(struct gu_client *, const char *path);
 int usb_write_png(FILE *, const uint8_t *pixels);
 int gu_script(struct gu_client *, const char *path, const char *screenshot);
+int gu_power(struct gu_client *, int argc, char **argv);
+int gu_usb_detach(struct gu_client *, const char *ms);
 int ce_boot_options(struct usb_link *, const char *directory, int cf_only, int verify_ce);
 int ce_boot(struct usb_link *, const char *directory, int cf_only);
 int ce_self_test(struct usb_link *, const char *directory, int cf_only);

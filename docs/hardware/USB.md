@@ -89,6 +89,10 @@ out/host/glaze-usb run bin/settings --wait
 out/host/glaze-usb reboot           # restart the current OS
 out/host/glaze-usb reboot --ce      # return to stock CE from Glaze
 out/host/glaze-usb reboot --glaze   # restart Glaze, or boot it from CE
+out/host/glaze-usb power status     # battery band, adapter, network-card power
+out/host/glaze-usb power suspend 30 # power off; the RTC alarm wakes it 30 s later
+out/host/glaze-usb power idle 75 8000  # the idle power off once this disconnects
+out/host/glaze-usb usb-detach 5000  # the USB unit goes dead for 5 s (docs/dev/HWTEST.md)
 ```
 
 Unlock SpringBoard before launching an app. `run` installs and launches a

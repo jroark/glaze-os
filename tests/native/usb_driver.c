@@ -49,6 +49,7 @@ void usb_input_cancel(void) { input_cancels++; }
 bool hwdump_active(void) { return false; }  /* the HWDUMP=1 peek stays refused */
 void machine_reboot_ce(void) { rebooted++; reboot_longjmp(reboot_return); }
 uint64_t time_us(void) { static uint64_t now; now += 100000; return now; }
+void kprintf(const char *fmt, ...) { (void)fmt; }
 int usb_input_ctl(struct proc *p, uint32_t op, uint32_t b, uint32_t n)
 { (void)p; (void)op; (void)b; (void)n; return 123; }
 static uint8_t *model_ram(void *ctx, uint32_t pa, uint32_t n)
@@ -142,6 +143,19 @@ int main(void)
     clear_session(); assert(input_cancels==cancels); /* cable reset cannot cancel network input */
     gu_put32(user,0); assert(sys_usb_ctl(&p,GZ_USB_DEBUG_TRANSPORT,0,4)==0);
     clear_session(); assert(input_cancels==cancels+1);
+    /* GZ_USB_DETACH: only after the reply has left, the unit goes off for
+     * the time asked, then comes back set up again without a session. */
+    gu_put32(user, 50); assert(sys_usb_ctl(&p, GZ_USB_DETACH, 0, 4) == GZ_EINVAL);
+    gu_put32(user, 500); assert(sys_usb_ctl(&denied, GZ_USB_DETACH, 0, 4) == GZ_EPERM);
+    gu_put32(user,1); assert(sys_usb_ctl(&p,GZ_USB_DEBUG_TRANSPORT,0,4)==0);
+    gu_put32(user, 500); assert(sys_usb_ctl(&p, GZ_USB_DETACH, 0, 4) == GZ_EPERM);
+    gu_put32(user,0); assert(sys_usb_ctl(&p,GZ_USB_DEBUG_TRANSPORT,0,4)==0);
+    gu_put32(user, 500); assert(sys_usb_ctl(&p, GZ_USB_DETACH, 0, 4) == 0);
+    assert(active && detach_pending);
+    usb_poll(); usb_poll(); usb_poll();             /* 300 ms of the fake clock */
+    assert(detached && !active);
+    for (int i = 0; i < 10 && detached; i++) usb_poll();
+    assert(!detached && active && !configured);
     usb_stop(); assert(!active);
     puts("usb-driver: ALL PASS"); return 0;
 }

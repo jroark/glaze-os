@@ -19,14 +19,23 @@ enum {
     GU_MIRROR_NEXT, GU_MIRROR_READ, GU_MIRROR_INPUT, GU_MIRROR_CLOSE, GU_NAND_READ,
     GU_CF_INFO, GU_CF_READ, GU_NAND_STATUS, GU_CF_FORMAT, GU_CF_RECOVERY_BEGIN,
     GU_NAND_REPAIR, GU_INSTALL_STATUS, GU_BT_CARD_INFO, GU_BT_DISCOVERY, GU_BT_SERIAL, GU_BT_AUDIO,
-    GU_CAM_PROBE
+    GU_CAM_PROBE, GU_POWER, GU_USB_DETACH
 };
 enum { GU_CAP_FILES = 1, GU_CAP_RUN = 2, GU_CAP_LOGS = 4, GU_CAP_RELOAD = 8,
        GU_CAP_SCREEN = 16, GU_CAP_SCRIPT = 32, GU_CAP_STATUS = 64, GU_CAP_REBOOT_CE = 128,
        GU_CAP_ENTROPY = 256, GU_CAP_NETWORK = 512, GU_CAP_USB_NET = 1024,
        GU_CAP_NAND_BACKUP = 4096, GU_CAP_MIRROR = 2048, GU_CAP_CF_READ = 8192,
        GU_CAP_NAND_REPAIR = 16384, GU_CAP_INSTALL_STATUS = 32768, GU_CAP_BT_CARD_INFO = 65536, GU_CAP_BT_DISCOVERY = 131072, GU_CAP_BT_SERIAL = 262144, GU_CAP_BT_AUDIO = 524288,
-       GU_CAP_CAM_PROBE = 1048576 };
+       GU_CAP_CAM_PROBE = 1048576, GU_CAP_POWER = 2097152,
+       GU_CAP_DETACH = 4194304 };
+/* GU_USB_DETACH: u32 ms (100-10000). After replying, the function unit
+ * turns off for that long and comes back. On a real BE-300 the D+ pull-up
+ * stays, so the host sees a dead link, not an unplug (tools/hwtest). */
+/* GU_POWER: u32 op, then for SUSPEND/HIBERNATE/IDLE u32 alarm seconds (wake
+ * by the RTC alarm) and u32 idle ms (IDLE only: screen off plus power off
+ * after that much inactivity, once the debugger disconnects). STATUS replies
+ * with struct gz_power_status. Used by tools/hwtest. */
+enum { GU_POWER_STATUS, GU_POWER_SUSPEND, GU_POWER_HIBERNATE, GU_POWER_IDLE };
 #define GU_SCRIPT_MAX 2048u
 #define GU_SCRIPT_MS 3600000u
 #define GU_SCREEN_BYTES (240u * 320u * 2u)

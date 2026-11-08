@@ -41,6 +41,10 @@ int power_save(uint32_t *ctx);
 void power_resume_entry(void);
 
 static volatile bool sleeping;
+/* What the last suspend saw when it woke, for the "awake" line: PMUINT,
+ * SYSINT1 and the button latch tell a press from a stray power interrupt. */
+static uint16_t wake_pmuint, wake_sysint1;
+static uint8_t wake_keys;
 extern const char power_sleep_begin[], power_sleep_end[];
 
 /* VR4131 SUSPEND (UM 12.1.4(3)): every clock but the RTC's, ICU's and
@@ -133,6 +137,9 @@ static int suspend_until(uint64_t alarm)
         suspend_once((status & ~0xFF00u) | ST_IM2 | ST_IE);
         write_c0_status(status & ~ST_IE);
         sleeping = false;
+        wake_pmuint = PMU_INT;
+        wake_sysint1 = ICU_SYSINT1;
+        wake_keys = KEYS_SET2;
         if ((wake = wake_reason(alarm)))
             break;
         wake_ack();
@@ -387,8 +394,9 @@ int power_sleep(int mode, uint32_t alarm_s)
     audio_resume(cold);
     if (cold || card_off)
         pcmcia_resume();
-    kprintf("power: awake (%s) after %u s%s\n", wake == GZ_WAKE_ALARM ? "alarm" : "power",
+    kprintf("power: awake (%s) after %u s%s (PMUINT 0x%x SYSINT1 0x%x keys 0x%x)\n",
+            wake == GZ_WAKE_ALARM ? "alarm" : "power",
             (uint32_t)(((timer_etime() - asleep) & 0xFFFFFFFFFFFFull) / RTC_HZ),
-            watchdog ? "" : "; the watchdog didn't answer its stop");
+            watchdog ? "" : "; the watchdog didn't answer its stop", wake_pmuint, wake_sysint1, wake_keys);
     return wake | mode << 8;
 }
