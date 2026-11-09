@@ -185,3 +185,34 @@ Glaze at 81fc6d1, be300 at 1731cc7, medians of three cold boots each
 These are emulator results; the emulator doesn't model cache contents or NAND
 timing exactly. Glaze keeps up to four apps in the background, Windows CE was
 measured with one.
+
+### On a real BE-300
+
+The same probes on the device (November 8, 2026), medians of three runs each,
+over the USB sync cable:
+
+- **Windows CE:** `glaze-usb put out/glazeboot/CeBench.exe '\Nand Disk\CeBench.exe'`,
+  `glaze-usb run '\Nand Disk\CeBench.exe'`, then `glaze-usb get '\Nand Disk\cebench.log'`
+  once it says `cebench: done`. CE was already running, so there is no wizard
+  and no boot time; a PC Connect session was open.
+- **Glaze:** a GlazeBoot RAM boot of hwtest's `default` image (`glaze-usb boot`,
+  then `reload` for each later run), then `glaze-usb script` with bench.py's
+  launch script (`launch_script()`), reading the `sb: launch` lines from
+  `glaze-usb logs --once`. The romfs and a 6.5 MiB RAM disk sit in RAM on a
+  RAM boot, so its free memory (4,144 KiB at the lock screen) isn't
+  comparable with a NAND boot, and romfs pages come from RAM, not NAND.
+
+| App (Glaze / Windows CE) | Glaze cold | CE cold | Glaze warm | CE warm |
+| --- | ---: | ---: | ---: | ---: |
+| Calculator / calc.exe | 49 ms | 500 ms | 0 ms | 500 ms |
+| Notes / notes.exe | 36 ms | 305 ms | 0 ms | 142 ms |
+| Calendar / Calendar.exe | 44 ms | 931 ms | 0 ms | 500 ms |
+| Clock / clock.exe | 73 ms | 403 ms | 0 ms | 402 ms |
+| Settings / ControlPanel.exe | 252 ms | 983 ms | 0 ms | 108 ms |
+| Browser / Internet.exe | 61 ms | 3,609 ms | 51 ms | 1,342 ms |
+
+The median of the six cold launches is 55 ms for Glaze and 716 ms for Windows
+CE. Both take about twice as long as in the emulator. The Browser's warm
+launch restarted it: the RAM boot's memory was short. Windows CE's free
+memory matches the emulator's: 5,128 KiB at rest (emulator 5,068), 4,908 KiB
+median with an app in the background, 3,560 KiB lowest (with Internet).
