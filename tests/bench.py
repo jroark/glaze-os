@@ -22,6 +22,7 @@ much on the host, but run it on an idle machine.
 import argparse
 import os
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -38,6 +39,8 @@ APPS = [
     ("bin/browser", 90, 120),
     ("bin/music", 150, 120),
     ("bin/calendar", 30, 48),
+    ("bin/clock", 150, 48),
+    ("bin/calculator", 210, 48),
 ]
 APP_SECS = 18          # per app: cold launch, Home, warm launch, Home
 
@@ -57,30 +60,31 @@ def build(script):
     path = os.path.join(OUT, "launch.txt")
     with open(path, "w") as f:
         f.write(script)
-    jobs = ["-j8"]
-    run = lambda *a: subprocess.run(["make", *jobs, *a], cwd=ROOT, check=True,
+    # Natively with the cross compiler, else in its container (build.sh).
+    make = ["make", "-j8"] if shutil.which("mipsel-linux-gnu-gcc") else ["./build.sh"]
+    run = lambda *a: subprocess.run([*make, *a], cwd=ROOT, check=True,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    run(f"OUT=out/bench/ui", f"INPUT_SCRIPT={path}")
+    run("OUT=out/bench/ui", f"INPUT_SCRIPT={os.path.relpath(path, ROOT)}")
     run("OUT=out/bench/kt", "INIT=bin/ktest")
 
 
-def boot(be300, image, secs, until=None):
-    """Boots a copy of image; returns [(host_seconds, line)]."""
-    work = os.path.join(OUT, "run")
+def boot(be300, image, secs, until=None, args=(), work=None):
+    """Boots a copy of image, with more emulator args; returns [(host_seconds, line)]."""
+    work = work or os.path.join(OUT, "run")
     os.makedirs(work, exist_ok=True)
-    nand = os.path.join(work, "glaze.bin")
+    nand = os.path.join(work, "nand.bin")
     with open(image, "rb") as src, open(nand, "wb") as dst:
         dst.write(src.read())
     env = dict(os.environ, SDL_VIDEODRIVER="dummy")
     t0 = time.monotonic()
-    p = subprocess.Popen([be300, "--nand", nand, "--rtc-host-time"], cwd=work, env=env,
+    p = subprocess.Popen([be300, "--nand", nand, "--rtc-host-time", *args], cwd=work, env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace")
     lines = []
     try:
         for line in p.stdout:
             now = time.monotonic() - t0
             lines.append((now, line.rstrip()))
-            if (until and until in line) or now > secs:
+            if (until and any(u in line for u in ([until] if isinstance(until, str) else until))) or now > secs:
                 break
     finally:
         p.terminate()

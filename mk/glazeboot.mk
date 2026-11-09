@@ -94,6 +94,14 @@ $(GB_DIR)/UsbProbe.exe: wince/usb_probe/main.c $(BE300_RT)
 	$(BE300_DEV)/tools/be300-ld -o $@ $(GB_DIR)/UsbProbe.o $(BE300_RT) -L $(BE300_DEV)/sdk/Lib -l coredll
 usb-probe-exe: $(GB_DIR)/UsbProbe.exe
 
+# Windows CE boot, memory and launch measurements (wince/ce_bench, tests/bench_ce.py).
+$(GB_DIR)/CeBench.exe: wince/ce_bench/main.c $(BE300_RT)
+	@mkdir -p $(GB_DIR)
+	$(BE300_DEV)/tools/be300-cc -Os -Wall -Wextra -c -o $(GB_DIR)/CeBench.o $<
+	$(BE300_DEV)/tools/be300-ld -o $@ $(GB_DIR)/CeBench.o $(BE300_RT) -L $(BE300_DEV)/sdk/Lib -l coredll -l toolhelp
+ce-bench-exe: $(GB_DIR)/CeBench.exe
+.PHONY: ce-bench-exe
+
 # Veo camera check under stock CE (wince/veo_test, docs/hardware/VEO.md).
 $(GB_DIR)/VeoTest.exe: wince/veo_test/main.c $(BE300_RT)
 	@mkdir -p $(GB_DIR)
