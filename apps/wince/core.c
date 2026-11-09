@@ -875,8 +875,15 @@ static bool reg_save(void);
 static void reg_seed_shared(void)
 {
     struct fs_stat st;
+    /* Casio's backup writes System.$$$ and renames it; some devices (BeeV2)
+     * were imaged with only that copy. Both have the same format. */
     const char *backup = "/NAND/Backup/System.reg";
-    if (fs_stat(backup, &st) || st.type != FS_FILE || !st.size || st.size > CE_REG_FILE_MAX)
+    if (fs_stat(backup, &st) || st.type != FS_FILE) {
+        backup = "/NAND/Backup/System.$$$";
+        if (fs_stat(backup, &st) || st.type != FS_FILE)
+            return;
+    }
+    if (!st.size || st.size > CE_REG_FILE_MAX)
         return;
     uint8_t *data = malloc(st.size);
     if (data && fs_read_file(backup, data, st.size) == (int)st.size && ce_reg_import_casio(&registry, data, st.size))

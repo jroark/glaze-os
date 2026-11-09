@@ -3,10 +3,13 @@
 
 Usage: tools/wince_audit.py --image /path/to/300.bin [--app Tasks.exe] [--json out.json]
 
-For each executable in the image's Program Files, follows its imports as
-apps/wince/main.c resolves them: a runtime adapter first, then a library in
-Program Files, then a Casio application DLL from NK (apps/wince/assets.c's
-list). Libraries are followed transitively. A name nothing provides is
+For each executable on the image's FAT volume (or --app: a name in Program
+Files, or a FAT path such as "Program Files/Extra Apps/Calc.exe"), follows its
+imports as apps/wince resolves them: a runtime adapter first, then a library
+in the program's folder or \Windows, a Casio application DLL from NK
+(apps/wince/assets.c's list), the root, the device registry's
+HKLM\Loader\SystemPath folders, and Program Files. Libraries are followed
+transitively. A name nothing provides is
 reported: calling it stops the app with "Unsupported WinCE call". The image
 is only read; nothing vendor-derived is written unless --json is given.
 """
@@ -124,6 +127,44 @@ def import_table(image, directory, ordinals):
     return out
 
 
+def system_path(volume):
+    """HKLM\Loader\SystemPath from the device's Casio registry backup
+    (System.reg, or System.$$$ on images taken mid-backup), as FAT folders."""
+    data = None
+    for name in ("Backup/System.reg", "Backup/System.$$$"):
+        try:
+            data = volume.read(name)
+            break
+        except AssetError:
+            continue
+    if not data or len(data) < 8 or u32(data, 0) != 0x1d8374b2:
+        return []
+    pos, key, out = 8, "", []
+    while pos + 4 <= len(data):
+        length, kind = u16(data, pos), u16(data, pos + 2)
+        rec = data[pos + 4:pos + 4 + length]
+        if kind == 1 and len(rec) >= 6:
+            units = u16(rec, 2)
+            key = ("HKLM\\" if u16(rec, 0) == 2 else "?") + rec[6:6 + units * 2].decode("utf-16le", "replace").rstrip("\0")
+        elif kind == 2 and len(rec) >= 6 and key.lower() == "hklm\\loader":
+            units, size = u16(rec, 2), u16(rec, 4)
+            if rec[6:6 + units * 2].decode("utf-16le", "replace").rstrip("\0").lower() == "systempath":
+                text = rec[6 + units * 2:6 + units * 2 + size].decode("utf-16le", "replace")
+                out = [ce_folder(p) for p in text.split("\0") if p]
+        pos += 4 + length
+    return out
+
+
+def ce_folder(path):
+    """A CE folder as a FAT path, as apps/wince/core.c canonicalizes it."""
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    if parts and parts[0].lower() in ("nand disk", "storage card"):
+        parts = parts[1:]
+    if parts and parts[0].lower() == "program disk":
+        parts = ["Program Files"] + parts[1:]
+    return "/".join(parts)
+
+
 class Audit:
     def __init__(self, nand, runtime):
         self.runtime = runtime
@@ -131,47 +172,74 @@ class Audit:
         self.nk = NkImage(nand, strict=False)
         self.decoder = CpkDecoder(self.nk.module("ccfs.dll"))
         self.ordinals = {d: exports(self.nk.module(d), d) for d in ("coredll.dll", "commctrl.dll")}
-        root = next(e for e in self.volume.entries(self.volume.root) if e[0] == "Program Files")
-        self.programs = {e[0]: e for e in self.volume.entries(self.volume.chain(root[3])) if not e[2] & 16}
+        self.files = {}  # lowercase FAT path -> its real path
+        self.walk(self.volume.root, "")
         self.toc = self.nk.toc()
         self.modules = {}
+        self.search_tail = ["", *system_path(self.volume), "Program Files"]
+        self.programs = sorted((p[:-4] if p.lower().endswith(".cpk") else p for p in self.files.values()
+                                if p.lower().endswith((".exe", ".exe.cpk"))), key=str.lower)
 
-    def program(self, name):
-        for candidate in (name, name + ".cpk"):
-            match = next((n for n in self.programs if n.lower() == candidate.lower()), None)
-            if match:
-                data = self.volume.read("Program Files/" + match)
-                return self.decoder.unpack(data) if match.lower().endswith(".cpk") else data
+    def walk(self, directory, prefix):
+        for name, _, attr, cluster, _ in self.volume.entries(directory):
+            path = f"{prefix}/{name}" if prefix else name
+            if attr & 16:
+                if cluster:
+                    self.walk(self.volume.chain(cluster), path)
+            else:
+                self.files[path.lower()] = path
+
+    def read(self, path):
+        """A FAT file's decoded bytes, also as name.cpk; None if absent."""
+        for candidate in (path, path + ".cpk"):
+            real = self.files.get(candidate.lower())
+            if real:
+                data = self.volume.read(real)
+                return self.decoder.unpack(data) if real.lower().endswith(".cpk") else data
         return None
 
-    def module(self, dll):
-        """('fat'|'nk', named exports, ordinal exports, imports) or None."""
+    def module(self, dll, folder):
+        """('fat'|'nk', named exports, ordinal exports, imports) or None, in
+        apps/wince/source.c's order: the program's folder and \Windows, NK's
+        Casio libraries, then the root, SystemPath and Program Files."""
         key = dll.lower()
-        if key in self.modules:
-            return self.modules[key]
-        result = None
-        data = self.program(dll)
-        if data is not None:
-            image, exp, imp = pe_layout(data)
-            result = ("fat",) + export_table(image, exp) + (import_table(image, imp, self.ordinals),)
-        elif key in {n.lower() for n in self.runtime.rom_libraries} and key in self.toc:
-            m = self.nk.rom_module(dll)
-            result = ("nk",) + export_table(m["image"], m["units"][0]) + \
-                (import_table(m["image"], m["units"][1], self.ordinals),)
-        self.modules[key] = result
-        return result
+        rom = key in {n.lower() for n in self.runtime.rom_libraries} and key in self.toc
+        for where in [folder, "Windows", None, *self.search_tail]:
+            if where is None:
+                if not rom:
+                    continue
+                cache = ("nk", key)
+                if cache not in self.modules:
+                    m = self.nk.rom_module(dll)
+                    self.modules[cache] = ("nk",) + export_table(m["image"], m["units"][0]) + \
+                        (import_table(m["image"], m["units"][1], self.ordinals),)
+                return self.modules[cache]
+            path = f"{where}/{dll}" if where else dll
+            cache = ("fat", path.lower())
+            if cache not in self.modules:
+                data = self.read(path)
+                if data is None:
+                    self.modules[cache] = None
+                else:
+                    image, exp, imp = pe_layout(data)
+                    self.modules[cache] = ("fat",) + export_table(image, exp) + \
+                        (import_table(image, imp, self.ordinals),)
+            if self.modules[cache]:
+                return self.modules[cache]
+        return None
 
     def app(self, name):
-        data = self.program(name)
-        image, _, imp = pe_layout(data)
+        path = name if "/" in name else "Program Files/" + name
+        folder = path.rsplit("/", 1)[0] if "/" in path else ""
+        image, _, imp = pe_layout(self.read(path))
         missing, loaded, seen = {}, {}, set()
-        pending = [(name, import_table(image, imp, self.ordinals))]
+        pending = [(path.rsplit("/", 1)[-1], import_table(image, imp, self.ordinals))]
         while pending:
             owner, imports = pending.pop()
             for dll, symbol, ordinal in imports:
                 if symbol and self.runtime.native(dll, symbol):
                     continue
-                module = self.module(dll)
+                module = self.module(dll, folder)
                 label = symbol or f"#{ordinal}"
                 if module and (symbol in module[1] if symbol else ordinal in module[2]):
                     loaded[dll.lower()] = module[0]
@@ -192,15 +260,14 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true", help="list each missing name")
     args = parser.parse_args()
     audit = Audit(args.image.read_bytes(), Runtime())
-    names = args.app or sorted((n[:-4] if n.lower().endswith(".cpk") else n for n in audit.programs
-                                if n.lower().endswith((".exe", ".exe.cpk"))), key=str.lower)
+    names = args.app or audit.programs
     report, total = {}, 0
     for name in names:
         result = report[name] = audit.app(name)
         count = sum(len(v) for v in result["missing"].values())
         total += count
         rom = sorted(d for d, kind in result["loaded"].items() if kind == "nk")
-        print(f"{name:28} {count:4} missing" + (f"  (NK: {', '.join(rom)})" if rom else ""))
+        print(f"{name:52} {count:4} missing" + (f"  (NK: {', '.join(rom)})" if rom else ""))
         if args.verbose:
             for dll, symbols in result["missing"].items():
                 for symbol, owners in symbols.items():

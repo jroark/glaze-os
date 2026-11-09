@@ -3,18 +3,20 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define CE_REG_KEYS 512
-#define CE_REG_VALUES 1024
-#define CE_REG_FILE_MAX (256u * 1024u)
+/* Sized for third-party BE-300 images (BeeV2: 1069 keys, 2612 values). */
+#define CE_REG_KEYS 2048
+#define CE_REG_VALUES 4096
+#define CE_REG_FILE_MAX (1024u * 1024u)
 struct ce_reg_value {
     char *key; /* owned copy, below 256 bytes */
-    char name[128];
+    char *name; /* owned, below 128 bytes */
     uint32_t type, size;
     uint8_t *bytes;
 };
 struct ce_registry {
     char *keys[CE_REG_KEYS]; /* owned paths, below 256 bytes */
     unsigned key_count, value_count;
+    uint32_t encoded; /* ce_reg_encode's size less its 16 fixed bytes */
     struct ce_reg_value values[CE_REG_VALUES];
 };
 void ce_reg_clear(struct ce_registry *);

@@ -67,11 +67,17 @@ int main(int argc, char **argv)
     ce_reg_clear(copy);
     unsigned char *large = calloc(1, 65536);
     assert(large);
-    assert(!ce_reg_set(copy, "HKCU", "A", 3, large, 65536));
-    assert(!ce_reg_set(copy, "HKCU", "B", 3, large, 65536));
-    assert(!ce_reg_set(copy, "HKCU", "C", 3, large, 65536));
+    /* 64 KiB values fill the file limit; one more doesn't fit. */
+    unsigned fit = (CE_REG_FILE_MAX - 16) / (18 + 4 + 1 + 65536);
+    char label[8];
+    for (unsigned i = 0; i < fit; i++) {
+        snprintf(label, sizeof(label), "%c%u", i ? 'V' : 'A', i);
+        if (!i)
+            strcpy(label, "A");
+        assert(!ce_reg_set(copy, "HKCU", label, 3, large, 65536));
+    }
     assert(ce_reg_set(copy, "HKCU", "D", 3, large, 65536) == 8);
-    assert(copy->value_count == 3 && !ce_reg_find(copy, "HKCU", "D"));
+    assert(copy->value_count == fit && !ce_reg_find(copy, "HKCU", "D"));
     assert(!ce_reg_set(copy, "HKCU", "A", 4, binary, 4));
     free(large);
     ce_reg_clear(copy);
@@ -155,10 +161,16 @@ int main(int argc, char **argv)
             size_t n = fread(file, 1, sizeof(file), f);
             fclose(f);
             assert(ce_reg_import_casio(r, file, n));
-            assert(ce_reg_find(r, "HKCU\\ControlPanel\\Menu\\Memory", "AppPath"));
+            /* Any device's backup: the stock one, or a BeeV2/BeShell/eXpod one. */
+            assert(r->key_count > 100 && r->value_count > 300);
             uint32_t size;
             uint8_t *encoded = ce_reg_encode(r, &size);
             assert(encoded && ce_reg_decode(copy, encoded, size));
+            assert(copy->key_count == r->key_count && copy->value_count == r->value_count);
+            uint32_t again;
+            uint8_t *reencoded = ce_reg_encode(copy, &again);
+            assert(reencoded && again == size); /* key order may differ */
+            free(reencoded);
             printf("System.reg: %u keys, %u values, %u bytes encoded\n", r->key_count, r->value_count, size);
             free(encoded);
             ce_reg_clear(r);

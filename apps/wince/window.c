@@ -1316,6 +1316,8 @@ static void pump_messages(unsigned wait)
             ce_post(timers[i].window, 0x113, timers[i].id, timers[i].proc);
         }
     struct gz_input_event e;
+    if (wait)
+        ce_database_flush(); /* idle: save database writes before blocking */
     if (ui_next_event(&e, wait))
         input(&e);
 }

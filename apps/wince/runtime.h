@@ -39,6 +39,7 @@ void *ce_resolve_winsock(const char *, const char *);
 bool ce_sync_close(CW, bool *);
 bool ce_mapping_close(CW, bool *);
 bool ce_database_close(CW, bool *);
+void ce_database_flush(void); /* pending CE database writes, before waiting */
 void *ce_resolve_database(const char *);
 void *ce_resolve_mapping(const char *);
 void *ce_resolve_string(const char *);

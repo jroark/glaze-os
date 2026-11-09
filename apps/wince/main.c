@@ -426,6 +426,7 @@ void ce_shutdown(void)
     if (closing)
         return;
     closing = true;
+    ce_database_flush();
     for (unsigned i = library_count; i > 0; i--) {
         struct ce_module *m = &libraries[i - 1];
         if (m->pe.entry)
