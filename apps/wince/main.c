@@ -114,6 +114,8 @@ static void *native_symbol(const char *dll, const char *name)
                 fn = ce_resolve_gdi(name);
             if (!fn)
                 fn = ce_resolve_fpe(name);
+            if (!fn)
+                fn = ce_resolve_wave(name);
         } else if (!strcasecmp(dll, "commctrl.dll") || !strcasecmp(dll, "CSO.dll")) {
             fn = ce_resolve_window(name);
             if (!fn)
@@ -121,6 +123,8 @@ static void *native_symbol(const char *dll, const char *name)
         }
         if (!fn)
             fn = ce_resolve_system(dll, name);
+        if (!fn)
+            fn = ce_resolve_extras(dll, name);
         if (!fn)
             fn = ce_resolve_ras(dll, name);
         if (!fn)
@@ -278,6 +282,23 @@ CW ce_module_handle(const char *name)
     return 0;
 }
 
+/* The index-th loaded module: the program (index 0, *name NULL), then the
+ * libraries in load order; for TOOLHELP's module list. */
+bool ce_module_at(unsigned index, CW *base, uint32_t *size, const char **name)
+{
+    if (!index) {
+        *base = ce_main.base;
+        *size = ce_main.pe.size;
+        *name = NULL;
+        return true;
+    }
+    if (index - 1 >= library_count)
+        return false;
+    *base = libraries[index - 1].base;
+    *size = libraries[index - 1].pe.size;
+    *name = library_names[index - 1];
+    return true;
+}
 CW ce_load_library(const char *name)
 {
     if (!name || !*name) {

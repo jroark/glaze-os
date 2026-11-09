@@ -2071,10 +2071,17 @@ CE_API(LoadStringW)
     PTR(WCHAR, a2)[n] = 0;
     return n;
 }
+static struct { CW address; uint32_t size; } found_resources[64];
+static unsigned found_next;
 CE_API(FindResourceW)
 {
-    uint32_t size;
-    return WORD(ce_resource(a0, (uint16_t)a2, (uint16_t)a1, &size));
+    uint32_t size = 0;
+    CW found = WORD(ce_resource(a0, (uint16_t)a2, (uint16_t)a1, &size));
+    if (found) {
+        found_resources[found_next % ARRAY_SIZE(found_resources)].address = found;
+        found_resources[found_next++ % ARRAY_SIZE(found_resources)].size = size;
+    }
+    return found;
 }
 CE_API(LoadResource)
 {
@@ -2243,6 +2250,486 @@ CE_API(ImageList_Destroy)
     return image_list(a0) ? ce_DeleteObject(a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) : 0;
 }
 
+/* ---- clip rectangles, saved states, regions ----------------------------- */
+
+/* Regions and clips are single rectangles here: a DC's clip is its whole
+ * window or bitmap until one is selected. */
+static struct ce_rect dc_full(const struct dc *d)
+{
+    if (is_memory_dc(d)) {
+        struct ce_bitmap *b = bitmap(d->bitmap);
+        return (struct ce_rect){0, 0, b ? b->w : 0, b ? b->h : 0};
+    }
+    gfx_rect r = window_bounds(d->window);
+    return (struct ce_rect){0, 0, r.w, r.h};
+}
+static struct ce_rect dc_area(const struct dc *d)
+{
+    return d->clipped ? d->clip : dc_full(d);
+}
+static bool rect_empty(const struct ce_rect *r)
+{
+    return r->right <= r->left || r->bottom <= r->top;
+}
+static struct ce_rect rect_and(struct ce_rect a, struct ce_rect b)
+{
+    struct ce_rect r = {MAX(a.left, b.left), MAX(a.top, b.top), MIN(a.right, b.right), MIN(a.bottom, b.bottom)};
+    if (rect_empty(&r))
+        r = (struct ce_rect){0, 0, 0, 0};
+    return r;
+}
+/* The part of `a` outside `b`, when that is a rectangle (b spans a's whole
+ * width or height from one edge); otherwise all of `a`. */
+static struct ce_rect rect_minus(struct ce_rect a, struct ce_rect b)
+{
+    struct ce_rect c = rect_and(a, b);
+    if (rect_empty(&c))
+        return a;
+    if (c.left == a.left && c.right == a.right) {
+        if (c.top == a.top)
+            a.top = c.bottom;
+        else if (c.bottom == a.bottom)
+            a.bottom = c.top;
+    } else if (c.top == a.top && c.bottom == a.bottom) {
+        if (c.left == a.left)
+            a.left = c.right;
+        else if (c.right == a.right)
+            a.right = c.left;
+    }
+    if (rect_empty(&a))
+        a = (struct ce_rect){0, 0, 0, 0};
+    return a;
+}
+static CW set_clip(struct dc *d, struct ce_rect r)
+{
+    d->clipped = true;
+    d->clip = r;
+    return rect_empty(&r) ? 1 : 2; /* NULLREGION, SIMPLEREGION */
+}
+CE_API(ExcludeClipRect)
+{
+    struct dc *d = dc_get(a0);
+    if (!d)
+        return 0;
+    return set_clip(d, rect_minus(dc_area(d), (struct ce_rect){(int32_t)a1, (int32_t)a2, (int32_t)a3, (int32_t)a4}));
+}
+CE_API(IntersectClipRect)
+{
+    struct dc *d = dc_get(a0);
+    if (!d)
+        return 0;
+    return set_clip(d, rect_and(dc_area(d), (struct ce_rect){(int32_t)a1, (int32_t)a2, (int32_t)a3, (int32_t)a4}));
+}
+CE_API(GetClipBox)
+{
+    struct dc *d = dc_get(a0);
+    if (!d || !a1)
+        return 0;
+    struct ce_rect r = dc_area(d);
+    *PTR(struct ce_rect, a1) = r;
+    return rect_empty(&r) ? 1 : 2;
+}
+/* GetClipRgn(dc, region): 1 with the clip copied, 0 with none selected. */
+CE_API(GetClipRgn)
+{
+    struct dc *d = dc_get(a0);
+    struct ce_object *o = ce_object(a1, CE_OBJ_REGION);
+    if (!d || !o)
+        return (CW)-1;
+    if (!d->clipped)
+        return 0;
+    *(struct ce_rect *)o->data = d->clip;
+    return 1;
+}
+CE_API(RectVisible)
+{
+    struct dc *d = dc_get(a0);
+    if (!d || !a1)
+        return 0;
+    struct ce_rect r = rect_and(dc_area(d), *PTR(struct ce_rect, a1));
+    return !rect_empty(&r);
+}
+/* CombineRgn(dest, a, b, RGN_AND 1 / OR 2 / XOR 3 / DIFF 4 / COPY 5): OR
+ * and XOR take the bounding rectangle. */
+CE_API(CombineRgn)
+{
+    struct ce_object *d = ce_object(a0, CE_OBJ_REGION), *x = ce_object(a1, CE_OBJ_REGION),
+                     *y = a3 == 5 ? NULL : ce_object(a2, CE_OBJ_REGION);
+    if (!d || !x || (a3 != 5 && !y) || a3 < 1 || a3 > 5)
+        return 0;
+    struct ce_rect a = *(struct ce_rect *)x->data, b = y ? *(struct ce_rect *)y->data : a, r;
+    switch (a3) {
+    case 1:
+        r = rect_and(a, b);
+        break;
+    case 2:
+    case 3:
+        r = rect_empty(&a) ? b : rect_empty(&b) ? a
+          : (struct ce_rect){MIN(a.left, b.left), MIN(a.top, b.top), MAX(a.right, b.right), MAX(a.bottom, b.bottom)};
+        break;
+    case 4:
+        r = rect_minus(a, b);
+        break;
+    default:
+        r = a;
+    }
+    *(struct ce_rect *)d->data = r;
+    return rect_empty(&r) ? 1 : 2;
+}
+CE_API(OffsetRgn)
+{
+    struct ce_object *o = ce_object(a0, CE_OBJ_REGION);
+    if (!o)
+        return 0;
+    struct ce_rect *r = o->data;
+    r->left += (int32_t)a1;
+    r->right += (int32_t)a1;
+    r->top += (int32_t)a2;
+    r->bottom += (int32_t)a2;
+    return rect_empty(r) ? 1 : 2;
+}
+CE_API(GetRgnBox)
+{
+    struct ce_object *o = ce_object(a0, CE_OBJ_REGION);
+    if (!o || !a1)
+        return 0;
+    *PTR(struct ce_rect, a1) = *(struct ce_rect *)o->data;
+    return rect_empty((struct ce_rect *)o->data) ? 1 : 2;
+}
+/* SaveDC/RestoreDC: a stack of each DC's selections, colours and clip. */
+static struct {
+    struct dc *dc;
+    int level;
+    struct dc state;
+} saved_dcs[32];
+CE_API(SaveDC)
+{
+    struct dc *d = dc_get(a0);
+    if (!d)
+        return 0;
+    int level = 1;
+    for (unsigned i = 0; i < ARRAY_SIZE(saved_dcs); i++)
+        if (saved_dcs[i].dc == d)
+            level = MAX(level, saved_dcs[i].level + 1);
+    for (unsigned i = 0; i < ARRAY_SIZE(saved_dcs); i++)
+        if (!saved_dcs[i].dc) {
+            saved_dcs[i].dc = d;
+            saved_dcs[i].level = level;
+            saved_dcs[i].state = *d;
+            return (CW)level;
+        }
+    return 0;
+}
+/* RestoreDC(dc, level): a level, or -n for the n-th most recent. */
+CE_API(RestoreDC)
+{
+    struct dc *d = dc_get(a0);
+    if (!d)
+        return 0;
+    int top = 0;
+    for (unsigned i = 0; i < ARRAY_SIZE(saved_dcs); i++)
+        if (saved_dcs[i].dc == d)
+            top = MAX(top, saved_dcs[i].level);
+    int level = (int32_t)a1 < 0 ? top + 1 + (int32_t)a1 : (int)a1;
+    int found = -1;
+    for (unsigned i = 0; i < ARRAY_SIZE(saved_dcs); i++)
+        if (saved_dcs[i].dc == d && saved_dcs[i].level == level)
+            found = (int)i;
+    if (found < 0 || level < 1)
+        return 0;
+    *d = saved_dcs[found].state;
+    for (unsigned i = 0; i < ARRAY_SIZE(saved_dcs); i++)
+        if (saved_dcs[i].dc == d && saved_dcs[i].level >= level)
+            saved_dcs[i].dc = NULL;
+    return 1;
+}
+/* Pattern brushes are drawn in one colour here, so their origin is moot. */
+CE_API(SetBrushOrgEx)
+{
+    if (a3)
+        PTR(int32_t, a3)[0] = PTR(int32_t, a3)[1] = 0;
+    return dc_get(a0) != NULL;
+}
+/* CreatePatternBrush(bitmap): a solid brush of the bitmap's average colour. */
+CE_API(CreatePatternBrush)
+{
+    const struct ce_bitmap *b = bitmap(a0);
+    if (!b) {
+        ce_error = 87;
+        return 0;
+    }
+    uint32_t r = 0, g = 0, bl = 0, n = 0;
+    for (int y = 0; y < b->h && y < 64; y++)
+        for (int x = 0; x < b->w && x < 64; x++, n++) {
+            uint32_t c = read_pixel(b, x, y);
+            r += c >> 16 & 255;
+            g += c >> 8 & 255;
+            bl += c & 255;
+        }
+    uint32_t rgb = n ? (r / n) << 16 | (g / n) << 8 | bl / n : 0;
+    return ce_new_object(CE_OBJ_BRUSH, rgb, NULL, 0);
+}
+CE_API(GetBkColor)
+{
+    struct dc *d = dc_get(a0);
+    if (!d)
+        return 0xffffffffu;
+    return (d->back >> 16 & 255) | (d->back & 0xff00) | (d->back & 255) << 16; /* COLORREF is BGR */
+}
+CE_API(GetTextFaceW)
+{
+    static const char face[] = "Tahoma";
+    if (!dc_get(a0))
+        return 0;
+    if (a2 && a1) {
+        ce_widen(PTR(WCHAR, a2), a1, face);
+        return MIN(a1 - 1, (CW)strlen(face));
+    }
+    return strlen(face) + 1;
+}
+/* CreateDCW("DISPLAY", ...): a DC on the screen. */
+CE_API(CreateDCW)
+{
+    return ce_GetDC(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+
+/* ---- shapes ----------------------------------------------------------------- */
+
+/* Polygon(dc, points, count): filled even-odd by scan lines, then outlined. */
+CE_API(Polygon)
+{
+    struct target t;
+    if (a2 < 2 || a2 > 4096 || !a1 || !begin(a0, &t))
+        return 0;
+    const int32_t *p = PTR(int32_t, a1);
+    uint32_t rgb = brush_color(t.dc);
+    int top = p[1], bottom = p[1];
+    for (unsigned i = 1; i < a2; i++) {
+        top = MIN(top, p[i * 2 + 1]);
+        bottom = MAX(bottom, p[i * 2 + 1]);
+    }
+    for (int y = top; rgb != 0xffffffffu && y < bottom; y++) {
+        int xs[64], n = 0;
+        for (unsigned i = 0; i < a2 && n < 64; i++) {
+            int x0 = p[i * 2], y0 = p[i * 2 + 1], x1 = p[(i + 1) % a2 * 2], y1 = p[(i + 1) % a2 * 2 + 1];
+            if ((y0 <= y && y1 > y) || (y1 <= y && y0 > y))
+                xs[n++] = x0 + (int)((int64_t)(y - y0) * (x1 - x0) / (y1 - y0));
+        }
+        for (int i = 1; i < n; i++)
+            for (int j = i; j > 0 && xs[j - 1] > xs[j]; j--) {
+                int tmp = xs[j];
+                xs[j] = xs[j - 1];
+                xs[j - 1] = tmp;
+            }
+        for (int i = 0; i + 1 < n; i += 2)
+            fill(&t, xs[i], y, xs[i + 1] - xs[i], 1, rgb);
+    }
+    const struct ce_object *pen = pen_of(t.dc);
+    for (unsigned i = 0; pen && pen->height != 5 && i < a2; i++)
+        line(&t, p[i * 2], p[i * 2 + 1], p[(i + 1) % a2 * 2], p[(i + 1) % a2 * 2 + 1], pen->value, t.dc->rop2, false);
+    end(&t);
+    return 1;
+}
+/* RoundRect(dc, left, top, right, bottom, corner width, corner height). */
+CE_API(RoundRect)
+{
+    struct target t;
+    if (!begin(a0, &t))
+        return 0;
+    int l = (int)a1, top = (int)a2, r = (int)a3, b = (int)a4;
+    int rx = MIN((int)a5 / 2, (r - l) / 2), ry = MIN((int)a6 / 2, (b - top) / 2);
+    uint32_t rgb = brush_color(t.dc);
+    const struct ce_object *pen = pen_of(t.dc);
+    for (int y = top; y < b; y++) {
+        int dy = y < top + ry ? top + ry - y : y >= b - ry ? y - (b - ry - 1) : 0, inset = 0;
+        if (dy && rx && ry) {
+            /* The corner ellipse's half width at this row. */
+            int64_t limit = (int64_t)rx * rx * ((int64_t)ry * ry - (int64_t)dy * dy);
+            int half = 0;
+            while ((int64_t)(half + 1) * (half + 1) * ry * ry <= limit)
+                half++;
+            inset = rx - half;
+        }
+        if (rgb != 0xffffffffu)
+            fill(&t, l + inset, y, r - l - 2 * inset, 1, rgb);
+        if (pen && pen->height != 5) {
+            plot(&t, t.x + l + inset, t.y + y, pen->value, t.dc->rop2);
+            plot(&t, t.x + r - 1 - inset, t.y + y, pen->value, t.dc->rop2);
+            if (y == top || y == b - 1)
+                line(&t, l + inset, y, r - 1 - inset, y, pen->value, t.dc->rop2, true);
+        }
+    }
+    end(&t);
+    return 1;
+}
+
+/* ---- resources and DIB files ----------------------------------------------- */
+
+CE_API(SizeofResource)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(found_resources); i++)
+        if (a1 && found_resources[i].address == a1)
+            return found_resources[i].size;
+    ce_error = 1812; /* ERROR_RESOURCE_DATA_NOT_FOUND */
+    return 0;
+}
+CE_API(CreateFileW);
+CE_API(ReadFile);
+CE_API(GetFileSize);
+CE_API(CloseHandle);
+/* SHLoadDIBitmap(path): a .bmp file as a bitmap. */
+CE_API(SHLoadDIBitmap)
+{
+    CW h = ce_CreateFileW(a0, 0x80000000u, 1, 0, 3, 0x80, 0, 0, 0, 0, 0, 0);
+    if (h == 0xffffffffu)
+        return 0;
+    CW size = ce_GetFileSize(h, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), got = 0;
+    uint8_t *data = size >= 54 && size <= 4u * 1024u * 1024u ? malloc(size) : NULL;
+    bool ok = data && ce_ReadFile(h, WORD(data), size, WORD(&got), 0, 0, 0, 0, 0, 0, 0, 0) && got == size;
+    ce_CloseHandle(h, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    CW handle = 0;
+    if (ok && data[0] == 'B' && data[1] == 'M') {
+        const uint8_t *dib = data + 14;
+        uint32_t header = ce_u32(dib), bpp = ce_u16(dib + 14), used = ce_u32(dib + 32), bits = ce_u32(data + 10);
+        uint32_t colors = bpp <= 8 ? (used ? used : 1u << bpp) : 0;
+        if (header >= 40 && 14 + header + colors * 4 <= size && bits < size) {
+            struct ce_bitmap *b = bitmap_from_dib(dib, header + colors * 4, data + bits, size - bits, NULL, true);
+            if (b) {
+                handle = ce_new_object(CE_OBJ_BITMAP, 0, b, sizeof(*b));
+                if (!handle)
+                    bitmap_free(b);
+            }
+        }
+    }
+    free(data);
+    return handle;
+}
+
+/* ---- image lists ------------------------------------------------------------ */
+
+/* ImageList_Remove(list, index): -1 removes all. */
+CE_API(ImageList_Remove)
+{
+    struct image_list *l = image_list(a0);
+    if (!l || (a1 != 0xffffffffu && a1 >= l->count))
+        return 0;
+    if (a1 == 0xffffffffu) {
+        l->count = 0;
+        return 1;
+    }
+    size_t stride = (size_t)l->capacity * (size_t)l->cx;
+    for (int y = 0; y < l->cy; y++) {
+        size_t row = (size_t)y * stride;
+        memmove(l->px + row + a1 * l->cx, l->px + row + (a1 + 1) * l->cx, (size_t)(l->count - a1 - 1) * l->cx * 2);
+        memmove(l->opaque + row + a1 * l->cx, l->opaque + row + (a1 + 1) * l->cx, (size_t)(l->count - a1 - 1) * l->cx);
+    }
+    l->count--;
+    return 1;
+}
+CE_API(ImageList_Replace)
+{
+    struct image_list *l = image_list(a0);
+    const struct ce_bitmap *b = bitmap(a2);
+    if (!l || !b || a1 >= l->count)
+        return 0;
+    return image_list_put(l, a1, b, -1, a3 ? bitmap(a3) : NULL) >= 0;
+}
+CE_API(ImageList_GetIconSize)
+{
+    struct image_list *l = image_list(a0);
+    if (!l)
+        return 0;
+    if (a1)
+        *PTR(int32_t, a1) = l->cx;
+    if (a2)
+        *PTR(int32_t, a2) = l->cy;
+    return 1;
+}
+/* ImageList_GetIcon(list, index, flags): an icon of that image, its
+ * transparent pixels in the AND mask. */
+CE_API(ImageList_GetIcon)
+{
+    struct image_list *l = image_list(a0);
+    if (!l || a1 >= l->count)
+        return 0;
+    struct ce_bitmap *b = calloc(1, sizeof(*b));
+    uint32_t and_stride = ALIGN_UP((uint32_t)l->cx, 32u) / 8;
+    uint8_t *block = calloc(1, (size_t)l->cx * l->cy * 2 + and_stride * l->cy);
+    if (!b || !block) {
+        free(b);
+        free(block);
+        return 0;
+    }
+    b->w = l->cx;
+    b->h = l->cy;
+    b->bpp = 16;
+    b->stride = l->cx * 2;
+    b->bits = b->block = block;
+    b->rgb565 = true;
+    b->masks[0] = 0xf800;
+    b->masks[1] = 0x07e0;
+    b->masks[2] = 0x001f;
+    gfx_surface_init(&b->surf, (uint16_t *)block, l->cx, l->cy, l->cx);
+    uint8_t *mask = block + (size_t)l->cx * l->cy * 2;
+    size_t stride = (size_t)l->capacity * (size_t)l->cx;
+    for (int y = 0; y < l->cy; y++)
+        for (int x = 0; x < l->cx; x++) {
+            size_t at = (size_t)y * stride + (size_t)a1 * l->cx + (size_t)x;
+            ((uint16_t *)block)[y * l->cx + x] = l->px[at];
+            if (!l->opaque[at]) /* the mask is bottom-up, as icon_transparent reads it */
+                mask[(uint32_t)(l->cy - 1 - y) * and_stride + (unsigned)x / 8] |= (uint8_t)(0x80u >> (x & 7));
+        }
+    b->and_mask = mask;
+    b->and_stride = and_stride;
+    CW handle = ce_new_object(CE_OBJ_ICON, 1, b, sizeof(*b));
+    if (!handle)
+        bitmap_free(b);
+    return handle;
+}
+/* ImageList_Merge(list1, image1, list2, image2, dx, dy): image2 drawn over
+ * image1 at (dx, dy), as a new one-image list. */
+CE_API(ImageList_Merge)
+{
+    struct image_list *x = image_list(a0), *y = image_list(a2);
+    if (!x || !y || a1 >= x->count || a3 >= y->count)
+        return 0;
+    CW handle = image_list_new(x->cx, x->cy);
+    struct image_list *m = image_list(handle);
+    if (!m)
+        return 0;
+    m->px = calloc((size_t)x->cx * x->cy, 2);
+    m->opaque = calloc((size_t)x->cx * x->cy, 1);
+    if (!m->px || !m->opaque) {
+        ce_DeleteObject(handle, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        return 0;
+    }
+    m->capacity = m->count = 1;
+    size_t xs = (size_t)x->capacity * x->cx, ys = (size_t)y->capacity * y->cx;
+    for (int row = 0; row < x->cy; row++)
+        for (int col = 0; col < x->cx; col++) {
+            size_t at = (size_t)row * xs + (size_t)a1 * x->cx + (size_t)col, out = (size_t)row * x->cx + (size_t)col;
+            m->px[out] = x->px[at];
+            m->opaque[out] = x->opaque[at];
+            int sx = col - (int)a4, sy = row - (int)a5;
+            if (sx >= 0 && sy >= 0 && sx < y->cx && sy < y->cy) {
+                size_t from = (size_t)sy * ys + (size_t)a3 * y->cx + (size_t)sx;
+                if (y->opaque[from]) {
+                    m->px[out] = y->px[from];
+                    m->opaque[out] = 1;
+                }
+            }
+        }
+    return handle;
+}
+/* Overlays and drag images aren't drawn. */
+CE_API(ImageList_SetOverlayImage) { return image_list(a0) != NULL; }
+CE_API(ImageList_BeginDrag) { return image_list(a0) != NULL; }
+CE_API(ImageList_DragEnter) { return 1; }
+CE_API(ImageList_DragMove) { return 1; }
+CE_API(ImageList_DragLeave) { return 1; }
+CE_API(ImageList_EndDrag) { return 0; }
+CE_API(ImageList_SetDragCursorImage) { return 1; }
+
 static const struct ce_export exports[] = {
     CE_EXPORT(BeginPaint),
     CE_EXPORT(EndPaint),
@@ -2327,6 +2814,15 @@ static const struct ce_export exports[] = {
     CE_EXPORT(ImageList_LoadImage),
     CE_EXPORT(ImageList_Draw),
     CE_EXPORT(ImageList_Destroy),
+    CE_EXPORT(ExcludeClipRect), CE_EXPORT(IntersectClipRect), CE_EXPORT(GetClipBox), CE_EXPORT(GetClipRgn),
+    CE_EXPORT(RectVisible), CE_EXPORT(CombineRgn), CE_EXPORT(OffsetRgn), CE_EXPORT(GetRgnBox), CE_EXPORT(SaveDC),
+    CE_EXPORT(RestoreDC), CE_EXPORT(SetBrushOrgEx), CE_EXPORT(CreatePatternBrush), CE_EXPORT(GetBkColor),
+    CE_EXPORT(GetTextFaceW), CE_EXPORT(CreateDCW), CE_EXPORT(Polygon), CE_EXPORT(RoundRect),
+    CE_EXPORT(SizeofResource), CE_EXPORT(SHLoadDIBitmap), CE_EXPORT(ImageList_Remove), CE_EXPORT(ImageList_Replace),
+    CE_EXPORT(ImageList_GetIconSize), CE_EXPORT(ImageList_GetIcon), CE_EXPORT(ImageList_Merge),
+    CE_EXPORT(ImageList_SetOverlayImage), CE_EXPORT(ImageList_BeginDrag), CE_EXPORT(ImageList_DragEnter),
+    CE_EXPORT(ImageList_DragMove), CE_EXPORT(ImageList_DragLeave), CE_EXPORT(ImageList_EndDrag),
+    CE_EXPORT(ImageList_SetDragCursorImage),
 };
 void *ce_resolve_gdi(const char *name)
 {

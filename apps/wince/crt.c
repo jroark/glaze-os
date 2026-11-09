@@ -326,6 +326,8 @@ CW ce_SetFilePointer(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
 struct ce_stream {
     CW handle;
     bool binary, console; /* console: _getstdfilex's stdin/out/err, the serial log */
+    bool eof;
+    int pushed; /* a byte read ahead past "\r", or -1 */
 };
 CE_API(_wfopen)
 {
@@ -359,6 +361,8 @@ CE_API(_wfopen)
     }
     s->handle = handle;
     s->binary = binary;
+    s->console = s->eof = false;
+    s->pushed = -1;
     return WORD(s);
 }
 CE_API(fclose)
@@ -395,7 +399,7 @@ CE_API(fopen)
 /* _getstdfilex(0 stdin, 1 stdout, 2 stderr): writes go to the serial log. */
 CE_API(_getstdfilex)
 {
-    static struct ce_stream console[3] = {{0, true, true}, {0, true, true}, {0, true, true}};
+    static struct ce_stream console[3] = {{0, true, true, false, -1}, {0, true, true, false, -1}, {0, true, true, false, -1}};
     return a0 < 3 ? WORD(&console[a0]) : 0;
 }
 /* fread/fwrite(buffer, size, count, stream) return whole items. */
@@ -429,7 +433,10 @@ CE_API(fseek)
     struct ce_stream *s = PTR(struct ce_stream, a0);
     if (!s || s->console || a2 > 2)
         return (CW)-1;
-    return ce_SetFilePointer(s->handle, a1, 0, a2, 0, 0, 0, 0, 0, 0, 0, 0) == 0xffffffffu ? (CW)-1 : 0;
+    CW offset = a2 == 1 && s->pushed >= 0 ? a1 - 1 : a1; /* the byte read ahead */
+    s->eof = false;
+    s->pushed = -1;
+    return ce_SetFilePointer(s->handle, offset, 0, a2, 0, 0, 0, 0, 0, 0, 0, 0) == 0xffffffffu ? (CW)-1 : 0;
 }
 CE_API(ftell)
 {
@@ -500,6 +507,118 @@ CE_API(fwprintf)
         return (CW)-1;
     return (CW)stream_write(s, text, (unsigned)n);
 }
+/* One byte of a stream: text mode turns "\r\n" into "\n". */
+static int stream_getc(struct ce_stream *s)
+{
+    uint8_t c;
+    CW got = 0;
+    if (s->pushed >= 0) {
+        c = (uint8_t)s->pushed;
+        s->pushed = -1;
+        return c;
+    }
+    if (s->console || s->eof || !ce_ReadFile(s->handle, WORD(&c), 1, WORD(&got), 0, 0, 0, 0, 0, 0, 0, 0) || !got) {
+        s->eof = true;
+        return -1;
+    }
+    if (c == '\r' && !s->binary) {
+        uint8_t next;
+        if (ce_ReadFile(s->handle, WORD(&next), 1, WORD(&got), 0, 0, 0, 0, 0, 0, 0, 0) && got) {
+            if (next == '\n')
+                return '\n';
+            s->pushed = next;
+        }
+    }
+    return c;
+}
+CE_API(fgetc)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a0);
+    return s ? (CW)stream_getc(s) : (CW)-1;
+}
+CE_API(feof)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a0);
+    return s && s->eof;
+}
+/* fgets(buffer, size, stream): through the newline, terminated. */
+CE_API(fgets)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a2);
+    char *out = PTR(char, a0);
+    if (!s || !out || (int32_t)a1 < 1)
+        return 0;
+    unsigned n = 0;
+    while (n + 1 < a1) {
+        int c = stream_getc(s);
+        if (c < 0)
+            break;
+        out[n++] = (char)c;
+        if (c == '\n')
+            break;
+    }
+    out[n] = 0;
+    return n ? a0 : 0;
+}
+/* fgetws on an ANSI text stream: bytes widened from Windows-1252. */
+CE_API(fgetws)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a2);
+    WCHAR *out = PTR(WCHAR, a0);
+    if (!s || !out || (int32_t)a1 < 1)
+        return 0;
+    unsigned n = 0;
+    while (n + 1 < a1) {
+        int c = stream_getc(s);
+        if (c < 0)
+            break;
+        out[n++] = ce_cp1252_decode((uint8_t)c);
+        if (c == '\n')
+            break;
+    }
+    out[n] = 0;
+    return n ? a0 : 0;
+}
+CE_API(fputs)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a1);
+    const char *text = PTR(char, a0);
+    if (!s || !text)
+        return (CW)-1;
+    WCHAR wide[1024];
+    unsigned n = 0;
+    for (; text[n] && n < ARRAY_SIZE(wide); n++)
+        wide[n] = ce_cp1252_decode((uint8_t)text[n]);
+    return stream_write(s, wide, n) >= 0 ? 0 : (CW)-1;
+}
+/* fgetpos(stream, fpos_t *): the position as a 64-bit value. */
+CE_API(fgetpos)
+{
+    struct ce_stream *s = PTR(struct ce_stream, a0);
+    if (!s || !a1 || s->console)
+        return (CW)-1;
+    CW at = ce_SetFilePointer(s->handle, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0);
+    if (at == 0xffffffffu)
+        return (CW)-1;
+    ce_put32(PTR(void, a1), at - (s->pushed >= 0));
+    ce_put32(PTR(uint8_t, a1) + 4, 0);
+    return 0;
+}
+/* vfprintf(stream, format, va_list): CE's va_list points at the words. */
+CE_API(vfprintf)
+{
+    const CW *v = PTR(CW, a2);
+    return ce_fprintf(a0, a1, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]);
+}
+CE_API(swscanf);
+/* fwscanf(stream, format, ...): the rest of the current line, scanned. */
+CE_API(fwscanf)
+{
+    WCHAR line[512];
+    if (!ce_fgetws(WORD(line), ARRAY_SIZE(line), a0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        return (CW)-1;
+    return ce_swscanf(WORD(line), a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11);
+}
 CE_API(fputws)
 {
     struct ce_stream *s = PTR(struct ce_stream, a1);
@@ -537,6 +656,14 @@ static const struct ce_export exports[] = {
     CE_EXPORT(fflush),
     CE_EXPORT(fwprintf),
     CE_EXPORT(fputws),
+    CE_EXPORT(fgetc),
+    CE_EXPORT(feof),
+    CE_EXPORT(fgets),
+    CE_EXPORT(fgetws),
+    CE_EXPORT(fputs),
+    CE_EXPORT(fgetpos),
+    CE_EXPORT(vfprintf),
+    CE_EXPORT(fwscanf),
     CE_EXPORT(strncat),
     CE_EXPORT(strncmp),
     CE_EXPORT(_itoa),

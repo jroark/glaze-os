@@ -26,10 +26,11 @@ from wince_assets import AssetError, CpkDecoder, Fat16, NkImage, cstr, exports, 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "apps/wince"
 # apps/wince/*.c resolver groups, in main.c's native_symbol order.
-CORE = ("core", "crt", "mapping", "database", "string", "thread", "time", "window", "gdi", "fpe", "system", "ras", "data", "process")
+CORE = ("core", "crt", "mapping", "database", "string", "thread", "time", "window", "gdi", "fpe", "system", "ras", "data", "process",
+        "extras", "wave")
 FILES = {"core": ["core.c"], "crt": ["crt.c"], "mapping": ["mapping.c"], "database": ["database.c"],
          "string": ["string.c", "scan.c"], "thread": ["thread.c"], "time": ["time.c", "timezone.c"],
-         "window": ["window.c"], "gdi": ["gdi.c"], "fpe": ["fpe.c"], "system": ["system.c"], "ras": ["ras.c"], "data": [], "process": ["process.c"], "property": ["property.c"], "shell": ["shell.c"],
+         "window": ["window.c"], "gdi": ["gdi.c"], "fpe": ["fpe.c"], "system": ["system.c"], "ras": ["ras.c"], "data": [], "process": ["process.c"], "extras": ["extras.c"], "wave": ["wave.c"], "property": ["property.c"], "shell": ["shell.c"],
          "ole": ["ole.c"], "winsock": ["winsock.c"]}
 
 
@@ -63,6 +64,8 @@ class Runtime:
     def native(self, dll, name):
         dll = dll.lower()
         if dll == "coredll.dll" and any(name in self.groups[g] for g in CORE):
+            return True
+        if dll == "toolhelp.dll" and name in self.groups["extras"]:
             return True
         if dll in ("commctrl.dll", "cso.dll") and (name in self.groups["window"] or name in self.groups["gdi"]):
             return True

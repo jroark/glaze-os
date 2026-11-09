@@ -28,6 +28,7 @@ static struct {
     CW handle;
     const void *data;
     uint32_t bytes;
+    void *owned; /* CreateAcceleratorTableW's copy */
 } accelerators[8];
 
 static struct menu *menu(CW handle)
@@ -1187,8 +1188,280 @@ CE_API(SHGetFileInfo)
     return (a4 & 0x100) ? 0 : 1;
 }
 
+/* ---- menus: insertion, item information, radio groups ------------------ */
+
+static bool set_item(struct menu_item *it, CW flags, CW id, CW text)
+{
+    if ((flags & 16) && !menu(id)) {
+        ce_error = 1401;
+        return false;
+    }
+    memset(it, 0, sizeof(*it));
+    it->flags = flags;
+    if (flags & 16)
+        it->submenu = id;
+    else
+        it->command = id;
+    if (!(flags & 0x800) && text) {
+        unsigned n = MIN(ce_wlen(PTR(WCHAR, text)), ARRAY_SIZE(it->text) - 1);
+        memcpy(it->text, PTR(void, text), n * 2);
+    }
+    return true;
+}
+/* InsertMenuW(menu, position or command, flags, id, text): before that
+ * item, or at the end when there is none. */
+CE_API(InsertMenuW)
+{
+    struct menu *m = menu(a0);
+    if (!m || m->count == ARRAY_SIZE(m->item)) {
+        ce_error = !m ? 1401 : 8;
+        return 0;
+    }
+    unsigned at = 0;
+    if (a2 & 0x400)
+        at = MIN(a1, m->count);
+    else
+        while (at < m->count && m->item[at].command != a1)
+            at++;
+    struct menu_item item;
+    if (!set_item(&item, a2 & ~0x400u, a3, a4))
+        return 0;
+    memmove(&m->item[at + 1], &m->item[at], (m->count - at) * sizeof(m->item[0]));
+    m->item[at] = item;
+    m->count++;
+    return 1;
+}
+/* MENUITEMINFO: cbSize, fMask, fType, fState, wID, hSubMenu, hbmpChecked,
+ * hbmpUnchecked, dwItemData, dwTypeData, cch. MF_* flags hold the type
+ * (MFT_SEPARATOR 0x800, MFT_RADIOCHECK 0x200) and state (checked 8,
+ * grayed 3) as AppendMenu stores them. */
+CE_API(GetMenuItemInfoW)
+{
+    struct menu_item *it = find_item(a0, a1, a2 != 0, 0);
+    CW *info = PTR(CW, a3);
+    if (!it || !info) {
+        ce_error = 1456;
+        return 0;
+    }
+    CW mask = info[1];
+    if (mask & 0x10) { /* MIIM_TYPE */
+        info[2] = it->flags & 0xa00;
+        if (info[9] && info[10]) {
+            unsigned n = MIN(ce_wlen(it->text), info[10] - 1);
+            memcpy(PTR(void, info[9]), it->text, n * 2);
+            PTR(WCHAR, info[9])[n] = 0;
+        }
+        info[10] = ce_wlen(it->text);
+    }
+    if (mask & 1)
+        info[3] = it->flags & 0x100b;
+    if (mask & 2)
+        info[4] = it->flags & 16 ? 0 : it->command;
+    if (mask & 4)
+        info[5] = it->flags & 16 ? it->submenu : 0;
+    if (mask & 0x20)
+        info[8] = 0;
+    return 1;
+}
+CE_API(SetMenuItemInfoW)
+{
+    struct menu_item *it = find_item(a0, a1, a2 != 0, 0);
+    const CW *info = PTR(CW, a3);
+    if (!it || !info) {
+        ce_error = 1456;
+        return 0;
+    }
+    CW mask = info[1];
+    if (mask & 0x10) {
+        it->flags = (it->flags & ~0xa00u) | (info[2] & 0xa00);
+        memset(it->text, 0, sizeof(it->text));
+        if (!(info[2] & 0x800) && info[9]) {
+            unsigned n = MIN(ce_wlen(PTR(WCHAR, info[9])), ARRAY_SIZE(it->text) - 1);
+            memcpy(it->text, PTR(void, info[9]), n * 2);
+        }
+    }
+    if (mask & 1)
+        it->flags = (it->flags & ~0x100bu) | (info[3] & 0x100b);
+    if ((mask & 2) && !(it->flags & 16))
+        it->command = info[4];
+    if ((mask & 4) && menu(info[5])) {
+        it->flags |= 16;
+        it->submenu = info[5];
+    }
+    return 1;
+}
+/* CheckMenuRadioItem(menu, first, last, check, MF_BYPOSITION or command). */
+CE_API(CheckMenuRadioItem)
+{
+    struct menu *m = menu(a0);
+    if (!m)
+        return 0;
+    bool position = (a4 & 0x400) != 0, found = false;
+    for (unsigned i = 0; i < m->count; i++) {
+        CW key = position ? i : m->item[i].command;
+        if (key < MIN(a1, a2) || key > MAX(a1, a2) || (!position && (m->item[i].flags & 16)))
+            continue;
+        m->item[i].flags = (m->item[i].flags & ~8u) | (key == a3 ? 8u | 0x200u : 0);
+        found |= key == a3;
+    }
+    return found;
+}
+CE_API(DrawMenuBar)
+{
+    ce_redraw_all();
+    return ce_window(a0) != NULL;
+}
+
+/* ---- accelerators, clipboard formats ------------------------------------ */
+
+/* CreateAcceleratorTableW(ACCEL[], count): fVirt, key and command per
+ * six-byte entry, stored as an RT_ACCELERATOR resource reads. */
+CE_API(CreateAcceleratorTableW)
+{
+    if (!a0 || !a1 || a1 > 256) {
+        ce_error = 87;
+        return 0;
+    }
+    uint8_t *table = malloc(a1 * 8);
+    if (!table) {
+        ce_error = 8;
+        return 0;
+    }
+    const uint8_t *in = PTR(uint8_t, a0);
+    for (unsigned i = 0; i < a1; i++) {
+        ce_put16(table + i * 8, (uint16_t)(in[i * 6] | (i + 1 == a1 ? 0x80 : 0)));
+        ce_put16(table + i * 8 + 2, ce_u16(in + i * 6 + 2));
+        ce_put16(table + i * 8 + 4, ce_u16(in + i * 6 + 4));
+        ce_put16(table + i * 8 + 6, 0);
+    }
+    for (unsigned i = 0; i < ARRAY_SIZE(accelerators); i++)
+        if (!accelerators[i].handle) {
+            accelerators[i].handle = 0x77000000u + i;
+            accelerators[i].data = accelerators[i].owned = table;
+            accelerators[i].bytes = a1 * 8;
+            return accelerators[i].handle;
+        }
+    free(table);
+    ce_error = 8;
+    return 0;
+}
+CE_API(DestroyAcceleratorTable)
+{
+    unsigned i = a0 - 0x77000000u;
+    if (i >= ARRAY_SIZE(accelerators) || !accelerators[i].handle)
+        return 0;
+    free(accelerators[i].owned);
+    memset(&accelerators[i], 0, sizeof(accelerators[i]));
+    return 1;
+}
+static WCHAR formats[16][64];
+CE_API(RegisterClipboardFormatW)
+{
+    const WCHAR *name = PTR(WCHAR, a0);
+    if (!name || !*name || ce_wlen(name) >= 64) {
+        ce_error = 87;
+        return 0;
+    }
+    for (unsigned i = 0; i < ARRAY_SIZE(formats); i++)
+        if (formats[i][0] && !ce_wcmp(formats[i], name))
+            return 0xc000 + i;
+    for (unsigned i = 0; i < ARRAY_SIZE(formats); i++)
+        if (!formats[i][0]) {
+            memcpy(formats[i], name, (ce_wlen(name) + 1) * 2);
+            return 0xc000 + i;
+        }
+    ce_error = 8;
+    return 0;
+}
+CE_API(GetClipboardFormatNameW)
+{
+    unsigned i = a0 - 0xc000;
+    if (i >= ARRAY_SIZE(formats) || !formats[i][0] || !a1 || !a2)
+        return 0;
+    unsigned n = MIN(ce_wlen(formats[i]), a2 - 1);
+    memcpy(PTR(void, a1), formats[i], n * 2);
+    PTR(WCHAR, a1)[n] = 0;
+    return n;
+}
+CE_API(LocalAlloc);
+/* GetClipboardDataAlloc(format): a copy the caller frees with LocalFree. */
+CE_API(GetClipboardDataAlloc)
+{
+    if (!clipboard_open || a0 != 13 || !clipboard)
+        return 0;
+    unsigned bytes = (ce_wlen(PTR(WCHAR, clipboard)) + 1) * 2;
+    CW block = ce_LocalAlloc(0, bytes, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    if (block)
+        memcpy(PTR(void, block), PTR(void, clipboard), bytes);
+    return block;
+}
+
+/* ---- command bars and bands --------------------------------------------- */
+
+/* CommandBar_InsertComboBox(bar, instance, width, style, id, button): a
+ * combo box in the bar, after `button` buttons of 23 pixels. */
+CE_API(CommandBar_InsertComboBox)
+{
+    struct ce_window *bar = ce_window(a0);
+    if (!bar || !a2 || a2 > 240)
+        return 0;
+    static const WCHAR combo[] = {'C', 'o', 'm', 'b', 'o', 'B', 'o', 'x', 0};
+    int x = MIN(240 - (int)a2, 2 + (int)a5 * 23);
+    struct ce_window *w = ce_new_window(combo, NULL, a3 | 0x50000000u, MAX(0, x), 2, (int)a2, 22, a0, a4, 0, 0);
+    return w ? w->handle : 0;
+}
+/* CommandBar_InsertMenubarEx(bar, instance, menu, button): with no
+ * instance, `menu` is an HMENU; otherwise a resource. */
+CE_API(CommandBar_InsertMenubarEx)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w)
+        return 0;
+    w->user = a1 ? load_menu(a1, a2) : menu(a2) ? a2 : 0;
+    w->dirty = true;
+    return w->user != 0;
+}
+CE_API(CommandBar_DrawMenuBar)
+{
+    struct ce_window *w = ce_window(a0);
+    if (w)
+        w->dirty = true;
+    return w != NULL;
+}
+/* Command bands are drawn as one command bar holding the first band's
+ * menu and buttons; the bar itself serves as each band's command bar. */
+CE_API(CommandBands_Create)
+{
+    return ce_CommandBar_Create(a0, a1, a2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+CE_API(CommandBands_AddBands) { return ce_window(a0) != NULL; }
+CE_API(CommandBands_GetCommandBar) { return ce_window(a0) ? a0 : 0; }
+CE_API(CommandBands_AddAdornments)
+{
+    return ce_CommandBar_AddAdornments(a0, a1, a2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+CE_API(CommandBands_GetRestoreInformation) { return 0; }
+CE_API(IsCommandBarMessage) { return 0; }
+/* CreateStatusWindowW(style, text, parent, id): a 20-pixel bar along the
+ * parent's bottom. */
+CE_API(CreateStatusWindowW)
+{
+    static const WCHAR klass[] = {'S', 't', 'a', 't', 'i', 'c', 0};
+    gfx_rect r = ce_client_rect(a2);
+    struct ce_window *w = ce_new_window(klass, PTR(WCHAR, a1), (a0 & ~0xffffu) | 0x50000000u, 0, MAX(0, r.h - 20),
+                                       r.w ? r.w : 240, 20, a2, a3, 0, 0);
+    return w ? w->handle : 0;
+}
+
 static const struct ce_export exports[] = {
     CE_EXPORT(Shell_NotifyIcon),
+    CE_EXPORT(InsertMenuW), CE_EXPORT(GetMenuItemInfoW), CE_EXPORT(SetMenuItemInfoW),
+    CE_EXPORT(CheckMenuRadioItem), CE_EXPORT(DrawMenuBar), CE_EXPORT(CreateAcceleratorTableW),
+    CE_EXPORT(DestroyAcceleratorTable), CE_EXPORT(RegisterClipboardFormatW), CE_EXPORT(GetClipboardFormatNameW),
+    CE_EXPORT(GetClipboardDataAlloc), CE_EXPORT(CommandBar_InsertComboBox), CE_EXPORT(CommandBar_InsertMenubarEx),
+    CE_EXPORT(CommandBar_DrawMenuBar), CE_EXPORT(CommandBands_Create), CE_EXPORT(CommandBands_AddBands),
+    CE_EXPORT(CommandBands_GetCommandBar), CE_EXPORT(CommandBands_AddAdornments),
+    CE_EXPORT(CommandBands_GetRestoreInformation), CE_EXPORT(IsCommandBarMessage), CE_EXPORT(CreateStatusWindowW),
     CE_EXPORT(LoadMenuW),
     CE_EXPORT(GetMenu),
     CE_EXPORT(CreatePopupMenu), CE_EXPORT(AppendMenuW),

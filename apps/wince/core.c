@@ -324,6 +324,7 @@ CE_API(free)
 struct ce_heap_block {
     struct ce_heap_block *next;
     void *data;
+    CW size;
 };
 static struct {
     CW handle;
@@ -359,12 +360,63 @@ CE_API(HeapAlloc)
             free(b);
             break;
         }
+        b->size = a2;
         b->next = heaps[i].blocks;
         heaps[i].blocks = b;
         return WORD(b->data);
     }
     ce_error = 8;
     return 0;
+}
+static struct ce_heap_block *heap_block(CW heap, CW data)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(heaps); i++)
+        if (heap && heaps[i].handle == heap)
+            for (struct ce_heap_block *b = heaps[i].blocks; b; b = b->next)
+                if (WORD(b->data) == data)
+                    return b;
+    return NULL;
+}
+/* HeapReAlloc(heap, flags, block, size): HEAP_ZERO_MEMORY (8) clears what
+ * grows; HEAP_REALLOC_IN_PLACE_ONLY (0x10) fails rather than move. */
+CE_API(HeapReAlloc)
+{
+    struct ce_heap_block *b = heap_block(a0, a2);
+    if (!b || (a1 & ~0x19u)) {
+        ce_error = 87;
+        return 0;
+    }
+    if ((a1 & 0x10) && a3 > b->size) {
+        ce_error = 8;
+        return 0;
+    }
+    void *data = realloc(b->data, a3 ? a3 : 1);
+    if (!data) {
+        ce_error = 8;
+        return 0;
+    }
+    if ((a1 & 8) && a3 > b->size)
+        memset((uint8_t *)data + b->size, 0, a3 - b->size);
+    b->data = data;
+    b->size = a3;
+    return WORD(data);
+}
+CE_API(HeapSize)
+{
+    struct ce_heap_block *b = heap_block(a0, a2);
+    if (!b) {
+        ce_error = 87;
+        return (CW)-1;
+    }
+    return b->size;
+}
+/* The process heap is an ordinary heap made on first use. */
+CE_API(GetProcessHeap)
+{
+    static CW heap;
+    if (!heap)
+        heap = ce_HeapCreate(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    return heap;
 }
 CE_API(HeapFree)
 {
@@ -2192,6 +2244,9 @@ static const struct ce_export exports[] = {
     CE_EXPORT(HeapAlloc),
     CE_EXPORT(HeapFree),
     CE_EXPORT(HeapDestroy),
+    CE_EXPORT(HeapReAlloc),
+    CE_EXPORT(HeapSize),
+    CE_EXPORT(GetProcessHeap),
     CE_EXPORT(strlen),
     CE_EXPORT(mbstowcs),
     CE_EXPORT(wcstombs),

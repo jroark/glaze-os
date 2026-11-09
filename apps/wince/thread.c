@@ -14,9 +14,10 @@ static struct gz_mutex lock = GZ_MUTEX_INIT;
 static uint64_t tls_used;
 static CW tls_generation[TLS_SLOTS];
 static CW serial;
-enum { SYNC_MUTEX = 1, SYNC_EVENT, SYNC_THREAD };
+enum { SYNC_MUTEX = 1, SYNC_EVENT, SYNC_THREAD, SYNC_SEMAPHORE };
 static struct sync_object {
     CW handle, kind, refs, owner, depth, code, proc, arg, tid;
+    int32_t count, maximum; /* semaphores */
     bool signaled, manual, suspended, open;
     WCHAR name[128];
 } objects[SYNC_OBJECTS];
@@ -139,39 +140,112 @@ CE_API(EventModify)
 }
 CE_API(SetEvent) { return ce_EventModify(a0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); }
 CE_API(ResetEvent) { return ce_EventModify(a0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); }
-CE_API(WaitForSingleObject)
+/* With `lock` held: whether a wait on `o` would succeed now, and taking it
+ * (a mutex's ownership, an auto-reset event, a semaphore count) if `take`. */
+static bool ready(struct sync_object *o, CW tid, bool take)
+{
+    bool now = o->kind == SYNC_MUTEX ? (!o->owner || o->owner == tid)
+             : o->kind == SYNC_SEMAPHORE ? o->count > 0 : o->signaled;
+    if (now && take) {
+        if (o->kind == SYNC_MUTEX) {
+            o->owner = tid;
+            o->depth++;
+        }
+        if (o->kind == SYNC_EVENT && !o->manual)
+            o->signaled = false;
+        if (o->kind == SYNC_SEMAPHORE)
+            o->count--;
+    }
+    return now;
+}
+/* WaitForMultipleObjects(count, handles, wait_all, timeout): WAIT_OBJECT_0 +
+ * the first ready index (or 0 once all are), WAIT_TIMEOUT 258, or -1. */
+CE_API(WaitForMultipleObjects)
 {
     CW start = gz_time_ms(), tid = gz_thread_id();
-    gz_mutex_lock(&lock);
-    struct sync_object *o = lookup(a0);
-    if (!o || !o->open) {
-        gz_mutex_unlock(&lock);
-        ce_error = 6;
+    if (!a0 || a0 > 64 || !a1) {
+        ce_error = 87;
         return (CW)-1;
     }
-    o->refs++;
+    struct sync_object *set[64];
+    gz_mutex_lock(&lock);
+    for (unsigned i = 0; i < a0; i++) {
+        set[i] = lookup(PTR(CW, a1)[i]);
+        if (!set[i] || !set[i]->open) {
+            gz_mutex_unlock(&lock);
+            ce_error = 6;
+            return (CW)-1;
+        }
+    }
+    for (unsigned i = 0; i < a0; i++)
+        set[i]->refs++;
+    CW result = 258;
     for (;;) {
-        bool ready = o->kind == SYNC_MUTEX ? (!o->owner || o->owner == tid) : o->signaled;
-        if (ready) {
-            if (o->kind == SYNC_MUTEX) {
-                o->owner = tid;
-                o->depth++;
+        if (a2) {
+            bool all = true;
+            for (unsigned i = 0; i < a0 && all; i++)
+                all = ready(set[i], tid, false);
+            if (all) {
+                for (unsigned i = 0; i < a0; i++)
+                    ready(set[i], tid, true);
+                result = 0;
+                break;
             }
-            if (o->kind == SYNC_EVENT && !o->manual)
-                o->signaled = false;
-            release(o);
-            gz_mutex_unlock(&lock);
-            return 0;
+        } else {
+            unsigned i = 0;
+            while (i < a0 && !ready(set[i], tid, true))
+                i++;
+            if (i < a0) {
+                result = i;
+                break;
+            }
         }
-        if (a1 != 0xffffffffu && gz_time_ms() - start >= a1) {
-            release(o);
-            gz_mutex_unlock(&lock);
-            return 258;
-        }
+        if (a3 != 0xffffffffu && gz_time_ms() - start >= a3)
+            break;
         gz_mutex_unlock(&lock);
         gz_sleep_ms(1);
         gz_mutex_lock(&lock);
     }
+    for (unsigned i = 0; i < a0; i++)
+        release(set[i]);
+    gz_mutex_unlock(&lock);
+    return result;
+}
+CE_API(WaitForSingleObject)
+{
+    CW handle = a0;
+    return ce_WaitForMultipleObjects(1, WORD(&handle), 0, a1, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+CE_API(CreateSemaphoreW)
+{
+    if ((int32_t)a2 <= 0 || (int32_t)a1 < 0 || (int32_t)a1 > (int32_t)a2) {
+        ce_error = 87;
+        return 0;
+    }
+    CW h = create(SYNC_SEMAPHORE, a3, false, false);
+    if (h && ce_error != 183) {
+        gz_mutex_lock(&lock);
+        struct sync_object *o = lookup(h);
+        o->count = (int32_t)a1;
+        o->maximum = (int32_t)a2;
+        gz_mutex_unlock(&lock);
+    }
+    return h;
+}
+CE_API(ReleaseSemaphore)
+{
+    gz_mutex_lock(&lock);
+    struct sync_object *o = lookup(a0);
+    bool ok = o && o->open && o->kind == SYNC_SEMAPHORE && (int32_t)a1 > 0 && (int32_t)a1 <= o->maximum - o->count;
+    if (ok) {
+        if (a2)
+            *PTR(CW, a2) = (CW)o->count;
+        o->count += (int32_t)a1;
+    }
+    gz_mutex_unlock(&lock);
+    if (!ok)
+        ce_error = o ? 298 : 6; /* ERROR_TOO_MANY_POSTS */
+    return ok;
 }
 bool ce_sync_close(CW h, bool *handled)
 {
@@ -234,6 +308,31 @@ CE_API(InterlockedDecrement)
     CW v = --*PTR(CW, a0);
     gz_mutex_unlock(&lock);
     return v;
+}
+CE_API(InterlockedExchange)
+{
+    gz_mutex_lock(&lock);
+    CW old = *PTR(CW, a0);
+    *PTR(CW, a0) = a1;
+    gz_mutex_unlock(&lock);
+    return old;
+}
+CE_API(InterlockedCompareExchange)
+{
+    gz_mutex_lock(&lock);
+    CW old = *PTR(CW, a0);
+    if (old == a2)
+        *PTR(CW, a0) = a1;
+    gz_mutex_unlock(&lock);
+    return old;
+}
+CE_API(InterlockedExchangeAdd)
+{
+    gz_mutex_lock(&lock);
+    CW old = *PTR(CW, a0);
+    *PTR(CW, a0) = old + a1;
+    gz_mutex_unlock(&lock);
+    return old;
 }
 CE_API(TlsAlloc)
 {
@@ -401,6 +500,29 @@ CE_API(ResumeThread)
         ce_error = 6;
     return result;
 }
+/* Glaze can't stop another thread where it stands: a thread not yet
+ * started stays suspended; a running one keeps running. */
+CE_API(SuspendThread)
+{
+    gz_mutex_lock(&lock);
+    struct sync_object *o = lookup(a0);
+    CW result = (CW)-1;
+    if (o && o->open && o->kind == SYNC_THREAD)
+        result = o->suspended;
+    gz_mutex_unlock(&lock);
+    if (result == (CW)-1)
+        ce_error = 6;
+    return result;
+}
+/* GetThreadTimes(thread, creation, exit, kernel, user): not accounted. */
+CE_API(GetThreadTimes)
+{
+    CW out[] = {a1, a2, a3, a4};
+    for (unsigned i = 0; i < 4; i++)
+        if (out[i])
+            memset(PTR(void, out[i]), 0, 8);
+    return 1;
+}
 CE_API(GetCurrentThreadId) { return WORD(gz_self()) >> 16; }
 CE_API(GetCurrentProcessId) { return gz_getpid(); }
 CE_API(GetCurrentProcess) { return 0x42; }
@@ -423,6 +545,14 @@ static const struct ce_export exports[] = {CE_EXPORT(CreateMutexW),
                                            CE_EXPORT(SetEvent),
                                            CE_EXPORT(ResetEvent),
                                            CE_EXPORT(WaitForSingleObject),
+                                           CE_EXPORT(WaitForMultipleObjects),
+                                           CE_EXPORT(CreateSemaphoreW),
+                                           CE_EXPORT(ReleaseSemaphore),
+                                           CE_EXPORT(InterlockedExchange),
+                                           CE_EXPORT(InterlockedCompareExchange),
+                                           CE_EXPORT(InterlockedExchangeAdd),
+                                           CE_EXPORT(SuspendThread),
+                                           CE_EXPORT(GetThreadTimes),
                                            CE_EXPORT(InitializeCriticalSection),
                                            CE_EXPORT(DeleteCriticalSection),
                                            CE_EXPORT(EnterCriticalSection),
