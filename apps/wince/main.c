@@ -467,6 +467,7 @@ int main(void)
         if(!file)ce_fatal("Cannot read the selected NAND executable");
         map_module(&ce_main,file,size);finish_module(&ce_main,ce_source_name());
         free(file);ce_main.pe.file=NULL;
+        ce_source_cache_icons();
     }else load(&ce_main, "program.exe");
     if (ce_main.pe.dll)
         ce_fatal("Expected a WinCE application");

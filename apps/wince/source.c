@@ -3,6 +3,7 @@
 #include "runtime.h"
 #include "source.h"
 #include "assets.h"
+#include "exeicon.h"
 
 static bool active, metadata_loaded;
 static char program[FS_PATH_MAX], directory[FS_PATH_MAX], ce_name[FS_PATH_MAX+16];
@@ -247,4 +248,59 @@ bool ce_source_file(const char *canonical,char out[FS_PATH_MAX])
     bool ok=!fs_mkdirs(parent)&&fs_write_file(out,data,size)==(int)size;free(data);
     if(!ok)fs_remove(out);
     return ok;
+}
+/* Files shows a NAND executable with its own icon from CE_ICON_DIR. Only a
+ * runner holds the CCFS dictionary compressed programs need, so each launch
+ * fills in its folder's missing icons, decoding just headers and resources. */
+static int icon_file_read(void *arg,uint32_t offset,void *out,uint32_t size)
+{
+    int fd=*(int *)arg;
+    if(fs_seek(fd,(int32_t)offset,FS_SEEK_SET)!=(int)offset)return -1;
+    return fs_read(fd,out,size);
+}
+static void cache_icon(const char *path,uint32_t bytes,unsigned icon_size,const char *tag)
+{
+    uint32_t hash=2166136261u;
+    for(const char *p=path;*p;p++)hash=(hash^(uint8_t)*p)*16777619u;
+    char out[64],tmp[72];snprintf(out,sizeof out,CE_ICON_DIR "/%08x%s.gzi",(unsigned)hash,tag);
+    struct fs_stat st;if(!fs_stat(out,&st))return;
+    int fd=fs_open(path,FS_O_READ);if(fd<0)return;
+    uint8_t *gzi=NULL;uint32_t size=0;const char *error;
+    if(suffix(path,".cpk")){
+        struct ce_cpk_file cpk;
+        error=ce_cpk_open(&cpk,icon_file_read,&fd,bytes,metadata.dictionary,metadata.dictionary_bytes);
+        if(!error)error=ce_exe_icon(ce_cpk_read,&cpk,cpk.size,icon_size,&gzi,&size);
+        ce_cpk_close(&cpk);
+    }else error=ce_exe_icon(icon_file_read,&fd,bytes,icon_size,&gzi,&size);
+    fs_close(fd);
+    if(error){free(gzi);gzi=NULL;size=0;} /* an empty file: no icon */
+    snprintf(tmp,sizeof tmp,"%s.tmp",out);
+    if(fs_write_file(tmp,gzi,size)!=(int)size||fs_rename(tmp,out))fs_remove(tmp);
+    free(gzi);
+}
+void ce_source_cache_icons(void)
+{
+    if(!active||strncmp(directory,"/NAND/",6))return;
+    fs_mkdirs(CE_ICON_DIR);
+    /* SpringBoard's home icon for this program, keyed as its context is. */
+    struct fs_stat st;
+    if((!suffix(program,".cpk")||metadata.dictionary)&&!fs_stat(program,&st)&&st.type==FS_FILE)
+        cache_icon(program,st.size,CE_ICON_HOME_SIZE,"-32");
+    struct fs_dirent ents[32];
+    for(uint32_t skip=0;;){
+        int n=fs_list(directory,skip,ents,ARRAY_SIZE(ents));
+        if(n<=0)break;
+        for(int i=0;i<n;i++){
+            const char *name=ents[i].name;
+            bool cpk=suffix(name,".exe.cpk");
+            if(ents[i].type!=FS_FILE||!ents[i].size||(!cpk&&!suffix(name,".exe")))continue;
+            /* Compressed programs need NK's dictionary, which the launch has
+             * already loaded when the program itself is compressed. */
+            if(cpk&&!metadata.dictionary)continue;
+            char path[FS_PATH_MAX];int len=snprintf(path,sizeof path,"%s/%s",directory,name);
+            if(len>0&&len<FS_PATH_MAX)cache_icon(path,ents[i].size,CE_ICON_SIZE,"");
+        }
+        skip+=(uint32_t)n;
+        if(n<(int)ARRAY_SIZE(ents))break;
+    }
 }

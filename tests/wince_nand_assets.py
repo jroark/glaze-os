@@ -60,6 +60,52 @@ def nand_fixture(packed):
 def cpk(kind,payload,size=512):
     b=bytearray(56);b[:12]=b'CASIO.$&%-Z\1';put(b,44,size);put(b,48,1);put(b,52,kind<<24);return b+payload
 
+def stored_cpk(data,stride=512):
+    """A CPK of kind-0 (stored) blocks, one per 512 bytes."""
+    data=data+bytes(-len(data)%stride);count=len(data)//stride
+    b=bytearray(52);b[:12]=b'CASIO.$&%-Z\1';put(b,44,len(data));put(b,48,(stride//512)<<24|count)
+    for i in range(count):b+=struct.pack('<I',i*stride)
+    return bytes(b)+data
+def icon_dib(size,colors):
+    """A 4 bpp icon DIB: left half palette 1, right half palette 2; the top
+    quarter of rows is transparent in the AND mask."""
+    head=struct.pack('<IiiHHIIiiII',40,size,size*2,1,4,0,0,0,0,0,0)
+    palette=b''.join(struct.pack('<BBBB',b,g,r,0) for r,g,b in [(0,0,0)]+colors+[(0,0,0)]*(15-len(colors)))
+    row=bytes([0x11]*(size//4)+[0x22]*(size//4));stride=(size+31)//32*4
+    xor=row*size;mask=b''.join((b'\xff'*stride if y>=size*3//4 else bytes(stride)) for y in range(size))  # bottom-up
+    return head+palette+xor+mask
+def icon_pe(icons=True):
+    """PE32/MIPS headers and one .rsrc section: RT_ICON 1 (32 px), 2 (16 px) and RT_GROUP_ICON 101 naming both."""
+    big=icon_dib(32,[(255,0,0),(0,0,255)]);small=icon_dib(16,[(0,255,0),(0,255,0)])
+    group=struct.pack('<HHH',0,1,2)+struct.pack('<BBBBHHIH',16,16,16,0,1,4,len(small),2)+struct.pack('<BBBBHHIH',32,32,16,0,1,4,len(big),1)
+    leaves=[(3,1,big),(3,2,small),(14,101,group)] if icons else [(3,1,big)]
+    types=sorted({t for t,_,_ in leaves});rva=0x1000
+    # Layout: root, type dirs, name dirs, language data entries, then data.
+    root=16+8*len(types);tdirs={};at=root
+    for t in types:tdirs[t]=at;at+=16+8*sum(1 for x in leaves if x[0]==t)
+    ndirs={};
+    for t,i,_ in leaves:ndirs[t,i]=at;at+=24
+    entries={};
+    for t,i,_ in leaves:entries[t,i]=at;at+=16
+    datas={}
+    for t,i,d in leaves:datas[t,i]=at;at+=(len(d)+3)&~3
+    sec=bytearray(at)
+    struct.pack_into('<IIHHHH',sec,0,0,0,0,0,0,len(types))
+    for k,t in enumerate(types):struct.pack_into('<II',sec,16+k*8,t,0x80000000|tdirs[t])
+    for t in types:
+        names=[i for tt,i,_ in leaves if tt==t];struct.pack_into('<IIHHHH',sec,tdirs[t],0,0,0,0,0,len(names))
+        for k,i in enumerate(names):struct.pack_into('<II',sec,tdirs[t]+16+k*8,i,0x80000000|ndirs[t,i])
+    for t,i,d in leaves:
+        struct.pack_into('<IIHHHHII',sec,ndirs[t,i],0,0,0,0,0,1,0x409,entries[t,i])
+        struct.pack_into('<IIII',sec,entries[t,i],rva+datas[t,i],len(d),0,0);sec[datas[t,i]:datas[t,i]+len(d)]=d
+    h=bytearray(0x200);h[:2]=b'MZ';put(h,60,0x40);h[0x40:0x44]=b'PE\0\0'
+    struct.pack_into('<HHIIIHH',h,0x44,0x166,1,0,0,0,224,0x0102)
+    o=0x58;struct.pack_into('<H',h,o,0x10b);put(h,o+28,0x10000);put(h,o+32,0x1000);put(h,o+36,0x200)
+    put(h,o+56,0x1000+((len(sec)+0xfff)&~0xfff));put(h,o+60,0x200);struct.pack_into('<H',h,o+68,9);put(h,o+92,16)
+    put(h,o+96+16,rva);put(h,o+96+20,len(sec))
+    s=o+224;h[s:s+8]=b'.rsrc\0\0\0';raw=(len(sec)+0x1ff)&~0x1ff
+    struct.pack_into('<IIIIIIHHI',h,s+8,len(sec),rva,raw,0x200,0,0,0,0,0x40000040)
+    return bytes(h)+bytes(sec)+bytes(raw-len(sec))
 def constant_run(kind):
     nibble=kind>=4;unit=4 if nibble else 8;threshold=kind-2 if nibble else kind+1
     remaining=1024 if nibble else 512;values=[];run=0;value=0xa if nibble else 0xab
@@ -119,6 +165,22 @@ class Assets(unittest.TestCase):
         self.run_cli('decode',source,self.dictionary,target,success=False)
         source.write_bytes(cpk(15,b''));self.run_cli('decode',source,self.dictionary,target,success=False)
         source.write_bytes(cpk(16,b'\x00'));self.run_cli('decode',source,self.dictionary,target,success=False)
+    def test_exe_icon(self):
+        exe=self.path/'app.exe';gzi=self.path/'app.gzi';pe=icon_pe();exe.write_bytes(pe)
+        self.run_cli('icon',exe,gzi);self.check_icon(gzi.read_bytes())
+        # The same program as a multi-block CPK: only header and resource blocks are read.
+        packed=self.path/'app.exe.cpk';packed.write_bytes(stored_cpk(pe))
+        self.run_cli('icon',packed,gzi,self.dictionary);self.check_icon(gzi.read_bytes())
+        out=self.run_cli('range',packed,self.dictionary,500,600).stdout;self.assertEqual(out,pe[500:1100])
+        self.run_cli('range',packed,self.dictionary,len(pe)-4,8,success=False)
+        exe.write_bytes(icon_pe(icons=False));self.run_cli('icon',exe,gzi,success=False)
+        exe.write_bytes(pe[:0x300]);self.run_cli('icon',exe,gzi,success=False)  # resources past the end
+    def check_icon(self,data):
+        self.assertEqual(data[:12],b'GZI1'+struct.pack('<HHHH',24,24,1,0))
+        px=lambda x,y:struct.unpack_from('<H',data,12+(y*24+x)*2)[0];alpha=lambda x,y:data[12+24*24*2+y*24+x]
+        # The 32 px entry (red | blue), scaled: its top quarter is masked out.
+        self.assertEqual((alpha(3,0),alpha(3,23),alpha(20,23)),(0,255,255))
+        self.assertEqual((px(3,23),px(20,23)),(0xf800,0x001f))
     def test_optional_local_nand(self):
         image=os.environ.get('WINCE_NAND')
         if not image:self.skipTest('set WINCE_NAND for a locally supplied original NAND')
@@ -130,6 +192,9 @@ class Assets(unittest.TestCase):
             self.run_cli('decode',source,self.dictionary,target)
             self.assertEqual(target.read_bytes(),decoder.unpack(data))
             self.assertTrue(target.read_bytes().startswith(b'MZ'))
+            if name.endswith('.exe'):
+                gzi=self.path/(name+'.gzi');self.run_cli('icon',source,gzi,self.dictionary)
+                self.assertEqual(gzi.read_bytes()[:8],b'GZI1'+struct.pack('<HH',24,24))
         for name in ('pimdb.dll','NFC.dll','MailData.dll','CS.dll','CSO.dll'):
             self.run_cli('rom',self.nand,name,self.path/(name+'.img'))
 

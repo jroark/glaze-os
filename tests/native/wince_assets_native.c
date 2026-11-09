@@ -1,5 +1,6 @@
 #include "../../apps/wince/assets.h"
 #include "../../apps/wince/pe.h"
+#include "../../apps/wince/exeicon.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,5 +22,19 @@ int main(int argc,char **argv){
   uint32_t n,made;uint8_t *b=file(argv[2],&n);uint32_t cap=(uint32_t)strtoul(argv[4],NULL,0);uint8_t *out=malloc(cap?cap:1);
   const char *err=ce_rom_decompress(b,n,out,cap,&made);free(b);if(err){fprintf(stderr,"%s\n",err);free(out);return 1;}
   FILE *o=fopen(argv[3],"wb");fwrite(out,1,made,o);fclose(o);free(out);return 0;}
+ if(argc==6&&!strcmp(argv[1],"range")){
+  /* range <cpk> <dict> <offset> <length>: ce_cpk_read's bytes to stdout. */
+  FILE *f=fopen(argv[2],"rb");uint32_t dn;void *d=file(argv[3],&dn);if(!f||!d)return 2;fseek(f,0,SEEK_END);uint32_t n=(uint32_t)ftell(f);
+  struct ce_cpk_file c;const char *err=ce_cpk_open(&c,rd,f,n,d,dn);uint32_t off=(uint32_t)strtoul(argv[4],NULL,0),len=(uint32_t)strtoul(argv[5],NULL,0);
+  uint8_t *out=malloc(len?len:1);if(!err&&ce_cpk_read(&c,off,out,len)!=(int)len)err="range read failed";
+  if(!err)fwrite(out,1,len,stdout);ce_cpk_close(&c);fclose(f);free(d);free(out);if(err){fprintf(stderr,"%s\n",err);return 1;}return 0;}
+ if((argc==4||argc==5)&&!strcmp(argv[1],"icon")){
+  /* icon <exe|cpk> <out.gzi> [dict]: the program's icon, as the runner caches it. */
+  FILE *f=fopen(argv[2],"rb");if(!f)return 2;fseek(f,0,SEEK_END);uint32_t n=(uint32_t)ftell(f),dn=0;void *d=argc==5?file(argv[4],&dn):NULL;
+  uint8_t *gzi=NULL;uint32_t size=0;const char *err;
+  if(d){struct ce_cpk_file c;err=ce_cpk_open(&c,rd,f,n,d,dn);if(!err)err=ce_exe_icon(ce_cpk_read,&c,c.size,CE_ICON_SIZE,&gzi,&size);ce_cpk_close(&c);}
+  else err=ce_exe_icon(rd,f,n,CE_ICON_SIZE,&gzi,&size);
+  fclose(f);free(d);if(err){fprintf(stderr,"%s\n",err);free(gzi);return 1;}
+  FILE *o=fopen(argv[3],"wb");fwrite(gzi,1,size,o);fclose(o);free(gzi);return 0;}
  return 2;
 }

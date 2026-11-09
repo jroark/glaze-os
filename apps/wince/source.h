@@ -15,4 +15,6 @@ const char *ce_source_ordinals(uint32_t *);
 bool ce_source_file(const char *, char [FS_PATH_MAX]);
 bool ce_source_executable(const char *, char [FS_PATH_MAX]);
 bool ce_source_directory(const char *, char [FS_PATH_MAX]);
+/* Writes CE_ICON_DIR icons for the program folder's executables. */
+void ce_source_cache_icons(void);
 #endif

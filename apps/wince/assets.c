@@ -590,3 +590,55 @@ const char *ce_cpk_unpack(const void *data, uint32_t bytes, const void *dict, ui
 done:
     free(out); free(block); return error;
 }
+/* Ranges of a CPK through its block table, for readers that need only a
+ * file's headers and a section (Files' executable icons). */
+const char *ce_cpk_open(struct ce_cpk_file *f, ce_asset_reader read, void *arg, uint32_t bytes,
+                        const uint8_t *dict, uint32_t dict_bytes)
+{
+    uint8_t header[52];
+    memset(f, 0, sizeof(*f));
+    if (bytes < 52 || bytes > CE_ASSET_MAX || read(arg, 0, header, 52) != 52 || memcmp(header, "CASIO.$&%-Z\1", 12))
+        return "Invalid CPK signature";
+    uint32_t size = ce_u32(header + 44), word = ce_u32(header + 48), count = word & 0xffffff;
+    uint32_t stride = MAX(word >> 24, 1u) * 512;
+    if (!size || size > CE_ASSET_MAX || count != (size + stride - 1) / stride || count > (bytes - 52) / 4)
+        return "Invalid CPK block table";
+    f->table = malloc(count * 4);
+    f->block = malloc(stride);
+    if (!f->table || !f->block) { ce_cpk_close(f); return "Out of memory reading CPK"; }
+    if (read(arg, 52, f->table, count * 4) != (int)(count * 4)) { ce_cpk_close(f); return "Cannot read CPK block table"; }
+    f->read = read; f->arg = arg; f->bytes = bytes; f->size = size; f->stride = stride; f->count = count;
+    f->dict = dict; f->dict_bytes = dict_bytes; f->cached = UINT32_MAX;
+    return NULL;
+}
+static bool cpk_load(struct ce_cpk_file *f, uint32_t i)
+{
+    if (f->cached == i) return true;
+    uint32_t payload = 52 + f->count * 4, entry = ce_u32(f->table + i * 4), lo = entry & 0xffffff;
+    uint32_t hi = i + 1 < f->count ? ce_u32(f->table + (i + 1) * 4) & 0xffffff : f->bytes - payload;
+    if ((!i && lo) || lo > hi || hi > f->bytes - payload) return false;
+    uint8_t *packed = malloc(MAX(hi - lo, 1u));
+    bool ok = packed && f->read(f->arg, payload + lo, packed, hi - lo) == (int)(hi - lo) &&
+              cpk_block(packed, hi - lo, entry >> 24, f->block, f->stride, f->dict, f->dict_bytes);
+    free(packed);
+    f->cached = ok ? i : UINT32_MAX;
+    return ok;
+}
+int ce_cpk_read(void *arg, uint32_t offset, void *out, uint32_t size)
+{
+    struct ce_cpk_file *f = arg;
+    if (!f->block || offset > f->size || size > f->size - offset) return -1;
+    for (uint32_t done = 0; done < size;) {
+        uint32_t at = offset + done, i = at / f->stride, skip = at % f->stride;
+        uint32_t n = MIN(size - done, MIN(f->stride, f->size - i * f->stride) - skip);
+        if (!cpk_load(f, i)) return -1;
+        memcpy((uint8_t *)out + done, f->block + skip, n);
+        done += n;
+    }
+    return (int)size;
+}
+void ce_cpk_close(struct ce_cpk_file *f)
+{
+    free(f->table); free(f->block);
+    f->table = f->block = NULL;
+}

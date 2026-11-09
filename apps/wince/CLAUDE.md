@@ -20,7 +20,9 @@ launches share `/Library/WinCE/registry` (seeded from `\Backup\System.reg`,
 reloaded on `registry.gen` changes). System bridges live in `system.c`
 (passcode, sound, touch calibration, notifications), `gdi.c` (ExtEscape
 display), `process.c` (CreateProcess via SpringBoard, `SB_GO_HOME`), `ras.c`
-(dial-up) and `fpe.c` (soft-float, libm, setjmp). `tools/wince_audit.py --image`
+(dial-up) and `fpe.c` (soft-float, libm, setjmp). Each direct launch caches
+its folder's program icons for Files (`exeicon.c` over `ce_cpk_read`, which
+decodes only the CPK blocks it touches; `ce_source_cache_icons`). `tools/wince_audit.py --image`
 lists every app's unresolved imports; `tests/run_wince_nand.py --app X --input
 tests/ui/t_wince_nand_*.txt` drives one through Files (`--no-build` repacks
 romfs with the run's script, so one build serves parallel runs).

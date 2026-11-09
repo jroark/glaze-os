@@ -12,6 +12,18 @@ must include both. Rebuild `glazeboot` and transfer the updated kernel and ROMFS
 for an existing USB/GlazeBoot installation. A normal Glaze NAND installation
 replaces Windows CE and does not provide this original-volume launch path.
 
+Files marks programs (`.exe`, `.exe.cpk`) with a small application-window
+glyph. Once any program from a NAND folder has been opened, Files shows each
+program in that folder with its own icon. The runner holds NK's CCFS
+dictionary, so at launch it writes the folder's icons to
+`/Library/WinCE/icons/<FNV-1a of the source path>.gzi`. These are 24 px images
+of the first icon group, scaled from its nearest entry. It decodes only each
+program's headers and resource blocks. Programs without an icon get an empty
+file there and keep the glyph. The runner also saves the launched program's
+32 px icon as `<hash>-32.gzi`. SpringBoard shows it on the program's home
+screen icon, on a light tile with rounded corners, from the next return to the
+home screen. The icons are lost when the RAM disk resets.
+
 ## What runs
 
 The userspace PE32/MIPS compatibility layer executes the original
@@ -164,7 +176,8 @@ make -j4 out/glaze.bin glazeboot
 ```
 
 The native ASan/UBSan tests use a generated NK/export/dictionary fixture and
-cover every CPK block kind, a ROM library with a compressed data section
+cover every CPK block kind, a program's icon read through a multi-block
+CPK's ranges, a ROM library with a compressed data section
 (every BinaryDecompress match kind, rebuilt as a PE the loader's parser
 accepts), and malformed ranges and truncated streams. The optional local NAND
 checks compare Calculator, LC.dll, and Calendar against the independent Python

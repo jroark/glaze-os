@@ -99,8 +99,49 @@ static void found(const char *bundle, const struct pkg_info *info, void *arg)
 }
 
 /* card_only: a cheap poll of the card while the home screen is idle. */
+/* A direct CE launch's own icon: its runner caches the program's 32 px icon
+ * as CE_ICON_DIR/<context hash>-32.gzi (apps/wince/exeicon.h) once it has
+ * decoded the program, so look for it on each return home until it's there.
+ * CE icons are small and square, so they sit centred on a light tile with
+ * the home screen's rounded corners, which the tile's own alpha carries. */
+#define CE_TILE     ICON_SIZE
+static void load_wince_icon(int app)
+{
+    char path[64];
+    uint8_t data[12 + 32 * 32 * 3];
+    gfx_image img;
+
+    if (icon_data[app] || strncmp(sb_apps[app].id, "wince.", 6))
+        return;
+    snprintf(path, sizeof(path), "/Library/WinCE/icons/%s-32.gzi", sb_apps[app].id + 6);
+    int n = fs_read_file(path, data, sizeof(data));
+    if (n <= 0 || !gfx_image_parse(&img, data, (size_t)n) || img.w > CE_TILE - 8 || img.h > CE_TILE - 8)
+        return;
+    uint16_t *px = malloc(CE_TILE * CE_TILE * 2 * 2 + CE_TILE * CE_TILE), *mask_px = px + CE_TILE * CE_TILE;
+    if (!px)
+        return;
+    uint8_t *alpha = (uint8_t *)(mask_px + CE_TILE * CE_TILE);
+    gfx_surface s, mask;
+    gfx_rect r = gfx_r(0, 0, CE_TILE, CE_TILE);
+    gfx_surface_init(&s, px, CE_TILE, CE_TILE, CE_TILE);
+    gfx_surface_init(&mask, mask_px, CE_TILE, CE_TILE, CE_TILE);
+    gfx_fill(&s, r, 0xC8CED6);
+    gfx_round_rect_vgradient(&s, gfx_r(1, 1, CE_TILE - 2, CE_TILE - 2), 8, 0xFFFFFF, 0xDDE2E8, 255);
+    gfx_draw_image(&s, (CE_TILE - img.w) / 2, (CE_TILE - img.h) / 2, &img, 255);
+    gfx_fill(&mask, r, 0x000000);
+    gfx_round_rect(&mask, r, 9, 0xFFFFFF, 255);
+    for (int i = 0; i < CE_TILE * CE_TILE; i++)
+        alpha[i] = (uint8_t)((mask_px[i] >> 11) * 255 / 31);
+    icon_data[app] = px;
+    sb_set_icon(app, &(gfx_image){CE_TILE, CE_TILE, px, alpha});
+}
+
 void apps_scan(bool card_only)
 {
+    if (!card_only)
+        for (int i = 0; i < sb_num_apps; i++)
+            if (sb_apps[i].wince && sb_apps[i].path[0])
+                load_wince_icon(i);
     memset(seen, 0, sizeof(seen));
     if (!card_only)
         pkg_list("", found, NULL);
@@ -172,7 +213,7 @@ int apps_wince(const char *source)
         found=true;break;
     }
     if(!found)return GZ_ENOSPC;
-    for(int i=0;i<sb_num_apps;i++)if(sb_apps[i].wince&&!strcmp(sb_apps[i].path,context))return i;
+    for(int i=0;i<sb_num_apps;i++)if(sb_apps[i].wince&&!strcmp(sb_apps[i].path,context)){load_wince_icon(i);return i;}
     int index=-1;
     for(int i=0;i<sb_num_apps;i++)if(sb_apps[i].installed&&!sb_apps[i].path[0]){index=i;break;}
     if(index<0){if(sb_num_apps==SB_MAX_APPS)return GZ_ENOSPC;index=sb_num_apps++;}
@@ -182,7 +223,8 @@ int apps_wince(const char *source)
     size_t len=strlen(label);if(len>4&&!strcasecmp(label+len-4,".cpk"))label[len-4]=0;
     strlcpy(a->label,label,sizeof a->label);strlcpy(a->exec,"wince",sizeof a->exec);
     a->installed=a->present=a->wince=true;a->status_style=SB_STATUS_FULLSCREEN;
-    sb_set_icon(index,NULL);changed=true;return index;
+    free(icon_data[index]);icon_data[index]=NULL;
+    sb_set_icon(index,NULL);load_wince_icon(index);changed=true;return index;
 }
 
 int apps_launch(int app)

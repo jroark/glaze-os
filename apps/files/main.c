@@ -81,6 +81,14 @@ static uint8_t pkg_icon_buf[16 * 1024];
 static gfx_image pkg_icon;
 static bool pkg_icon_ok;
 
+/* Windows CE programs' own icons, which the CE runner caches for each NAND
+ * folder it launches from (apps/wince/exeicon.h: FNV-1a of the source path,
+ * 24 px GZI; an empty file means the program has none). */
+#define CE_ICON_DIR     "/Library/WinCE/icons"
+#define CE_ICON_BYTES   (12 + 24 * 24 * 3)
+static uint8_t *ce_icon_data[MAX_ENTRIES];
+static gfx_image ce_icon[MAX_ENTRIES];
+
 /* ---- helpers -------------------------------------------------------------- */
 
 static int lower(int c)
@@ -192,6 +200,32 @@ static gfx_rect list_area(void)
     return gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H - (editing ? TOOLBAR_H : 0));
 }
 
+static void load_ce_icons(void)
+{
+    for (int i = 0; i < MAX_ENTRIES; i++) {
+        free(ce_icon_data[i]);
+        ce_icon_data[i] = NULL;
+    }
+    if (strncmp(cwd, "/NAND/", 6))
+        return;
+    for (int i = 0; i < nents; i++) {
+        if (kind_of(&ents[i]) != K_WINCE)
+            continue;
+        char path[FS_PATH_MAX], icon[64];
+        uint32_t hash = 2166136261u;
+        join(path, cwd, ents[i].name);
+        for (const char *p = path; *p; p++)
+            hash = (hash ^ (uint8_t)*p) * 16777619u;
+        snprintf(icon, sizeof(icon), CE_ICON_DIR "/%08x.gzi", (unsigned)hash);
+        uint8_t *data = malloc(CE_ICON_BYTES);
+        int n = data ? fs_read_file(icon, data, CE_ICON_BYTES) : -1;
+        if (n > 0 && gfx_image_parse(&ce_icon[i], data, (size_t)n) && ce_icon[i].w <= 24 && ce_icon[i].h <= 24)
+            ce_icon_data[i] = data;
+        else
+            free(data);
+    }
+}
+
 static void load_dir(void)
 {
     int n = fs_list(cwd, 0, ents, MAX_ENTRIES);
@@ -199,6 +233,7 @@ static void load_dir(void)
     list_err = n < 0 ? n : 0;
     nents = n < 0 ? 0 : n;
     qsort(ents, (size_t)nents, sizeof(ents[0]), ent_cmp);
+    load_ce_icons();
     if (fs_statvfs(cwd, &info) < 0)
         memset(&info, 0, sizeof(info));
     confirm_row = -1;
@@ -278,6 +313,22 @@ static void draw_card_glyph(gfx_surface *s, int x, int y)
         gfx_fill(s, gfx_r(x + 4 + i * 4, y + 18, 2, 2), 0xC9A64A);
 }
 
+/* A Windows CE program without a cached icon yet: a small application
+ * window, a blue caption over a white client area, so programs stand out
+ * from documents. */
+static void draw_app_glyph(gfx_surface *s, int x, int y)
+{
+    gfx_rect w = gfx_r(x + 1, y + 2, 22, 20);
+
+    gfx_round_rect(s, w, 2, 0x5C6470, 255);
+    gfx_fill(s, gfx_r(w.x + 1, w.y + 6, w.w - 2, w.h - 7), 0xFFFFFF);
+    gfx_round_rect_vgradient(s, gfx_r(w.x + 1, w.y + 1, w.w - 2, 6), 1, 0x4F8FE0, 0x1F5FB8, 255);
+    gfx_fill(s, gfx_r(w.x + w.w - 5, w.y + 3, 2, 2), 0xFFFFFF);
+    for (int i = 0; i < 3; i++)
+        gfx_fill(s, gfx_r(w.x + 3 + i * 6, w.y + 9, 4, 4), i == 1 ? 0xE9A93C : 0x6FA8E8);
+    gfx_fill(s, gfx_r(w.x + 3, w.y + 15, 16, 1), 0xB8C0CC);
+}
+
 static void draw_doc_glyph(gfx_surface *s, int x, int y, enum kind k)
 {
     gfx_rect page = gfx_r(x + 4, y + 1, 17, 22);
@@ -329,6 +380,10 @@ static void draw_row(gfx_surface *s, int i, gfx_rect r, bool pressed_here, void 
         draw_card_glyph(s, x, y + (ROW_H - 24) / 2);
     else if (k == K_FOLDER)
         draw_folder_glyph(s, x, y + (ROW_H - 24) / 2);
+    else if (k == K_WINCE && ce_icon_data[i])
+        gfx_draw_image(s, x + (24 - ce_icon[i].w) / 2, y + (ROW_H - ce_icon[i].h) / 2, &ce_icon[i], 255);
+    else if (k == K_WINCE)
+        draw_app_glyph(s, x, y + (ROW_H - 24) / 2);
     else
         draw_doc_glyph(s, x, y + (ROW_H - 24) / 2, k);
     x += 32;
@@ -941,7 +996,7 @@ int main(void)
             else if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP || ev.type == GZ_EV_TEXT) {
                 if (!alert_open && view == V_NAME) name_input(&ev);
             } else if (ev.type == GZ_EV_APP_ACTIVATE)
-                ;
+                load_ce_icons();    /* a CE program launched from here may have cached icons */
             else if (ev.type == GZ_EV_TOUCH_CANCEL) {
                 /* Home mid-touch: drop the touch without acting on it. */
                 bool changed;

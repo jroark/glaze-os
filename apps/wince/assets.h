@@ -24,6 +24,19 @@ typedef void (*ce_asset_progress)(void *, uint32_t done, uint32_t total);
 const char *ce_nk_recover(ce_asset_reader, void *, ce_asset_progress, struct ce_nk_assets *);
 void ce_nk_assets_free(struct ce_nk_assets *);
 const char *ce_cpk_unpack(const void *, uint32_t, const void *, uint32_t, void **, uint32_t *);
+/* A CPK read in ranges through its block table, one decoded block cached:
+ * ce_cpk_read is a ce_asset_reader over the decoded bytes (size of them). */
+struct ce_cpk_file {
+    ce_asset_reader read;
+    void *arg;
+    uint32_t bytes, size, stride, count, cached;
+    const uint8_t *dict;
+    uint32_t dict_bytes;
+    uint8_t *table, *block;
+};
+const char *ce_cpk_open(struct ce_cpk_file *, ce_asset_reader, void *, uint32_t bytes, const uint8_t *dict, uint32_t dict_bytes);
+int ce_cpk_read(void *cpk, uint32_t offset, void *, uint32_t size);
+void ce_cpk_close(struct ce_cpk_file *);
 /* Windows CE BinaryDecompress data (romimage's IMAGE_SCN_COMPRESSED sections):
  * a 24-bit size, 24-bit block end offsets, then LZ blocks of 4 KiB output. */
 const char *ce_rom_decompress(const uint8_t *, uint32_t, uint8_t *, uint32_t capacity, uint32_t *produced);
