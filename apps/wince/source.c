@@ -149,8 +149,10 @@ static bool find_file(const char *path,char out[FS_PATH_MAX])
 }
 void *ce_source_program(uint32_t *size)
 {
-    /* Decode metadata before reading a potentially large compressed program. */
-    if(suffix(program,".cpk"))load_metadata();
+    /* Recover NK's metadata before holding the program: its temporary 6 MiB
+     * buffer may not fit beside a mapped image (eXpod's 150 KiB shell32.exe),
+     * and nearly every CE program imports COREDLL by ordinal. */
+    load_metadata();
     return read_file(program,size);
 }
 const char *ce_source_module_name(const char *name)
@@ -158,17 +160,59 @@ const char *ce_source_module_name(const char *name)
     for(unsigned i=0;i<loaded_count;i++)if(!strcasecmp(name,loaded_names[i]))return loaded_paths[i];
     return NULL;
 }
-/* A module's file in the program's folder, \Windows or \Program Files. */
-static bool find_module(const char *name,char found[FS_PATH_MAX])
+/* CE's loader order: the program's folder, \Windows (where ROM modules
+ * also appear), the root, then the device's HKLM\Loader\SystemPath (a
+ * MULTI_SZ of folders, such as BeShell's \Program Disk\SystemCE\). The
+ * stock image keeps its programs and DLLs together in \Program Files,
+ * which comes last for programs started from elsewhere. \Windows includes
+ * the boot patch folder (see source_paths). `stage` 0 searches the
+ * program's folder and \Windows, 1 the rest. */
+static bool source_path(const char *canonical,char out[FS_PATH_MAX]);
+#define SEARCH_MAX 12
+#define PATCH_FOLDER "/NAND/Program Files/Patch"
+static char search_paths[SEARCH_MAX][FS_PATH_MAX];
+static unsigned search_count, stage_one;
+static bool search_ready;
+static void add_search(const char *path)
+{
+    if(search_count==SEARCH_MAX||!*path)return;
+    for(unsigned i=0;i<search_count;i++)if(!strcasecmp(search_paths[i],path))return;
+    strlcpy(search_paths[search_count++],path,FS_PATH_MAX);
+}
+static void build_search(void)
+{
+    if(search_ready)return;
+    search_ready=true;
+    add_search(directory);add_search("/NAND/Windows");add_search(PATCH_FOLDER);
+    stage_one=search_count;
+    add_search("/NAND");
+    WCHAR list[512];CW type=0;
+    int bytes=ce_registry_get("HKLM\\Loader","SystemPath",&type,list,sizeof list-2);
+    if(bytes>0&&(type==7||type==1)){
+        list[MIN((unsigned)bytes/2,ARRAY_SIZE(list)-1)]=0;
+        for(const WCHAR *p=list;*p&&p<list+ARRAY_SIZE(list);){
+            char canonical[FS_PATH_MAX],path[FS_PATH_MAX];
+            if(ce_canonical_path(canonical,p)&&source_path(canonical,path))add_search(path);
+            while(*p)p++;
+            p++;
+        }
+    }
+    add_search("/NAND/Program Files");
+}
+static bool find_module_stage(const char *name,char found[FS_PATH_MAX],unsigned stage)
 {
     if(!active||!name||!*name||strlen(name)>=32||strchr(name,'/')||strchr(name,'\\')||strchr(name,':')||strstr(name,".."))return false;
-    const char *folders[]={directory,"/NAND/Windows","/NAND/Program Files"};
-    for(unsigned i=0;i<ARRAY_SIZE(folders);i++){
+    build_search();
+    for(unsigned i=stage?stage_one:0;i<(stage?search_count:stage_one);i++){
         char path[FS_PATH_MAX];
-        int n=snprintf(path,sizeof path,"%s/%s",folders[i],name);
+        int n=snprintf(path,sizeof path,"%s/%s",search_paths[i],name);
         if(n>0&&n<FS_PATH_MAX&&find_file(path,found))return true;
     }
     return false;
+}
+static bool find_module(const char *name,char found[FS_PATH_MAX])
+{
+    return find_module_stage(name,found,0)||find_module_stage(name,found,1);
 }
 void *ce_source_image(const char *name,uint32_t *size)
 {
@@ -180,7 +224,11 @@ void *ce_source_image(const char *name,uint32_t *size)
 void *ce_source_library(const char *name,uint32_t *size)
 {
     char found[FS_PATH_MAX];
-    if(!find_module(name,found))return NULL;
+    if(!find_module_stage(name,found,0)){
+        /* NK's modules are in \Windows, ahead of the root and SystemPath. */
+        void *rom=ce_source_rom_library(name,size);
+        if(rom||!find_module_stage(name,found,1))return rom;
+    }
     if(suffix(found,".cpk"))load_metadata();
     void *data=read_file(found,size);if(!data)return NULL;
     if(loaded_count<ARRAY_SIZE(loaded_names)){
@@ -208,7 +256,18 @@ void *ce_source_rom_library(const char *name,uint32_t *size)
     return pe;
 }
 /* Map CE file paths to the original volume. Writes keep using ce_path's
- * private drive; the existing copy-on-write file handling consumes this. */
+ * private drive; the existing copy-on-write file handling consumes this.
+ * Third-party shells' boot loaders (BeShell's BeLoader, eXpod's expod.exe,
+ * BeeV2's BeeBoot) copy \Nand Disk\Program Files\Patch into the object
+ * store's \Windows at every boot; \Windows's second source models that
+ * (`which` 1), behind the NAND's own \Windows folder. */
+static bool source_path_at(const char *canonical,unsigned which,char out[FS_PATH_MAX])
+{
+    if(!which)return source_path(canonical,out);
+    if(which>1||!active||strncasecmp(canonical,"/Windows",8)||(canonical[8]&&canonical[8]!='/'))return false;
+    int n=snprintf(out,FS_PATH_MAX,"%s%s",PATCH_FOLDER,canonical+8);
+    return n>0&&n<FS_PATH_MAX;
+}
 static bool source_path(const char *canonical,char out[FS_PATH_MAX])
 {
     if(!active||!canonical||*canonical!='/')return false;
@@ -224,19 +283,27 @@ static bool source_path(const char *canonical,char out[FS_PATH_MAX])
 bool ce_source_executable(const char *canonical,char out[FS_PATH_MAX])
 {
     char path[FS_PATH_MAX];
-    if(source_path(canonical,path)&&find_file(path,out))return true;
+    for(unsigned which=0;which<2;which++)
+        if(source_path_at(canonical,which,path)&&find_file(path,out))return true;
     const char *leaf=strrchr(canonical,'/');
     return find_module(leaf?leaf+1:canonical,out);
 }
-bool ce_source_directory(const char *canonical,char out[FS_PATH_MAX])
+bool ce_source_directory_at(const char *canonical,unsigned which,char out[FS_PATH_MAX])
 {
     struct fs_stat st;
-    return source_path(canonical,out)&&!fs_stat(out,&st)&&st.type==FS_DIR;
+    return source_path_at(canonical,which,out)&&!fs_stat(out,&st)&&st.type==FS_DIR;
+}
+bool ce_source_directory(const char *canonical,char out[FS_PATH_MAX])
+{
+    return ce_source_directory_at(canonical,0,out)||ce_source_directory_at(canonical,1,out);
 }
 bool ce_source_file(const char *canonical,char out[FS_PATH_MAX])
 {
     char path[FS_PATH_MAX],found[FS_PATH_MAX];
-    if(!source_path(canonical,path)||!find_file(path,found))return false;
+    bool hit=false;
+    for(unsigned which=0;which<2&&!hit;which++)
+        hit=source_path_at(canonical,which,path)&&find_file(path,found);
+    if(!hit)return false;
     if(!suffix(found,".cpk")){strlcpy(out,found,FS_PATH_MAX);return true;}
     /* Compressed data needs a decoded backing file for the ordinary CE file
      * handles. Keep it in the private drive, never beside its NAND source. */

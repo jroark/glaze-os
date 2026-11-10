@@ -13,14 +13,11 @@ static bool root(const char *s)
     return !strcasecmp(s, "HKCR") || !strcasecmp(s, "HKCU") || !strcasecmp(s, "HKLM") ||
            !strcasecmp(s, "HKU");
 }
+/* Kept as a running total: recounting every entry on each write made
+ * importing a full device registry quadratic. */
 static uint32_t encoded_size(const struct ce_registry *r)
 {
-    uint32_t n = 16;
-    for (unsigned i = 0; i < r->value_count; i++)
-        n += 18 + strlen(r->values[i].key) + strlen(r->values[i].name) + r->values[i].size;
-    for (unsigned i = 0; i < r->key_count; i++)
-        n += 5 + strlen(r->keys[i]);
-    return n;
+    return 16 + r->encoded;
 }
 static bool below(const char *s, const char *parent)
 {
@@ -48,6 +45,7 @@ void ce_reg_clear(struct ce_registry *r)
     for (unsigned i = 0; i < r->value_count; i++) {
         free(r->values[i].bytes);
         free(r->values[i].key);
+        free(r->values[i].name);
     }
     for (unsigned i = 0; i < r->key_count; i++)
         free(r->keys[i]);
@@ -95,6 +93,7 @@ int ce_reg_create(struct ce_registry *r, const char *key)
                 return 8;
             memcpy(copy, path, strlen(path) + 1);
             r->keys[r->key_count++] = copy;
+            r->encoded += 5 + strlen(copy);
         }
         *p = saved;
         if (!saved)
@@ -143,10 +142,11 @@ int ce_reg_set(struct ce_registry *r, const char *key, const char *name, uint32_
     if (next > CE_REG_FILE_MAX)
         return 8;
     uint8_t *copy = malloc(size ? size : 1);
-    char *path = v ? NULL : malloc(strlen(key) + 1);
-    if (!copy || (!v && !path)) {
+    char *path = v ? NULL : malloc(strlen(key) + 1), *label = v ? NULL : malloc(strlen(name) + 1);
+    if (!copy || (!v && (!path || !label))) {
         free(copy);
         free(path);
+        free(label);
         return 8;
     }
     if (size)
@@ -154,10 +154,15 @@ int ce_reg_set(struct ce_registry *r, const char *key, const char *name, uint32_
     if (!v) {
         v = &r->values[r->value_count++];
         memcpy(path, key, strlen(key) + 1);
+        memcpy(label, name, strlen(name) + 1);
         v->key = path;
+        v->name = label;
+    } else {
+        r->encoded -= 18 + strlen(v->key) + strlen(v->name) + v->size;
+        memcpy(v->name, name, strlen(name) + 1); /* same name, perhaps in another case */
     }
+    r->encoded += 18 + strlen(v->key) + strlen(v->name) + size;
     free(v->bytes);
-    memcpy(v->name, name, strlen(name) + 1);
     v->type = type;
     v->size = size;
     v->bytes = copy;
@@ -168,8 +173,10 @@ int ce_reg_remove_value(struct ce_registry *r, const char *key, const char *name
     struct ce_reg_value *v = ce_reg_find(r, key, name);
     if (!v)
         return 2;
+    r->encoded -= 18 + strlen(v->key) + strlen(v->name) + v->size;
     free(v->bytes);
     free(v->key);
+    free(v->name);
     *v = r->values[--r->value_count];
     memset(&r->values[r->value_count], 0, sizeof(*v));
     return 0;
@@ -189,6 +196,7 @@ int ce_reg_delete(struct ce_registry *r, const char *key)
     }
     for (unsigned i = 0; i < r->key_count; i++)
         if (!strcasecmp(r->keys[i], key)) {
+            r->encoded -= 5 + strlen(r->keys[i]);
             free(r->keys[i]);
             r->key_count--;
             if (i < r->key_count)

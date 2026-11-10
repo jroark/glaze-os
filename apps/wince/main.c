@@ -114,6 +114,8 @@ static void *native_symbol(const char *dll, const char *name)
                 fn = ce_resolve_gdi(name);
             if (!fn)
                 fn = ce_resolve_fpe(name);
+            if (!fn)
+                fn = ce_resolve_wave(name);
         } else if (!strcasecmp(dll, "commctrl.dll") || !strcasecmp(dll, "CSO.dll")) {
             fn = ce_resolve_window(name);
             if (!fn)
@@ -121,6 +123,8 @@ static void *native_symbol(const char *dll, const char *name)
         }
         if (!fn)
             fn = ce_resolve_system(dll, name);
+        if (!fn)
+            fn = ce_resolve_extras(dll, name);
         if (!fn)
             fn = ce_resolve_ras(dll, name);
         if (!fn)
@@ -236,7 +240,12 @@ static void finish_module(struct ce_module *m, const char *resource)
     for (unsigned i = 0; i < m->pe.count; i++) {
         struct ce_section *s = &m->pe.section[i];
         uint32_t extent = ALIGN_UP(MAX(s->size, s->bytes), 4096u);
-        if (extent && gz_vm_publish(m->base + s->rva, extent, (s->flags >> 31) & 1))
+        /* Code is published read-only. CE gave a module loaded into RAM
+         * writable copies of its other sections, and MFC for CE edits
+         * resources (dialog templates in .rsrc) in place. */
+        bool code = s->flags & (0x20u | 0x20000000u); /* CNT_CODE, MEM_EXECUTE */
+        bool writable = (s->flags & 0x80000000u) || !code;
+        if (extent && gz_vm_publish(m->base + s->rva, extent, writable))
             ce_fatal("Cannot publish PE section");
     }
     printf("wince: loaded %s at %08x, entry %08x\n", resource, m->base, m->base + m->pe.entry);
@@ -278,6 +287,23 @@ CW ce_module_handle(const char *name)
     return 0;
 }
 
+/* The index-th loaded module: the program (index 0, *name NULL), then the
+ * libraries in load order; for TOOLHELP's module list. */
+bool ce_module_at(unsigned index, CW *base, uint32_t *size, const char **name)
+{
+    if (!index) {
+        *base = ce_main.base;
+        *size = ce_main.pe.size;
+        *name = NULL;
+        return true;
+    }
+    if (index - 1 >= library_count)
+        return false;
+    *base = libraries[index - 1].base;
+    *size = libraries[index - 1].pe.size;
+    *name = library_names[index - 1];
+    return true;
+}
 CW ce_load_library(const char *name)
 {
     if (!name || !*name) {
@@ -426,6 +452,7 @@ void ce_shutdown(void)
     if (closing)
         return;
     closing = true;
+    ce_database_flush();
     for (unsigned i = library_count; i > 0; i--) {
         struct ce_module *m = &libraries[i - 1];
         if (m->pe.entry)
@@ -433,6 +460,7 @@ void ce_shutdown(void)
     }
 }
 
+CE_API(GetSysColor);
 int main(void)
 {
     ui_init(SB_STATUS_FULLSCREEN);
@@ -473,6 +501,11 @@ int main(void)
         ce_fatal("Expected a WinCE application");
     if (published != bridge_count)
         publish_bridges();
+    /* The desktop behind the program's windows, not the progress screen:
+     * small dialogs and programs without a window leave the rest visible. */
+    gfx_fill(&ui.surf, gfx_r(0, 0, ui.surf.w, ui.surf.h), ce_color(ce_GetSysColor(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+    ui_invalidate_all();
+    ui_present();
     printf("wince: entering original executable\n");
     CW result = ce_call(ce_main.base + ce_main.pe.entry, ce_main.base, 0, WORD(ce_command_line()), 1);
     ce_shutdown();

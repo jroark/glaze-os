@@ -403,6 +403,9 @@ CE_API(lineTranslateAddress)
     return 0;
 }
 
+/* lineShutdown(line app); lineTranslateDialog has no dialing-location UI. */
+CE_API(lineShutdown) { return 0; }
+CE_API(lineTranslateDialog) { return 0x80000048u; } /* LINEERR_OPERATIONUNAVAIL */
 void *ce_resolve_ras(const char *dll, const char *name)
 {
     static const struct ce_export exports[] = {
@@ -410,7 +413,7 @@ void *ce_resolve_ras(const char *dll, const char *name)
         CE_EXPORT(RasGetEntryDialParams), CE_EXPORT(RasSetEntryDialParams), CE_EXPORT(RasDial),
         CE_EXPORT(RasHangup), CE_EXPORT(RasGetConnectStatus), CE_EXPORT(RasEnumDevicesW),
         CE_EXPORT(lineInitialize), CE_EXPORT(lineNegotiateAPIVersion), CE_EXPORT(lineGetDevCaps),
-        CE_EXPORT(lineTranslateAddress),
+        CE_EXPORT(lineTranslateAddress), CE_EXPORT(lineShutdown), CE_EXPORT(lineTranslateDialog),
     };
     if (strcasecmp(dll, "coredll.dll"))
         return NULL;

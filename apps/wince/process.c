@@ -218,6 +218,8 @@ CE_API(CoshMainMenuExec)
     m.w[3] = (uint32_t)gz_getpid();
     return gz_send(ui.sb_port, &m, &r) >= 0 && !r.w[0];
 }
+/* CoshNotifyIconSys: COShell's tray icons; Glaze's status bar has none. */
+CE_API(CoshNotifyIconSys) { return 0; }
 void *ce_resolve_process(const char *dll, const char *name)
 {
     static const struct ce_export core[] = {CE_EXPORT(GetCommandLineW), CE_EXPORT(CreateProcessW),
@@ -229,6 +231,8 @@ void *ce_resolve_process(const char *dll, const char *name)
     } else if (!strcasecmp(dll, "COShellApi.dll")) {
         if (!strcmp(name, "CoshExecute"))
             return (void *)ce_CoshExecute;
+        if (!strcmp(name, "CoshNotifyIconSys"))
+            return (void *)ce_CoshNotifyIconSys;
         if (!strcmp(name, "CoshMainMenuExec"))
             return (void *)ce_CoshMainMenuExec;
     }

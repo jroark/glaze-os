@@ -240,14 +240,12 @@ CE_API(LocalAlloc)
         ce_error = 8;
         return 0;
     }
-    struct local_block *b = malloc(sizeof(*b) + MAX(1u, a1));
+    struct local_block *b = calloc(1, sizeof(*b) + MAX(1u, a1)); /* zeroed: see malloc */
     if (!b) {
         ce_error = 8;
         return 0;
     }
     b->size = a1;
-    if (a0 & 0x40)
-        memset(b + 1, 0, a1);
     gz_mutex_lock(&local_lock);
     b->next = locals;
     locals = b;
@@ -311,9 +309,12 @@ CE_API(LocalReAlloc)
     gz_mutex_unlock(&local_lock);
     return WORD(resized + 1);
 }
+/* CE apps' heap memory starts zeroed. CE's heaps grew from fresh, zero-
+ * filled pages, so most early blocks were zero and programs (BeeV2's
+ * Pocket Paint) read fields they never set; Glaze's malloc reuses blocks. */
 CE_API(malloc)
 {
-    return WORD(malloc(a0));
+    return WORD(calloc(1, a0 ? a0 : 1));
 }
 CE_API(free)
 {
@@ -324,6 +325,7 @@ CE_API(free)
 struct ce_heap_block {
     struct ce_heap_block *next;
     void *data;
+    CW size;
 };
 static struct {
     CW handle;
@@ -354,17 +356,68 @@ CE_API(HeapAlloc)
         struct ce_heap_block *b = malloc(sizeof(*b));
         if (!b)
             break;
-        b->data = (a1 & 8) ? calloc(1, a2 ? a2 : 1) : malloc(a2 ? a2 : 1);
+        b->data = calloc(1, a2 ? a2 : 1); /* zeroed: see malloc */
         if (!b->data) {
             free(b);
             break;
         }
+        b->size = a2;
         b->next = heaps[i].blocks;
         heaps[i].blocks = b;
         return WORD(b->data);
     }
     ce_error = 8;
     return 0;
+}
+static struct ce_heap_block *heap_block(CW heap, CW data)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(heaps); i++)
+        if (heap && heaps[i].handle == heap)
+            for (struct ce_heap_block *b = heaps[i].blocks; b; b = b->next)
+                if (WORD(b->data) == data)
+                    return b;
+    return NULL;
+}
+/* HeapReAlloc(heap, flags, block, size): HEAP_ZERO_MEMORY (8) clears what
+ * grows; HEAP_REALLOC_IN_PLACE_ONLY (0x10) fails rather than move. */
+CE_API(HeapReAlloc)
+{
+    struct ce_heap_block *b = heap_block(a0, a2);
+    if (!b || (a1 & ~0x19u)) {
+        ce_error = 87;
+        return 0;
+    }
+    if ((a1 & 0x10) && a3 > b->size) {
+        ce_error = 8;
+        return 0;
+    }
+    void *data = realloc(b->data, a3 ? a3 : 1);
+    if (!data) {
+        ce_error = 8;
+        return 0;
+    }
+    if ((a1 & 8) && a3 > b->size)
+        memset((uint8_t *)data + b->size, 0, a3 - b->size);
+    b->data = data;
+    b->size = a3;
+    return WORD(data);
+}
+CE_API(HeapSize)
+{
+    struct ce_heap_block *b = heap_block(a0, a2);
+    if (!b) {
+        ce_error = 87;
+        return (CW)-1;
+    }
+    return b->size;
+}
+/* The process heap is an ordinary heap made on first use. */
+CE_API(GetProcessHeap)
+{
+    static CW heap;
+    if (!heap)
+        heap = ce_HeapCreate(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    return heap;
 }
 CE_API(HeapFree)
 {
@@ -660,22 +713,27 @@ CE_API(GetModuleFileNameW)
 
 /* CE's wide printf uses 16-bit strings; `limit` counts the terminator.
  * Unsupported conversions abort instead of pretending formatting succeeded. */
-static CW wide_format(WCHAR *out, const WCHAR *fmt, const CW *args, unsigned limit, unsigned nargs)
+/* `odd`: args[0] is an odd O32 argument slot (see ce_wformat_slots). */
+static CW wide_format(WCHAR *out, const WCHAR *fmt, const CW *args, unsigned limit, unsigned nargs, bool odd)
 {
     uintptr_t words[128];
     nargs = MIN(nargs, ARRAY_SIZE(words));
     for (unsigned i = 0; i < nargs; i++)
         words[i] = args[i];
-    int n = ce_wformat(out, limit, fmt, words, nargs);
-    if (n < 0)
+    int n = ce_wformat_slots(out, limit, fmt, words, nargs, odd);
+    if (n < 0) {
+        char text[128];
+        ce_narrow(text, sizeof(text), fmt);
+        printf("wince: unsupported format \"%s\"\n", text);
         ce_missing("wsprintfW conversion");
+    }
     return (CW)n;
 }
 
 CE_API(wsprintfW)
 {
     CW args[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
-    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), args, 1024, ARRAY_SIZE(args));
+    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), args, 1024, ARRAY_SIZE(args), false);
 }
 CE_API(vswprintf)
 {
@@ -683,12 +741,12 @@ CE_API(vswprintf)
         ce_error = 87;
         return (CW)-1;
     }
-    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), PTR(CW, a2), 1024, 128);
+    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), PTR(CW, a2), 1024, 128, (a2 >> 2) & 1);
 }
 CE_API(_snwprintf)
 {
     CW args[] = {a3, a4, a5, a6, a7, a8, a9, a10, a11};
-    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a2), args, MIN(a1, 1024u), ARRAY_SIZE(args));
+    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a2), args, MIN(a1, 1024u), ARRAY_SIZE(args), true);
 }
 
 CE_API(iswctype)
@@ -875,8 +933,15 @@ static bool reg_save(void);
 static void reg_seed_shared(void)
 {
     struct fs_stat st;
+    /* Casio's backup writes System.$$$ and renames it; some devices (BeeV2)
+     * were imaged with only that copy. Both have the same format. */
     const char *backup = "/NAND/Backup/System.reg";
-    if (fs_stat(backup, &st) || st.type != FS_FILE || !st.size || st.size > CE_REG_FILE_MAX)
+    if (fs_stat(backup, &st) || st.type != FS_FILE) {
+        backup = "/NAND/Backup/System.$$$";
+        if (fs_stat(backup, &st) || st.type != FS_FILE)
+            return;
+    }
+    if (!st.size || st.size > CE_REG_FILE_MAX)
         return;
     uint8_t *data = malloc(st.size);
     if (data && fs_read_file(backup, data, st.size) == (int)st.size && ce_reg_import_casio(&registry, data, st.size))
@@ -1457,7 +1522,7 @@ static CW file_error(int error)
 }
 struct find_handle {
     bool active, fs_done, source_done;
-    uint32_t index, bundled_index, source_index;
+    uint32_t index, bundled_index, source_index, source_which;
     char path[FS_PATH_MAX], canonical_dir[FS_PATH_MAX], pattern[FS_NAME_MAX];
 };
 static struct find_handle searches[8];
@@ -1516,9 +1581,26 @@ static CW find_next(struct find_handle *search, CW out)
     }
     while(!search->source_done){
         char original[FS_PATH_MAX];
-        if(!ce_source_directory(search->canonical_dir,original)){search->source_done=true;break;}
+        /* Each original folder in turn: \Windows has the boot patch folder too. */
+        if(!ce_source_directory_at(search->canonical_dir,search->source_which,original)){
+            if(++search->source_which>1){search->source_done=true;break;}
+            search->source_index=0;continue;
+        }
         int count=fs_list(original,search->source_index++,&entry,1);
-        if(count<=0){search->source_done=true;break;}
+        if(count<=0){
+            if(++search->source_which>1){search->source_done=true;break;}
+            search->source_index=0;continue;
+        }
+        if(search->source_which){
+            char first[FS_PATH_MAX],shadow[FS_PATH_MAX];struct fs_stat shadow_st;
+            size_t l=strlen(entry.name);
+            char base[FS_NAME_MAX];strlcpy(base,entry.name,sizeof base);
+            if(l>4&&!strcasecmp(base+l-4,".cpk"))base[l-4]=0;
+            if(ce_source_directory_at(search->canonical_dir,0,first)&&
+               ((snprintf(shadow,sizeof shadow,"%s/%s",first,base)<FS_PATH_MAX&&!fs_stat(shadow,&shadow_st))||
+                (snprintf(shadow,sizeof shadow,"%s/%s.cpk",first,base)<FS_PATH_MAX&&!fs_stat(shadow,&shadow_st))))
+                continue;
+        }
         char physical[FS_PATH_MAX],overlay[FS_PATH_MAX];struct fs_stat st;
         int n=snprintf(physical,sizeof physical,"%s/%s",original,entry.name);
         if(n<0||n>=FS_PATH_MAX)continue;
@@ -1692,7 +1774,9 @@ CE_API(CreateFileW)
     }
     int fd = fs_open(open_path, flags);
     if (fd < 0) {
-        printf("wince: open failed %s: %d\n", canonical, fd);
+        char asked[FS_PATH_MAX];
+        ce_narrow(asked, sizeof(asked), PTR(WCHAR, a0));
+        printf("wince: open failed %s (\"%s\"): %d\n", canonical, asked, fd);
         file_error(fd);
         files[i].claimed = false;
         return 0xffffffffu;
@@ -1985,19 +2069,37 @@ CE_API(GetModuleHandleW)
         ce_error = 126;
     return handle;
 }
+/* System DLLs the runtime provides as adapters, without a file to load:
+ * LoadLibrary gives each a pseudo handle (0x73000000 + index) whose
+ * GetProcAddress resolves through the adapters. PViewCE loads TOOLHELP.DLL
+ * itself. A real file of the same name, if a device has one, wins. */
+static const char *const builtin_dlls[] = {"coredll.dll", "toolhelp.dll", "commctrl.dll", "ole32.dll",
+                                           "oleaut32.dll", "winsock.dll", "ws2.dll"};
 CE_API(LoadLibraryW)
 {
-    char name[64];
-    ce_narrow(name, sizeof(name), PTR(WCHAR, a0));
-    if (!strcasecmp(name, "coredll.dll"))
+    char path[FS_PATH_MAX];
+    ce_narrow(path, sizeof(path), PTR(WCHAR, a0));
+    const char *name = path;
+    for (const char *p = path; *p; p++)
+        if (*p == '\\' || *p == '/')
+            name = p + 1;
+    if (!strcasecmp(name, "coredll.dll") || !strcasecmp(name, "coredll"))
         return 0x73000000u;
-    return ce_load_library(name);
+    CW module = ce_load_library(path);
+    for (unsigned i = 1; !module && i < ARRAY_SIZE(builtin_dlls); i++)
+        if (!strcasecmp(name, builtin_dlls[i])) {
+            ce_error = 0;
+            return 0x73000000u + i;
+        }
+    return module;
 }
 static CW proc_address(CW module, const char *name, CW ordinal)
 {
     if (!name)
         return ce_find_ordinal(module, (uint16_t)ordinal);
-    CW address = module == 0x73000000u ? ce_import_address("coredll.dll", name) : ce_find_symbol(module, name);
+    unsigned builtin = module - 0x73000000u;
+    CW address = builtin < ARRAY_SIZE(builtin_dlls) ? ce_import_address(builtin_dlls[builtin], name)
+                                                    : ce_find_symbol(module, name);
     if (!address)
         ce_error = 127;
     return address;
@@ -2024,7 +2126,7 @@ CE_API(NKDbgPrintfW)
     uintptr_t args[] = {a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
     char message[512];
     /* Debug output must not stop the app on a conversion the runtime lacks. */
-    if (!a0 || ce_wformat(text, ARRAY_SIZE(text), PTR(WCHAR, a0), args, ARRAY_SIZE(args)) < 0)
+    if (!a0 || ce_wformat_slots(text, ARRAY_SIZE(text), PTR(WCHAR, a0), args, ARRAY_SIZE(args), true) < 0)
         return 0;
     ce_narrow(message, sizeof(message), text);
     printf("wince: debug: %s\n", message);
@@ -2055,10 +2157,42 @@ CE_API(DeviceIoControl)
     ce_error = 50; /* ERROR_NOT_SUPPORTED */
     return 0;
 }
+/* KernelIoControl(code, in, in size, out, out size, returned): only
+ * IOCTL_HAL_GET_DEVICEID (CTL_CODE(FILE_DEVICE_HAL, 21), 0x01010054) is
+ * answered. DEVICE_ID: dwSize, then the preset and platform IDs' offsets
+ * and sizes; the preset ID is a hash of this device's NAND partition
+ * table, stable across boots, and the platform ID names the BE-300. */
 CE_API(KernelIoControl)
 {
-    ce_error = 50;
-    return 0;
+    if (a0 != 0x01010054u) {
+        ce_error = 50;
+        return 0;
+    }
+    static const char platform[8] = "BE-300";
+    uint8_t id[20 + 8 + 8] = {0};
+    uint8_t table[512];
+    uint32_t hash = 2166136261u;
+    if (fs_nand_read(0, table, sizeof(table)) == (int)sizeof(table))
+        for (unsigned i = 0; i < sizeof(table); i++)
+            hash = (hash ^ table[i]) * 16777619u;
+    ce_put32(id, sizeof(id));
+    ce_put32(id + 4, 20);
+    ce_put32(id + 8, 8);
+    ce_put32(id + 12, 28);
+    ce_put32(id + 16, 8);
+    ce_put32(id + 20, hash);
+    ce_put32(id + 24, hash * 2654435761u);
+    memcpy(id + 28, platform, 8);
+    if (a5)
+        *PTR(CW, a5) = sizeof(id);
+    if (!a3 || a4 < sizeof(id)) {
+        if (a3 && a4 >= 4)
+            ce_put32(PTR(void, a3), sizeof(id));
+        ce_error = 122; /* ERROR_INSUFFICIENT_BUFFER */
+        return 0;
+    }
+    memcpy(PTR(void, a3), id, sizeof(id));
+    return 1;
 }
 /* The private registry is already saved on every change. */
 CE_API(RegCopyFile)
@@ -2185,6 +2319,9 @@ static const struct ce_export exports[] = {
     CE_EXPORT(HeapAlloc),
     CE_EXPORT(HeapFree),
     CE_EXPORT(HeapDestroy),
+    CE_EXPORT(HeapReAlloc),
+    CE_EXPORT(HeapSize),
+    CE_EXPORT(GetProcessHeap),
     CE_EXPORT(strlen),
     CE_EXPORT(mbstowcs),
     CE_EXPORT(wcstombs),

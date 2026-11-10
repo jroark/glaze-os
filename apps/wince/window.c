@@ -20,6 +20,7 @@ static struct ce_message queue[QUEUE];
 static unsigned head, tail;
 static struct gz_mutex queue_lock = GZ_MUTEX_INIT;
 static CW focus, capture, modal, pressed;
+static int touch_x, touch_y; /* the last touch, in screen coordinates */
 static CW window_serial;
 
 static bool quitting;
@@ -94,6 +95,16 @@ gfx_rect ce_client_rect(CW handle)
 void ce_post(CW window, CW message, CW wparam, CW lparam)
 {
     gz_mutex_lock(&queue_lock);
+    /* Like Windows, at most one WM_TIMER per timer is pending: a modal loop
+     * that doesn't dispatch them (WorldTALK's error box) mustn't fill the
+     * queue. */
+    if (message == 0x113)
+        for (unsigned i = tail; i != head; i++)
+            if (queue[i % QUEUE].message == 0x113 && queue[i % QUEUE].window == window &&
+                queue[i % QUEUE].wparam == wparam) {
+                gz_mutex_unlock(&queue_lock);
+                return;
+            }
     if (head - tail >= QUEUE)
         ce_fatal("WinCE message queue is full");
     queue[head++ % QUEUE] = (struct ce_message){window, message, wparam, lparam, gz_time_ms(), 0, 0};
@@ -1082,6 +1093,8 @@ static void input(const struct gz_input_event *e)
     }
     if (e->type != GZ_EV_TOUCH_DOWN && e->type != GZ_EV_TOUCH_MOVE && e->type != GZ_EV_TOUCH_UP)
         return;
+    touch_x = e->x;
+    touch_y = e->y;
     if (ce_keyboard_open && !ui.hardware_keyboard && e->y >= 320 - UI_KB_H) {
         bool changed = false;
         int c = ui_keyboard_event(&ce_keyboard, e, 320 - UI_KB_H, &changed);
@@ -1316,6 +1329,8 @@ static void pump_messages(unsigned wait)
             ce_post(timers[i].window, 0x113, timers[i].id, timers[i].proc);
         }
     struct gz_input_event e;
+    if (wait)
+        ce_database_flush(); /* idle: save database writes before blocking */
     if (ui_next_event(&e, wait))
         input(&e);
 }
@@ -2337,6 +2352,265 @@ CE_API(SipSetInfo)
     return ce_SipShowIM(ce_u32(PTR(uint8_t, a0) + 4), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
+/* ---- more of USER: points, dialogs, classes, deferred positions --------- */
+
+CE_API(SetRectRgn);
+CE_API(WaitForMultipleObjects);
+static int cursor_shown;
+#define DESKTOP_WINDOW 0x74000000u
+CE_API(GetDesktopWindow) { return DESKTOP_WINDOW; }
+CE_API(GetMessagePos) { return (CW)(uint16_t)touch_x | (CW)(uint16_t)touch_y << 16; }
+CE_API(GetCursorPos)
+{
+    if (!a0)
+        return 0;
+    PTR(int32_t, a0)[0] = touch_x;
+    PTR(int32_t, a0)[1] = touch_y;
+    return 1;
+}
+CE_API(ShowCursor) { return (CW)(a0 ? ++cursor_shown : --cursor_shown); }
+static bool child_of(CW parent, CW child)
+{
+    struct ce_window *w = ce_window(child);
+    for (unsigned depth = 0; w && w->parent && depth < WINDOWS; depth++) {
+        if (w->parent == parent)
+            return true;
+        w = ce_window(w->parent);
+    }
+    return false;
+}
+CE_API(IsChild) { return a0 && child_of(a0, a1); }
+/* WindowFromPoint(POINT by value): the deepest visible window there. */
+CE_API(WindowFromPoint)
+{
+    CW best = 0;
+    for (unsigned i = 0; i < WINDOWS; i++) {
+        struct ce_window *w = &windows[i];
+        if (w->handle && ce_window_visible(w->handle) && gfx_rect_contains(ce_window_rect(w->handle), (int)a0, (int)a1) &&
+            (!best || child_of(best, w->handle)))
+            best = w->handle;
+    }
+    return best;
+}
+/* ChildWindowFromPoint(parent, POINT in its client coordinates). */
+CE_API(ChildWindowFromPoint)
+{
+    gfx_rect client = ce_client_rect(a0);
+    int x = client.x + (int)a1, y = client.y + (int)a2;
+    for (unsigned i = 0; i < WINDOWS; i++) {
+        struct ce_window *w = &windows[i];
+        if (w->handle && w->parent == a0 && ce_window_visible(w->handle) &&
+            gfx_rect_contains(ce_window_rect(w->handle), x, y))
+            return w->handle;
+    }
+    return gfx_rect_contains(client, x, y) ? a0 : 0;
+}
+CE_API(SetParent)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w || (a1 && !ce_window(a1)) || a1 == a0 || child_of(a0, a1)) {
+        ce_error = 87;
+        return 0;
+    }
+    CW old = w->parent;
+    w->parent = a1;
+    ce_redraw_all();
+    return old ? old : DESKTOP_WINDOW;
+}
+CE_API(ValidateRect)
+{
+    struct ce_window *w = ce_window(a0);
+    if (w && !a1)
+        w->dirty = false;
+    return w != NULL;
+}
+CE_API(GetUpdateRect)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w)
+        return 0;
+    if (a1) {
+        gfx_rect r = ce_client_rect(a0);
+        struct ce_rect *out = PTR(struct ce_rect, a1);
+        *out = w->dirty ? (struct ce_rect){0, 0, r.w, r.h} : (struct ce_rect){0, 0, 0, 0};
+    }
+    return w->dirty;
+}
+CE_API(GetUpdateRgn)
+{
+    struct ce_window *w = ce_window(a0);
+    if (!w)
+        return 0;
+    gfx_rect r = ce_client_rect(a0);
+    ce_SetRectRgn(a1, 0, 0, w->dirty ? (CW)r.w : 0, w->dirty ? (CW)r.h : 0, 0, 0, 0, 0, 0, 0, 0);
+    return w->dirty ? 2 : 1;
+}
+CE_API(SetScrollRange)
+{
+    CW info[7] = {28, 1, a2, a3, 0, 0, 0}; /* SIF_RANGE */
+    return ce_SetScrollInfo(a0, a1, WORD(info), a4, 0, 0, 0, 0, 0, 0, 0, 0) != 0 || ce_error == 0;
+}
+CE_API(DefDlgProcW) { return ce_DefWindowProcW(a0, a1, a2, a3, 0, 0, 0, 0, 0, 0, 0, 0); }
+/* AdjustWindowRectEx(rect, style, menu, exstyle): a caption above, a
+ * one-pixel border or dialog frame around; CE windows have no menu bar. */
+CE_API(AdjustWindowRectEx)
+{
+    struct ce_rect *r = PTR(struct ce_rect, a0);
+    if (!r)
+        return 0;
+    if ((a1 & 0x00c00000u) == 0x00c00000u)
+        r->top -= 20;
+    if (a1 & 0x00c00000u) {
+        r->left--;
+        r->top--;
+        r->right++;
+        r->bottom++;
+    }
+    return 1;
+}
+/* Dialog templates lay out at 7/4 horizontal and 14/8 vertical pixels per
+ * unit (dialog creation above): base units 7 x 14. */
+CE_API(GetDialogBaseUnits) { return 7 | 14u << 16; }
+CE_API(MapDialogRect)
+{
+    struct ce_rect *r = PTR(struct ce_rect, a1);
+    if (!r)
+        return 0;
+    r->left = r->left * 7 / 4;
+    r->right = r->right * 7 / 4;
+    r->top = r->top * 14 / 8;
+    r->bottom = r->bottom * 14 / 8;
+    return 1;
+}
+/* The next (or previous) enabled, visible WS_TABSTOP child of a dialog;
+ * group navigation stays between WS_GROUP children. */
+static CW next_child(CW dialog, CW from, bool previous, CW required, bool group)
+{
+    CW list[WINDOWS];
+    unsigned n = 0, at = 0;
+    for (unsigned i = 0; i < WINDOWS; i++)
+        if (windows[i].handle && windows[i].parent == dialog)
+            list[n++] = windows[i].handle;
+    if (!n)
+        return 0;
+    while (at < n && list[at] != from)
+        at++;
+    if (at == n)
+        at = previous ? 0 : n - 1;
+    for (unsigned step = 1; step <= n; step++) {
+        unsigned i = previous ? (at + n - step) % n : (at + step) % n;
+        struct ce_window *w = ce_window(list[i]);
+        if (group && step > 0 && (w->style & 0x20000u) && !previous)
+            break; /* WS_GROUP starts the next group */
+        if (w->visible && w->enabled && (!required || (w->style & required)))
+            return list[i];
+        if (group && previous && (w->style & 0x20000u))
+            break;
+    }
+    return from;
+}
+CE_API(GetNextDlgTabItem) { return next_child(a0, a1, a2 != 0, 0x10000u, false); }
+CE_API(GetNextDlgGroupItem) { return next_child(a0, a1, a2 != 0, 0, true); }
+/* GetClassLong/SetClassLong(window, GCL_*): the class's WNDCLASS words. */
+static CW *class_word(CW window, CW index)
+{
+    struct ce_window *w = ce_window(window);
+    if (!w)
+        return NULL;
+    for (unsigned i = 0; i < ARRAY_SIZE(classes); i++)
+        if (classes[i].atom && !strcasecmp(classes[i].name, w->klass))
+            switch ((int32_t)index) {
+            case -26: return &classes[i].info[0]; /* GCL_STYLE */
+            case -24: return &classes[i].proc;    /* GCL_WNDPROC */
+            case -20: return &classes[i].info[2]; /* GCL_CBCLSEXTRA */
+            case -18: return &classes[i].info[3]; /* GCL_CBWNDEXTRA */
+            case -14: return &classes[i].info[5]; /* GCL_HICON */
+            case -12: return &classes[i].info[6]; /* GCL_HCURSOR */
+            case -10: return &classes[i].info[7]; /* GCL_HBRBACKGROUND */
+            }
+    return NULL;
+}
+CE_API(GetClassLongW)
+{
+    CW *p = class_word(a0, a1);
+    if (!p)
+        ce_error = 87;
+    return p ? *p : 0;
+}
+CE_API(SetClassLongW)
+{
+    CW *p = class_word(a0, a1);
+    if (!p) {
+        ce_error = 87;
+        return 0;
+    }
+    CW old = *p;
+    *p = a2;
+    if ((int32_t)a1 == -24)
+        for (unsigned i = 0; i < ARRAY_SIZE(classes); i++)
+            if (&classes[i].proc == p)
+                classes[i].info[1] = a2;
+    return old;
+}
+CE_API(SetWindowRgn) { return ce_window(a0) != NULL; }
+CE_API(RectangleAnimation) { return 1; }
+/* Deferred positions are applied at once. */
+CE_API(BeginDeferWindowPos) { return 0x7b000001u; }
+CE_API(DeferWindowPos)
+{
+    return ce_SetWindowPos(a1, a2, a3, a4, a5, a6, a7, 0, 0, 0, 0, 0) ? a0 : 0;
+}
+CE_API(EndDeferWindowPos) { return 1; }
+static bool messages_waiting(void)
+{
+    gz_mutex_lock(&queue_lock);
+    bool any = head != tail;
+    gz_mutex_unlock(&queue_lock);
+    return any;
+}
+CE_API(GetQueueStatus) { return messages_waiting() ? 0x00080008u : 0; } /* QS_POSTMESSAGE */
+CE_API(PostThreadMessageW)
+{
+    ce_post(0, a1, a2, a3);
+    return 1;
+}
+/* MsgWaitForMultipleObjectsEx(count, handles, timeout, wake mask, flags):
+ * the objects, or WAIT_OBJECT_0 + count once a message is queued; input is
+ * pumped meanwhile. MWMO_WAITALL (1) waits for all the objects. */
+CE_API(MsgWaitForMultipleObjectsEx)
+{
+    CW start = gz_time_ms();
+    for (;;) {
+        if (messages_waiting())
+            return a0;
+        if (a0) {
+            CW r = ce_WaitForMultipleObjects(a0, a1, a4 & 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            if (r != 258)
+                return r;
+        }
+        CW elapsed = gz_time_ms() - start;
+        if (a2 != 0xffffffffu && elapsed >= a2)
+            return 258;
+        pump_messages(a2 == 0xffffffffu ? 20 : MIN(20u, a2 - elapsed));
+    }
+}
+CE_API(MsgWaitForMultipleObjects)
+{
+    return ce_MsgWaitForMultipleObjectsEx(a0, a1, a3, a4, a2 ? 1 : 0, 0, 0, 0, 0, 0, 0, 0);
+}
+CE_API(IsRectEmpty)
+{
+    const struct ce_rect *r = PTR(struct ce_rect, a0);
+    return !r || r->right <= r->left || r->bottom <= r->top;
+}
+CE_API(SetRectEmpty)
+{
+    if (!a0)
+        return 0;
+    *PTR(struct ce_rect, a0) = (struct ce_rect){0, 0, 0, 0};
+    return 1;
+}
+
 static const struct ce_export exports[] = {
     CE_EXPORT(RegisterClassW), CE_EXPORT(UnregisterClassW),
     CE_EXPORT(GetClassInfoW), CE_EXPORT(GetClassNameW), CE_EXPORT(EnumWindows),
@@ -2423,6 +2697,15 @@ static const struct ce_export exports[] = {
     CE_EXPORT(SipGetInfo),
     CE_EXPORT(SipShowIM),
     CE_EXPORT(SipSetInfo),
+    CE_EXPORT(GetDesktopWindow), CE_EXPORT(GetMessagePos), CE_EXPORT(GetCursorPos), CE_EXPORT(ShowCursor),
+    CE_EXPORT(IsChild), CE_EXPORT(WindowFromPoint), CE_EXPORT(ChildWindowFromPoint), CE_EXPORT(SetParent),
+    CE_EXPORT(ValidateRect), CE_EXPORT(GetUpdateRect), CE_EXPORT(GetUpdateRgn), CE_EXPORT(SetScrollRange),
+    CE_EXPORT(DefDlgProcW), CE_EXPORT(AdjustWindowRectEx), CE_EXPORT(GetDialogBaseUnits), CE_EXPORT(MapDialogRect),
+    CE_EXPORT(GetNextDlgTabItem), CE_EXPORT(GetNextDlgGroupItem), CE_EXPORT(GetClassLongW), CE_EXPORT(SetClassLongW),
+    CE_EXPORT(SetWindowRgn), CE_EXPORT(RectangleAnimation), CE_EXPORT(BeginDeferWindowPos),
+    CE_EXPORT(DeferWindowPos), CE_EXPORT(EndDeferWindowPos), CE_EXPORT(GetQueueStatus),
+    CE_EXPORT(PostThreadMessageW), CE_EXPORT(MsgWaitForMultipleObjectsEx), CE_EXPORT(MsgWaitForMultipleObjects),
+    CE_EXPORT(IsRectEmpty), CE_EXPORT(SetRectEmpty),
 };
 void *ce_resolve_window(const char *name)
 {

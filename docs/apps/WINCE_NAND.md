@@ -64,6 +64,31 @@ were never written in Glaze show 1601. Physical hardware has not been rerun
 for these changes; the guest integration test exercises the RAM-boot
 trampoline and its NAND mount.
 
+## Third-party BE-300 images
+
+Images set up with replacement shells also run from Files: BeeV2, BeShell
+and eXpod. Every executable on them binds (`tools/wince_audit.py`), including
+MFC applications and control panel applets. Most of them show their real
+interface in the emulator:
+- the shells' own control panels and settings applets;
+- BeShell's start bar;
+- GSPlayer, Minesweeper, Solitaire and the image viewer;
+- hotkey and wallpaper editors;
+- process viewers and file finders.
+
+The runtime models what these shells' boot loaders set up:
+- **DLL search.** DLLs are found through the device registry's
+  `HKLM\Loader\SystemPath` (for example `\Program Disk\SystemCE\`).
+- **The `\Windows` folder.** It also shows `\Nand Disk\Program Files\Patch`,
+  which BeShell's BeLoader, eXpod's `expod.exe` and BeeV2's BeeBoot copy
+  there at every boot.
+- **The registry backup.** It is seeded from `System.$$$` when an image has
+  no `System.reg` (BeeV2).
+
+Programs that need hardware or a desktop connection report that, as on a
+device without them: Transcriber's touch hook, ActiveSync and PC link tools,
+and a COM port. Direct-framebuffer games need `gx.dll`, which isn't provided.
+
 ## Casio libraries from the NK ROM
 
 Casio's application libraries (`pimdb`, `NFC`, `MailData`, `NotifyData`, `CS`,

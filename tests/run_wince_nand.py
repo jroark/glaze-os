@@ -20,6 +20,17 @@ sys.path.insert(0,str(ROOT/'tools'))
 from wince_assets import Fat16,u32
 from wince_nand_assets import synthetic_nk,cpk
 
+def nand_layout(nk_bytes):
+    """The test NAND: GlazeBoot's romfs from 0x40000 (sized from the last
+    build, with room for a script), NK after it and the FAT to the end, on
+    64 KiB boundaries."""
+    built=ROOT/'out/glazeboot/romfs.img'
+    romfs=built.stat().st_size if built.exists() else 0x4c0000
+    align=lambda v:-(-v//0x10000)*0x10000
+    nk=align(0x40000+romfs+0x20000)
+    fat=align(nk+nk_bytes)
+    return {'nk':nk,'fat':fat,'fat_bytes':0x1000000-fat}
+
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--image',type=Path)
@@ -61,11 +72,36 @@ def main():
         roots=sorted((e[0] for e in volume.entries(volume.root) if e[2]&16),key=str.lower)
         for d in roots:
             copy_tree(d,work/d);folders.append(work/d)
-        names=sorted((p.name for p in (work/'Program Files').iterdir()),key=lambda n:(not (work/'Program Files'/n).is_dir(),n.lower()))
-        target=next((n for n in names if n.lower() in (expected.lower(),expected.lower()+'.cpk')),None)
-        if not target:ap.error(f'{expected} is not in the image\'s Program Files')
-        folder_row=roots.index('Program Files')
-        app_row=names.index(target)
+        # The test NAND holds GlazeBoot's romfs, NK and this FAT in 16 MiB,
+        # less than a device's 12 MiB FAT. Third-party images fill theirs, so
+        # Program Files subfolders the program can't need (not on its path,
+        # SystemCE or Patch) are left out, largest first, until the copy fits.
+        layout=nand_layout(len(packed))
+        def used(root):
+            total=0
+            for p in root.rglob('*'):
+                total+=512 if p.is_dir() else -(-p.stat().st_size//512)*512+32
+            return total
+        keep={'systemce','patch',(expected.strip('/').split('/')[0] if not expected.startswith('/') else '').lower()}
+        budget=layout['fat_bytes']*9//10
+        while sum(used(d) for d in folders)>budget:
+            optional=[p for p in (work/'Program Files').iterdir() if p.is_dir() and p.name.lower() not in keep]
+            if not optional:break
+            drop=max(optional,key=used);print('Left out of the test FAT:',drop.name);shutil.rmtree(drop)
+        # --app names a program in Program Files, a path below it such as
+        # "Extra Apps/Calc.exe", or a path from the volume's root ("/Windows/x.exe").
+        parts=expected.strip('/').split('/') if expected.startswith('/') else ['Program Files',*expected.split('/')]
+        def listing(host):
+            # Files lists folders first, then files, by case-insensitive name.
+            return sorted((p.name for p in host.iterdir()),key=lambda n:(not (host/n).is_dir(),n.lower()))
+        path_rows,host=[],work
+        for i,part in enumerate(parts):
+            names=listing(host)
+            last=i==len(parts)-1
+            target=next((n for n in names if n.lower()==part.lower() or (last and n.lower()==part.lower()+'.cpk')),None)
+            if not target:ap.error(f'{expected} is not on the image')
+            path_rows.append((names.index(target),len(names)));host=host/target
+        expected=parts[-1]
     else:
         programs=work/'Program Files';programs.mkdir()
         from make_wince_abi import executable
@@ -74,23 +110,27 @@ def main():
         struct.pack_into('<III',pe,512,0x24020025,0x03e00008,0) # li v0,37; jr ra; nop
         (programs/'Fixture.exe').write_bytes(pe)
         folders.append(programs)
-        packed=synthetic_nk();expected='Fixture.exe';folder_row=app_row=0
-    # Unlock, open Files and NAND (the fifth row), open Program Files, then
-    # scroll its 36-pixel rows (260 visible below the bar, first centred at
-    # y 78) with slow drags that rest before lifting.
-    rows=len(names) if args.image else 1
-    scroll=max(0,min(36*app_row-150,36*rows+34-260)) # Files has a 34-pixel footer
-    lines=['3000 drag 40 280 235 280 500','4500 tap 30 50','6500 tap 120 222',f'8500 tap 120 {78+36*folder_row}']
-    # Equal steps: a drag of 6 pixels or less would be a tap on a row.
-    if scroll<24:scroll=0
-    drags=-(-scroll//200);t,left=10500,scroll
-    while left>0:
-        step=-(-left//drags);drags-=1;lines.append(f'{t} down 120 290')
-        for i in range(1,21):lines.append(f'{t+i*50} move 120 {290-step*i//20}')
-        # Resting over Files' 100 ms before the lift leaves no fling.
-        lines.append(f'{t+1600} up 120 {290-step}');t+=1900;left-=step
-    app_y=78+36*app_row-scroll
-    launch=t;lines.append(f'{launch} tap 120 {app_y}')
+        packed=synthetic_nk();expected='Fixture.exe';path_rows=[(0,1),(0,1)]
+    # Unlock, open Files and NAND (the fifth row), then each folder on the
+    # way and the program: scroll the folder's 36-pixel rows (260 visible
+    # below the bar, first centred at y 78) with slow drags that rest before
+    # lifting, and tap the row.
+    lines=['3000 drag 40 280 235 280 500','4500 tap 30 50','6500 tap 120 222']
+    t=8500
+    for depth,(row,rows) in enumerate(path_rows):
+        scroll=max(0,min(36*row-150,36*rows+34-260)) # Files has a 34-pixel footer
+        # Equal steps: a drag of 6 pixels or less would be a tap on a row.
+        if scroll<24:scroll=0
+        drags=-(-scroll//200);left=scroll
+        while left>0:
+            step=-(-left//drags);drags-=1;lines.append(f'{t} down 120 290')
+            for i in range(1,21):lines.append(f'{t+i*50} move 120 {290-step*i//20}')
+            # Resting over Files' 100 ms before the lift leaves no fling.
+            lines.append(f'{t+1600} up 120 {290-step}');t+=1900;left-=step
+        app_y=78+36*row-scroll
+        lines.append(f'{t} tap 120 {app_y}')
+        if depth<len(path_rows)-1:t+=2000
+    launch=t
     script=work/'input.txt'
     script.write_text('\n'.join(lines)+'\n')
     # --input times count from the launch tap.
@@ -125,29 +165,32 @@ def main():
     pack_args=shlex.split(pack_line)
     pack_args[pack_args.index('out/glazeboot/romfs.img')]=str(romfs_path)
     subprocess.run(pack_args,cwd=ROOT,stdout=subprocess.DEVNULL,check=True)
+    layout=nand_layout(len(packed))
+    fat_kb=layout['fat_bytes']//1024
     fat=work/'fat.img'
     fat.unlink(missing_ok=True)
     if shutil.which('mkfs.fat'):
-        subprocess.run(['mkfs.fat','-F','16','-s','1','-n','CETEST','-C',str(fat),'6144'],stdout=subprocess.DEVNULL,check=True)
+        subprocess.run(['mkfs.fat','-F','16','-s','1','-n','CETEST','-C',str(fat),str(fat_kb)],stdout=subprocess.DEVNULL,check=True)
     else:
-        fat.write_bytes(bytes(6144*1024))
-        subprocess.run(['mformat','-i',str(fat),'-T',str(6144*2),'-h','16','-s','32','-c','1','-v','CETEST','::'],stdout=subprocess.DEVNULL,check=True)
+        fat.write_bytes(bytes(fat_kb*1024))
+        subprocess.run(['mformat','-i',str(fat),'-T',str(fat_kb*2),'-h','16','-s','32','-c','1','-v','CETEST','::'],stdout=subprocess.DEVNULL,check=True)
     for d in folders:
         subprocess.run(['mcopy','-s','-i',str(fat),str(d),'::/'],stdout=subprocess.DEVNULL,check=True)
     data=bytearray((ROOT/'out/glaze-ramboot.bin').read_bytes())
     # Model the default GlazeBoot app selection, leaving enough RAM for NK's
     # temporary metadata recovery. SPL reads this partition's explicit length.
     romfs=romfs_path.read_bytes()
-    data[0x40000:0x500000]=b'\xff'*(0x500000-0x40000)
+    nk_start,fat_start=layout['nk'],layout['fat']
+    if 0x40000+len(romfs)>nk_start:raise RuntimeError('romfs grew past the planned NK partition')
+    data[0x40000:]=b'\xff'*(len(data)-0x40000)
     data[0x40000:0x40000+len(romfs)]=romfs
     struct.pack_into('<II',data,4*16+8,0x40000//512,(len(romfs)+511)//512)
-    if len(packed)>0x500000:raise RuntimeError('CE NK does not fit test partition')
-    data[0x500000:0x500000+len(packed)]=packed
-    struct.pack_into('<II',data,40,0x500000//512,(len(packed)+511)//512)
-    fat_data=fat.read_bytes();data[0xa00000:]=fat_data
-    struct.pack_into('<II',data,56,0xa00000//512,len(fat_data)//512)
+    data[nk_start:nk_start+len(packed)]=packed
+    struct.pack_into('<II',data,40,nk_start//512,(len(packed)+511)//512)
+    fat_data=fat.read_bytes();data[fat_start:fat_start+len(fat_data)]=fat_data
+    struct.pack_into('<II',data,56,fat_start//512,len(fat_data)//512)
     nand=work/'nand.img';nand.write_bytes(data)
-    before=hashlib.sha256(data[0x500000:]).hexdigest()
+    before=hashlib.sha256(data[nk_start:]).hexdigest()
     # --seconds of emulation follow the launch tap.
     seconds=launch//1000+args.seconds
     env=dict(os.environ,SDL_VIDEODRIVER='dummy',SDL_AUDIODRIVER='dummy',BE300_AUTOSTOP_SEC=str(seconds))
@@ -168,7 +211,7 @@ def main():
     if args.relaunch:
         assert log.count('wince: entering original executable')==2, 'second launch did not enter CE'
         assert log.count('wince: recovered ')==1, 'metadata cache was not reused'
-    assert hashlib.sha256(nand.read_bytes()[0x500000:]).hexdigest()==before,'Original CE partitions changed'
+    assert hashlib.sha256(nand.read_bytes()[nk_start:]).hexdigest()==before,'Original CE partitions changed'
     print('Files/NAND CE launch: PASS; source partitions unchanged')
     for p in work.glob('screenshot_*.bmp'):print(p)
 

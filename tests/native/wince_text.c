@@ -42,9 +42,17 @@ int main(void)
     check("%S|%hs|%ls", A((uintptr_t)"nar", (uintptr_t)"row", (uintptr_t)wide("wide")), "nar|row|wide");
     check("%c%C%lc|%%|%s", A('x', 'y', 'z', 0), "xyz|%|(null)");
     check("%ld|%lu|%.0d|", A(-1, 7, 0), "-1|7||");
+    /* Doubles: two words from an even slot (the low word first). */
+    union { double d; uint64_t u; } x = {1.25}, y = {-0.000125}, z = {1234567.0}, w = {2.5};
+#define D(v) (uintptr_t)(uint32_t)(v).u, (uintptr_t)(uint32_t)((v).u >> 32)
+    check("%.1fM|%f|%e", A(D(x), D(x), D(y)), "1.3M|1.250000|-1.250000e-004");
+    check("%g|%g|%G|%5.1f|%-6.2f|", A(D(x), D(y), D(z), D(w), D(w)), "1.25|-0.000125|1.23457E+006|  2.5|2.50  |");
+    check("%d %f", A(7, 0, D(w)), "7 2.500000"); /* the double skips to an even slot */
     uint16_t out[8];
     assert(ce_wformat(out, 8, wide("%d"), NULL, 0) == -1);       /* missing argument */
-    assert(ce_wformat(out, 8, wide("%f"), A(1)) == -1);          /* unsupported */
+    assert(ce_wformat(out, 8, wide("%f"), A(1)) == -1);          /* a double needs two words */
+    assert(ce_wformat(out, 8, wide("a%1b"), NULL, 0) == 3 && out[1] == '1' && out[2] == 'b'); /* printed itself */
+    assert(ce_wformat(out, 8, wide("x %1"), NULL, 0) == 3 && out[2] == '1');
     assert(ce_wformat(out, 4, wide("abcdef"), NULL, 0) == 3);    /* truncated */
     assert(out[3] == 0);
 

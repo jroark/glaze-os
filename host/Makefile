@@ -378,7 +378,7 @@ wince-test: ../tests/native/wince_property.c ../apps/wince/property_state.c ../a
 wince-test: ../tests/native/wince_text.c ../apps/wince/text.c ../apps/wince/text.h
 wince-test: ../tests/native/wince_runtime.c ../tests/native/wince_runtime_host.h ../tests/native/wince_filemeta.c ../apps/wince/filemeta.c ../apps/wince/thread.c ../apps/wince/mapping.c ../apps/wince/timezone.c ../apps/wince/scan.c ../apps/wince/string.c ../apps/wince/view.c ../apps/wince/winsock.c ../apps/wince/ole.c
 wince-test: ../apps/wince/list.c ../apps/wince/date_control.c ../apps/wince/tabs.c
-wince-test: ../apps/wince/database.c ../tests/native/wince_database.c
+wince-test: ../apps/wince/database.c ../apps/wince/dbstore.c ../apps/wince/dbstore.h ../tests/native/wince_database.c
 	@mkdir -p ../out/host
 	$(CC) -std=c11 -g -Wall -Wextra -I../lib/include -fsanitize=address,undefined \
 	    -o ../out/host/wince-pe-test ../tests/native/wince_pe.c ../apps/wince/pe.c
@@ -408,7 +408,7 @@ wince-test: ../apps/wince/database.c ../tests/native/wince_database.c
 	    -o ../out/host/wince-filemeta-test ../tests/native/wince_filemeta.c ../apps/wince/datetime.c ../apps/wince/pe.c
 	../out/host/wince-filemeta-test
 	$(CC) -std=c11 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -I../lib/include -fsanitize=address,undefined \
-	    -o ../out/host/wince-database-test ../tests/native/wince_database.c ../apps/wince/pe.c
+	    -o ../out/host/wince-database-test ../tests/native/wince_database.c ../apps/wince/pe.c ../apps/wince/dbstore.c
 	../out/host/wince-database-test
 	python3 ../tests/wince_assets_test.py
 	python3 ../tests/wince_runner_test.py
