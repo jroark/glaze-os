@@ -32,7 +32,8 @@ static uint8_t cis_byte(unsigned i)
 #define PCMCIA_CD_MASK 6u
 #define PCMCIA0_CARD_PRESENT() ((PCMCIA_STATUS & PCMCIA_CD_MASK) == 0)
 /* The jacket's socket (1) is always empty here. */
-static uint32_t socket1_detect = 8, socket1_bus, socket1_reg;
+static uint32_t socket1_detect = 8, socket1_bus, socket1_reg, socket1_gate = 1;
+#define PCMCIA1_GATE socket1_gate
 #define PCMCIA1_DETECT socket1_detect
 #define PCMCIA1_EMPTY 8u
 #define PCMCIA1_PRESENCE socket1_reg
@@ -287,9 +288,11 @@ static void wl54cf_socket_tests(void)
     for (unsigned i = 0; i < sizeof(wl54cf); i++) attr[i*2] = wl54cf[i];
     booted = true;
 
-    /* Socket 1's unit is clock-gated: every register reads 0. That is no
-     * jacket, not a card in one; the CF slot's card goes to socket 0. */
+    /* Socket 1's unit is clock-gated (gate 1120 off): every register reads
+     * 0. That is no jacket, not a card in one; the CF slot's card goes to
+     * socket 0. */
     reset_sockets();
+    socket1_gate = 0;
     socket1_detect = 0; socket1_reg = 0; socket1_bus = 0;
     status = PCMCIA_CD_MASK;                    /* the CF slot's detect not settled */
     pcmcia_poll();
@@ -298,6 +301,17 @@ static void wl54cf_socket_tests(void)
     unsigned n = net_inserts;
     pcmcia_poll();
     assert(socket_full && socket == 0 && net_inserts > n && net_product == 0x8103);
+    socket1_gate = 1;
+
+    /* After a cold NAND boot, with the gate on, a card in a powered jacket
+     * reads DETECT 0 and PRESENCE 0 (a BE-300 with a USR modem, 2026-11-09):
+     * it is tried in socket 1. This controller doesn't answer, so the socket
+     * is marked dead. */
+    reset_sockets();
+    socket1_detect = 0; socket1_reg = 0; socket1_bus = 0;
+    status = PCMCIA_CD_MASK;
+    pcmcia_poll();
+    assert(inserted_on == 1 && socket1_dead);
 
     /* A live socket 1 that reads as a card but doesn't answer: the card goes
      * there first, then to the CF slot once that reports it. */

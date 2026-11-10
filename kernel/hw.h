@@ -222,6 +222,7 @@
 #define PCMCIA1_EMPTY       0x08u
 #define PCMCIA1_PRESENCE    REG32(0x0A00104Cu)  /* 0x0C with a card, 0x48 without */
 #define PCMCIA1_ABSENT      0x40u
+#define PCMCIA1_GATE        REG32(0x0A001120u)  /* the detect unit's clock (kernel/main.c) */
 #define PCMCIA1_BUS         REG32(0x0A001B00u)
 #define PCMCIA1_BUS_ON      0x01u
 #define PCMCIA1_CHIP        REG32(0x0B000010u)

@@ -113,6 +113,21 @@ The controller reads 0 while its bus is off. Card windows (pcmcia.dll's
 window table, 0x0198B9AC): I/O at 0x0B200000 + port, attribute memory at
 0x0B600000 (CIS bytes at even addresses, no NAND port in the way).
 
+The detect bits read differently when Windows CE never ran (a cold NAND
+boot, then a USB RAM reload; BE-300, 2026-11-09). The kernel turns the
+detect unit's clock (gate 1120) on at boot:
+
+| | 0x0A001008 | 0x0A00104C |
+| --- | --- | --- |
+| card in a powered jacket | 0 | 0 |
+| jacket unpowered (reads as empty) | 0x8 | 0x40 |
+
+So 0 means "card" once the gate is on. `socket1_card()` checks the gate
+rather than treating 0 as "no unit", which was why a jacket card was never
+powered after a NAND boot. Not yet seen: what these read with no jacket at
+all and a CF card in the slot. At boot that card is still found through the
+CF socket's own detect first.
+
 `cf.c` looks for a card in socket 1 first, then the CF socket, and points
 `pcmcia_io_base` and `pcmcia_attr_base` (hw.h; drivers resolve them as
 module imports) at the socket that has it. At a RAM boot it takes over a

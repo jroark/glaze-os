@@ -18,6 +18,10 @@ enum hayes_result hayes_classify(const char *line, uint32_t *rate);
 #define HAYES_SETUP_MS      3000u
 #define HAYES_DIAL_MS       90000u
 #define HAYES_TRIES         3
+/* Pause before each command. The RC56LD takes a command right after its
+ * last result code; the USR XJ/CC1560 drops one sent that soon (the echo
+ * and reply never come), seen on a BE-300 through the jacket, 2026-11-09. */
+#define HAYES_GAP_MS        250u
 
 struct hayes {
     int state;              /* NET_DIAL_IDLE, _STARTING, _DIALING, _NEGOTIATING (CONNECT) */

@@ -37,14 +37,56 @@ answers `L27-01`.
 This is a controller modem, not a host-signal "soft" modem: the AT interpreter
 and the data pump are on the card. Unlike most modems, it keeps echoing
 commands after `ATE0`, so the dialer recognises echoes instead of relying on
-`E0`. `ATDT,` (no digits) goes off-hook and answers `OK` straight away. That
-makes it a safe way to exercise the dialer on a real line without calling
-anyone.
+`E0`.
 
-Checked on hardware through a Glaze USB RAM reload: the AT probe, the Settings
-pages, and the dialer's ATZ / setup / ATI3 / ATD / result / DTR hang-up. A real
-call and PPP session over a phone line haven't been tested yet. PPP itself is
-tested in the emulator, as described below.
+**This card has never placed a call.** On a phone line (2026-11-09) every
+`ATDT102` answered `OK` at once, and the far end never rang. That included tone
+and pulse, blind dialing (`X0`), `AT&F` first, and `ATH1` first. It also
+printed nothing for `ATI0`, `ATS7?`, `AT+FCLASS?` or `AT&V`, but `ATI3`
+answered. So the earlier "`ATDT,` answers `OK`" result shows the same fault,
+not a safe test. With the dongle reseated and the 250 ms pause added
+(below), it still never took the line off-hook: the simulator's line LED
+stayed dark and the router saw no ring. Its line side is faulty.
+
+### USR XJ/CC1560 in the PCMCIA jacket: a real call
+
+A U.S. Robotics XJ/CC1560 Megahertz 56k modem in the jacket's socket 1
+([PCCARDS.md](PCCARDS.md)) dialed a DCB IP-6690 router over a Teltone TLS-3B
+line simulator on 2026-11-09. The router answered with PAP dial-in.
+
+- **The card:** COR `60h` at `0x300`, and the 16550 at 3f8h. It answered
+  `AT` at divisor 1 on some boots and at divisor 2 on others; the dialer
+  worked at either. `ATI3` answers `TB201, V.90 Modem` / `Regulatory
+  revision 1.1`.
+- **A pause before each command:** it drops a command sent right after its
+  last result code, so the echo and reply never come. The dialer waits
+  `HAYES_GAP_MS` (250 ms) before each command. The RC56LD didn't need this.
+- **The call:** about 40 s from `ATDT` to `CONNECT
+  21600/ARQ/V34/LAPM/V42BIS` on the simulator, then PPP up 0.5–6.5 s later.
+  - The router's log shows LCP (asyncmap 0, pcomp, accomp), then PAP. Glaze
+    rejects CCP with a Protocol-Reject. IPCP agrees VJ, the address and both
+    ms-dns entries.
+- **Checked on the call (the scratch test app and Settings):**
+  - A wrong password is refused (`NET_DIAL_E_AUTH`).
+  - Pings to the peer and through the router's NAT (to 8.8.8.8) take about
+    165–185 ms.
+  - DNS through the router's proxy works, and an HTTP GET of example.com
+    returned 200 OK.
+  - Hanging up returns the router to dial-in wait. Redialing with the saved
+    settings works, and so do Settings' Connect and Hang Up ("Connected,
+    21.6 kbps").
+- **Open: bigger downloads stall.** The Browser's 68k.news (97 KB) and a
+  plain GET of it got no data, or stopped part-way, within the 30 s idle
+  timeout. Small replies always arrived. Not diagnosed yet: full-size
+  segments, VJ, or the UART path under sustained input are the suspects.
+- **Open: one freeze.** After about 25 minutes of calls the device froze
+  with the screen on, and USB stopped answering. It needed a reset; the
+  console before it shows nothing unusual.
+- **Router configuration:** the router's first DNS server pointed at a dead
+  address. Its proxy answered names it hadn't cached too slowly, and
+  `net_resolve` failed with `GZ_ENOENT`.
+
+PPP is also tested in the emulator, as described below.
 
 ## Kernel
 
