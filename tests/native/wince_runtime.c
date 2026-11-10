@@ -220,6 +220,10 @@ void gfx_fill(gfx_surface *s, gfx_rect r, uint32_t c)
     (void)r;
     (void)c;
 }
+void gfx_text_fit(gfx_surface *s, int x, int y, int max_w, const gfx_font *f, const char *t, uint32_t c, int alpha)
+{
+    (void)s; (void)x; (void)y; (void)max_w; (void)f; (void)t; (void)c; (void)alpha;
+}
 int gfx_text(gfx_surface *s, int x, int y, const gfx_font *f, const char *t, uint32_t c, int alpha)
 {
     (void)s;

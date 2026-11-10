@@ -181,7 +181,7 @@ class Audit:
         self.modules = {}
         self.search_tail = ["", *system_path(self.volume), "Program Files"]
         self.programs = sorted((p[:-4] if p.lower().endswith(".cpk") else p for p in self.files.values()
-                                if p.lower().endswith((".exe", ".exe.cpk"))), key=str.lower)
+                                if p.lower().endswith((".exe", ".exe.cpk", ".cpl", ".cpl.cpk"))), key=str.lower)
 
     def walk(self, directory, prefix):
         for name, _, attr, cluster, _ in self.volume.entries(directory):
@@ -203,11 +203,13 @@ class Audit:
 
     def module(self, dll, folder):
         """('fat'|'nk', named exports, ordinal exports, imports) or None, in
-        apps/wince/source.c's order: the program's folder and \Windows, NK's
+        apps/wince/source.c's order: the program's folder and \Windows (with the
+        boot patch folder), NK's
         Casio libraries, then the root, SystemPath and Program Files."""
         key = dll.lower()
         rom = key in {n.lower() for n in self.runtime.rom_libraries} and key in self.toc
-        for where in [folder, "Windows", None, *self.search_tail]:
+        # \Windows includes Program Files\Patch, as shells' boot loaders copy it there.
+        for where in [folder, "Windows", "Program Files/Patch", None, *self.search_tail]:
             if where is None:
                 if not rom:
                     continue

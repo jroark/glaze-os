@@ -9,6 +9,7 @@
 #define TREE_SORT 0xffff0003u
 struct view_item {
     bool used, expanded;
+    bool callback; /* LPSTR_TEXTCALLBACK: the parent supplies the text */
     CW parent, data, state;
     int children, image;
     WCHAR *text[VIEW_COLS];
@@ -53,17 +54,27 @@ static void read_text(CW dst, CW capacity, const WCHAR *src)
         memcpy(PTR(void, dst), src, n * 2);
     PTR(WCHAR, dst)[n] = 0;
 }
+/* LVN_GETDISPINFOW for an owner-data or LPSTR_TEXTCALLBACK item (slot
+ * `row`): NMHDR, then an LVITEMW with its position and lParam. */
 static bool owner_text(struct ce_window *w, unsigned row, unsigned column)
 {
     struct ce_view *v = w->view;
     WCHAR buffer[512] = {0};
-    CW notice[12] = {w->handle, w->id, (CW)-177, 1, row, column,
-        0, 0, WORD(buffer), ARRAY_SIZE(buffer), 0, 0};
+    unsigned position = row;
+    for (unsigned n = 0; n < v->count; n++)
+        if (v->order[n] == row)
+            position = n;
+    CW notice[12] = {w->handle, w->id, (CW)-177, 1, position, column,
+        0, 0, WORD(buffer), ARRAY_SIZE(buffer), 0, v->item[row].data};
     ce_send(w->parent, 0x4e, w->id, WORD(notice)); /* LVN_GETDISPINFOW */
-    if (w->view != v || row >= v->count)
+    if (w->view != v || !v->item[row].used)
         return false;
     buffer[ARRAY_SIZE(buffer) - 1] = 0;
     return copy_text(&w->view->item[row].text[column], notice[8]);
+}
+static bool callback_text(const struct ce_window *w, unsigned row)
+{
+    return (w->style & 0x1000) || w->view->item[row].callback;
 }
 bool ce_view_init(struct ce_window *w)
 {
@@ -401,7 +412,8 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
             for (i = 0; i < VIEW_ITEMS && v->item[i].used; i++)
                 ;
             struct view_item *it = &v->item[i];
-            if ((p[0] & 1) && !copy_text(&it->text[0], p[5]))
+            it->callback = (p[0] & 1) && p[5] == (CW)-1;
+            if ((p[0] & 1) && !it->callback && !copy_text(&it->text[0], p[5]))
                 return true;
             it->used = true;
             it->data = (p[0] & 4) ? p[8] : 0;
@@ -439,8 +451,7 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
                 return true;
             struct view_item *it = &v->item[i];
             bool get = msg == 0x104b || msg == 0x1073;
-            if (get && (w->style & 0x1000) && (msg == 0x1073 || (p[0] & 1)) &&
-                !owner_text(w, i, p[2]))
+            if (get && callback_text(w, i) && (msg == 0x1073 || (p[0] & 1)) && !owner_text(w, i, p[2]))
                 return true;
             if (get) {
                 if (msg == 0x1073 || (p[0] & 1))
@@ -452,7 +463,10 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
                 if (msg == 0x104b && (p[0] & 8))
                     p[3] = it->state & p[4];
             } else {
-                if ((msg == 0x1074 || (p[0] & 1)) && !copy_text(&it->text[p[2]], p[5]))
+                bool text = msg == 0x1074 || (p[0] & 1);
+                if (text && !p[2])
+                    it->callback = p[5] == (CW)-1;
+                if (text && p[5] != (CW)-1 && !copy_text(&it->text[p[2]], p[5]))
                     return true;
                 if (msg == 0x104c && (p[0] & 2))
                     it->image = (int)p[7];
@@ -613,12 +627,15 @@ void ce_view_draw(struct ce_window *w)
         }
         for (unsigned c = 0; c < (v->tree ? 1 : MAX(1u, v->col_count)); c++) {
             char text[1024];
-            if (!v->tree && (w->style & 0x1000) && !owner_text(w, i, c)) {
+            if (!v->tree && callback_text(w, i) && !owner_text(w, i, c)) {
                 gfx_reset_clip(&ui.surf);
                 return;
             }
             ce_display(text, sizeof(text), it->text[c]);
-            gfx_text(&ui.surf, x + 2, y + 2, ui_font(FONT_R12), text, color, 255);
+            /* Each column's text stays within its width, as CE truncates it. */
+            bool last = v->tree || c + 1 >= v->col_count;
+            int width = last ? r.x + r.w - x - 4 : MAX(24, v->widths[c]) - 4;
+            gfx_text_fit(&ui.surf, x + 2, y + 2, MAX(0, width), ui_font(FONT_R12), text, color, 255);
             x += MAX(24, v->widths[c]);
         }
     }

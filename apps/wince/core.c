@@ -1516,7 +1516,7 @@ static CW file_error(int error)
 }
 struct find_handle {
     bool active, fs_done, source_done;
-    uint32_t index, bundled_index, source_index;
+    uint32_t index, bundled_index, source_index, source_which;
     char path[FS_PATH_MAX], canonical_dir[FS_PATH_MAX], pattern[FS_NAME_MAX];
 };
 static struct find_handle searches[8];
@@ -1575,9 +1575,26 @@ static CW find_next(struct find_handle *search, CW out)
     }
     while(!search->source_done){
         char original[FS_PATH_MAX];
-        if(!ce_source_directory(search->canonical_dir,original)){search->source_done=true;break;}
+        /* Each original folder in turn: \Windows has the boot patch folder too. */
+        if(!ce_source_directory_at(search->canonical_dir,search->source_which,original)){
+            if(++search->source_which>1){search->source_done=true;break;}
+            search->source_index=0;continue;
+        }
         int count=fs_list(original,search->source_index++,&entry,1);
-        if(count<=0){search->source_done=true;break;}
+        if(count<=0){
+            if(++search->source_which>1){search->source_done=true;break;}
+            search->source_index=0;continue;
+        }
+        if(search->source_which){
+            char first[FS_PATH_MAX],shadow[FS_PATH_MAX];struct fs_stat shadow_st;
+            size_t l=strlen(entry.name);
+            char base[FS_NAME_MAX];strlcpy(base,entry.name,sizeof base);
+            if(l>4&&!strcasecmp(base+l-4,".cpk"))base[l-4]=0;
+            if(ce_source_directory_at(search->canonical_dir,0,first)&&
+               ((snprintf(shadow,sizeof shadow,"%s/%s",first,base)<FS_PATH_MAX&&!fs_stat(shadow,&shadow_st))||
+                (snprintf(shadow,sizeof shadow,"%s/%s.cpk",first,base)<FS_PATH_MAX&&!fs_stat(shadow,&shadow_st))))
+                continue;
+        }
         char physical[FS_PATH_MAX],overlay[FS_PATH_MAX];struct fs_stat st;
         int n=snprintf(physical,sizeof physical,"%s/%s",original,entry.name);
         if(n<0||n>=FS_PATH_MAX)continue;

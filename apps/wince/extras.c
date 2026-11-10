@@ -510,6 +510,32 @@ CE_API(PostKeybdMessage)
     return 1;
 }
 CE_API(GetDoubleClickTime) { return 500; }
+/* Battery driver queries (Power applets): Glaze's battery reports bands,
+ * so three main levels and one backup level; no change notifications. */
+CE_API(BatteryDrvrGetLevels) { return 3 | 1u << 16; }
+CE_API(BatteryDrvrSupportsChangeNotification) { return 0; }
+CE_API(BatteryGetLifeTimeInfo)
+{
+    if (a0)
+        memset(PTR(void, a0), 0, 16);
+    if (a1)
+        *PTR(CW, a1) = 0;
+    if (a2)
+        *PTR(CW, a2) = 0;
+    return 1;
+}
+CE_API(EnumPnpIds)
+{
+    ce_error = 259;
+    return 0;
+}
+/* KeybdGetDeviceInfo(index, out): no CE keyboard driver answers. */
+CE_API(KeybdGetDeviceInfo)
+{
+    ce_error = 50;
+    return 0;
+}
+CE_API(NotifyWinUserSystem) { return 0; }
 /* The SIP has one input method, Glaze's keyboard, with no COM CLSID. */
 CE_API(SipStatus) { return 1; /* SIP_STATUS_AVAILABLE */ }
 CE_API(SipGetCurrentIM)
@@ -758,7 +784,9 @@ static const struct ce_export exports[] = {
     CE_EXPORT(CreateAPISet), CE_EXPORT(RegisterAPISet), CE_EXPORT(GetForegroundInfo), CE_EXPORT(CeRunAppAtEvent),
     CE_EXPORT(mouse_event), CE_EXPORT(PostKeybdMessage), CE_EXPORT(GetDoubleClickTime), CE_EXPORT(SipStatus),
     CE_EXPORT(SipGetCurrentIM), CE_EXPORT(SipSetCurrentIM), CE_EXPORT(SipEnumIM), CE_EXPORT(SHCreateShortcut),
-    CE_EXPORT(SHGetShortcutTarget), CE_EXPORT(SHGetSpecialFolderPath),
+    CE_EXPORT(SHGetShortcutTarget), CE_EXPORT(SHGetSpecialFolderPath), CE_EXPORT(BatteryDrvrGetLevels),
+    CE_EXPORT(BatteryDrvrSupportsChangeNotification), CE_EXPORT(BatteryGetLifeTimeInfo), CE_EXPORT(EnumPnpIds),
+    CE_EXPORT(KeybdGetDeviceInfo), CE_EXPORT(NotifyWinUserSystem),
 };
 static const struct ce_export toolhelp[] = {
     CE_EXPORT(CreateToolhelp32Snapshot), CE_EXPORT(CloseToolhelp32Snapshot), CE_EXPORT(Process32First),

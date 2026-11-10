@@ -2721,6 +2721,15 @@ CE_API(ImageList_Merge)
         }
     return handle;
 }
+/* IMAGELISTDRAWPARAMS: cbSize, himl, i, hdcDst, x, y, cx, cy, xBitmap,
+ * yBitmap, rgbBk, rgbFg, fStyle, dwRop. */
+CE_API(ImageList_DrawIndirect)
+{
+    const CW *p = PTR(CW, a0);
+    if (!p || p[0] < 56)
+        return 0;
+    return ce_ImageList_Draw(p[1], p[2], p[3], p[4], p[5], p[12], 0, 0, 0, 0, 0, 0);
+}
 /* Overlays and drag images aren't drawn. */
 CE_API(ImageList_SetOverlayImage) { return image_list(a0) != NULL; }
 CE_API(ImageList_BeginDrag) { return image_list(a0) != NULL; }
@@ -2822,7 +2831,7 @@ static const struct ce_export exports[] = {
     CE_EXPORT(ImageList_GetIconSize), CE_EXPORT(ImageList_GetIcon), CE_EXPORT(ImageList_Merge),
     CE_EXPORT(ImageList_SetOverlayImage), CE_EXPORT(ImageList_BeginDrag), CE_EXPORT(ImageList_DragEnter),
     CE_EXPORT(ImageList_DragMove), CE_EXPORT(ImageList_DragLeave), CE_EXPORT(ImageList_EndDrag),
-    CE_EXPORT(ImageList_SetDragCursorImage),
+    CE_EXPORT(ImageList_SetDragCursorImage), CE_EXPORT(ImageList_DrawIndirect),
 };
 void *ce_resolve_gdi(const char *name)
 {
