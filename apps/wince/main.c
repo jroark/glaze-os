@@ -7,7 +7,7 @@
 #include <glaze/vm.h>
 
 struct ce_module ce_main;
-#define CE_MAX_LIBRARIES 16
+#define CE_MAX_LIBRARIES 32
 static struct ce_module libraries[CE_MAX_LIBRARIES];
 static char library_names[CE_MAX_LIBRARIES][32];
 static bool library_initialized[CE_MAX_LIBRARIES];
@@ -112,11 +112,19 @@ static void *native_symbol(const char *dll, const char *name)
                 fn = ce_resolve_window(name);
             if (!fn)
                 fn = ce_resolve_gdi(name);
+            if (!fn)
+                fn = ce_resolve_fpe(name);
         } else if (!strcasecmp(dll, "commctrl.dll") || !strcasecmp(dll, "CSO.dll")) {
             fn = ce_resolve_window(name);
             if (!fn)
                 fn = ce_resolve_gdi(name);
         }
+        if (!fn)
+            fn = ce_resolve_system(dll, name);
+        if (!fn)
+            fn = ce_resolve_ras(dll, name);
+        if (!fn)
+            fn = ce_resolve_process(dll, name);
         if (!fn)
             fn = ce_resolve_property(name);
         if (!fn)
@@ -137,6 +145,9 @@ static CW resolve_import(const char *dll, const char *name, uint16_t ordinal, vo
     if (!name && ordinals && ce_ordinal_find(ordinals, ordinal_size, dll, ordinal,
             ordinal_symbol, sizeof(ordinal_symbol)))
         name = ordinal_symbol;
+    void *data = name ? ce_resolve_data(dll, name) : NULL;
+    if (data)
+        return WORD(data);
     void *fn = name ? native_symbol(dll, name) : NULL;
     if (fn)
         return bridge(fn, NULL);
@@ -163,6 +174,9 @@ CW ce_import_address(const char *dll, const char *name)
 {
     /* Capability probes must see NULL for absent APIs. Only static imports
      * receive a diagnostic trap, since execution cannot safely continue. */
+    void *data = ce_resolve_data(dll, name);
+    if (data)
+        return WORD(data);
     void *fn = native_symbol(dll, name);
     CW address = fn ? bridge(fn, NULL) : 0;
     if (!address) {
@@ -281,6 +295,10 @@ CW ce_load_library(const char *name)
     char mapped[48];
     if (!file && ce_bundled_res_name(base, mapped))
         file = res_map(mapped, &size);
+    /* Casio application DLLs ship only inside NK; their XIP images are
+     * rebuilt from the cached records and bound like any other library. */
+    if (!file && ce_source_active() && (owned = ce_source_rom_library(base, &size)))
+        file = owned;
     if (!file) {
         ce_error = 126;
         return 0;
@@ -433,20 +451,30 @@ int main(void)
     }
     if (gz_vm_map(CE_BRIDGE_BASE, CE_BRIDGE_BYTES))
         ce_fatal("Cannot allocate WinCE call bridges");
+    /* CE's user KData page (PUserKData = 0x5800): the loader rewrites the
+     * usual constant-address reads, and this page answers those made through
+     * a base register (NFC's debug output). SH_CURTHREAD holds the main
+     * thread's token, as the rewritten reads compute it; SH_CURPROC 0x42. */
+    if (!gz_vm_map(0x5000, 4096)) {
+        CW stack;
+        ce_put32(PTR(uint8_t, 0x5808), WORD(&stack) >> 16);
+        ce_put32(PTR(uint8_t, 0x580c), 0x42);
+        gz_vm_publish(0x5000, 4096, 0);
+    }
     bridges = PTR(uint32_t, CE_BRIDGE_BASE);
     if(direct){
         uint32_t size=0;void *file=ce_source_program(&size);
         if(!file)ce_fatal("Cannot read the selected NAND executable");
         map_module(&ce_main,file,size);finish_module(&ce_main,ce_source_name());
         free(file);ce_main.pe.file=NULL;
+        ce_source_cache_icons();
     }else load(&ce_main, "program.exe");
     if (ce_main.pe.dll)
         ce_fatal("Expected a WinCE application");
     if (published != bridge_count)
         publish_bridges();
-    static WCHAR command[1];
     printf("wince: entering original executable\n");
-    CW result = ce_call(ce_main.base + ce_main.pe.entry, ce_main.base, 0, WORD(command), 1);
+    CW result = ce_call(ce_main.base + ce_main.pe.entry, ce_main.base, 0, WORD(ce_command_line()), 1);
     ce_shutdown();
     printf("wince: original executable returned %u\n", result);
     return (int)result;

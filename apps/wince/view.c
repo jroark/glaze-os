@@ -585,7 +585,7 @@ void ce_view_draw(struct ce_window *w)
         int x = r.x;
         for (unsigned c = 0; c < v->col_count; c++) {
             char text[256];
-            ce_narrow(text, sizeof(text), v->columns[c]);
+            ce_display(text, sizeof(text), v->columns[c]);
             gfx_text(&ui.surf, x + 2, y + 2, ui_font(FONT_R12), text, 0, 255);
             x += MAX(24, v->widths[c]);
         }
@@ -617,7 +617,7 @@ void ce_view_draw(struct ce_window *w)
                 gfx_reset_clip(&ui.surf);
                 return;
             }
-            ce_narrow(text, sizeof(text), it->text[c]);
+            ce_display(text, sizeof(text), it->text[c]);
             gfx_text(&ui.surf, x + 2, y + 2, ui_font(FONT_R12), text, color, 255);
             x += MAX(24, v->widths[c]);
         }

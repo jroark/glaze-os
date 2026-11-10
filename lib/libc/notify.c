@@ -89,11 +89,16 @@ int sb_note_cancel_for(const char *path, uint32_t id)
 }
 
 _Static_assert(sizeof(struct sb_wince_req)<=sizeof(struct sb_note_req), "CE launch must fit the client page");
-int sb_wince_launch(const char *path)
+int sb_wince_launch_args(const char *path, const char *args)
 {
     REQ_LOCKED();
     int rv=open_client("");if(rv)return rv;
     struct sb_wince_req *ce=(void *)req;
     if(!path || strlcpy(ce->path,path,sizeof ce->path)>=sizeof ce->path)return GZ_EINVAL;
+    if(strlcpy(ce->args,args?args:"",sizeof ce->args)>=sizeof ce->args)return GZ_EINVAL;
     return request(SB_WINCE_LAUNCH,0,0,0);
+}
+int sb_wince_launch(const char *path)
+{
+    return sb_wince_launch_args(path,"");
 }

@@ -173,7 +173,7 @@ static CW sheet_proc(CW handle, CW message, CW wp, CW lp)
         gfx_fill(&ui.surf, gfx_r(0, 0, 240, 320), 0xc0c0c0);
         gfx_fill(&ui.surf, gfx_r(0, 0, 240, 24), 0x305080);
         char title[192];
-        ce_narrow(title, sizeof(title), w->text);
+        ce_display(title, sizeof(title), w->text);
         gfx_text(&ui.surf, 4, 4, ui_font(FONT_R12), title, 0xffffff, 255);
     } else if (message == 0x111 || message == 0x10) {
         unsigned command = message == 0x10 ? 2 : wp & 65535;

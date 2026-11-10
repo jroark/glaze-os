@@ -5,7 +5,8 @@
 
 #include <glaze/sys.h>
 
-/* Page-aligned, nonempty regions below 0x0f000000, at most 4 MiB each.
+/* Page-aligned, nonempty regions above page 0 and below 0x0f000000, at most
+ * 4 MiB each.
  * Existing mappings (including demand-paged images) are never replaced. */
 static inline int gz_vm_map(uint32_t address, uint32_t size)
 {

@@ -38,5 +38,6 @@ typedef uint32_t (*ce_resolver)(const char *dll, const char *name, uint16_t ordi
 const char *ce_pe_imports(const struct ce_pe *, void *image, ce_resolver, void *);
 const char *ce_pe_direct_calls(const struct ce_pe *, void *image, ce_resolver, void *);
 const void *ce_pe_resource(const struct ce_pe *, void *image, uint16_t type, uint16_t id, uint32_t *bytes);
+bool ce_pe_resource_id(const struct ce_pe *, void *image, uint16_t type, unsigned index, uint16_t *id);
 
 #endif

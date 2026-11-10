@@ -318,6 +318,12 @@ const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, ce_resolver 
                 ce_put32(p, (29u << 16) | (reg << 11) | (16u << 6) | 2u);
                 continue;
             }
+            /* KData's SH_CURPROC slot (PUserKData + 0xc), the inline
+             * GetCurrentProcess(): the runtime's process handle, 0x42. */
+            if ((load & 0xffffu) == 0x580cu && (load & 0xffe00000u) == 0x8c000000u && reg) {
+                ce_put32(p, 0x24000000u | (reg << 16) | 0x42u);
+                continue;
+            }
             if (!reg || reg == 31 || (load & 0xffe00000u) != 0x24000000u)
                 continue;
             for (unsigned t = 0; t < ARRAY_SIZE(traps); t++) {
@@ -347,6 +353,32 @@ const char *ce_pe_direct_calls(const struct ce_pe *pe, void *image, ce_resolver 
     return NULL;
 }
 
+/* The ID of a type's index-th resource with a numeric ID (ExtractIconEx's
+ * positive indices count RT_GROUP_ICON entries this way). */
+bool ce_pe_resource_id(const struct ce_pe *pe, void *image, uint16_t type, unsigned index, uint16_t *id)
+{
+    uint32_t root = pe->directory[2].rva, limit = pe->directory[2].size;
+    uint8_t *dir = ce_range(0, 16, limit) ? ce_pe_at(pe, image, root, 16) : NULL;
+    if (!dir)
+        return false;
+    uint32_t named = ce_u16(dir + 12), ids = ce_u16(dir + 14);
+    uint8_t *entries = ce_range(16, (named + ids) * 8, limit) ? ce_pe_at(pe, image, root + 16, (named + ids) * 8) : NULL;
+    for (uint32_t i = named; entries && i < named + ids; i++) {
+        uint32_t value = ce_u32(entries + i * 8 + 4), off = value & 0x7fffffffu;
+        if (ce_u32(entries + i * 8) != type || !(value & 0x80000000u) || !ce_range(off, 16, limit))
+            continue;
+        uint8_t *sub = ce_pe_at(pe, image, root + off, 16);
+        uint32_t sub_named = sub ? ce_u16(sub + 12) : 0, sub_ids = sub ? ce_u16(sub + 14) : 0;
+        if (!sub || index >= sub_ids || !ce_range(off + 16, (sub_named + sub_ids) * 8, limit))
+            return false;
+        uint8_t *e = ce_pe_at(pe, image, root + off + 16 + (sub_named + index) * 8, 8);
+        if (!e || ce_u32(e) > 65535)
+            return false;
+        *id = (uint16_t)ce_u32(e);
+        return true;
+    }
+    return false;
+}
 const void *ce_pe_resource(const struct ce_pe *pe, void *image, uint16_t type, uint16_t id, uint32_t *bytes)
 {
     uint32_t root = pe->directory[2].rva, limit = pe->directory[2].size, off = 0;

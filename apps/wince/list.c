@@ -295,7 +295,7 @@ static void row(struct ce_window *w, gfx_rect r, unsigned index)
     if (index >= l->count)
         return;
     char text[1024];
-    ce_narrow(text, sizeof(text), l->items[index].text);
+    ce_display(text, sizeof(text), l->items[index].text);
     bool selected = (int)index == l->selected;
     gfx_fill(&ui.surf, r, selected ? 0x305080 : 0xffffff);
     gfx_text(&ui.surf, r.x + 2, r.y + 2, ui_font(FONT_R12), text, selected ? 0xffffff : 0, 255);
@@ -311,7 +311,7 @@ void ce_list_draw(struct ce_window *w)
     if (l->combo) {
         if ((w->style & 3) != 3) {
             char text[1024];
-            ce_narrow(text, sizeof(text), w->text);
+            ce_display(text, sizeof(text), w->text);
             gfx_text(&ui.surf, r.x + 2, r.y + 3, ui_font(FONT_R12), text, 0, 255);
         } else if (l->selected >= 0)
             row(w, r, l->selected);

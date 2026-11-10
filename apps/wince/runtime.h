@@ -120,6 +120,9 @@ void *ce_resolve_time(const char *);
 void *ce_resolve_timezone(const char *);
 void *ce_resolve_window(const char *);
 void *ce_resolve_gdi(const char *);
+void *ce_resolve_fpe(const char *);
+void *ce_resolve_system(const char *dll, const char *name);
+void *ce_resolve_data(const char *dll, const char *name);
 void *ce_resolve_shell(const char *, const char *);
 void ce_shell_draw(void);
 bool ce_shell_input(const struct gz_input_event *);
@@ -137,6 +140,9 @@ CW ce_call(CW proc, CW a0, CW a1, CW a2, CW a3);
 
 unsigned ce_wlen(const WCHAR *);
 void ce_narrow(char *, uint32_t, const WCHAR *);
+/* Latin-1 for Glaze's fonts, with ASCII stand-ins for common symbols. */
+char ce_glyph(WCHAR);
+void ce_display(char *, uint32_t, const WCHAR *);
 void ce_widen(WCHAR *, uint32_t, const char *);
 int ce_wcmp(const WCHAR *, const WCHAR *);
 bool ce_path(char path[FS_PATH_MAX], const WCHAR *);
@@ -149,6 +155,20 @@ void ce_destroy_window(CW);
 void *ce_resolve_property(const char *);
 uint32_t ce_registry_dword(const char *, const char *, uint32_t);
 bool ce_registry_set_dword(const char *, const char *, uint32_t);
+/* A REG_BINARY value of exactly `size` bytes; false if absent or another size. */
+bool ce_registry_binary(const char *, const char *, void *, uint32_t size);
+bool ce_registry_set_binary(const char *, const char *, const void *, uint32_t size);
+/* A REG_SZ or REG_EXPAND_SZ value, truncated to `capacity` units with its terminator. */
+bool ce_registry_string(const char *, const char *, WCHAR *, uint32_t capacity);
+bool ce_canonical_path(char canonical[FS_PATH_MAX], const WCHAR *input);
+/* The index-th subkey's name; a value's size (or -1), its type and bytes; a typed store. */
+bool ce_registry_child(const char *key, unsigned index, char *out, uint32_t capacity);
+int ce_registry_get(const char *key, const char *name, CW *type, void *out, uint32_t capacity);
+bool ce_registry_put(const char *key, const char *name, CW type, const void *data, uint32_t size);
+void *ce_resolve_ras(const char *dll, const char *name);
+bool ce_process_close(CW, bool *);
+void *ce_resolve_process(const char *dll, const char *name);
+const WCHAR *ce_command_line(void);
 void ce_post(CW window, CW message, CW wparam, CW lparam);
 CW ce_send(CW window, CW message, CW wparam, CW lparam);
 CW ce_dialog_proc(CW, CW, CW, CW);

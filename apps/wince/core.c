@@ -94,6 +94,39 @@ void ce_narrow(char *dst, uint32_t capacity, const WCHAR *src)
         dst[n] = 0;
 }
 
+/* Glaze's fonts are Latin-1. Text for display keeps those characters and
+ * draws common symbols (arrows, triangles, typographic punctuation) as their
+ * nearest ASCII; anything else is '?'. Paths still use ce_narrow's UTF-8. */
+char ce_glyph(WCHAR c)
+{
+    if (c < 256)
+        return (char)c;
+    if (c == 0x2190 || (c >= 0x25c0 && c <= 0x25c4))
+        return '<';
+    if (c == 0x2192 || (c >= 0x25b6 && c <= 0x25ba))
+        return '>';
+    if (c == 0x2191 || (c >= 0x25b2 && c <= 0x25b5))
+        return '^';
+    if (c == 0x2193 || (c >= 0x25bc && c <= 0x25bf))
+        return 'v';
+    if (c == 0x2013 || c == 0x2014 || c == 0x2212 || c == 0x2194)
+        return '-';
+    if (c == 0x2018 || c == 0x2019)
+        return '\'';
+    if (c == 0x201c || c == 0x201d)
+        return '"';
+    if (c == 0x2022 || c == 0x25cf || c == 0x25a0)
+        return (char)0xb7;
+    return '?';
+}
+void ce_display(char *dst, uint32_t capacity, const WCHAR *src)
+{
+    uint32_t n = 0;
+    for (; src && src[n] && n + 1 < capacity; n++)
+        dst[n] = ce_glyph(src[n]);
+    if (capacity)
+        dst[n] = 0;
+}
 void ce_widen(WCHAR *dst, uint32_t capacity, const char *src)
 {
     uint32_t n = 0;
@@ -114,7 +147,7 @@ void ce_widen(WCHAR *dst, uint32_t capacity, const char *src)
         dst[n] = 0;
 }
 
-static bool ce_canonical_path(char canonical[FS_PATH_MAX], const WCHAR *input)
+bool ce_canonical_path(char canonical[FS_PATH_MAX], const WCHAR *input)
 {
     char raw[FS_PATH_MAX+16], norm[FS_PATH_MAX+16];
     ce_narrow(raw, sizeof(raw), input);
@@ -819,9 +852,40 @@ static struct {
 } reg_handles[64];
 static CW reg_serial;
 static bool registry_loaded;
+static uint32_t registry_generation;
+/* Packaged apps keep a private registry. Direct NAND launches share one, as
+ * CE apps do (Connections' phonebook is Internet's and Mail's): it starts as
+ * the device's own \Backup\System.reg, and a generation counter, bumped on
+ * every save, tells other running CE apps to reload it. */
+#define SHARED_REGISTRY "/Library/WinCE/registry"
+#define SHARED_GENERATION "/Library/WinCE/registry.gen"
 static void registry_file(char path[FS_PATH_MAX])
 {
-    snprintf(path, FS_PATH_MAX, "%s/data/registry", res_bundle());
+    if (ce_source_active())
+        strlcpy(path, SHARED_REGISTRY, FS_PATH_MAX);
+    else
+        snprintf(path, FS_PATH_MAX, "%s/data/registry", res_bundle());
+}
+static uint32_t shared_generation(void)
+{
+    uint8_t word[4];
+    return fs_read_file(SHARED_GENERATION, word, 4) == 4 ? ce_u32(word) : 0;
+}
+static bool reg_save(void);
+static void reg_seed_shared(void)
+{
+    struct fs_stat st;
+    const char *backup = "/NAND/Backup/System.reg";
+    if (fs_stat(backup, &st) || st.type != FS_FILE || !st.size || st.size > CE_REG_FILE_MAX)
+        return;
+    uint8_t *data = malloc(st.size);
+    if (data && fs_read_file(backup, data, st.size) == (int)st.size && ce_reg_import_casio(&registry, data, st.size))
+        printf("wince: registry starts from the device's System.reg (%u keys, %u values)\n", registry.key_count,
+               registry.value_count);
+    else
+        ce_reg_clear(&registry);
+    free(data);
+    reg_save();
 }
 static const char *reg_root(CW handle)
 {
@@ -836,12 +900,23 @@ static const char *reg_root(CW handle)
 }
 static void reg_load(void)
 {
-    if (registry_loaded)
+    if (ce_source_active()) {
+        uint32_t generation = shared_generation();
+        if (registry_loaded && generation == registry_generation)
+            return;
+        registry_generation = generation;
+        ce_reg_clear(&registry);
+    } else if (registry_loaded) {
         return;
+    }
     registry_loaded = true;
     char path[FS_PATH_MAX];
     registry_file(path);
     struct fs_stat st;
+    if (fs_stat(path, &st) && ce_source_active()) {
+        reg_seed_shared();
+        return;
+    }
     if (fs_stat(path, &st)) {
         uint32_t seed_size = 0;
         const void *seed = res_map("registry", &seed_size);
@@ -862,7 +937,10 @@ static bool reg_save(void)
 {
     char path[FS_PATH_MAX], temporary[FS_PATH_MAX], folder[FS_PATH_MAX];
     registry_file(path);
-    snprintf(folder, sizeof(folder), "%s/data", res_bundle());
+    if (ce_source_active())
+        strlcpy(folder, "/Library/WinCE", sizeof(folder));
+    else
+        snprintf(folder, sizeof(folder), "%s/data", res_bundle());
     snprintf(temporary, sizeof(temporary), "%s.tmp", path);
     if (fs_mkdirs(folder))
         return false;
@@ -878,7 +956,13 @@ static bool reg_save(void)
             ok = false;
     }
     free(data);
-    return ok && !fs_rename(temporary, path);
+    ok = ok && !fs_rename(temporary, path);
+    if (ok && ce_source_active()) {
+        uint8_t word[4];
+        ce_put32(word, registry_generation = shared_generation() + 1);
+        fs_write_file(SHARED_GENERATION, word, 4);
+    }
+    return ok;
 }
 uint32_t ce_registry_dword(const char *key, const char *name, uint32_t fallback)
 {
@@ -892,6 +976,53 @@ bool ce_registry_set_dword(const char *key, const char *name, uint32_t value)
     uint8_t bytes[4];
     ce_put32(bytes, value);
     return !ce_reg_create(&registry, key) && !ce_reg_set(&registry, key, name, 4, bytes, 4) && reg_save();
+}
+bool ce_registry_child(const char *key, unsigned index, char *out, uint32_t capacity)
+{
+    reg_load();
+    const char *child = ce_reg_child(&registry, key, index);
+    return child && strlcpy(out, child, capacity) < capacity;
+}
+int ce_registry_get(const char *key, const char *name, CW *type, void *out, uint32_t capacity)
+{
+    reg_load();
+    struct ce_reg_value *v = ce_reg_find(&registry, key, name);
+    if (!v)
+        return -1;
+    if (type)
+        *type = v->type;
+    memcpy(out, v->bytes, MIN(v->size, capacity));
+    return (int)v->size;
+}
+bool ce_registry_put(const char *key, const char *name, CW type, const void *data, uint32_t size)
+{
+    reg_load();
+    return !ce_reg_create(&registry, key) && !ce_reg_set(&registry, key, name, type, data, size) && reg_save();
+}
+bool ce_registry_string(const char *key, const char *name, WCHAR *out, uint32_t capacity)
+{
+    reg_load();
+    struct ce_reg_value *v = ce_reg_find(&registry, key, name);
+    if (!v || (v->type != 1 && v->type != 2) || !capacity)
+        return false;
+    uint32_t n = MIN(v->size / 2, capacity - 1);
+    memcpy(out, v->bytes, n * 2);
+    out[n] = 0;
+    return true;
+}
+bool ce_registry_binary(const char *key, const char *name, void *out, uint32_t size)
+{
+    reg_load();
+    struct ce_reg_value *v = ce_reg_find(&registry, key, name);
+    if (!v || v->type != 3 || v->size != size)
+        return false;
+    memcpy(out, v->bytes, size);
+    return true;
+}
+bool ce_registry_set_binary(const char *key, const char *name, const void *data, uint32_t size)
+{
+    reg_load();
+    return !ce_reg_create(&registry, key) && !ce_reg_set(&registry, key, name, 3, data, size) && reg_save();
 }
 static bool reg_utf8(char *out, unsigned capacity, const WCHAR *in)
 {
@@ -1587,6 +1718,9 @@ CE_API(CloseHandle)
     closed = ce_database_close(a0, &handled);
     if (handled)
         return closed;
+    closed = ce_process_close(a0, &handled);
+    if (handled)
+        return closed;
     struct file_handle *f = file_handle(a0);
     if (!f) {
         ce_error = 6;
@@ -1884,6 +2018,119 @@ CE_API(FreeLibrary)
 {
     return a0 != 0;
 }
+CE_API(NKDbgPrintfW)
+{
+    WCHAR text[512];
+    uintptr_t args[] = {a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
+    char message[512];
+    /* Debug output must not stop the app on a conversion the runtime lacks. */
+    if (!a0 || ce_wformat(text, ARRAY_SIZE(text), PTR(WCHAR, a0), args, ARRAY_SIZE(args)) < 0)
+        return 0;
+    ce_narrow(message, sizeof(message), text);
+    printf("wince: debug: %s\n", message);
+    return 0;
+}
+/* The runtime never dispatches structured exceptions, so frame handlers only
+ * run if called directly; they continue the search (ExceptionContinueSearch). */
+CE_API(__C_specific_handler)
+{
+    return 1;
+}
+CE_API(RaiseException)
+{
+    char reason[64];
+    snprintf(reason, sizeof(reason), "WinCE exception %08x raised", (unsigned)a0);
+    ce_fatal(reason);
+}
+/* Every API set the runtime implements is ready from the first call. */
+CE_API(IsAPIReady)
+{
+    return 1;
+}
+/* No CE device drivers exist in Glaze; callers see the driver refuse. */
+CE_API(DeviceIoControl)
+{
+    if (a6)
+        *PTR(CW, a6) = 0;
+    ce_error = 50; /* ERROR_NOT_SUPPORTED */
+    return 0;
+}
+CE_API(KernelIoControl)
+{
+    ce_error = 50;
+    return 0;
+}
+/* The private registry is already saved on every change. */
+CE_API(RegCopyFile)
+{
+    return 1;
+}
+CE_API(FlushFileBuffers)
+{
+    return 1;
+}
+CE_API(SetThreadPriority)
+{
+    return 1;
+}
+CE_API(GetThreadPriority)
+{
+    return 3; /* THREAD_PRIORITY_NORMAL */
+}
+/* Object store against program memory: the BE-300 has 16 MiB in 4 KiB pages.
+ * Glaze's file system is separate flash, so a change is accepted unchanged. */
+CE_API(GetSystemMemoryDivision)
+{
+    if (a0)
+        *PTR(CW, a0) = 1024;
+    if (a1)
+        *PTR(CW, a1) = 3072;
+    if (a2)
+        *PTR(CW, a2) = 4096;
+    return 1;
+}
+CE_API(SetSystemMemoryDivision)
+{
+    return 0; /* SYSMEM_CHANGED */
+}
+/* SYSTEM_POWER_STATUS_EX(2) from Glaze's battery driver, which follows CE's
+ * own (glaze/battery.h). Lifetimes are unknown (BATTERY_LIFE_UNKNOWN). */
+static unsigned power_status(uint8_t *p, unsigned size)
+{
+    struct gz_power_status st = {0};
+    bool valid = !gz_power_status(&st) && (st.flags & GZ_POWER_VALID);
+    unsigned n = MIN(size, 56u);
+    memset(p, 0, n);
+    uint8_t out[56] = {0};
+    out[0] = st.flags & GZ_POWER_AC ? 1 : valid ? 0 : 255;
+    out[1] = !valid ? 255 : st.flags & GZ_POWER_CRITICAL ? 4 : st.flags & GZ_POWER_LOW ? 2 : 1;
+    if (valid && (st.flags & GZ_POWER_CHARGING))
+        out[1] |= 8;
+    out[2] = valid ? st.level : 255;
+    ce_put32(out + 4, 0xffffffffu);
+    ce_put32(out + 8, 0xffffffffu);
+    out[13] = 8; /* no backup battery */
+    out[14] = 255;
+    ce_put32(out + 16, 0xffffffffu);
+    ce_put32(out + 20, 0xffffffffu);
+    ce_put32(out + 24, valid ? (CW)st.adc_avg * 4200u / MAX(1u, st.cal_max) : 0); /* mV */
+    out[52] = 4; /* BATTERY_CHEMISTRY_LION */
+    memcpy(p, out, n);
+    return n;
+}
+CE_API(GetSystemPowerStatusEx)
+{
+    if (!a0)
+        return 0;
+    power_status(PTR(uint8_t, a0), 24);
+    return 1;
+}
+CE_API(GetSystemPowerStatusEx2)
+{
+    if (!a0 || a1 < 24)
+        return 0;
+    return power_status(PTR(uint8_t, a0), a1);
+}
 CE_API(GetVersionEx)
 {
     uint8_t *p = PTR(uint8_t, a0);
@@ -2017,6 +2264,20 @@ static const struct ce_export exports[] = {
     CE_EXPORT(GetProcAddressA),
     CE_EXPORT(FreeLibrary),
     CE_EXPORT(GetVersionEx),
+    CE_EXPORT(NKDbgPrintfW),
+    CE_EXPORT(__C_specific_handler),
+    CE_EXPORT(RaiseException),
+    CE_EXPORT(IsAPIReady),
+    CE_EXPORT(DeviceIoControl),
+    CE_EXPORT(KernelIoControl),
+    CE_EXPORT(RegCopyFile),
+    CE_EXPORT(FlushFileBuffers),
+    CE_EXPORT(SetThreadPriority),
+    CE_EXPORT(GetThreadPriority),
+    CE_EXPORT(GetSystemMemoryDivision),
+    CE_EXPORT(SetSystemMemoryDivision),
+    CE_EXPORT(GetSystemPowerStatusEx),
+    CE_EXPORT(GetSystemPowerStatusEx2),
     {"GetVersionExW", (void *)ce_GetVersionEx},
     CE_EXPORT(GlobalMemoryStatus),
 };

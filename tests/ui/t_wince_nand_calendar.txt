@@ -1,0 +1,6 @@
+# Direct NAND Calendar (times after the launch tap): create an appointment.
+25000 tap 20 12
+37000 tap 140 158
+38000 text Compatibility appointment
+42000 tap 20 12
+46000 tap 120 70

@@ -3,11 +3,12 @@
 #include "runtime.h"
 #include "source.h"
 #include "assets.h"
+#include "exeicon.h"
 
 static bool active, metadata_loaded;
 static char program[FS_PATH_MAX], directory[FS_PATH_MAX], ce_name[FS_PATH_MAX+16];
 static struct ce_nk_assets metadata;
-static char loaded_names[16][32], loaded_paths[16][FS_PATH_MAX+16];
+static char loaded_names[32][32], loaded_paths[32][FS_PATH_MAX+16];
 static unsigned loaded_count;
 static uint32_t last_progress;
 
@@ -69,6 +70,11 @@ static bool cache_key(uint32_t *key)
     if(fs_nand_read((start+count-1)*512,page,sizeof page)!=sizeof page)return false;
     *key=hash_bytes(h,page,sizeof page);return true;
 }
+static uint32_t cache_hash(uint32_t names,uint32_t dict,uint32_t mods)
+{
+    uint32_t h=hash_bytes(hash_bytes(2166136261u,metadata.ordinals,names),metadata.dictionary,dict);
+    return mods?hash_bytes(h,metadata.modules,mods):h;
+}
 static void load_metadata(void)
 {
     if(metadata_loaded)return;
@@ -76,16 +82,17 @@ static void load_metadata(void)
     uint32_t key=0;cache_key(&key);
     const char *cache="/Library/WinCE/rom.cache";
     char tmp[64];snprintf(tmp,sizeof tmp,"/Library/WinCE/rom.%u.tmp",(unsigned)gz_getpid());
+    /* Version 2 adds the cached Casio ROM library records. */
     uint8_t header[24];int fd=fs_open(cache,FS_O_READ);
     if(fd>=0){
-        if(fs_read(fd,header,sizeof header)==sizeof header&&ce_u32(header)==0x31414357u&&ce_u32(header+4)==key&&key){
-            uint32_t names=ce_u32(header+8),dict=ce_u32(header+12);
-            if(names&&names<=CE_ORDINAL_MAX&&dict>=0x104&&dict<=CE_DICT_MAX){
-                metadata.ordinals=malloc(names);metadata.dictionary=malloc(dict);
-                if(metadata.ordinals&&metadata.dictionary&&fs_read(fd,metadata.ordinals,names)==(int)names&&
-                    fs_read(fd,metadata.dictionary,dict)==(int)dict&&
-                    hash_bytes(hash_bytes(2166136261u,metadata.ordinals,names),metadata.dictionary,dict)==ce_u32(header+16)){
-                    metadata.ordinal_bytes=names;metadata.dictionary_bytes=dict;fs_close(fd);return;
+        if(fs_read(fd,header,sizeof header)==sizeof header&&ce_u32(header)==0x32414357u&&ce_u32(header+4)==key&&key){
+            uint32_t names=ce_u32(header+8),dict=ce_u32(header+12),mods=ce_u32(header+20);
+            if(names&&names<=CE_ORDINAL_MAX&&dict>=0x104&&dict<=CE_DICT_MAX&&mods<=CE_ROM_MODULES_MAX){
+                metadata.ordinals=malloc(names);metadata.dictionary=malloc(dict);metadata.modules=mods?malloc(mods):NULL;
+                if(metadata.ordinals&&metadata.dictionary&&(!mods||metadata.modules)&&fs_read(fd,metadata.ordinals,names)==(int)names&&
+                    fs_read(fd,metadata.dictionary,dict)==(int)dict&&(!mods||fs_read(fd,metadata.modules,mods)==(int)mods)&&
+                    cache_hash(names,dict,mods)==ce_u32(header+16)){
+                    metadata.ordinal_bytes=names;metadata.dictionary_bytes=dict;metadata.module_bytes=mods;fs_close(fd);return;
                 }
                 ce_nk_assets_free(&metadata);
             }
@@ -98,13 +105,16 @@ static void load_metadata(void)
     if(metadata.checksum_mismatches)printf("wince: metadata recovery audited %u NK record checksum mismatches\n",metadata.checksum_mismatches);
     printf("wince: recovered %u bytes of matching CE ordinal names and %u CCFS dictionary bytes\n",
            metadata.ordinal_bytes,metadata.dictionary_bytes);
-    memset(header,0,sizeof header);ce_put32(header,0x31414357u);ce_put32(header+4,key);
+    printf("wince: cached %u bytes of original CE application libraries\n",metadata.module_bytes);
+    memset(header,0,sizeof header);ce_put32(header,0x32414357u);ce_put32(header+4,key);
     ce_put32(header+8,metadata.ordinal_bytes);ce_put32(header+12,metadata.dictionary_bytes);
-    ce_put32(header+16,hash_bytes(hash_bytes(2166136261u,metadata.ordinals,metadata.ordinal_bytes),metadata.dictionary,metadata.dictionary_bytes));
+    ce_put32(header+16,cache_hash(metadata.ordinal_bytes,metadata.dictionary_bytes,metadata.module_bytes));
+    ce_put32(header+20,metadata.module_bytes);
     fs_mkdirs("/Library/WinCE");fd=fs_open(tmp,FS_O_WRITE|FS_O_CREATE|FS_O_TRUNC);
     if(fd>=0){
         bool ok=fs_write(fd,header,sizeof header)==sizeof header&&fs_write(fd,metadata.ordinals,metadata.ordinal_bytes)==(int)metadata.ordinal_bytes&&
-                fs_write(fd,metadata.dictionary,metadata.dictionary_bytes)==(int)metadata.dictionary_bytes;
+                fs_write(fd,metadata.dictionary,metadata.dictionary_bytes)==(int)metadata.dictionary_bytes&&
+                (!metadata.module_bytes||fs_write(fd,metadata.modules,metadata.module_bytes)==(int)metadata.module_bytes);
         if(fs_close(fd))ok=false;
         if(!ok||fs_rename(tmp,cache))fs_remove(tmp);
     }
@@ -148,26 +158,54 @@ const char *ce_source_module_name(const char *name)
     for(unsigned i=0;i<loaded_count;i++)if(!strcasecmp(name,loaded_names[i]))return loaded_paths[i];
     return NULL;
 }
-void *ce_source_library(const char *name,uint32_t *size)
+/* A module's file in the program's folder, \Windows or \Program Files. */
+static bool find_module(const char *name,char found[FS_PATH_MAX])
 {
-    if(!active||!name||!*name||strlen(name)>=32||strchr(name,'/')||strchr(name,'\\')||strchr(name,':')||strstr(name,".."))return NULL;
+    if(!active||!name||!*name||strlen(name)>=32||strchr(name,'/')||strchr(name,'\\')||strchr(name,':')||strstr(name,".."))return false;
     const char *folders[]={directory,"/NAND/Windows","/NAND/Program Files"};
     for(unsigned i=0;i<ARRAY_SIZE(folders);i++){
-        char path[FS_PATH_MAX],found[FS_PATH_MAX];
+        char path[FS_PATH_MAX];
         int n=snprintf(path,sizeof path,"%s/%s",folders[i],name);
-        if(n<0||n>=FS_PATH_MAX||!find_file(path,found))continue;
-        if(suffix(found,".cpk"))load_metadata();
-        void *data=read_file(found,size);if(!data)return NULL;
-        if(loaded_count<ARRAY_SIZE(loaded_names)){
-            strlcpy(loaded_names[loaded_count],name,sizeof loaded_names[0]);
-            snprintf(loaded_paths[loaded_count],sizeof loaded_paths[0],"\\Nand Disk%s",found+5);
-            char *p=loaded_paths[loaded_count];if(suffix(p,".cpk"))p[strlen(p)-4]=0;
-            for(;*p;p++)if(*p=='/')*p='\\';
-            loaded_count++;
-        }
-        return data;
+        if(n>0&&n<FS_PATH_MAX&&find_file(path,found))return true;
     }
-    return NULL;
+    return false;
+}
+void *ce_source_image(const char *name,uint32_t *size)
+{
+    char found[FS_PATH_MAX];
+    if(!find_module(name,found))return NULL;
+    if(suffix(found,".cpk"))load_metadata();
+    return read_file(found,size);
+}
+void *ce_source_library(const char *name,uint32_t *size)
+{
+    char found[FS_PATH_MAX];
+    if(!find_module(name,found))return NULL;
+    if(suffix(found,".cpk"))load_metadata();
+    void *data=read_file(found,size);if(!data)return NULL;
+    if(loaded_count<ARRAY_SIZE(loaded_names)){
+        strlcpy(loaded_names[loaded_count],name,sizeof loaded_names[0]);
+        snprintf(loaded_paths[loaded_count],sizeof loaded_paths[0],"\\Nand Disk%s",found+5);
+        char *p=loaded_paths[loaded_count];if(suffix(p,".cpk"))p[strlen(p)-4]=0;
+        for(;*p;p++)if(*p=='/')*p='\\';
+        loaded_count++;
+    }
+    return data;
+}
+/* Casio application libraries exist only in NK. They are loaded from the
+ * cached records after Program Files and Windows, at their ROM addresses. */
+void *ce_source_rom_library(const char *name,uint32_t *size)
+{
+    if(!active||!name||!*name)return NULL;
+    load_metadata();
+    void *pe=NULL;
+    if(ce_rom_module_pe(metadata.modules,metadata.module_bytes,name,&pe,size))return NULL;
+    if(loaded_count<ARRAY_SIZE(loaded_names)){
+        strlcpy(loaded_names[loaded_count],name,sizeof loaded_names[0]);
+        snprintf(loaded_paths[loaded_count],sizeof loaded_paths[0],"\\Windows\\%s",name);
+        loaded_count++;
+    }
+    return pe;
 }
 /* Map CE file paths to the original volume. Writes keep using ce_path's
  * private drive; the existing copy-on-write file handling consumes this. */
@@ -180,6 +218,15 @@ static bool source_path(const char *canonical,char out[FS_PATH_MAX])
     else if(!strcmp(canonical,"/"))n=snprintf(out,FS_PATH_MAX,"/NAND");
     else n=snprintf(out,FS_PATH_MAX,"/NAND%s",canonical);
     return n>0&&n<FS_PATH_MAX;
+}
+/* An executable for CreateProcess: its CE path on the original volume, or
+ * a bare or \Windows name found as libraries are. */
+bool ce_source_executable(const char *canonical,char out[FS_PATH_MAX])
+{
+    char path[FS_PATH_MAX];
+    if(source_path(canonical,path)&&find_file(path,out))return true;
+    const char *leaf=strrchr(canonical,'/');
+    return find_module(leaf?leaf+1:canonical,out);
 }
 bool ce_source_directory(const char *canonical,char out[FS_PATH_MAX])
 {
@@ -201,4 +248,59 @@ bool ce_source_file(const char *canonical,char out[FS_PATH_MAX])
     bool ok=!fs_mkdirs(parent)&&fs_write_file(out,data,size)==(int)size;free(data);
     if(!ok)fs_remove(out);
     return ok;
+}
+/* Files shows a NAND executable with its own icon from CE_ICON_DIR. Only a
+ * runner holds the CCFS dictionary compressed programs need, so each launch
+ * fills in its folder's missing icons, decoding just headers and resources. */
+static int icon_file_read(void *arg,uint32_t offset,void *out,uint32_t size)
+{
+    int fd=*(int *)arg;
+    if(fs_seek(fd,(int32_t)offset,FS_SEEK_SET)!=(int)offset)return -1;
+    return fs_read(fd,out,size);
+}
+static void cache_icon(const char *path,uint32_t bytes,unsigned icon_size,const char *tag)
+{
+    uint32_t hash=2166136261u;
+    for(const char *p=path;*p;p++)hash=(hash^(uint8_t)*p)*16777619u;
+    char out[64],tmp[72];snprintf(out,sizeof out,CE_ICON_DIR "/%08x%s.gzi",(unsigned)hash,tag);
+    struct fs_stat st;if(!fs_stat(out,&st))return;
+    int fd=fs_open(path,FS_O_READ);if(fd<0)return;
+    uint8_t *gzi=NULL;uint32_t size=0;const char *error;
+    if(suffix(path,".cpk")){
+        struct ce_cpk_file cpk;
+        error=ce_cpk_open(&cpk,icon_file_read,&fd,bytes,metadata.dictionary,metadata.dictionary_bytes);
+        if(!error)error=ce_exe_icon(ce_cpk_read,&cpk,cpk.size,icon_size,&gzi,&size);
+        ce_cpk_close(&cpk);
+    }else error=ce_exe_icon(icon_file_read,&fd,bytes,icon_size,&gzi,&size);
+    fs_close(fd);
+    if(error){free(gzi);gzi=NULL;size=0;} /* an empty file: no icon */
+    snprintf(tmp,sizeof tmp,"%s.tmp",out);
+    if(fs_write_file(tmp,gzi,size)!=(int)size||fs_rename(tmp,out))fs_remove(tmp);
+    free(gzi);
+}
+void ce_source_cache_icons(void)
+{
+    if(!active||strncmp(directory,"/NAND/",6))return;
+    fs_mkdirs(CE_ICON_DIR);
+    /* SpringBoard's home icon for this program, keyed as its context is. */
+    struct fs_stat st;
+    if((!suffix(program,".cpk")||metadata.dictionary)&&!fs_stat(program,&st)&&st.type==FS_FILE)
+        cache_icon(program,st.size,CE_ICON_HOME_SIZE,"-32");
+    struct fs_dirent ents[32];
+    for(uint32_t skip=0;;){
+        int n=fs_list(directory,skip,ents,ARRAY_SIZE(ents));
+        if(n<=0)break;
+        for(int i=0;i<n;i++){
+            const char *name=ents[i].name;
+            bool cpk=suffix(name,".exe.cpk");
+            if(ents[i].type!=FS_FILE||!ents[i].size||(!cpk&&!suffix(name,".exe")))continue;
+            /* Compressed programs need NK's dictionary, which the launch has
+             * already loaded when the program itself is compressed. */
+            if(cpk&&!metadata.dictionary)continue;
+            char path[FS_PATH_MAX];int len=snprintf(path,sizeof path,"%s/%s",directory,name);
+            if(len>0&&len<FS_PATH_MAX)cache_icon(path,ents[i].size,CE_ICON_SIZE,"");
+        }
+        skip+=(uint32_t)n;
+        if(n<(int)ARRAY_SIZE(ents))break;
+    }
 }

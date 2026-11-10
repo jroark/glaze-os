@@ -23,6 +23,7 @@ static CW focus, capture, modal, pressed;
 static CW window_serial;
 
 static bool quitting;
+static bool keyboard_auto; /* opened by tapping an edit, not by SipShowIM */
 static CW exit_code;
 static uint8_t key_state[256];
 static struct {
@@ -40,7 +41,9 @@ static bool is_edit(const struct ce_window *w)
 }
 static CW builtin_proc(CW, CW, CW, CW);
 static void draw_control(struct ce_window *);
+CW ce_GetActiveWindow(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
 static void click_button(struct ce_window *);
+static bool is_button(const struct ce_window *w);
 static unsigned handle_index(CW handle)
 {
     return handle - 0x70000000u;
@@ -136,11 +139,15 @@ static CW change_focus(CW handle)
     if (previous) {
         previous->dirty = true;
         ce_send(old, 8, handle, 0); /* WM_KILLFOCUS */
+        if (is_button(previous) && (previous->style & 0x4000u)) /* BS_NOTIFY: BN_KILLFOCUS */
+            ce_send(previous->parent, 0x111, previous->id | 7u << 16, old);
     }
     struct ce_window *next = ce_window(handle);
     if (next && focus == handle) {
         next->dirty = true;
         ce_send(handle, 7, old, 0); /* WM_SETFOCUS */
+        if (is_button(next) && (next->style & 0x4000u)) /* BN_SETFOCUS */
+            ce_send(next->parent, 0x111, next->id | 6u << 16, handle);
     }
     return old;
 }
@@ -307,6 +314,128 @@ static void replace_selection(struct ce_window *w, const WCHAR *text)
     edited(w);
 }
 
+/* Trackbars and progress bars keep their range and position in scroll[0];
+ * both default to 0-100. Trackbar: TBM_* (0x400-0x417), and a touch moves
+ * the thumb, sending the parent WM_HSCROLL (WM_VSCROLL with TBS_VERT) with
+ * TB_THUMBTRACK, then TB_THUMBPOSITION and TB_ENDTRACK. Progress: PBM_*.
+ * https://learn.microsoft.com/en-us/windows/win32/controls/trackbar-control-reference */
+static bool is_trackbar(const struct ce_window *w)
+{
+    return !strcasecmp(w->klass, "msctls_trackbar32");
+}
+static bool is_progress(const struct ce_window *w)
+{
+    return !strcasecmp(w->klass, "msctls_progress32");
+}
+static void range_defaults(struct ce_window *w)
+{
+    if (!w->scroll[0].minimum && !w->scroll[0].maximum && !w->scroll[0].page) {
+        w->scroll[0].maximum = 100;
+        w->scroll[0].page = 10;
+    }
+}
+static int32_t clamp_position(struct ce_window *w, int32_t pos)
+{
+    return MAX(w->scroll[0].minimum, MIN(w->scroll[0].maximum, pos));
+}
+static bool range_proc(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
+{
+    range_defaults(w);
+    int32_t *lo = &w->scroll[0].minimum, *hi = &w->scroll[0].maximum, *pos = &w->scroll[0].position;
+    CW old = (CW)*pos;
+    *result = 0;
+    if (is_progress(w)) {
+        switch (msg) {
+        case 0x401: /* PBM_SETRANGE */
+            *result = (CW)(uint16_t)*lo | (CW)(uint16_t)*hi << 16;
+            *lo = (int16_t)lp, *hi = (int16_t)(lp >> 16);
+            break;
+        case 0x406: /* PBM_SETRANGE32 */
+            *result = (CW)(uint16_t)*lo | (CW)(uint16_t)*hi << 16;
+            *lo = (int32_t)wp, *hi = (int32_t)lp;
+            break;
+        case 0x402: *result = old; *pos = (int32_t)wp; break;               /* PBM_SETPOS */
+        case 0x403: *result = old; *pos += (int32_t)wp; break;              /* PBM_DELTAPOS */
+        case 0x404: *result = (CW)w->scroll[0].page; w->scroll[0].page = wp; break; /* PBM_SETSTEP */
+        case 0x405: *result = old; *pos += (int32_t)w->scroll[0].page; break; /* PBM_STEPIT */
+        case 0x407: /* PBM_GETRANGE */
+            if (lp) {
+                PTR(int32_t, lp)[0] = *lo;
+                PTR(int32_t, lp)[1] = *hi;
+            }
+            *result = (CW)(wp ? *lo : *hi);
+            return true;
+        case 0x408: *result = old; return true;                             /* PBM_GETPOS */
+        case 0x409: case 0x2001: return true;                               /* bar and background colours */
+        default: return false;
+        }
+        *pos = clamp_position(w, *pos);
+        w->dirty = true;
+        return true;
+    }
+    switch (msg) {
+    case 0x400: *result = old; return true;                                 /* TBM_GETPOS */
+    case 0x401: *result = (CW)*lo; return true;                             /* TBM_GETRANGEMIN */
+    case 0x402: *result = (CW)*hi; return true;                             /* TBM_GETRANGEMAX */
+    case 0x405: *pos = (int32_t)lp; break;                                  /* TBM_SETPOS */
+    case 0x406: *lo = (int16_t)lp, *hi = (int16_t)(lp >> 16); break;        /* TBM_SETRANGE */
+    case 0x407: *lo = (int32_t)lp; break;                                   /* TBM_SETRANGEMIN */
+    case 0x408: *hi = (int32_t)lp; break;                                   /* TBM_SETRANGEMAX */
+    case 0x403: case 0x404: case 0x409: case 0x40a: case 0x40b: case 0x40c: case 0x414:
+        return true; /* tics and selection ranges are not drawn */
+    case 0x415: *result = (CW)w->scroll[0].page; w->scroll[0].page = lp; return true; /* TBM_SETPAGESIZE */
+    case 0x416: *result = (CW)w->scroll[0].page; return true;               /* TBM_GETPAGESIZE */
+    case 0x417: case 0x418: return true;                                    /* line size */
+    case 0x201: case 0x200: case 0x202: {                                   /* touch */
+        if (msg == 0x200 && !(wp & 1))
+            return false;
+        gfx_rect r = ce_window_rect(w->handle);
+        bool vertical = w->style & 2;
+        int at = vertical ? (int16_t)(lp >> 16) : (int16_t)lp, span = MAX(1, (vertical ? r.h : r.w) - 12);
+        int32_t next = *lo + (int32_t)((int64_t)(MAX(0, MIN(span, at - 6))) * (*hi - *lo) / span);
+        *pos = clamp_position(w, next);
+        w->dirty = true;
+        CW bar = vertical ? 0x115 : 0x114;
+        if (msg != 0x202)
+            ce_send(w->parent, bar, 5 | (CW)(uint16_t)*pos << 16, w->handle); /* TB_THUMBTRACK */
+        else {
+            ce_send(w->parent, bar, 4 | (CW)(uint16_t)*pos << 16, w->handle); /* TB_THUMBPOSITION */
+            ce_send(w->parent, bar, 8, w->handle);                           /* TB_ENDTRACK */
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+    *pos = clamp_position(w, *pos);
+    w->dirty = true;
+    return true;
+}
+static void draw_range(struct ce_window *w, gfx_rect r)
+{
+    range_defaults(w);
+    int32_t lo = w->scroll[0].minimum, hi = w->scroll[0].maximum, pos = w->scroll[0].position;
+    int64_t span = MAX(1, hi - lo);
+    if (is_progress(w)) {
+        gfx_fill(&ui.surf, r, 0xffffff);
+        gfx_fill(&ui.surf, gfx_r(r.x, r.y, r.w, 1), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x, r.y + r.h - 1, r.w, 1), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x, r.y, 1, r.h), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x + r.w - 1, r.y, 1, r.h), 0x808080);
+        int filled = (int)((int64_t)(r.w - 2) * (pos - lo) / span);
+        gfx_fill(&ui.surf, gfx_r(r.x + 1, r.y + 1, MAX(0, filled), r.h - 2), 0x305080);
+        return;
+    }
+    bool vertical = w->style & 2;
+    int length = (vertical ? r.h : r.w) - 12, offset = 6 + (int)((int64_t)length * (pos - lo) / span);
+    if (vertical) {
+        gfx_fill(&ui.surf, gfx_r(r.x + r.w / 2 - 2, r.y + 6, 4, length), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x + 2, r.y + offset - 4, r.w - 4, 9), 0x305080);
+    } else {
+        gfx_fill(&ui.surf, gfx_r(r.x + 6, r.y + r.h / 2 - 2, length, 4), 0x808080);
+        gfx_fill(&ui.surf, gfx_r(r.x + offset - 4, r.y + 2, 9, r.h - 4), 0x305080);
+    }
+}
 static CW spin_proc(struct ce_window *w, CW msg, CW wp, CW lp)
 {
     switch (msg) {
@@ -443,6 +572,8 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
         (message == 0x202 || (message >= 0x465 && message <= 0x472)))
         return spin_proc(w, message, wp, lp);
     CW list_result;
+    if ((is_trackbar(w) || is_progress(w)) && range_proc(w, message, wp, lp, &list_result))
+        return list_result;
     if (ce_date_message(w, message, wp, lp, &list_result))
         return list_result;
     if (ce_view_message(w, message, wp, lp, &list_result))
@@ -612,6 +743,22 @@ static CW builtin_proc(CW handle, CW message, CW wp, CW lp)
     }
 }
 
+CW ce_GetDC(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
+CW ce_ReleaseDC(CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW, CW);
+/* WM_DRAWITEM (0x2b) to an owner-drawn control's parent: a DRAWITEMSTRUCT
+ * (type, ID, item, ODA_DRAWENTIRE, state, window, DC, item rectangle, data)
+ * with a DC on the control. States: ODS_SELECTED 1, ODS_DISABLED 4,
+ * ODS_FOCUS 0x10. */
+static void owner_draw(struct ce_window *w, CW type, CW item, CW data)
+{
+    gfx_rect r = ce_window_rect(w->handle);
+    CW dc = ce_GetDC(w->handle, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    CW dis[12] = {type, w->id, item, 1,
+                  (pressed == w->handle ? 1u : 0) | (w->enabled ? 0 : 4u) | (focus == w->handle ? 0x10u : 0),
+                  w->handle, dc, 0, 0, (CW)r.w, (CW)r.h, data};
+    ce_send(w->parent, 0x2b, w->id, WORD(dis));
+    ce_ReleaseDC(w->handle, dc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
 static void draw_control(struct ce_window *w)
 {
     gfx_rect r = ce_window_rect(w->handle);
@@ -620,14 +767,14 @@ static void draw_control(struct ce_window *w)
         if (w->property_page || (w->style & 0x40000000u))
             return;
         char title[256];
-        ce_narrow(title, sizeof(title), w->text);
+        ce_display(title, sizeof(title), w->text);
         gfx_fill(&ui.surf, gfx_r(r.x, r.y, r.w, 24), 0x305080);
         gfx_text(&ui.surf, r.x + 3, r.y + 4, ui_font(FONT_R12), title, 0xffffff, 255);
     } else if (!strcasecmp(w->klass, "SysDateTimePick32")) {
         WCHAR wide[128];
         char text[128];
         ce_date_text(w, wide, ARRAY_SIZE(wide));
-        ce_narrow(text, sizeof(text), wide);
+        ce_display(text, sizeof(text), wide);
         gfx_fill(&ui.surf, r, 0xffffff);
         gfx_text(&ui.surf, r.x + 2, r.y + 3, ui_font(FONT_R12), text, 0, 255);
     } else if (w->view) {
@@ -639,7 +786,7 @@ static void draw_control(struct ce_window *w)
         int width = r.w / MAX(1u, w->tabs->count);
         for (unsigned i = 0; i < w->tabs->count; i++) {
             char text[192];
-            ce_narrow(text, sizeof(text), w->tabs->text[i]);
+            ce_display(text, sizeof(text), w->tabs->text[i]);
             gfx_rect tab = gfx_r(r.x + (int)i * width, r.y, width, 24);
             gfx_fill(&ui.surf, tab, (int)i == w->tabs->selected ? 0xeeeeee : 0xaaaaaa);
             gfx_text_center(&ui.surf, tab.x, tab.y + 4, tab.w, ui_font(FONT_R12), text, 0, 255);
@@ -662,13 +809,15 @@ static void draw_control(struct ce_window *w)
                 if (ch == '\n')
                     continue;
             }
-            char s[2] = {(char)((w->style & 0x20) ? '*' : ch < 256 ? ch : '?'), 0};
+            char s[2] = {(w->style & 0x20) ? '*' : ce_glyph(ch), 0};
             x += gfx_text(&ui.surf, x, y, ui_font(FONT_R12), s, 0, 255);
         }
         gfx_reset_clip(&ui.surf);
+    } else if ((!strcasecmp(w->klass, "Button") || !strcasecmp(w->klass, "CSOButton")) && (w->style & 15) == 11) {
+        owner_draw(w, 4, 0, 0); /* BS_OWNERDRAW: the parent paints, as ODT_BUTTON */
     } else if (!strcasecmp(w->klass, "Button") || !strcasecmp(w->klass, "CSOButton")) {
         char text[128];
-        ce_narrow(text, sizeof(text), w->text);
+        ce_display(text, sizeof(text), w->text);
         if ((w->style & 15) == 7) {
             gfx_line(&ui.surf, r.x, r.y + 6, r.x + r.w - 1, r.y + 6, 0x808080, 255);
             gfx_line(&ui.surf, r.x, r.y + 6, r.x, r.y + r.h - 1, 0x808080, 255);
@@ -691,13 +840,15 @@ static void draw_control(struct ce_window *w)
             gfx_line(&ui.surf, r.x, r.y, r.x + r.w - 1, r.y, 0x808080, 255);
             gfx_text_center(&ui.surf, r.x, r.y + 3, r.w, ui_font(FONT_R12), text, 0, 255);
         }
+    } else if (is_trackbar(w) || is_progress(w)) {
+        draw_range(w, r);
     } else if (!strcasecmp(w->klass, "msctls_updown32")) {
         gfx_fill(&ui.surf, r, 0xaaaaaa);
         gfx_text_center(&ui.surf, r.x, r.y - 2, r.w, ui_font(FONT_R12), "+", 0, 255);
         gfx_text_center(&ui.surf, r.x, r.y + r.h / 2 - 2, r.w, ui_font(FONT_R12), "-", 0, 255);
     } else if (!strcasecmp(w->klass, "msctls_statusbar32")) {
         char text[256];
-        ce_narrow(text, sizeof(text), w->text);
+        ce_display(text, sizeof(text), w->text);
         gfx_fill(&ui.surf, r, 0xc0c0c0);
         gfx_text(&ui.surf, r.x + 2, r.y + 2, ui_font(FONT_R12), text, 0, 255);
     } else if (!strcasecmp(w->klass, "Static")) {
@@ -723,6 +874,14 @@ bool ce_screen_dirty = true;
  * through a DC; explicit renders (UpdateWindow, popups, keyboard) always do. */
 static void render(bool force)
 {
+    /* A keyboard the runtime opened for an edit closes once no edit has
+     * the focus (an editor window closed), as CE's SIP does for its apps. */
+    struct ce_window *typing = ce_window(focus);
+    if (keyboard_auto && ce_keyboard_open && (!typing || !is_edit(typing) || !ce_window_visible(focus))) {
+        ce_keyboard_open = keyboard_auto = false;
+        ce_redraw_all();
+        force = true;
+    }
     bool drawn = force || ce_screen_dirty;
     for (unsigned i = 0; i < WINDOWS; i++) {
         struct ce_window *w = &windows[i];
@@ -949,11 +1108,15 @@ static void input(const struct gz_input_event *e)
     if (e->type == GZ_EV_TOUCH_DOWN) {
         change_focus(w->handle);
         pressed = is_button(w) ? w->handle : 0;
-        if (ce_keyboard_open && w->dialog_proc && e->y < r.y + 24) {
-            ce_keyboard_open = false;
+        /* CE's SIP has its own button; Glaze's keyboard closes when a tap
+         * lands outside any edit, as in Glaze's own apps. */
+        if (ce_keyboard_open && ((w->dialog_proc && e->y < r.y + 24) || !is_edit(w))) {
+            ce_keyboard_open = keyboard_auto = false;
             ce_redraw_all();
         }
         if (is_edit(w) && !(w->style & 0x800)) {
+            if (!ce_keyboard_open)
+                keyboard_auto = true;
             ce_keyboard_open = true;
             w->dirty = true;
         }
@@ -1023,7 +1186,7 @@ CE_API(UnregisterClassW)
 static bool system_class(CW name)
 {
     static const char *const names[] = {"Button", "Edit", "Static", "ListBox", "ComboBox", "ScrollBar",
-        "msctls_updown32", "msctls_statusbar32", "SysTabControl32", "SysListView32", "SysTreeView32",
+        "msctls_updown32", "msctls_statusbar32", "msctls_trackbar32", "msctls_progress32", "SysTabControl32", "SysListView32", "SysTreeView32",
         "SysDateTimePick32", "SysMonthCal32"};
     char text[64];
     if (name < 65536)
@@ -1520,6 +1683,118 @@ CE_API(BringWindowToTop)
         return 0;
     w->dirty = true;
     return 1;
+}
+CE_API(UnionRect)
+{
+    if (!a0 || !a1 || !a2)
+        return 0;
+    struct ce_rect a = *PTR(struct ce_rect, a1), b = *PTR(struct ce_rect, a2);
+    bool ea = a.left >= a.right || a.top >= a.bottom, eb = b.left >= b.right || b.top >= b.bottom;
+    struct ce_rect r = ea ? b : eb ? a :
+        (struct ce_rect){MIN(a.left, b.left), MIN(a.top, b.top), MAX(a.right, b.right), MAX(a.bottom, b.bottom)};
+    bool empty = r.left >= r.right || r.top >= r.bottom;
+    *PTR(struct ce_rect, a0) = empty ? (struct ce_rect){0, 0, 0, 0} : r;
+    return !empty;
+}
+CE_API(CopyRect)
+{
+    if (!a0 || !a1)
+        return 0;
+    *PTR(struct ce_rect, a0) = *PTR(struct ce_rect, a1);
+    return 1;
+}
+/* MapWindowPoints(from, to, points, count): either window may be 0 for the
+ * screen. Returns the horizontal offset in the low word, vertical in the high. */
+CE_API(MapWindowPoints)
+{
+    if ((a0 && !ce_window(a0)) || (a1 && !ce_window(a1))) {
+        ce_error = 1400;
+        return 0;
+    }
+    gfx_rect from = a0 ? ce_client_rect(a0) : (gfx_rect){0, 0, 0, 0};
+    gfx_rect to = a1 ? ce_client_rect(a1) : (gfx_rect){0, 0, 0, 0};
+    int dx = from.x - to.x, dy = from.y - to.y;
+    int32_t *p = PTR(int32_t, a2);
+    for (CW i = 0; p && i < a3 * 2; i += 2) {
+        p[i] += dx;
+        p[i + 1] += dy;
+    }
+    return (CW)(uint16_t)dx | (CW)(uint16_t)dy << 16;
+}
+/* CheckRadioButton(dialog, first, last, checked) sends BM_SETCHECK to each. */
+CE_API(CheckRadioButton)
+{
+    if (!ce_window(a0) || a1 > a2)
+        return 0;
+    for (struct ce_window *w = windows; w < windows + WINDOWS; w++)
+        if (w->handle && w->parent == a0 && w->id >= a1 && w->id <= a2)
+            ce_send(w->handle, 0xf1, w->id == a3, 0);
+    return 1;
+}
+/* All CE windows share the runtime's thread, so notifications are sends. */
+CE_API(SendNotifyMessageW)
+{
+    if (!ce_window(a0) && a0 != 0xffff)
+        return 0;
+    ce_send(a0, a1, a2, a3);
+    return 1;
+}
+/* RegisterWindowMessageW: one message number in 0xC000-0xFFFF per name. */
+CE_API(RegisterWindowMessageW)
+{
+    static WCHAR names[32][64];
+    static unsigned count;
+    const WCHAR *name = PTR(WCHAR, a0);
+    if (!name || !*name) {
+        ce_error = 87;
+        return 0;
+    }
+    for (unsigned i = 0; i < count; i++) {
+        unsigned j = 0;
+        while (names[i][j] && (names[i][j] | 32) == (name[j] | 32))
+            j++;
+        if (!names[i][j] && !name[j])
+            return 0xc000u + i;
+    }
+    if (count == ARRAY_SIZE(names) || ce_wlen(name) >= ARRAY_SIZE(names[0])) {
+        ce_error = 8;
+        return 0;
+    }
+    memcpy(names[count], name, (ce_wlen(name) + 1) * 2);
+    return 0xc000u + count++;
+}
+CE_API(GetCapture)
+{
+    return capture;
+}
+CE_API(SetActiveWindow)
+{
+    CW old = ce_GetActiveWindow(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    struct ce_window *w = ce_window(a0);
+    if (!w)
+        return 0;
+    while (w->parent && ce_window(w->parent))
+        w = ce_window(w->parent);
+    if (old != w->handle)
+        change_focus(w->handle);
+    return old;
+}
+/* Glaze's keyboard composes text itself: no input context is ever open. */
+CE_API(ImmGetContext)
+{
+    return 0;
+}
+CE_API(ImmReleaseContext)
+{
+    return 1;
+}
+CE_API(ImmGetCompositionStringW)
+{
+    return (CW)-2; /* IMM_ERROR_GENERAL */
+}
+CE_API(ImmNotifyIME)
+{
+    return 0;
 }
 CE_API(IntersectRect)
 {
@@ -2046,6 +2321,7 @@ CE_API(SipShowIM)
     if (open != ce_keyboard_open)
         ce_redraw_all(); /* uncover or cover the keyboard area */
     ce_keyboard_open = open;
+    keyboard_auto = false; /* the app manages the input panel */
     ui_keyboard_init(&ce_keyboard);
     for (unsigned i = 0; i < WINDOWS; i++)
         if (windows[i].handle && !windows[i].parent)
@@ -2069,6 +2345,18 @@ static const struct ce_export exports[] = {
     CE_EXPORT(EndDialog),
     CE_EXPORT(MessageBeep),
     CE_EXPORT(CreateWindowExW),
+    CE_EXPORT(UnionRect),
+    CE_EXPORT(CopyRect),
+    CE_EXPORT(MapWindowPoints),
+    CE_EXPORT(CheckRadioButton),
+    CE_EXPORT(SendNotifyMessageW),
+    CE_EXPORT(RegisterWindowMessageW),
+    CE_EXPORT(GetCapture),
+    CE_EXPORT(SetActiveWindow),
+    CE_EXPORT(ImmGetContext),
+    CE_EXPORT(ImmReleaseContext),
+    CE_EXPORT(ImmGetCompositionStringW),
+    CE_EXPORT(ImmNotifyIME),
     CE_EXPORT(DefWindowProcW),
     CE_EXPORT(CallWindowProcW),
     CE_EXPORT(SendMessageW),

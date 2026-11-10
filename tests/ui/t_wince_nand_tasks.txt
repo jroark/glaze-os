@@ -1,0 +1,5 @@
+# Direct NAND Tasks (times after the launch tap): create a task.
+20000 tap 26 12
+24000 tap 100 91
+25000 text Compatibility task
+28000 tap 20 12

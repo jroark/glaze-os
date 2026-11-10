@@ -3,16 +3,17 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define CE_REG_KEYS 128
-#define CE_REG_VALUES 128
+#define CE_REG_KEYS 512
+#define CE_REG_VALUES 1024
 #define CE_REG_FILE_MAX (256u * 1024u)
 struct ce_reg_value {
-    char key[256], name[128];
+    char *key; /* owned copy, below 256 bytes */
+    char name[128];
     uint32_t type, size;
     uint8_t *bytes;
 };
 struct ce_registry {
-    char keys[CE_REG_KEYS][256];
+    char *keys[CE_REG_KEYS]; /* owned paths, below 256 bytes */
     unsigned key_count, value_count;
     struct ce_reg_value values[CE_REG_VALUES];
 };
@@ -28,4 +29,8 @@ int ce_reg_set(struct ce_registry *, const char *, const char *, uint32_t, const
 int ce_reg_remove_value(struct ce_registry *, const char *, const char *);
 bool ce_reg_decode(struct ce_registry *, const void *, size_t);
 uint8_t *ce_reg_encode(const struct ce_registry *, uint32_t *);
+/* Merges a Casio/CE registry backup (\Backup\System.reg) into a registry:
+ * HKCR, HKCU and HKLM keys and values, without HKLM\Drivers. Entries beyond
+ * the registry's limits are skipped; false if the stream is malformed. */
+bool ce_reg_import_casio(struct ce_registry *, const void *, size_t);
 #endif
