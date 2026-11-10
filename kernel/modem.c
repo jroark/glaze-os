@@ -79,6 +79,7 @@ void modem_insert(uint32_t cor_address, unsigned config_index)
     config = (struct uart_config){
         .cor_address = cor_address, .io_base = 0x3f8, .divisor = divisors[0],
         .cor = (uint8_t)(0x40u | (config_index & 0x3Fu)), .lcr = 0x03, .mcr = 0x0b, .fcr = 7,
+        .rts_cts = 1,
     };
     char reply[96];
     for (unsigned i = 0; i < sizeof(divisors) / sizeof(divisors[0]); i++) {

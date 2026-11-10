@@ -73,8 +73,11 @@
 #define TCP_LISTEN_BACKLOG          1
 
 /* PPP over the CF modem's UART (servers/net/modem.c): PAP and CHAP-MD5,
- * Van Jacobson header compression, DNS servers from IPCP. One interface
- * at a time (LWIP_SINGLE_NETIF): a modem card replaces the Ethernet one. */
+ * DNS servers from IPCP. One interface at a time (LWIP_SINGLE_NETIF): a
+ * modem card replaces the Ethernet one. No Van Jacobson header
+ * compression: on a BE-300 (USR modem to a pppd router, 2026-11-09) most
+ * TCP segments it rebuilt failed the IP header checksum, so downloads
+ * stalled after a few KB. */
 #if GLAZE_MODEM                         /* MODEM=1 builds (mk/libs.mk) */
 #define PPP_SUPPORT                 1
 #define PPPOS_SUPPORT               1
@@ -85,7 +88,7 @@
 #define MSCHAP_SUPPORT              0
 #define EAP_SUPPORT                 0
 #define CCP_SUPPORT                 0
-#define VJ_SUPPORT                  1
+#define VJ_SUPPORT                  0   /* see above */
 #define PPP_NOTIFY_PHASE            0
 #define PRINTPKT_SUPPORT            0
 #define LWIP_USE_EXTERNAL_MBEDTLS   0
