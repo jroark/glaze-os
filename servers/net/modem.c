@@ -216,7 +216,10 @@ void net_modem_poll(void)
     }
     if (dial_state == NET_DIAL_STARTING || dial_state == NET_DIAL_DIALING) {
         const char *cmd = hayes_command(&dialer);
-        if (cmd) modem_write(cmd, strlen(cmd));
+        if (cmd) {
+            gz_sleep_ms(HAYES_GAP_MS);
+            modem_write(cmd, strlen(cmd));
+        }
         hayes_tick(&dialer, now);
         if (dialer.state == NET_DIAL_IDLE) {
             net_log("modem: dialing failed (%d)\n", dialer.error);

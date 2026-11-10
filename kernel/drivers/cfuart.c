@@ -69,10 +69,14 @@ void cfuart_poll(void)
     (void)R(2);
     for (unsigned n = 0; n < 256; n++) {
         uint8_t lsr = R(5);
-        if (lsr & 0x1e) { fail(); return; } /* overrun/parity/frame/break */
+        if (lsr & 0x1e) {                       /* overrun/parity/frame/break */
+            kprintf("cfuart: LSR %x after %u bytes\n", lsr, rh);
+            fail();
+            return;
+        }
         if (!(lsr & 1)) break;
         uint8_t byte = R(0);
-        if (rh - rt == RX_SIZE) { fail(); return; }
+        if (rh - rt == RX_SIZE) { kputs("cfuart: receive buffer full\n"); fail(); return; }
         rx[rh++ % RX_SIZE] = byte;
     }
     /* THRE means the entire enabled FIFO is empty, rather than one free

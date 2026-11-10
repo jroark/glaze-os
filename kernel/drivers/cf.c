@@ -104,10 +104,12 @@ static bool socket1_ours;       /* Glaze powered it, so the COR is Glaze's */
 
 static bool socket1_card(void)
 {
-    /* Its unit reads 0 throughout while its clock is gated (no jacket after
-     * a cold NAND boot, gate 1120): not a card. A live one reads 0x48
-     * empty or 0x0C with a card (hw.h). */
-    return PCMCIA1_PRESENCE != 0 &&
+    /* Its unit reads 0 throughout while its clock (gate 1120) is off: not a
+     * card. With the gate on, after Windows CE it reads 0x48 empty or 0x0C
+     * with a card (hw.h); after a cold NAND boot, 0x40 (DETECT 8) empty and
+     * 0 (DETECT 0) with a card in a powered jacket (seen on a BE-300 with a
+     * USR modem, 2026-11-09), so 0 alone can't mean "no card". */
+    return (PCMCIA1_GATE & 1) &&
            !(PCMCIA1_DETECT & PCMCIA1_EMPTY) && !(PCMCIA1_PRESENCE & PCMCIA1_ABSENT);
 }
 

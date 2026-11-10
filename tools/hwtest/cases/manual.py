@@ -45,7 +45,9 @@ def gps(ctx):
     pass
 
 
-@case(M, 'modem-call', covers='#105', manual='CF modem on a phone line with an ISP account: dial, PPP up, load a page.')
+@case(M, 'modem-call', covers='#105', manual=(
+    'Modem on a phone line: dial, PPP up, load a page. Known-good rig: USR XJ/CC1560 in the '
+    'jacket, Teltone TLS-3B line 1, DCB IP-6690 on line 2 (dial 102, PAP; docs/hardware/MODEM.md).'))
 def modem(ctx):
     pass
 
