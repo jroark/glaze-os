@@ -24,6 +24,13 @@ static uint32_t rh, rt, th, tt, io;
 static uint8_t mcr;
 static unsigned tx_fifo = 1;
 static bool io_logged;
+/* RTS/CTS flow control (uart_config.rts_cts): RTS is held low from
+ * RX_HIGH bytes waiting until the reader drains them to RX_LOW. A modem
+ * with &R2 sends only while RTS is up (a USR XJ/CC1560 on a BE-300 filled
+ * the ring in a 97 KB download while an app was busy, 2026-11-09). */
+#define RX_HIGH (RX_SIZE * 3u / 4u)
+#define RX_LOW (RX_SIZE / 4u)
+static bool rts_cts, rts_held, cts_seen;
 static int fault = GZ_ENOENT;
 static void fail(void) { fault = GZ_EIO; W(1, 0); KJ_SRC_PCMCIA &= ~KJ_SRC_ENABLE; }
 int cfuart_error(void) { return fault; }
@@ -37,6 +44,7 @@ int cfuart_init(const struct uart_config *c)
         (c->io_base & 7u) || c->io_base < 0x100u || c->io_base > 0x3f8u || !c->divisor)
         return fault = GZ_EINVAL;
     io = pcmcia_io_base + c->io_base;
+    rts_cts = c->rts_cts != 0; rts_held = cts_seen = false;
     /* Socket power/bus policy belongs to cf.c; preserve the live setup.
      * Socket 1's configuration window is mapped by cf.c (socket1_power_up). */
     if (cf_socket)
@@ -78,14 +86,24 @@ void cfuart_poll(void)
         uint8_t byte = R(0);
         if (rh - rt == RX_SIZE) { kputs("cfuart: receive buffer full\n"); fail(); return; }
         rx[rh++ % RX_SIZE] = byte;
+        if (rts_cts && !rts_held && rh - rt >= RX_HIGH) {
+            rts_held = true;
+            W(4, mcr & ~2u);
+        }
     }
     /* THRE means the entire enabled FIFO is empty, rather than one free
-     * slot. Fill its verified minimum capacity in one bounded service pass. */
-    if (tt != th && (R(5) & 0x20)) {
+     * slot. Fill its verified minimum capacity in one bounded service pass.
+     * CTS low holds transmission, once CTS has been seen up (a card that
+     * never drives it isn't stopped). The tick polls again; THRE stays
+     * masked meanwhile, since enabling it with THR empty interrupts at once. */
+    bool cts = !rts_cts || (R(6) & 0x10);
+    if (cts) cts_seen = true;
+    bool blocked = !cts && cts_seen;
+    if (tt != th && !blocked && (R(5) & 0x20)) {
         unsigned count = MIN(tx_fifo, th - tt);
         for (unsigned n = 0; n < count; n++) W(0, tx[tt++ % TX_SIZE]);
     }
-    W(1, tt == th ? IER_RX : IER_RX | IER_TX);
+    W(1, tt == th || blocked ? IER_RX : IER_RX | IER_TX);
 }
 void cfuart_stop(void)
 {
@@ -101,7 +119,14 @@ int cfuart_read(uint8_t *out, uint32_t count)
     for (uint32_t i = 0; i < n; i++) out[i] = rx[(rt+i) % RX_SIZE];
     return (int)n;
 }
-void cfuart_consume(uint32_t count) { rt += MIN(count, rh - rt); }
+void cfuart_consume(uint32_t count)
+{
+    rt += MIN(count, rh - rt);
+    if (rts_held && rh - rt <= RX_LOW) {
+        rts_held = false;
+        if (!fault && PCMCIA_CARD_PRESENT()) W(4, mcr);
+    }
+}
 int cfuart_write(const uint8_t *in, uint32_t count)
 {
     if (fault) return fault;
@@ -113,7 +138,7 @@ void cfuart_set_lines(uint8_t lines)
 {
     if (fault || !PCMCIA_CARD_PRESENT()) return;
     mcr = (uint8_t)((mcr & ~3u) | (lines & 3u));
-    W(4, mcr);
+    W(4, rts_held ? mcr & ~2u : mcr);
 }
 uint8_t cfuart_status(void)
 {

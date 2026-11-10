@@ -21,6 +21,9 @@ struct uart_config {
     uint16_t io_base;       /* ISA port the window decodes, e.g. 0x3f8 */
     uint16_t divisor;       /* 16550 DLL/DLM */
     uint8_t cor, lcr, mcr, fcr;
+    /* RTS/CTS flow control (modems): RTS drops while the receive ring is
+     * nearly full, and nothing is sent while CTS is low. */
+    uint8_t rts_cts;
 };
 struct uart_driver {
     uint32_t magic, abi, size;

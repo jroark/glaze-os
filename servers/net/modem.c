@@ -4,9 +4,10 @@
  *
  * The main thread reads the modem when the kernel says bytes are waiting
  * (GZ_NOTIFY_NET) and at least once a second: while dialing they go to the
- * dialer, once connected to pppos_input_tcpip. lwIP's tcpip thread writes
- * PPP frames back through output(). The modem drops the call when DTR goes
- * low (AT&D2); DCD, once it has been seen up, reports a lost carrier.
+ * dialer, once connected to pppos_input, under the core lock. lwIP's
+ * tcpip thread writes PPP frames back through output(). The modem drops
+ * the call when DTR goes low (AT&D2); DCD, once it has been seen up,
+ * reports a lost carrier.
  */
 #include <glaze/sys.h>
 #include <glaze/modem.h>
@@ -204,7 +205,14 @@ void net_modem_poll(void)
                            (dial_state == NET_DIAL_HANGING_UP && !ppp_ended);
         if (used < (unsigned)n && ppp_running) {
             rx_bytes += (unsigned)n - used;
-            pppos_input_tcpip(pcb, buf + used, n - (int)used);
+            /* Not pppos_input_tcpip: it copies each read, often a few bytes,
+             * into a pool pbuf for the tcpip thread's mailbox, and drops the
+             * bytes when either is full. On a BE-300 that broke most frames
+             * of a download (ERR_MEM from the first frames after PPP came up),
+             * and only small replies got through. */
+            LOCK_TCPIP_CORE();
+            pppos_input(pcb, buf + used, n - (int)used);
+            UNLOCK_TCPIP_CORE();
         }
     }
     if (n == GZ_EDEAD || n == GZ_ENOENT) {
@@ -277,6 +285,10 @@ int net_modem_request(uint32_t op, void *buf)
         saved = next;
         memset(&next, 0, sizeof(next));
         dial_error = NET_DIAL_E_NONE;
+        /* A UART fault (an overrun, say) stops all I/O until it is set up
+         * again; without this the modem would never answer ATZ. */
+        if (gz_modem_io(MODEM_IO_STATUS, NULL, 0) < 0 && gz_modem_io(MODEM_IO_RESET, NULL, 0) == 0)
+            net_log("modem: UART reset after a fault\n");
         hayes_start(&dialer, &saved, gz_time_ms());
         dial_state = dialer.state;
         net_log("modem: dialing\n");

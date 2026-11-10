@@ -64,8 +64,8 @@ line simulator on 2026-11-09. The router answered with PAP dial-in.
 - **The call:** about 40 s from `ATDT` to `CONNECT
   21600/ARQ/V34/LAPM/V42BIS` on the simulator, then PPP up 0.5–6.5 s later.
   - The router's log shows LCP (asyncmap 0, pcomp, accomp), then PAP. Glaze
-    rejects CCP with a Protocol-Reject. IPCP agrees VJ, the address and both
-    ms-dns entries.
+    rejects CCP with a Protocol-Reject. IPCP agrees the address and both
+    ms-dns entries (and, before VJ was dropped, VJ).
 - **Checked on the call (the scratch test app and Settings):**
   - A wrong password is refused (`NET_DIAL_E_AUTH`).
   - Pings to the peer and through the router's NAT (to 8.8.8.8) take about
@@ -75,13 +75,34 @@ line simulator on 2026-11-09. The router answered with PAP dial-in.
   - Hanging up returns the router to dial-in wait. Redialing with the saved
     settings works, and so do Settings' Connect and Hang Up ("Connected,
     21.6 kbps").
-- **Open: bigger downloads stall.** The Browser's 68k.news (97 KB) and a
-  plain GET of it got no data, or stopped part-way, within the 30 s idle
-  timeout. Small replies always arrived. Not diagnosed yet: full-size
-  segments, VJ, or the UART path under sustained input are the suspects.
-- **Open: one freeze.** After about 25 minutes of calls the device froze
-  with the screen on, and USB stopped answering. It needed a reset; the
-  console before it shows nothing unusual.
+- **Downloads:** httpbin bodies of 500 bytes to 30 KB, text and random
+  binary, all arrive complete. Binary runs at about 18 kbit/s, text at
+  33–39 kbit/s (the modem's V.42bis). The Browser loads 68k.news (97 KB).
+  Three bugs stalled anything over about 1 KB until they were fixed:
+  - **PPP input dropped under load.** `pppos_input_tcpip` copies each read
+    (often a few bytes) into a pool pbuf for the tcpip thread's mailbox, and
+    drops the bytes when either is full (`ERR_MEM` from the first frames
+    after PPP came up). The server now calls `pppos_input` under the core
+    lock.
+  - **Van Jacobson compression corrupted IP headers.** With pppd's VJ, most
+    TCP segments rebuilt by lwIP's `vj.c` failed the IP header checksum
+    (`ip.chkerr` 15 of 24, `link.chkerr` 0), so TCP stalled at 8,760 bytes.
+    `VJ_SUPPORT` is now 0 (`servers/net/lwipopts.h`). Not traced further
+    into `vj.c`.
+  - **The receive ring overflowed.** While the Browser was busy, a 97 KB
+    download filled cfuart's 4 KB ring at 115200. The driver faulted, and the
+    modem then didn't answer `ATZ` either. Modems now use RTS/CTS flow control
+    (`uart_config.rts_cts`, and the USR is set `&H1&R2`): RTS drops from 3/4
+    full until the ring drains to 1/4, and nothing is sent while CTS is low.
+    A dial first resets a faulted UART.
+- **Open: the Browser faults on a big page with little memory.** With the
+  hwtest RAM image (`ramfs_kb=6656`, about 2.4 MB free), opening 68k.news
+  ended in `fault: TLB load in browser` (a code page it couldn't map). With
+  `ramfs_kb=2048` (7.4 MB free) the page loads.
+- **Open: freezes.** Twice the device froze with the screen on and USB
+  not answering, and needed a reset. Once was after about 25 minutes of
+  calls; the console before it shows nothing unusual. Once was while
+  booting a USB RAM reload; the same image booted normally next time.
 - **Router configuration:** the router's first DNS server pointed at a dead
   address. Its proxy answered names it hadn't cached too slowly, and
   `net_resolve` failed with `GZ_ENOENT`.
@@ -130,7 +151,7 @@ start another (`net_dial_config_validate`).
 `servers/net/modem.c` runs the dialer, then lwIP's PPPoS:
 - Authentication is PAP or CHAP-MD5, whichever the peer asks for. With no user
   name, none.
-- Van Jacobson compression is offered.
+- No Van Jacobson compression (`VJ_SUPPORT` 0): see the downloads above.
 - IPCP supplies the address, and its DNS servers are used.
 - The PPP interface replaces the Ethernet one (`LWIP_SINGLE_NETIF`), so
   `net_status` reports `NET_ASSOCIATING` while dialing and `NET_UP` online.
