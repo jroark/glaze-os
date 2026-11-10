@@ -95,6 +95,16 @@ gfx_rect ce_client_rect(CW handle)
 void ce_post(CW window, CW message, CW wparam, CW lparam)
 {
     gz_mutex_lock(&queue_lock);
+    /* Like Windows, at most one WM_TIMER per timer is pending: a modal loop
+     * that doesn't dispatch them (WorldTALK's error box) mustn't fill the
+     * queue. */
+    if (message == 0x113)
+        for (unsigned i = tail; i != head; i++)
+            if (queue[i % QUEUE].message == 0x113 && queue[i % QUEUE].window == window &&
+                queue[i % QUEUE].wparam == wparam) {
+                gz_mutex_unlock(&queue_lock);
+                return;
+            }
     if (head - tail >= QUEUE)
         ce_fatal("WinCE message queue is full");
     queue[head++ % QUEUE] = (struct ce_message){window, message, wparam, lparam, gz_time_ms(), 0, 0};

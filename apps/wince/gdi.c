@@ -2068,10 +2068,16 @@ CE_API(LoadStringW)
         return 0;
     uint32_t n = ce_u16(p + off);
     off += 2;
-    if (!ce_range(off, n * 2, size) || !a2)
+    if (!ce_range(off, n * 2, size))
         return 0;
-    /* CE: a zero nBufferMax gets a read-only pointer to the resource's
-     * string (counted, unterminated unless built with rc -n). */
+    /* CE's idioms for a zero nBufferMax: with no buffer, the return value
+     * is a read-only pointer to the resource's string, whose length is the
+     * word before it; with a buffer, that pointer is stored there. The
+     * string is unterminated unless the resources were built with rc -n. */
+    if (!a3 && !a2)
+        return WORD(p + off);
+    if (!a2)
+        return 0;
     if (!a3) {
         *PTR(CW, a2) = WORD(p + off);
         return n;
