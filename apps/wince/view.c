@@ -72,6 +72,12 @@ static bool owner_text(struct ce_window *w, unsigned row, unsigned column)
     buffer[ARRAY_SIZE(buffer) - 1] = 0;
     return copy_text(&w->view->item[row].text[column], notice[8]);
 }
+/* Report view (LVS_REPORT, style & 3 == 1) has a header and columns. Icon,
+ * small-icon and list views are drawn as one column of names. */
+static bool report(const struct ce_window *w)
+{
+    return !w->view->tree && (w->style & 3) == 1 && w->view->col_count;
+}
 static bool callback_text(const struct ce_window *w, unsigned row)
 {
     return (w->style & 0x1000) || w->view->item[row].callback;
@@ -107,6 +113,20 @@ static int node(struct ce_view *v, CW handle)
     return i < VIEW_ITEMS && v->item[i].used ? (int)i : -1;
 }
 static CW node_handle(int i) { return i < 0 ? 0 : 0x79000000u + i; }
+/* TVN_GETDISPINFOW for a LPSTR_TEXTCALLBACK tree item: NMHDR, then a
+ * TVITEMW with the item's handle and lParam. */
+static bool tree_text(struct ce_window *w, unsigned slot)
+{
+    struct ce_view *v = w->view;
+    WCHAR buffer[512] = {0};
+    CW notice[13] = {w->handle, w->id, (CW)-452, 1, node_handle((int)slot), 0, 0,
+        WORD(buffer), ARRAY_SIZE(buffer), 0, 0, 0, v->item[slot].data};
+    ce_send(w->parent, 0x4e, w->id, WORD(notice));
+    if (w->view != v || !v->item[slot].used)
+        return false;
+    buffer[ARRAY_SIZE(buffer) - 1] = 0;
+    return copy_text(&v->item[slot].text[0], notice[7]);
+}
 static void tree_wire(struct ce_view *v, int i, CW out[10])
 {
     memset(out, 0, 40);
@@ -259,7 +279,8 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
             for (i = 0; i < VIEW_ITEMS && v->item[i].used; i++)
                 ;
             struct view_item *item = &v->item[i];
-            if ((it[0] & 1) && !copy_text(&item->text[0], it[4]))
+            item->callback = (it[0] & 1) && it[4] == (CW)-1;
+            if ((it[0] & 1) && !item->callback && !copy_text(&item->text[0], it[4]))
                 return true;
             item->used = true;
             item->parent = node_handle(parent);
@@ -492,9 +513,27 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
             *result = wp;
             return true;
         }
-        case 0x101e:
+        case 0x101e: /* LVM_SETCOLUMNWIDTH; LVSCW_AUTOSIZE -1, _USEHEADER -2 */
             if (wp < VIEW_COLS) {
-                v->widths[wp] = (int16_t)lp;
+                int requested = (int16_t)lp, width = requested;
+                if (requested == -1 || requested == -2) {
+                    const gfx_font *f = ui_font(FONT_R12);
+                    char text[256];
+                    width = 0;
+                    if (requested == -2 && v->columns[wp]) {
+                        ce_display(text, sizeof(text), v->columns[wp]);
+                        width = gfx_text_width(f, text);
+                    }
+                    for (unsigned n = 0; n < v->count; n++) {
+                        unsigned slot = v->order[n];
+                        if (callback_text(w, slot) && !owner_text(w, slot, wp))
+                            continue;
+                        ce_display(text, sizeof(text), v->item[slot].text[wp]);
+                        width = MAX(width, gfx_text_width(f, text));
+                    }
+                    width += 8;
+                }
+                v->widths[wp] = width;
                 w->dirty = true;
                 *result = 1;
             }
@@ -538,7 +577,7 @@ bool ce_view_message(struct ce_window *w, CW msg, CW wp, CW lp, CW *result)
     if (msg == 0x202 || msg == 0x100) {
         unsigned order[VIEW_ITEMS], count = rows(v, order);
         int row = (int16_t)(lp >> 16) / 18 + v->top;
-        if (!v->tree && v->col_count)
+        if (report(w))
             row--;
         if (msg == 0x100) {
             row = 0;
@@ -594,7 +633,7 @@ void ce_view_draw(struct ce_window *w)
     gfx_set_clip(&ui.surf, r);
     gfx_fill(&ui.surf, r, 0xffffff);
     int y = r.y;
-    if (!v->tree && v->col_count) {
+    if (report(w)) {
         gfx_fill(&ui.surf, gfx_r(r.x, y, r.w, 18), 0xc0c0c0);
         int x = r.x;
         for (unsigned c = 0; c < v->col_count; c++) {
@@ -625,15 +664,15 @@ void ce_view_draw(struct ce_window *w)
                 gfx_text(&ui.surf, x + 2, y + 2, ui_font(FONT_R12), it->expanded ? "-" : "+", color, 255);
             x += 14;
         }
-        for (unsigned c = 0; c < (v->tree ? 1 : MAX(1u, v->col_count)); c++) {
+        for (unsigned c = 0; c < (report(w) ? v->col_count : 1); c++) {
             char text[1024];
-            if (!v->tree && callback_text(w, i) && !owner_text(w, i, c)) {
+            if (v->tree ? it->callback && !tree_text(w, i) : callback_text(w, i) && !owner_text(w, i, c)) {
                 gfx_reset_clip(&ui.surf);
                 return;
             }
             ce_display(text, sizeof(text), it->text[c]);
             /* Each column's text stays within its width, as CE truncates it. */
-            bool last = v->tree || c + 1 >= v->col_count;
+            bool last = !report(w) || c + 1 >= v->col_count;
             int width = last ? r.x + r.w - x - 4 : MAX(24, v->widths[c]) - 4;
             gfx_text_fit(&ui.surf, x + 2, y + 2, MAX(0, width), ui_font(FONT_R12), text, color, 255);
             x += MAX(24, v->widths[c]);

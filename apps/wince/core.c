@@ -240,14 +240,12 @@ CE_API(LocalAlloc)
         ce_error = 8;
         return 0;
     }
-    struct local_block *b = malloc(sizeof(*b) + MAX(1u, a1));
+    struct local_block *b = calloc(1, sizeof(*b) + MAX(1u, a1)); /* zeroed: see malloc */
     if (!b) {
         ce_error = 8;
         return 0;
     }
     b->size = a1;
-    if (a0 & 0x40)
-        memset(b + 1, 0, a1);
     gz_mutex_lock(&local_lock);
     b->next = locals;
     locals = b;
@@ -311,9 +309,12 @@ CE_API(LocalReAlloc)
     gz_mutex_unlock(&local_lock);
     return WORD(resized + 1);
 }
+/* CE apps' heap memory starts zeroed. CE's heaps grew from fresh, zero-
+ * filled pages, so most early blocks were zero and programs (BeeV2's
+ * Pocket Paint) read fields they never set; Glaze's malloc reuses blocks. */
 CE_API(malloc)
 {
-    return WORD(malloc(a0));
+    return WORD(calloc(1, a0 ? a0 : 1));
 }
 CE_API(free)
 {
@@ -355,7 +356,7 @@ CE_API(HeapAlloc)
         struct ce_heap_block *b = malloc(sizeof(*b));
         if (!b)
             break;
-        b->data = (a1 & 8) ? calloc(1, a2 ? a2 : 1) : malloc(a2 ? a2 : 1);
+        b->data = calloc(1, a2 ? a2 : 1); /* zeroed: see malloc */
         if (!b->data) {
             free(b);
             break;
@@ -712,22 +713,27 @@ CE_API(GetModuleFileNameW)
 
 /* CE's wide printf uses 16-bit strings; `limit` counts the terminator.
  * Unsupported conversions abort instead of pretending formatting succeeded. */
-static CW wide_format(WCHAR *out, const WCHAR *fmt, const CW *args, unsigned limit, unsigned nargs)
+/* `odd`: args[0] is an odd O32 argument slot (see ce_wformat_slots). */
+static CW wide_format(WCHAR *out, const WCHAR *fmt, const CW *args, unsigned limit, unsigned nargs, bool odd)
 {
     uintptr_t words[128];
     nargs = MIN(nargs, ARRAY_SIZE(words));
     for (unsigned i = 0; i < nargs; i++)
         words[i] = args[i];
-    int n = ce_wformat(out, limit, fmt, words, nargs);
-    if (n < 0)
+    int n = ce_wformat_slots(out, limit, fmt, words, nargs, odd);
+    if (n < 0) {
+        char text[128];
+        ce_narrow(text, sizeof(text), fmt);
+        printf("wince: unsupported format \"%s\"\n", text);
         ce_missing("wsprintfW conversion");
+    }
     return (CW)n;
 }
 
 CE_API(wsprintfW)
 {
     CW args[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
-    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), args, 1024, ARRAY_SIZE(args));
+    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), args, 1024, ARRAY_SIZE(args), false);
 }
 CE_API(vswprintf)
 {
@@ -735,12 +741,12 @@ CE_API(vswprintf)
         ce_error = 87;
         return (CW)-1;
     }
-    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), PTR(CW, a2), 1024, 128);
+    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a1), PTR(CW, a2), 1024, 128, (a2 >> 2) & 1);
 }
 CE_API(_snwprintf)
 {
     CW args[] = {a3, a4, a5, a6, a7, a8, a9, a10, a11};
-    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a2), args, MIN(a1, 1024u), ARRAY_SIZE(args));
+    return wide_format(PTR(WCHAR, a0), PTR(WCHAR, a2), args, MIN(a1, 1024u), ARRAY_SIZE(args), true);
 }
 
 CE_API(iswctype)
@@ -1768,7 +1774,9 @@ CE_API(CreateFileW)
     }
     int fd = fs_open(open_path, flags);
     if (fd < 0) {
-        printf("wince: open failed %s: %d\n", canonical, fd);
+        char asked[FS_PATH_MAX];
+        ce_narrow(asked, sizeof(asked), PTR(WCHAR, a0));
+        printf("wince: open failed %s (\"%s\"): %d\n", canonical, asked, fd);
         file_error(fd);
         files[i].claimed = false;
         return 0xffffffffu;
@@ -2061,19 +2069,37 @@ CE_API(GetModuleHandleW)
         ce_error = 126;
     return handle;
 }
+/* System DLLs the runtime provides as adapters, without a file to load:
+ * LoadLibrary gives each a pseudo handle (0x73000000 + index) whose
+ * GetProcAddress resolves through the adapters. PViewCE loads TOOLHELP.DLL
+ * itself. A real file of the same name, if a device has one, wins. */
+static const char *const builtin_dlls[] = {"coredll.dll", "toolhelp.dll", "commctrl.dll", "ole32.dll",
+                                           "oleaut32.dll", "winsock.dll", "ws2.dll"};
 CE_API(LoadLibraryW)
 {
-    char name[64];
-    ce_narrow(name, sizeof(name), PTR(WCHAR, a0));
-    if (!strcasecmp(name, "coredll.dll"))
+    char path[FS_PATH_MAX];
+    ce_narrow(path, sizeof(path), PTR(WCHAR, a0));
+    const char *name = path;
+    for (const char *p = path; *p; p++)
+        if (*p == '\\' || *p == '/')
+            name = p + 1;
+    if (!strcasecmp(name, "coredll.dll") || !strcasecmp(name, "coredll"))
         return 0x73000000u;
-    return ce_load_library(name);
+    CW module = ce_load_library(path);
+    for (unsigned i = 1; !module && i < ARRAY_SIZE(builtin_dlls); i++)
+        if (!strcasecmp(name, builtin_dlls[i])) {
+            ce_error = 0;
+            return 0x73000000u + i;
+        }
+    return module;
 }
 static CW proc_address(CW module, const char *name, CW ordinal)
 {
     if (!name)
         return ce_find_ordinal(module, (uint16_t)ordinal);
-    CW address = module == 0x73000000u ? ce_import_address("coredll.dll", name) : ce_find_symbol(module, name);
+    unsigned builtin = module - 0x73000000u;
+    CW address = builtin < ARRAY_SIZE(builtin_dlls) ? ce_import_address(builtin_dlls[builtin], name)
+                                                    : ce_find_symbol(module, name);
     if (!address)
         ce_error = 127;
     return address;
@@ -2100,7 +2126,7 @@ CE_API(NKDbgPrintfW)
     uintptr_t args[] = {a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
     char message[512];
     /* Debug output must not stop the app on a conversion the runtime lacks. */
-    if (!a0 || ce_wformat(text, ARRAY_SIZE(text), PTR(WCHAR, a0), args, ARRAY_SIZE(args)) < 0)
+    if (!a0 || ce_wformat_slots(text, ARRAY_SIZE(text), PTR(WCHAR, a0), args, ARRAY_SIZE(args), true) < 0)
         return 0;
     ce_narrow(message, sizeof(message), text);
     printf("wince: debug: %s\n", message);
@@ -2131,10 +2157,42 @@ CE_API(DeviceIoControl)
     ce_error = 50; /* ERROR_NOT_SUPPORTED */
     return 0;
 }
+/* KernelIoControl(code, in, in size, out, out size, returned): only
+ * IOCTL_HAL_GET_DEVICEID (CTL_CODE(FILE_DEVICE_HAL, 21), 0x01010054) is
+ * answered. DEVICE_ID: dwSize, then the preset and platform IDs' offsets
+ * and sizes; the preset ID is a hash of this device's NAND partition
+ * table, stable across boots, and the platform ID names the BE-300. */
 CE_API(KernelIoControl)
 {
-    ce_error = 50;
-    return 0;
+    if (a0 != 0x01010054u) {
+        ce_error = 50;
+        return 0;
+    }
+    static const char platform[8] = "BE-300";
+    uint8_t id[20 + 8 + 8] = {0};
+    uint8_t table[512];
+    uint32_t hash = 2166136261u;
+    if (fs_nand_read(0, table, sizeof(table)) == (int)sizeof(table))
+        for (unsigned i = 0; i < sizeof(table); i++)
+            hash = (hash ^ table[i]) * 16777619u;
+    ce_put32(id, sizeof(id));
+    ce_put32(id + 4, 20);
+    ce_put32(id + 8, 8);
+    ce_put32(id + 12, 28);
+    ce_put32(id + 16, 8);
+    ce_put32(id + 20, hash);
+    ce_put32(id + 24, hash * 2654435761u);
+    memcpy(id + 28, platform, 8);
+    if (a5)
+        *PTR(CW, a5) = sizeof(id);
+    if (!a3 || a4 < sizeof(id)) {
+        if (a3 && a4 >= 4)
+            ce_put32(PTR(void, a3), sizeof(id));
+        ce_error = 122; /* ERROR_INSUFFICIENT_BUFFER */
+        return 0;
+    }
+    memcpy(PTR(void, a3), id, sizeof(id));
+    return 1;
 }
 /* The private registry is already saved on every change. */
 CE_API(RegCopyFile)

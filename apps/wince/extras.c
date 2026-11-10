@@ -128,7 +128,7 @@ CE_API(CharPrevW)
 CE_API(IsDBCSLeadByte) { return 0; }
 /* Narrow printf-family formats: widened (with %s and %c naming narrow
  * arguments), formatted by wsprintf's engine and narrowed to Windows-1252. */
-static int narrow_format(char *out, unsigned capacity, const char *f, const CW *args, unsigned count)
+static int narrow_format(char *out, unsigned capacity, const char *f, const CW *args, unsigned count, bool odd)
 {
     WCHAR format[512], text[1024];
     unsigned n = 0;
@@ -145,7 +145,7 @@ static int narrow_format(char *out, unsigned capacity, const char *f, const CW *
     uintptr_t words[12];
     for (unsigned i = 0; i < count && i < 12; i++)
         words[i] = args[i];
-    int len = f ? ce_wformat(text, ARRAY_SIZE(text), format, words, MIN(count, 12u)) : -1;
+    int len = f ? ce_wformat_slots(text, ARRAY_SIZE(text), format, words, MIN(count, 12u), odd) : -1;
     if (len < 0)
         return -1;
     unsigned k = 0;
@@ -160,13 +160,13 @@ static int narrow_format(char *out, unsigned capacity, const char *f, const CW *
 CE_API(sprintf)
 {
     CW args[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
-    return (CW)narrow_format(PTR(char, a0), 4096, PTR(char, a1), args, ARRAY_SIZE(args));
+    return (CW)narrow_format(PTR(char, a0), 4096, PTR(char, a1), args, ARRAY_SIZE(args), false);
 }
 /* vprintf(format, va_list): a CE va_list points at the argument words. */
 CE_API(vprintf)
 {
     char text[1024];
-    int n = narrow_format(text, sizeof(text), PTR(char, a0), PTR(CW, a1), 10);
+    int n = narrow_format(text, sizeof(text), PTR(char, a0), PTR(CW, a1), 10, (a1 >> 2) & 1);
     if (n > 0)
         printf("wince: stdout: %s\n", text);
     return (CW)n;
@@ -510,6 +510,143 @@ CE_API(PostKeybdMessage)
     return 1;
 }
 CE_API(GetDoubleClickTime) { return 500; }
+/* GetCPInfo(code page, CPINFO): Windows-1252, one byte per character. */
+CE_API(GetCPInfo)
+{
+    if (!a1 || (a0 > 2 && a0 != 1252)) {
+        ce_error = 87;
+        return 0;
+    }
+    uint8_t *p = PTR(uint8_t, a1);
+    memset(p, 0, 18);
+    ce_put32(p, 1);
+    p[4] = '?';
+    return 1;
+}
+CE_API(_vsnprintf)
+{
+    char text[1024];
+    int n = narrow_format(text, sizeof(text), PTR(char, a2), PTR(CW, a3), 10, (a3 >> 2) & 1);
+    if (n < 0)
+        return (CW)-1;
+    if ((CW)n >= a1) {
+        memcpy(PTR(void, a0), text, a1);
+        return (CW)-1; /* truncated, unterminated, as Microsoft's CRT does */
+    }
+    memcpy(PTR(void, a0), text, (unsigned)n + 1);
+    return (CW)n;
+}
+CE_API(strpbrk)
+{
+    const char *s = PTR(char, a0), *accept = PTR(char, a1);
+    for (; s && *s; s++)
+        if (strchr(accept, *s))
+            return WORD(s);
+    return 0;
+}
+/* GetStringTypeExW/GetStringTypeW(..., CT_CTYPE1 1, text, count, types). */
+static CW string_types(CW kind, CW text, CW count, CW out)
+{
+    const WCHAR *s = PTR(WCHAR, text);
+    uint16_t *t = PTR(uint16_t, out);
+    if (kind != 1 || !s || !t) {
+        ce_error = kind != 1 ? 50 : 87;
+        return 0;
+    }
+    unsigned n = count == 0xffffffffu ? ce_wlen(s) + 1 : count;
+    for (unsigned i = 0; i < n; i++) {
+        unsigned c = s[i], bits = 0;
+        bool upper = (c >= 'A' && c <= 'Z') || (c >= 0xc0 && c <= 0xde && c != 0xd7);
+        bool lower = (c >= 'a' && c <= 'z') || (c >= 0xdf && c <= 0xff && c != 0xf7);
+        if (upper) bits |= 0x101;
+        if (lower) bits |= 0x102;
+        if (c >= '0' && c <= '9') bits |= 4 | 0x80;
+        if ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) bits |= 0x80;
+        if (c == ' ' || (c >= 9 && c <= 13)) bits |= 8;
+        if (c == ' ' || c == 9) bits |= 0x40;
+        if (c < 32 || c == 127) bits |= 0x20;
+        if (c > 32 && c < 127 && !(bits & 0x107)) bits |= 0x10;
+        t[i] = (uint16_t)bits;
+    }
+    return 1;
+}
+CE_API(GetStringTypeExW) { return string_types(a1, a2, a3, a4); }
+CE_API(GetStringTypeW) { return string_types(a0, a1, a2, a3); }
+/* MapVirtualKeyW(code, type): virtual keys to characters (2) and back;
+ * scan codes aren't modelled. */
+CE_API(MapVirtualKeyW)
+{
+    if (a1 == 2)
+        return (a0 >= 'A' && a0 <= 'Z') || (a0 >= '0' && a0 <= '9') || a0 == ' ' ? a0 : 0;
+    return 0;
+}
+CE_API(QueryPerformanceCounter)
+{
+    if (!a0)
+        return 0;
+    ce_put32(PTR(void, a0), gz_time_ms());
+    ce_put32(PTR(uint8_t, a0) + 4, 0);
+    return 1;
+}
+CE_API(QueryPerformanceFrequency)
+{
+    if (!a0)
+        return 0;
+    ce_put32(PTR(void, a0), 1000);
+    ce_put32(PTR(uint8_t, a0) + 4, 0);
+    return 1;
+}
+CE_API(CeGetRandomSeed) { return ce_Random(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ^ gz_time_ms(); }
+CE_API(IsEncryptionPermitted) { return 1; }
+CE_API(FlushViewOfFile) { return 1; }
+CE_API(DisableThreadLibraryCalls) { return 1; }
+CE_API(GetMouseMovePoints) { return 0; }
+CE_API(CeEventHasOccurred) { return 0; }
+CE_API(ImmEscapeW) { return 0; }
+CE_API(GetCurrentPermissions) { return 1; }
+CE_API(CeSetThreadPriority) { return 1; }
+CE_API(SetCommMask) { return 1; }
+CE_API(WaitCommEvent)
+{
+    ce_error = 6;
+    return 0;
+}
+/* Object-store database volumes: the object store is the only one, so
+ * the *Ex calls act on it whatever volume GUID they name. */
+CE_API(CeCreateDatabase);
+CE_API(CeOpenDatabase);
+CE_API(CeDeleteDatabase);
+CE_API(CeOidGetInfo);
+CE_API(CeSetDatabaseInfo);
+CE_API(CeFindFirstDatabase);
+CE_API(CeFindNextDatabase);
+CE_API(CeMountDBVol)
+{
+    if (a0)
+        memset(PTR(void, a0), 0xff, 16); /* the object store's GUID */
+    return 1;
+}
+CE_API(CeUnmountDBVol) { return 1; }
+CE_API(CeFreeNotification) { return 1; }
+CE_API(CeGetReplChangeBitsEx) { return 0; }
+/* CeCreateDatabaseEx(volume, CEDBASEINFO): its name, type and sorts. */
+CE_API(CeCreateDatabaseEx)
+{
+    const uint8_t *info = PTR(uint8_t, a1);
+    if (!info) {
+        ce_error = 87;
+        return 0;
+    }
+    unsigned sorts = ce_u16(info + 74);
+    return ce_CeCreateDatabase(WORD(info + 4), ce_u32(info + 68), sorts, sorts ? WORD(info + 88) : 0, 0, 0, 0, 0, 0,
+                               0, 0, 0);
+}
+CE_API(CeOpenDatabaseEx) { return ce_CeOpenDatabase(a1, a2, a3, a4, 0, 0, 0, 0, 0, 0, 0, 0); }
+CE_API(CeDeleteDatabaseEx) { return ce_CeDeleteDatabase(a1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); }
+CE_API(CeOidGetInfoEx) { return ce_CeOidGetInfo(a1, a2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); }
+CE_API(CeSetDatabaseInfoEx) { return ce_CeSetDatabaseInfo(a1, a2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); }
+CE_API(CeFindFirstDatabaseEx) { return ce_CeFindFirstDatabase(a1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); }
+CE_API(CeFindNextDatabaseEx) { return ce_CeFindNextDatabase(a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); }
 /* Battery driver queries (Power applets): Glaze's battery reports bands,
  * so three main levels and one backup level; no change notifications. */
 CE_API(BatteryDrvrGetLevels) { return 3 | 1u << 16; }
@@ -786,7 +923,17 @@ static const struct ce_export exports[] = {
     CE_EXPORT(SipGetCurrentIM), CE_EXPORT(SipSetCurrentIM), CE_EXPORT(SipEnumIM), CE_EXPORT(SHCreateShortcut),
     CE_EXPORT(SHGetShortcutTarget), CE_EXPORT(SHGetSpecialFolderPath), CE_EXPORT(BatteryDrvrGetLevels),
     CE_EXPORT(BatteryDrvrSupportsChangeNotification), CE_EXPORT(BatteryGetLifeTimeInfo), CE_EXPORT(EnumPnpIds),
-    CE_EXPORT(KeybdGetDeviceInfo), CE_EXPORT(NotifyWinUserSystem),
+    CE_EXPORT(KeybdGetDeviceInfo), CE_EXPORT(NotifyWinUserSystem), CE_EXPORT(GetCPInfo), CE_EXPORT(_vsnprintf),
+    CE_EXPORT(strpbrk), CE_EXPORT(GetStringTypeExW), CE_EXPORT(GetStringTypeW), CE_EXPORT(MapVirtualKeyW),
+    CE_EXPORT(QueryPerformanceCounter), CE_EXPORT(QueryPerformanceFrequency), CE_EXPORT(CeGetRandomSeed),
+    CE_EXPORT(IsEncryptionPermitted), CE_EXPORT(FlushViewOfFile), CE_EXPORT(DisableThreadLibraryCalls),
+    CE_EXPORT(GetMouseMovePoints), CE_EXPORT(CeEventHasOccurred), CE_EXPORT(ImmEscapeW),
+    {"IsDBCSLeadByteEx", (void *)ce_IsDBCSLeadByte}, CE_EXPORT(GetCurrentPermissions), CE_EXPORT(CeSetThreadPriority),
+    {"CeGetThreadPriority", (void *)ce_GetCurrentPermissions}, CE_EXPORT(SetCommMask), CE_EXPORT(WaitCommEvent),
+    CE_EXPORT(CeMountDBVol), CE_EXPORT(CeUnmountDBVol), CE_EXPORT(CeFreeNotification),
+    CE_EXPORT(CeGetReplChangeBitsEx), CE_EXPORT(CeCreateDatabaseEx), CE_EXPORT(CeOpenDatabaseEx),
+    CE_EXPORT(CeDeleteDatabaseEx), CE_EXPORT(CeOidGetInfoEx), CE_EXPORT(CeSetDatabaseInfoEx),
+    CE_EXPORT(CeFindFirstDatabaseEx), CE_EXPORT(CeFindNextDatabaseEx),
 };
 static const struct ce_export toolhelp[] = {
     CE_EXPORT(CreateToolhelp32Snapshot), CE_EXPORT(CloseToolhelp32Snapshot), CE_EXPORT(Process32First),

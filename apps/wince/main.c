@@ -240,7 +240,12 @@ static void finish_module(struct ce_module *m, const char *resource)
     for (unsigned i = 0; i < m->pe.count; i++) {
         struct ce_section *s = &m->pe.section[i];
         uint32_t extent = ALIGN_UP(MAX(s->size, s->bytes), 4096u);
-        if (extent && gz_vm_publish(m->base + s->rva, extent, (s->flags >> 31) & 1))
+        /* Code is published read-only. CE gave a module loaded into RAM
+         * writable copies of its other sections, and MFC for CE edits
+         * resources (dialog templates in .rsrc) in place. */
+        bool code = s->flags & (0x20u | 0x20000000u); /* CNT_CODE, MEM_EXECUTE */
+        bool writable = (s->flags & 0x80000000u) || !code;
+        if (extent && gz_vm_publish(m->base + s->rva, extent, writable))
             ce_fatal("Cannot publish PE section");
     }
     printf("wince: loaded %s at %08x, entry %08x\n", resource, m->base, m->base + m->pe.entry);
@@ -455,6 +460,7 @@ void ce_shutdown(void)
     }
 }
 
+CE_API(GetSysColor);
 int main(void)
 {
     ui_init(SB_STATUS_FULLSCREEN);
@@ -495,6 +501,11 @@ int main(void)
         ce_fatal("Expected a WinCE application");
     if (published != bridge_count)
         publish_bridges();
+    /* The desktop behind the program's windows, not the progress screen:
+     * small dialogs and programs without a window leave the rest visible. */
+    gfx_fill(&ui.surf, gfx_r(0, 0, ui.surf.w, ui.surf.h), ce_color(ce_GetSysColor(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+    ui_invalidate_all();
+    ui_present();
     printf("wince: entering original executable\n");
     CW result = ce_call(ce_main.base + ce_main.pe.entry, ce_main.base, 0, WORD(ce_command_line()), 1);
     ce_shutdown();

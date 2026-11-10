@@ -115,6 +115,33 @@ CE_API(VariantChangeType)
     memcpy(PTR(void, a0), out, 16);
     return 0;
 }
+/* VariantCopyInd(dest, source): a copy; strings are duplicated, and
+ * VT_BYREF (0x4000) values are followed. */
+CE_API(VariantCopyInd)
+{
+    if (!a0 || !a1)
+        return 0x80070057u;
+    uint8_t copy[16];
+    memcpy(copy, PTR(void, a1), 16);
+    unsigned vt = ce_u16(copy);
+    if (vt & 0x4000) {
+        const uint8_t *ref = PTR(uint8_t, ce_u32(copy + 8));
+        unsigned base = vt & 0xfff, bytes = base == 2 || base == 18 || base == 11 ? 2 : base == 5 || base == 7 ? 8 : 4;
+        memset(copy + 8, 0, 8);
+        if (ref)
+            memcpy(copy + 8, ref, bytes);
+        ce_put16(copy, (uint16_t)base);
+        vt = base;
+    }
+    if (vt == 8 && ce_u32(copy + 8))
+        ce_put32(copy + 8, ce_SysAllocStringLen(ce_u32(copy + 8),
+                                                ce_SysStringLen(ce_u32(copy + 8), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+                                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+    if (a0 != a1)
+        ce_VariantClear(a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    memcpy(PTR(void, a0), copy, 16);
+    return 0;
+}
 CE_API(VarUI4FromStr)
 {
     const WCHAR *t = PTR(WCHAR, a0);
@@ -162,6 +189,7 @@ static const struct ce_export exports[] = {CE_EXPORT(SysAllocString), CE_EXPORT(
                                            CE_EXPORT(SysAllocStringByteLen), CE_EXPORT(SysStringByteLen),
                                            CE_EXPORT(VariantInit), CE_EXPORT(VariantClear),
                                            CE_EXPORT(VariantChangeType), CE_EXPORT(VarUI4FromStr),
+                                           CE_EXPORT(VariantCopyInd),
                                            CE_EXPORT(DispGetParam), CE_EXPORT(LoadTypeLib),
                                            CE_EXPORT(LoadRegTypeLib), CE_EXPORT(RegisterTypeLib),
                                            CE_EXPORT(CreateTypeLib2), CE_EXPORT(SetErrorInfo),
@@ -312,7 +340,8 @@ static const struct ce_export com[] = {CE_EXPORT(CoInitializeEx), CE_EXPORT(CoUn
                                        CE_EXPORT(StgCreateDocfile), CE_EXPORT(StgOpenStorage),
                                        CE_EXPORT(ReadClassStg), {"WriteClassStg", (void *)ce_ReadClassStg},
                                        {"ReadClassStm", (void *)ce_ReadClassStg},
-                                       {"WriteClassStm", (void *)ce_ReadClassStg}, CE_EXPORT(CreateOleAdviseHolder)};
+                                       {"WriteClassStm", (void *)ce_ReadClassStg}, CE_EXPORT(CreateOleAdviseHolder),
+                                       {"CoFreeUnusedLibraries", (void *)ce_CoUninitialize}};
 void *ce_resolve_ole(const char *dll, const char *name)
 {
     bool automation = !strcasecmp(dll, "oleaut32.dll");

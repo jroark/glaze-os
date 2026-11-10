@@ -130,7 +130,7 @@ CE_API(VirtualFree)
  * of zero bytes still returns a unique pointer. */
 CE_API(operator_new)
 {
-    return WORD(malloc(a0 ? a0 : 1));
+    return WORD(calloc(1, a0 ? a0 : 1)); /* zeroed: see ce_malloc */
 }
 CE_API(operator_delete)
 {
@@ -304,7 +304,7 @@ CE_API(_vsnwprintf)
     uintptr_t words[64];
     for (unsigned i = 0; i < ARRAY_SIZE(words); i++)
         words[i] = PTR(CW, a3)[i];
-    int n = ce_wformat(text, ARRAY_SIZE(text), PTR(WCHAR, a2), words, ARRAY_SIZE(words));
+    int n = ce_wformat_slots(text, ARRAY_SIZE(text), PTR(WCHAR, a2), words, ARRAY_SIZE(words), (a3 >> 2) & 1);
     if (n < 0)
         ce_missing("_vsnwprintf conversion");
     if ((CW)n > a1) {
@@ -475,10 +475,14 @@ static int stream_write(struct ce_stream *s, const WCHAR *text, unsigned n)
 }
 /* fprintf(stream, format, ...): a narrow format is widened, with %s and %c
  * naming narrow arguments (%hs and %hc in wsprintf's terms). */
+static CW stream_printf(struct ce_stream *s, const char *f, const uintptr_t *words, unsigned count, bool odd);
 CE_API(fprintf)
 {
-    struct ce_stream *s = PTR(struct ce_stream, a0);
-    const char *f = PTR(char, a1);
+    uintptr_t words[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
+    return stream_printf(PTR(struct ce_stream, a0), PTR(char, a1), words, ARRAY_SIZE(words), false);
+}
+static CW stream_printf(struct ce_stream *s, const char *f, const uintptr_t *words, unsigned count, bool odd)
+{
     WCHAR format[512], text[1024];
     unsigned n = 0;
     for (unsigned i = 0; f && f[i] && n + 2 < ARRAY_SIZE(format); i++) {
@@ -491,8 +495,7 @@ CE_API(fprintf)
             format[n++] = 'h';
     }
     format[n] = 0;
-    uintptr_t words[] = {a2, a3, a4, a5, a6, a7, a8, a9, a10, a11};
-    int len = s && f ? ce_wformat(text, ARRAY_SIZE(text), format, words, ARRAY_SIZE(words)) : -1;
+    int len = s && f ? ce_wformat_slots(text, ARRAY_SIZE(text), format, words, count, odd) : -1;
     if (len < 0)
         return (CW)-1;
     return (CW)stream_write(s, text, (unsigned)len);
@@ -607,8 +610,10 @@ CE_API(fgetpos)
 /* vfprintf(stream, format, va_list): CE's va_list points at the words. */
 CE_API(vfprintf)
 {
-    const CW *v = PTR(CW, a2);
-    return ce_fprintf(a0, a1, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]);
+    uintptr_t words[16];
+    for (unsigned i = 0; i < ARRAY_SIZE(words); i++)
+        words[i] = PTR(CW, a2)[i];
+    return stream_printf(PTR(struct ce_stream, a0), PTR(char, a1), words, ARRAY_SIZE(words), (a2 >> 2) & 1);
 }
 CE_API(swscanf);
 /* fwscanf(stream, format, ...): the rest of the current line, scanned. */

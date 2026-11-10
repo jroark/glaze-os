@@ -500,6 +500,34 @@ CE_API(ResumeThread)
         ce_error = 6;
     return result;
 }
+/* TerminateThread(thread, code): Glaze can't stop a thread where it
+ * stands. The thread object is signaled with the code, so waiters go on,
+ * and a thread that hasn't started never will. */
+CE_API(TerminateThread)
+{
+    gz_mutex_lock(&lock);
+    struct sync_object *o = lookup(a0);
+    bool ok = o && o->open && o->kind == SYNC_THREAD;
+    if (ok && !o->signaled) {
+        o->code = a1;
+        o->signaled = true;
+        o->suspended = true;
+    }
+    gz_mutex_unlock(&lock);
+    if (!ok)
+        ce_error = 6;
+    return ok;
+}
+/* TryEnterCriticalSection: taken when free or already ours. The VR4131
+ * has no LL/SC, so the check isn't atomic; a race only blocks briefly. */
+CE_API(TryEnterCriticalSection)
+{
+    struct gz_mutex *m = PTR(struct gz_mutex, a0);
+    if (!m || (m->owner && m->owner != gz_thread_id()))
+        return 0;
+    gz_mutex_lock(m);
+    return 1;
+}
 /* Glaze can't stop another thread where it stands: a thread not yet
  * started stays suspended; a running one keeps running. */
 CE_API(SuspendThread)
@@ -552,6 +580,8 @@ static const struct ce_export exports[] = {CE_EXPORT(CreateMutexW),
                                            CE_EXPORT(InterlockedCompareExchange),
                                            CE_EXPORT(InterlockedExchangeAdd),
                                            CE_EXPORT(SuspendThread),
+                                           CE_EXPORT(TerminateThread),
+                                           CE_EXPORT(TryEnterCriticalSection),
                                            CE_EXPORT(GetThreadTimes),
                                            CE_EXPORT(InitializeCriticalSection),
                                            CE_EXPORT(DeleteCriticalSection),

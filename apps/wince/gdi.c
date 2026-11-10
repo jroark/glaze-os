@@ -36,6 +36,7 @@ struct dc {
     int mode, rop2;
     bool clipped;
     struct ce_rect clip;
+    int origin_x, origin_y; /* SetViewportOrgEx */
 };
 
 static struct ce_object objects[512];
@@ -373,7 +374,7 @@ static bool icon_transparent(const struct ce_bitmap *b, int x, int y)
 
 static void dc_defaults(struct dc *d, CW window)
 {
-    *d = (struct dc){true, window, 0, 0, 0, 0, 0, 0, 0xffffff, 2, 13, false, {0, 0, 0, 0}};
+    *d = (struct dc){true, window, 0, 0, 0, 0, 0, 0, 0xffffff, 2, 13, false, {0, 0, 0, 0}, 0, 0};
 }
 static struct dc *dc_get(CW handle)
 {
@@ -445,6 +446,9 @@ static bool begin(CW handle, struct target *t)
             bounds = gfx_r(0, 0, 0, 0);
     }
     gfx_set_clip(t->s, bounds);
+    /* The viewport origin moves drawing; clips stay in device units. */
+    t->x += t->dc->origin_x;
+    t->y += t->dc->origin_y;
     return true;
 }
 static void end(struct target *t)
@@ -2064,8 +2068,14 @@ CE_API(LoadStringW)
         return 0;
     uint32_t n = ce_u16(p + off);
     off += 2;
-    if (!ce_range(off, n * 2, size) || !a3)
+    if (!ce_range(off, n * 2, size) || !a2)
         return 0;
+    /* CE: a zero nBufferMax gets a read-only pointer to the resource's
+     * string (counted, unterminated unless built with rc -n). */
+    if (!a3) {
+        *PTR(CW, a2) = WORD(p + off);
+        return n;
+    }
     n = MIN(n, a3 - 1);
     memcpy(PTR(void, a2), p + off, n * 2);
     PTR(WCHAR, a2)[n] = 0;
@@ -2721,6 +2731,21 @@ CE_API(ImageList_Merge)
         }
     return handle;
 }
+CE_API(SetViewportOrgEx)
+{
+    struct dc *d = dc_get(a0);
+    if (!d)
+        return 0;
+    if (a3) {
+        PTR(int32_t, a3)[0] = d->origin_x;
+        PTR(int32_t, a3)[1] = d->origin_y;
+    }
+    d->origin_x = (int32_t)a1;
+    d->origin_y = (int32_t)a2;
+    return 1;
+}
+CE_API(ImageList_DrawEx) { return ce_ImageList_Draw(a0, a1, a2, a3, a4, a9, 0, 0, 0, 0, 0, 0); }
+CE_API(ImageList_SetBkColor) { return image_list(a0) ? 0xffffffffu : 0xffffffffu; } /* CLR_NONE */
 /* IMAGELISTDRAWPARAMS: cbSize, himl, i, hdcDst, x, y, cx, cy, xBitmap,
  * yBitmap, rgbBk, rgbFg, fStyle, dwRop. */
 CE_API(ImageList_DrawIndirect)
@@ -2831,7 +2856,8 @@ static const struct ce_export exports[] = {
     CE_EXPORT(ImageList_GetIconSize), CE_EXPORT(ImageList_GetIcon), CE_EXPORT(ImageList_Merge),
     CE_EXPORT(ImageList_SetOverlayImage), CE_EXPORT(ImageList_BeginDrag), CE_EXPORT(ImageList_DragEnter),
     CE_EXPORT(ImageList_DragMove), CE_EXPORT(ImageList_DragLeave), CE_EXPORT(ImageList_EndDrag),
-    CE_EXPORT(ImageList_SetDragCursorImage), CE_EXPORT(ImageList_DrawIndirect),
+    CE_EXPORT(ImageList_SetDragCursorImage), CE_EXPORT(ImageList_DrawIndirect), CE_EXPORT(SetViewportOrgEx),
+    CE_EXPORT(ImageList_DrawEx), CE_EXPORT(ImageList_SetBkColor),
 };
 void *ce_resolve_gdi(const char *name)
 {
