@@ -87,6 +87,19 @@ int memcmp(const void *a, const void *b, size_t n)
 {
     const uint8_t *x = a, *y = b;
 
+    /* Equal words are skipped four bytes at a time when both pointers can
+     * be aligned together; the bytes of the first unequal word, and the
+     * tail, are compared one by one below. */
+    if (n >= 8 && (((uintptr_t)x ^ (uintptr_t)y) & 3) == 0) {
+        for (; (uintptr_t)x & 3; n--, x++, y++)
+            if (*x != *y)
+                return *x - *y;
+        const word_t *xw = (const word_t *)x, *yw = (const word_t *)y;
+        for (; n >= 4 && *xw == *yw; n -= 4, xw++, yw++)
+            ;
+        x = (const uint8_t *)xw;
+        y = (const uint8_t *)yw;
+    }
     for (; n; n--, x++, y++) {
         if (*x != *y)
             return *x - *y;

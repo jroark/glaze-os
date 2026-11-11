@@ -14,27 +14,28 @@ int __popcountsi2(uint32_t x)
     return (int)((x * 0x01010101u) >> 24);
 }
 
-/* Undefined for 0, as for the builtins. */
+/* Undefined for 0, as for the builtins. Five tests each, not a loop over
+ * up to 31 bits: littlefs calls these for every block it locates. */
 int __ctzsi2(uint32_t x)
 {
     int n = 0;
 
-    while (!(x & 1u)) {
-        x >>= 1;
-        n++;
-    }
-    return n;
+    if (!(x & 0x0000FFFFu)) { n += 16; x >>= 16; }
+    if (!(x & 0x000000FFu)) { n += 8; x >>= 8; }
+    if (!(x & 0x0000000Fu)) { n += 4; x >>= 4; }
+    if (!(x & 0x00000003u)) { n += 2; x >>= 2; }
+    return n + !(x & 1u);
 }
 
 int __clzsi2(uint32_t x)
 {
     int n = 0;
 
-    while (!(x & 0x80000000u)) {
-        x <<= 1;
-        n++;
-    }
-    return n;
+    if (!(x & 0xFFFF0000u)) { n += 16; x <<= 16; }
+    if (!(x & 0xFF000000u)) { n += 8; x <<= 8; }
+    if (!(x & 0xF0000000u)) { n += 4; x <<= 4; }
+    if (!(x & 0xC0000000u)) { n += 2; x <<= 2; }
+    return n + !(x & 0x80000000u);
 }
 
 uint32_t __bswapsi2(uint32_t x)
