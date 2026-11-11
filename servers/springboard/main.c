@@ -220,10 +220,15 @@ static uint32_t now_ms(void)
     return gz_time_ms();
 }
 
+/* Keep the modal visible while clocks, notifications and apps update. */
+static bool flush_blocked(void)
+{
+    return card_dialog.open || idle.dark || installer.active;
+}
+
 static void flush(gfx_rect r)
 {
-    /* Keep the modal visible while clocks, notifications and apps update. */
-    if (card_dialog.open || idle.dark || installer.active)
+    if (flush_blocked())
         return;
     gfx_blit(&fb, r.x, r.y, &bb, r);
 }
@@ -907,8 +912,14 @@ static void bench_log(const char *what, const char *app, uint32_t ms)
            si.free_pages * 4, si.cache_pages * 4);
 }
 
+/* The app rectangle the last zoom frame drew, and whether the next frame
+ * must redraw and show the whole screen. */
+static gfx_rect zoom_drawn;
+static bool zoom_whole;
+
 static void begin_zoom_in(void)
 {
+    zoom_whole = true;
     banner_visible = banner_touch = false;
     close_switcher();
     view.pressed = -1;
@@ -920,6 +931,7 @@ static void begin_zoom_in(void)
 
 static void begin_zoom_out(void)
 {
+    zoom_whole = true;
     calibration_cancel();
     display_cancel();
     banner_visible = banner_touch = false;
@@ -2714,11 +2726,21 @@ static void frame(void)
         gfx_rect full = gfx_r(0, app_top(), SB_APP_W, app_height());
         int q = state == ST_ZOOM_IN ? p : 1024 - p;
         gfx_rect r = lerp_rect(icon, full, q);
-        gfx_blit(&bb, 0, 0, &snap, gfx_r(0, 0, SCREEN_W, SCREEN_H));
+        /* Only the app's rectangle changes between frames: put the home
+         * snapshot back where the last frame drew it and show that and the
+         * new rectangle, not the whole screen twice (two 150 KB copies, one
+         * of them to the uncached framebuffer). The first frame, and any
+         * after one the framebuffer missed, is whole. */
+        gfx_rect screen = gfx_r(0, 0, SCREEN_W, SCREEN_H), dirty = screen;
+        if (!zoom_whole && !gfx_rect_intersect(gfx_rect_union(zoom_drawn, r), screen, &dirty))
+            dirty = gfx_r(0, 0, 0, 0);
+        gfx_blit(&bb, dirty.x, dirty.y, &snap, dirty);
         int alpha = q > 512 ? 255 : 80 + q * 175 / 512;
         if (front())
             gfx_blit_scaled(&bb, r, &front()->surf, gfx_r(0, 0, SB_APP_W, app_height()), alpha);
-        flush_all();
+        flush(dirty);
+        zoom_whole = flush_blocked();
+        zoom_drawn = r;
         if (done) {
             if (state == ST_ZOOM_IN) {
                 state = ST_APP;
