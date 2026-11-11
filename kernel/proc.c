@@ -195,6 +195,7 @@ void proc_exit(struct proc *p, int code)
         return;
     kprintf("proc: %s pid %d exited (%d)\n", p->name, p->pid, code);
     p->dying = true;
+    reap_pending = true;
     p->exit_code = code;
     ipc_proc_cleanup(p);
     sem_proc_cleanup(p);
@@ -207,6 +208,7 @@ void proc_exit(struct proc *p, int code)
 
 void proc_reap(void)
 {
+    reap_pending = false;
     for (int i = 0; i < MAX_PROCS; i++) {
         struct proc *p = &procs[i];
         if (!p->used)
@@ -265,6 +267,7 @@ int thread_exit(void)
     if (cur->stack_slot >= 0)
         p->stack_slots &= ~(1u << cur->stack_slot);
     thread_cancel_timeout(cur);
+    reap_pending = true;
     thread_block(T_ZOMBIE);     /* reaped by proc_reap after the switch */
     return SYSRET_BLOCKED;
 }
