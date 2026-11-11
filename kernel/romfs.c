@@ -78,11 +78,17 @@ static void read_block(uint32_t n, uint8_t *buf) { read_block_with(n, buf, false
 static void read_bytes(uint32_t off, void *dst, uint32_t len)
 {
     static uint8_t blk[NAND_PAGE_DATA] __attribute__((aligned(4)));
+    static uint32_t held = UINT32_MAX;      /* the block in blk */
     uint8_t *out = dst;
 
     while (len) {
         uint32_t in = off % NAND_PAGE_DATA, n = MIN(len, NAND_PAGE_DATA - in);
-        read_block(off / NAND_PAGE_DATA, blk);
+        /* lz_init reads thousands of 8-byte page descriptors in a row: one
+         * NAND read (and ECC check) per block, not per descriptor. */
+        if (off / NAND_PAGE_DATA != held) {
+            held = off / NAND_PAGE_DATA;
+            read_block(held, blk);
+        }
         memcpy(out, blk + in, n);
         out += n; off += n; len -= n;
     }
