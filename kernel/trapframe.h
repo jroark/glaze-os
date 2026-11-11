@@ -39,6 +39,7 @@ struct context {
 void swtch(struct context *old, struct context *new);
 void trap_return(void);
 void tlb_flush_all(void);
+void tlb_invalidate(uint32_t va, uint32_t asid);
 #endif
 
 #endif
