@@ -193,6 +193,18 @@ nand-ecc-test: ../tests/native/nand_ecc.c ../kernel/drivers/nand_ecc.c ../kernel
 	$(O)/$@
 .PHONY: nand-ecc-test
 
+# libc's memcmp and bit counts, renamed so the host's remain to compare with.
+libc-bits-test: ../tests/native/libc_bits.c ../lib/libc/string.c ../lib/libc/bitops.c
+	$(CC) -std=gnu11 -O2 -ffreestanding -fno-builtin -I../lib/include -I../lib/libc/include \
+		-Dmemcmp=gz_memcmp -c -o $(O)/libc_bits_string.o ../lib/libc/string.c
+	$(CC) -std=gnu11 -O2 -ffreestanding -fno-builtin -D__ctzsi2=gz_ctz -D__clzsi2=gz_clz \
+		-c -o $(O)/libc_bits_bitops.o ../lib/libc/bitops.c
+	objcopy --keep-global-symbol=gz_memcmp $(O)/libc_bits_string.o
+	objcopy --keep-global-symbol=gz_ctz --keep-global-symbol=gz_clz $(O)/libc_bits_bitops.o
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ $< $(O)/libc_bits_string.o $(O)/libc_bits_bitops.o
+	$(O)/$@
+.PHONY: libc-bits-test
+
 # libc's 64-bit division (lib/libc/divdi3.c) against the host's.
 divdi3-test: ../tests/native/divdi3.c ../lib/libc/divdi3.c
 	$(CC) $(CFLAGS) -O2 -fno-builtin -o $(O)/$@ $(filter %.c,$^)
