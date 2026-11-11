@@ -8,9 +8,9 @@
  *   every ~9 s:     TIMEOUT (0x7814) = 0x96
  *   about 10 / s:   ARG (0x780C) = 0x53, then CMD (0x7808) = 0x3A
  *
- * each after reading STATUS (0x7834). The emulator returns 0 there, but a
- * real BE-300 reads 3 after Windows CE, whose driver evidently doesn't wait
- * for 0, so the read is only replayed. TIMEOUT is a watchdog reload in
+ * each after reading STATUS (0x7834). A real BE-300 reads 3 there after
+ * Windows CE (as be300 does while the watchdog runs), whose driver evidently
+ * doesn't wait for 0, so the read is only replayed. TIMEOUT is a watchdog reload in
  * seconds (0x96 = 150): a real BE-300 resets 140-150 s after Windows CE
  * stops unless something keeps writing it, and with this it keeps running.
  *
@@ -21,7 +21,8 @@
  *   stop:   ARG0 (0x7804) = 0x35, CMD0 (0x7800) = 0x5C until STATUS & 7 == 0
  *   start:  TIMEOUT = seconds, then ARG = 0x53, CMD = 0x3A until STATUS & 7 == 3
  *
- * CE tries a stop up to 1000 times. The emulator's STATUS always reads 0.
+ * CE tries a stop up to 1000 times. be300 models the same STATUS values
+ * (3 running, 0 stopped; be300 src/hw/cmcu.c).
  */
 
 #include "../kernel.h"
