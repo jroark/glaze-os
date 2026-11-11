@@ -9,10 +9,9 @@
  *
  * Register use follows the DP8390D datasheet (the "NIC Core" register map,
  * remote DMA and buffer ring chapters) and the emulator's model,
- * be300 src/hw/cf_ne2000.c. The card is assumed to be in I/O mode at port
- * 0x300 once the bridge windows are on, as on the emulator and in the
- * Linux port; real cards would need their configuration option register
- * written through attribute memory first (TODO: not done, no CIS parser).
+ * be300 src/hw/cf_ne2000.c. cf.c puts the card in I/O mode at port 0x300
+ * by writing its configuration option register before this driver runs;
+ * the emulator's card decodes 0x300 without that.
  */
 
 #include "../kernel.h"

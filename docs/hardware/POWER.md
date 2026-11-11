@@ -324,14 +324,16 @@ and GZ_WAKE_* in `glaze/abi.h`) is `kernel/drivers/power.c`:
 
 ### Emulator and gaps
 
-- be300 runs SUSPEND as WAIT, and F12 wakes it through GIRQ0. Its
-  HIBERNATE cold-resets at once with RAM kept, so the SPL's
-  hibernate-again loop models the wait (each pass is a ROM load of the
-  SPL).
-- Its ETIME compare interrupt is delivered only while RTCL1 is stopped,
-  which Glaze never starts.
-- Its PMUINTREG bits don't follow the UM (RTCRST at bit 0, RSTSW at 2), and
-  its CMCU STATUS always reads 0.
+- be300 runs SUSPEND as WAIT (Count and the timers keep running), and F12
+  wakes it through GIRQ0. Its HIBERNATE now waits for a wake (a Power
+  press, or the ETIME alarm) and then cold-resets with RAM kept.
+- Its ETIME alarm fires when ETIME reaches ECMP (a match, since be300's
+  2026-11 RTC change; earlier it fired whenever ETIME >= ECMP). The
+  interrupt is still delivered only while RTCL1 is stopped, which Glaze
+  never starts.
+- Its PMUINTREG bits follow the UM, and its CMCU STATUS reads 3 while the
+  watchdog runs.
+- be300 docs/HARDWARE_ACCURACY_REVIEW.md lists the other known gaps.
 - Scripted input (`INPUT_SCRIPT`) can't run while asleep, so a sleep in such
   a build also wakes for the script's next event, as a Power press.
   `<ms> key power <held_ms>` holds a key.

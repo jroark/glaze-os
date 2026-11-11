@@ -48,7 +48,7 @@ card, with a DHCP reservation so `reload` reconnects to the same address.
    then unplug USB and dock the keyboard; it's picked up live. Read the trace
    with `logs --once`, which drains the buffer, so save its output:
    - `input: dock socket NN` on every change: 08 is the serial dock, 0c the USB
-     cradle, 0f nothing docked (the emulator says 07). 0e, 0a and 0c pass by
+     cradle, 0f nothing docked (be300 reads the same since 2026-11-11). 0e, 0a and 0c pass by
      while the connector slides in.
    - `dock control XXXX -> YYYY`: Windows CE's powered-up value for a serial
      dock is 1f08; 2008 or 200c is powered down.
