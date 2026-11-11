@@ -4,7 +4,10 @@
  * this replays what Windows CE's driver does, traced in the emulator (user
  * code at 0x019F19C4-0x019F2028):
  *
- *   once:           CONFIG (0x7810) = 0x10000
+ *   once:           CONFIG (0x7810) = 0x10000 (bit 16 reads set after the
+ *                   watchdog reset the system, and CE logs "System was
+ *                   rebooted by WDT."; writing 1 clears it:
+ *                   cedmbltin.dll 0x019F1FE8-0x019F2028)
  *   every ~9 s:     TIMEOUT (0x7814) = 0x96
  *   about 10 / s:   ARG (0x780C) = 0x53, then CMD (0x7808) = 0x3A
  *
