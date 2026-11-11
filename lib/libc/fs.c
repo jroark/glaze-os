@@ -346,11 +346,27 @@ int fs_hw_rescan(void)
 int fs_read_file(const char *path, void *dst, uint32_t max)
 {
     SESSION_LOCKED();
+    struct gz_msg r;
+    int n = connect();
+
+    /* One request when the file, or the part wanted, fits one (FS_READ_FILE);
+     * a longer file is read the long way. */
+    if (!n)
+        n = put_path(path, 0);
+    if (n)
+        return n;
+    n = call(FS_READ_FILE, MIN(max, FS_IO_MAX), 0, 0, &r);
+    if (n >= 0 && (!r.w[1] || (uint32_t)n >= max)) {
+        memcpy(dst, buf, MIN((uint32_t)n, max));
+        return n;
+    }
+    if (n < 0 && n != GZ_EINVAL)
+        return n;
     int fd = fs_open(path, FS_O_READ);
 
     if (fd < 0)
         return fd;
-    int n = fs_read(fd, dst, max);
+    n = fs_read(fd, dst, max);
     fs_close(fd);
     return n;
 }
