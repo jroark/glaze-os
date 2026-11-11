@@ -97,12 +97,71 @@ static uint32_t cp_clock;
 static struct { dhara_sector_t sector; dhara_page_t page; uint32_t gen; } sec_cache[SEC_N];
 static uint32_t sec_gen = 1;
 
+/*
+ * The code's remainder, a byte at a time. Dhara's chunk_remainder() (ecc/
+ * bch.c, vendored) shifts one bit per step in 64-bit arithmetic, about 4,000
+ * steps a page, and every page read is checked. Its eight steps for one byte
+ * are linear in the low byte of the remainder, so they fold into a table:
+ * the same polynomial and the same bytes on flash as bch_generate() and
+ * bch_verify(). bch_repair() is still Dhara's.
+ */
+static uint64_t bch_tab[256];
+
+static uint64_t bch_remainder(const uint8_t *data, size_t len)
+{
+    uint64_t r = 0;
+
+    if (!bch_tab[1])
+        for (unsigned b = 0; b < 256; b++) {
+            uint64_t t = b;
+            for (int j = 0; j < 8; j++)
+                t = (t & 1) ? (t ^ bch->generator) >> 1 : t >> 1;
+            bch_tab[b] = t;
+        }
+    for (size_t i = 0; i < len; i++) {
+        r ^= data[i] ^ 0xFFu;
+        r = (r >> 8) ^ bch_tab[r & 0xFFu];
+    }
+    return r;
+}
+
+/* bch_verify(): whether `ecc` is the code of `data`. */
+static bool bch_matches(const uint8_t *data, size_t len, const uint8_t *ecc)
+{
+    uint64_t stored = 0;
+
+    for (int i = bch->ecc_bytes - 1; i >= 0; i--)
+        stored = (stored << 8) | (ecc[i] ^ 0xFFu);
+    stored &= (1ull << bch->degree) - 1;
+    return bch_remainder(data, len) == stored;
+}
+
 #ifndef FTL_READONLY
 static void make_slot(const uint8_t *data, size_t len, uint8_t *slot)
 {
-    bch_generate(bch, data, len, slot);
+    uint64_t r = bch_remainder(data, len);
+
+    for (int i = 0; i < bch->ecc_bytes; i++, r >>= 8)   /* bch_generate() */
+        slot[i] = (uint8_t)~r;
     memset(slot + bch->ecc_bytes, 0xFF, ECC_SLOT - bch->ecc_bytes);
     slot[ECC_SLOT - 1] = ECC_VALID;
+}
+#endif
+
+#ifdef FTL_SELFTEST
+/* For tests/native/ftl_bch.c: the table-driven code against Dhara's, which
+ * wrote the pages already on every device. 0 when they agree on `data`. */
+int ftl_bch_selftest(const uint8_t *data, size_t len, const uint8_t *other_ecc)
+{
+    uint8_t mine[ECC_SLOT], theirs[BCH_MAX_ECC];
+
+    make_slot(data, len, mine);
+    bch_generate(bch, data, len, theirs);
+    if (memcmp(mine, theirs, bch->ecc_bytes))
+        return 1;
+    if (!bch_matches(data, len, theirs) || bch_verify(bch, data, len, mine))
+        return 2;
+    return bch_matches(data, len, other_ecc) == !bch_verify(bch, data, len, other_ecc) ? 0 : 3;
 }
 #endif
 
@@ -121,11 +180,11 @@ static int ecc_check(uint8_t *data, size_t len, const uint8_t *stored, bool requ
 
     if (!has_code(stored))
         return required ? -1 : 0;
-    if (!bch_verify(bch, data, len, stored))
+    if (bch_matches(data, len, stored))
         return 0;
     memcpy(ecc, stored, sizeof(ecc));
     bch_repair(bch, data, len, ecc);
-    if (bch_verify(bch, data, len, ecc)) {
+    if (!bch_matches(data, len, ecc)) {
         stats.uncorrectable++;
         return -1;
     }
