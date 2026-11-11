@@ -18,20 +18,33 @@ static uint32_t count_per_ms;
 static uint32_t count_per_tick;
 static uint32_t next_compare;
 static uint32_t last_count;
-static uint64_t count_total;
+static uint64_t us_total;       /* the monotonic clock, in microseconds */
+static uint32_t us_rem;         /* Count * 1000 short of the next one, < count_per_ms */
 
-static uint64_t clock_update(void)
-{
-    uint32_t now = read_c0_count();
-
-    count_total += (uint32_t)(now - last_count);
-    last_count = now;
-    return count_total;
-}
-
+/*
+ * Every scheduling decision and tick reads this, so it avoids 64-bit
+ * division (a subtract-and-shift loop on this CPU): the Count that passed
+ * since the last read is converted on its own, with one DIVU, and the
+ * remainder is carried, which gives exactly total Count * 1000 /
+ * count_per_ms. Only a gap of more than 4,000,000 counts (about 0.4 s,
+ * which the 100 Hz tick never leaves) needs the 64-bit form.
+ */
 uint64_t time_us(void)
 {
-    return clock_update() * 1000u / count_per_ms;
+    uint32_t now = read_c0_count();
+    uint32_t delta = now - last_count;
+
+    last_count = now;
+    if (delta < 4000000u) {
+        uint32_t n = delta * 1000u + us_rem;
+        us_total += n / count_per_ms;
+        us_rem = n % count_per_ms;
+    } else {
+        uint64_t n = (uint64_t)delta * 1000u + us_rem;
+        us_total += n / count_per_ms;
+        us_rem = (uint32_t)(n % count_per_ms);
+    }
+    return us_total;
 }
 
 /* Count's rate if the RTC can't measure it: a real BE-300 measures 10406
@@ -67,60 +80,72 @@ static bool rtc_ticks(uint16_t *out)
     return false;
 }
 
-/* Every wait is bounded, including a counter that stops after its first
- * tick or cannot produce a stable read. Count calibration precedes time_us. */
-static uint32_t measure(void)
+/* Calibration windows: three in a row, 1024 RTC ticks (31.25 ms) each. */
+#define CAL_WINDOWS     3
+#define CAL_TICKS       (RTC_HZ / 32)
+
+/* Waits for the RTC to advance `ticks` past *at, then notes the tick and
+ * Count it stopped on. Every wait is bounded, including a counter that
+ * stops after its first tick or cannot produce a stable read. */
+static bool wait_ticks(uint16_t *at, uint16_t ticks, uint32_t *count)
 {
-    const uint16_t span = RTC_HZ / 10;
-    uint16_t start, now;
+    uint16_t now;
     uint32_t n = 0;
 
-    if (!rtc_ticks(&start))
-        return 0;
     do {
         if (++n == RTC_POLLS || !rtc_ticks(&now))
-            return 0;
-    } while (now == start);
-    start = now;
-    uint32_t c0 = read_c0_count();
-    n = 0;
-    do {
-        if (++n == RTC_POLLS || !rtc_ticks(&now))
-            return 0;
-    } while ((uint16_t)(now - start) < span);
-    return (read_c0_count() - c0) / 100u;
+            return false;
+    } while ((uint16_t)(now - *at) < ticks);
+    *count = read_c0_count();
+    *at = now;
+    return true;
 }
 
-/* On a real BE-300 one boot in a few measured 187 kHz instead of 10406
- * (the RTC freshly reset, or a torn read), which ran every timeout ~55
- * times fast: the median of three, checked for plausibility. */
+/*
+ * Count calibration precedes time_us. On a real BE-300 one boot in a few
+ * measured 187 kHz instead of 10406 (the RTC freshly reset, or a torn read),
+ * which ran every timeout ~55 times fast: so three windows are measured and
+ * checked against each other and for plausibility. They are consecutive,
+ * and when they agree the rate is taken over all three, 94 ms, which is as
+ * precise as one 100 ms window was; boot used to wait for three of those.
+ */
 static void calibrate(void)
 {
-    uint32_t m[3];
+    uint32_t c[CAL_WINDOWS + 1], m[CAL_WINDOWS];
+    uint16_t t[CAL_WINDOWS + 1];
 
     count_per_ms = GUESS_COUNT_PER_MS;
-    for (int i = 0; i < 3; i++) {
-        m[i] = measure();
-        if (!m[i]) {
-            kputs("timer: the RTC isn't counting; guessing Count's rate\n");
-            return;
-        }
+    if (!rtc_ticks(&t[0]) || !wait_ticks(&t[0], 1, &c[0]))
+        goto dead;
+    for (int i = 0; i < CAL_WINDOWS; i++) {
+        t[i + 1] = t[i];
+        if (!wait_ticks(&t[i + 1], CAL_TICKS, &c[i + 1]))
+            goto dead;
+        m[i] = (uint32_t)((uint64_t)(c[i + 1] - c[i]) * RTC_HZ /
+                          ((uint32_t)(uint16_t)(t[i + 1] - t[i]) * 1000u));
     }
+    uint32_t all = (uint32_t)((uint64_t)(c[CAL_WINDOWS] - c[0]) * RTC_HZ /
+                              ((uint32_t)(uint16_t)(t[CAL_WINDOWS] - t[0]) * 1000u));
     for (int i = 0; i < 2; i++)
         for (int k = i + 1; k < 3; k++)
             if (m[k] < m[i]) {
-                uint32_t t = m[i];
+                uint32_t x = m[i];
                 m[i] = m[k];
-                m[k] = t;
+                m[k] = x;
             }
     if (m[1] < MIN_COUNT_PER_MS || m[1] > MAX_COUNT_PER_MS) {
         kprintf("timer: implausible Count rates %u %u %u kHz; guessing\n", m[0], m[1], m[2]);
         return;
     }
-    if (m[2] - m[0] > m[1] / 50)
+    if (m[2] - m[0] > m[1] / 50) {
         kprintf("timer: Count rates %u %u %u kHz disagree; using the median\n", m[0], m[1], m[2]);
-    count_per_ms = m[1];
+        all = m[1];
+    }
+    count_per_ms = all;
     rtc_ok = true;
+    return;
+dead:
+    kputs("timer: the RTC isn't counting; guessing Count's rate\n");
 }
 
 void timer_init(void)
@@ -158,7 +183,7 @@ uint64_t timer_etime(void)
 
 uint64_t timer_suspend(void)
 {
-    clock_update();
+    time_us();
     sleep_etime = timer_etime();
     return sleep_etime;
 }
@@ -167,8 +192,9 @@ void timer_resume(void)
 {
     uint64_t slept = (timer_etime() - sleep_etime) & 0xFFFFFFFFFFFFull;
 
-    /* RTC ticks to Count: count_per_ms per 32.768 ticks. */
-    count_total += slept * count_per_ms * 1000u / RTC_HZ;
+    /* RTC ticks to microseconds: 1000000 / 32768 = 15625 / 512. */
+    _Static_assert(RTC_HZ == 32768u, "the shift below is RTC_HZ / 64");
+    us_total += slept * 15625u >> 9;
     last_count = read_c0_count();
     next_compare = last_count + count_per_tick;
     write_c0_compare(next_compare);

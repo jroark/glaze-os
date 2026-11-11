@@ -105,8 +105,9 @@ int nand_ecc_solve(const uint16_t s[6], uint32_t pos[2], uint16_t val[2])
     return -1;
 }
 
-/* Log and antilog tables, built on first use. */
+/* Log, antilog and bit-reversal tables, built on first use. */
 static uint16_t exp_t[1023], log_t[1024];
+static uint8_t rev_t[256];
 
 static void tables(void)
 {
@@ -114,6 +115,8 @@ static void tables(void)
 
     if (exp_t[0])
         return;
+    for (int i = 0; i < 256; i++)
+        rev_t[i] = bitrev((uint8_t)i);
     for (int i = 0; i < 1023; i++) {
         exp_t[i] = a;
         log_t[a] = (uint16_t)i;
@@ -121,10 +124,22 @@ static void tables(void)
     }
 }
 
-/* b * x^k for k < 1023. */
+/* b * x^k. */
 static uint16_t mul_xk(uint16_t b, uint32_t k)
 {
     return b ? exp_t[(log_t[b] + k) % 1023] : 0;
+}
+
+/* The same for k < 1023. A page check does this about 2,600 times, so the
+ * exponent is reduced with a compare, not a division. */
+static uint16_t step_xk(uint16_t b, uint32_t k)
+{
+    uint32_t e;
+
+    if (!b)
+        return 0;
+    e = log_t[b] + k;
+    return exp_t[e >= 1023u ? e - 1023u : e];
 }
 
 static void unpack(const uint8_t raw[8], uint16_t r[6])
@@ -153,9 +168,9 @@ int nand_ecc_check(uint8_t page[528])
     for (uint32_t k = 0; k < 6; k++) {
         uint16_t acc = 0;
         for (uint32_t p = 0; p < NAND_ECC_BYTES; p++)
-            acc = (uint16_t)(mul_xk(acc, k) ^ (uint16_t)(bitrev(page[p]) << 2));
+            acc = (uint16_t)(step_xk(acc, k) ^ (uint16_t)(rev_t[page[p]] << 2));
         for (int i = 0; i < 6; i++)
-            acc = (uint16_t)(mul_xk(acc, k) ^ r[i]);
+            acc = (uint16_t)(step_xk(acc, k) ^ r[i]);
         s[k] = acc;
         clean = clean && !acc;
     }

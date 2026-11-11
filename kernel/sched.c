@@ -24,6 +24,11 @@ static struct thread *idle_thread;
 static struct context sched_boot_ctx;
 static uint64_t account_since, busy_us;
 
+/* Set whenever a thread turns into a zombie or a process starts dying, so
+ * schedule() only walks the tables in proc_reap() when there is something
+ * to free. It stays set while a zombie is still running on its own stack. */
+bool reap_pending;
+
 /* Also called when sampling, so the currently running slice is included.
  * Kernel execution is serialized with interrupts disabled. */
 uint64_t sched_account(uint64_t now)
@@ -296,7 +301,8 @@ void schedule(void)
         as_activate(&next->proc->as);
     swtch(prev ? &prev->ctx : &sched_boot_ctx, &next->ctx);
     /* Back in `prev`: reap any zombies other threads left behind. */
-    proc_reap();
+    if (reap_pending)
+        proc_reap();
 }
 
 void sched_init(void)
@@ -387,6 +393,7 @@ void sched_kill_proc_threads(struct proc *p)
                 runq_remove(t);
             thread_cancel_timeout(t);
             t->state = T_ZOMBIE;
+            reap_pending = true;
         } else {
             ipc_fail_reply_waiters(p, t);
         }
@@ -415,10 +422,13 @@ int sched_reap_threads(struct proc *p)
         struct thread *t = &threads[i];
         if (t->state == T_UNUSED || t->proc != p)
             continue;
-        if (t->state == T_ZOMBIE && t != cur)
+        if (t->state == T_ZOMBIE && t != cur) {
             thread_free(t);
-        else
+        } else {
+            if (t->state == T_ZOMBIE)
+                reap_pending = true;    /* freed once it has switched away */
             live++;
+        }
     }
     return live;
 }

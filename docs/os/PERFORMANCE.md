@@ -216,3 +216,78 @@ CE. Both take about twice as long as in the emulator. The Browser's warm
 launch restarted it: the RAM boot's memory was short. Windows CE's free
 memory matches the emulator's: 5,128 KiB at rest (emulator 5,068), 4,908 KiB
 median with an app in the background, 3,560 KiB lowest (with Internet).
+
+## Kernel, flash and boot pass (November 11, 2026)
+
+A pass over the kernel's per-switch work, the flash path and boot, measured in
+the emulator with `tests/bench.py` (one run each; guest times repeat to the
+millisecond) and ktest's own timing lines. Images built with `WL54CF=0`.
+
+| Measure | Before | After |
+| --- | ---: | ---: |
+| Emulator start to SpringBoard ready | 1.20 s | 0.84 s |
+| SpringBoard's own start (guest) | 282 ms | 170 ms |
+| Settings cold launch | 142 ms | 59 ms |
+| Photos cold launch | 57 ms | 21 ms |
+| Music cold launch | 26 ms | 12 ms |
+| Calendar cold launch | 23 ms | 15 ms |
+| Notes cold launch | 15 ms | 10 ms |
+| Clock cold launch | 40 ms | 31 ms |
+| Browser cold launch | 24 ms | 20 ms |
+| Calculator cold launch | 25 ms | 24 ms |
+| ktest: 1000 IPC round trips | 68 ms | 11 ms |
+| ktest: 8000 locked increments (two threads) | 257 ms | 42 ms |
+| ktest: 20,000 bytes written to flash | 59 ms | 20 ms |
+| ktest: the same read back | 19 ms | 9 ms |
+| Kernel text and data, scripted build | 179,224 bytes | 169,676 bytes |
+
+What changed, most effect first:
+
+- **Zombie reaping** ran after every context switch: all 32 process slots,
+  and all 128 threads for each one in use. It now runs only when a thread or
+  process has exited (`reap_pending`, `kernel/sched.c`). This is most of the
+  IPC and lock numbers.
+- **The clock.** `time_us()` divided a 64-bit count on every `schedule()` and
+  tick, through libc's 64-step loop. It now converts each Count delta with
+  one DIVU and carries the remainder (`kernel/timer.c`), and libc's 64-bit
+  division takes three DIVUs when the divisor is below 2^16
+  (`lib/libc/divdi3.c`), which covers every microsecond-to-millisecond
+  conversion after 71 minutes of uptime.
+- **BCH on every flash page.** The vendored remainder loop works a bit at a
+  time in 64-bit arithmetic; `servers/fs/ftl.c` now does the same polynomial a
+  byte at a time through a table. Same bytes on flash, checked against the
+  vendored code by `make -C host ftl-bch-test`.
+- **One request for a small file** (`FS_READ_FILE`): a preference was open,
+  read, close. With the BCH change this is the launch-time gain; Settings
+  reads over a dozen preferences as it starts.
+- **Boot calibration** of Count against the RTC took three 100 ms windows; it
+  takes three consecutive 31 ms ones and uses all 94 ms when they agree.
+- **TLB.** Mapping a page flushed all 32 entries; it now probes for the one
+  entry that can be stale (`tlb_invalidate`, `kernel/vectors.S`).
+- **Zoom animation** frames restore and flush only the rectangle that
+  changed, not the whole screen twice; **transitions** pace frames by their
+  start time, not a fixed sleep after drawing.
+- Smaller: table lookups in the boot reader's Reed-Solomon check
+  (`kernel/drivers/nand_ecc.c`), one NAND read per block while indexing a
+  compressed romfs, `clz`/`ctz` without loops, `memcmp` by words, and the
+  kernel linked with `--gc-sections`.
+
+Not visible in the emulator, which models neither caches, NAND timing nor
+the uncached framebuffer: the TLB change's effect on refills, the zoom and
+transition changes, the Reed-Solomon check (emulator images carry no
+parity) and the romfs index reads. These want a run on the device
+(`tools.hwtest`, and `glaze-usb script` with bench.py's launch script as
+above).
+
+Looked at and left:
+
+- `-mtune=vr4130` builds and uses no new instructions, but grows romfs by
+  32 KiB and its effect can only be measured on the device.
+- A reply-and-receive system call and direct hand-off between IPC partners
+  would save a trap per request; it changes the ABI the sibling repositories
+  build against.
+- Reading several flash pages per system call, straight into the caller, and
+  keeping the last compressed block for the next romfs fault.
+- Rounded-corner coverage (a square root per corner pixel), the keyboard's
+  hidden shadow rectangles, cached home-screen layers for page swipes, and
+  Notes redrawing its whole view per keystroke.

@@ -27,6 +27,8 @@ void uitr_release(void)
     old_s.px = new_s.px = NULL;
 }
 
+#define FRAME_MS    20u     /* two scheduler ticks */
+
 void ui_transition(void (*draw_new)(gfx_surface *s), bool forward)
 {
     gfx_rect all = gfx_r(0, 0, UI_W, UI_H);
@@ -43,7 +45,8 @@ void ui_transition(void (*draw_new)(gfx_surface *s), bool forward)
 
     uint32_t t0 = gz_time_ms();
     for (;;) {
-        int p = ui_ease_out(gz_time_ms() - t0, TRANSITION_MS);
+        uint32_t frame = gz_time_ms();
+        int p = ui_ease_out(frame - t0, TRANSITION_MS);
         int shift = UI_W * p / 1024;
         gfx_rect body = gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H);
         gfx_set_clip(&ui.surf, body);
@@ -62,6 +65,12 @@ void ui_transition(void (*draw_new)(gfx_surface *s), bool forward)
         ui_present();
         if (p >= 1024)
             break;
-        gz_sleep_ms(15);
+        /* Pace frames by when they start, not by a fixed sleep after the
+         * drawing: a 15 ms sleep on top of a slow frame (two body blits, a
+         * blended bar and the present) halved the frame rate on the device.
+         * A frame that overruns the period goes straight to the next. */
+        uint32_t spent = gz_time_ms() - frame;
+        if (spent < FRAME_MS)
+            gz_sleep_ms(FRAME_MS - spent);
     }
 }

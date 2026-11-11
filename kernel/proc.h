@@ -207,6 +207,7 @@ struct proc *proc_spawn_image(struct addrspace *src_as, uint32_t src, uint32_t s
 struct proc *proc_spawn_verified(const void *elf, uint32_t size, const char *name, uint32_t flags);
 struct proc *proc_by_pid(int pid);
 void proc_exit(struct proc *p, int code);
+extern bool reap_pending;
 void proc_reap(void);
 void sched_kill_proc_threads(struct proc *p);
 void sched_set_proc_prio(struct proc *p, int prio);

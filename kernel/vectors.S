@@ -201,6 +201,45 @@ swtch:
 	jr	$ra
 	nop
 
+/*
+ * void tlb_invalidate(uint32_t va, uint32_t asid): drop the entry holding
+ * va's page pair for that address space, if the TLB has one. TLBP matches
+ * EntryHi's VPN2 and ASID (VR4131 UM, TLB entry format and the TLBP
+ * instruction); a hit is rewritten like tlb_flush_all's entries.
+ */
+	.globl	tlb_invalidate
+tlb_invalidate:
+	mfc0	$t3, CP0_ENTRYHI
+	srl	$a0, $a0, 13
+	sll	$a0, $a0, 13
+	or	$a0, $a0, $a1
+	mtc0	$a0, CP0_ENTRYHI
+	nop
+	nop
+	nop
+	tlbp
+	nop
+	nop
+	mfc0	$t0, CP0_INDEX
+	nop
+	bltz	$t0, 1f			/* P bit: no match */
+	nop
+	sll	$t1, $t0, 13
+	lui	$t2, 0x8000
+	addu	$t2, $t2, $t1
+	mtc0	$t2, CP0_ENTRYHI
+	mtc0	$zero, CP0_ENTRYLO0
+	mtc0	$zero, CP0_ENTRYLO1
+	nop
+	nop
+	nop
+	tlbwi
+	nop
+1:	mtc0	$t3, CP0_ENTRYHI
+	nop
+	jr	$ra
+	nop
+
 /* Flush the whole TLB to invalid, unique entries (index in a0 ignored). */
 	.globl	tlb_flush_all
 tlb_flush_all:

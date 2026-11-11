@@ -9,7 +9,7 @@ KCRYPTO_OBJS := $(patsubst third_party/%.c,$(OUT)/kernel/crypto/%.o,$(KCRYPTO_SR
 KERNEL_SRCS := $(filter-out $(foreach d,$(DRIVER_NAMES) $(PCCARD_DRIVERS),kernel/drivers/$(d).c),$(wildcard kernel/*.c kernel/*.S kernel/drivers/*.c))
 KERNEL_OBJS := $(patsubst %,$(OUT)/%.o,$(basename $(KERNEL_SRCS))) $(OUT)/kernel/string.o $(OUT)/kernel/divdi3.o \
     $(OUT)/kernel/bitops.o $(KCRYPTO_OBJS)
-KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -Ikernel -MMD \
+KERNEL_CFLAGS := $(CFLAGS_COMMON) -O2 -ffunction-sections -fdata-sections -Ikernel -MMD \
     -DGLAZE_BUILD='"$(BUILD_ID)"' -DGLAZE_VERSION='"$(GLAZE_VERSION)"' -DGLAZE_INIT='"$(INIT)"' \
     $(if $(INPUT_SCRIPT),-DGLAZE_INPUT_SCRIPT) \
     $(if $(COLD_SOCKET_TEST),-DGLAZE_COLD_SOCKET_TEST) \
@@ -69,4 +69,4 @@ $(OUT)/kernel/reboot.checked: $(OUT)/kernel/reboot_entry.o
 	@touch $@
 
 $(OUT)/kernel.elf: $(KERNEL_OBJS) kernel/kernel.lds $(OUT)/kernel/reboot.checked
-	$(LD) -m elf32ltsmip -T kernel/kernel.lds -o $@ $(KERNEL_OBJS)
+	$(LD) -m elf32ltsmip --gc-sections -T kernel/kernel.lds -o $@ $(KERNEL_OBJS)
