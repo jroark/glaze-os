@@ -18,20 +18,33 @@ static uint32_t count_per_ms;
 static uint32_t count_per_tick;
 static uint32_t next_compare;
 static uint32_t last_count;
-static uint64_t count_total;
+static uint64_t us_total;       /* the monotonic clock, in microseconds */
+static uint32_t us_rem;         /* Count * 1000 short of the next one, < count_per_ms */
 
-static uint64_t clock_update(void)
-{
-    uint32_t now = read_c0_count();
-
-    count_total += (uint32_t)(now - last_count);
-    last_count = now;
-    return count_total;
-}
-
+/*
+ * Every scheduling decision and tick reads this, so it avoids 64-bit
+ * division (a subtract-and-shift loop on this CPU): the Count that passed
+ * since the last read is converted on its own, with one DIVU, and the
+ * remainder is carried, which gives exactly total Count * 1000 /
+ * count_per_ms. Only a gap of more than 4,000,000 counts (about 0.4 s,
+ * which the 100 Hz tick never leaves) needs the 64-bit form.
+ */
 uint64_t time_us(void)
 {
-    return clock_update() * 1000u / count_per_ms;
+    uint32_t now = read_c0_count();
+    uint32_t delta = now - last_count;
+
+    last_count = now;
+    if (delta < 4000000u) {
+        uint32_t n = delta * 1000u + us_rem;
+        us_total += n / count_per_ms;
+        us_rem = n % count_per_ms;
+    } else {
+        uint64_t n = (uint64_t)delta * 1000u + us_rem;
+        us_total += n / count_per_ms;
+        us_rem = (uint32_t)(n % count_per_ms);
+    }
+    return us_total;
 }
 
 /* Count's rate if the RTC can't measure it: a real BE-300 measures 10406
@@ -158,7 +171,7 @@ uint64_t timer_etime(void)
 
 uint64_t timer_suspend(void)
 {
-    clock_update();
+    time_us();
     sleep_etime = timer_etime();
     return sleep_etime;
 }
@@ -167,8 +180,9 @@ void timer_resume(void)
 {
     uint64_t slept = (timer_etime() - sleep_etime) & 0xFFFFFFFFFFFFull;
 
-    /* RTC ticks to Count: count_per_ms per 32.768 ticks. */
-    count_total += slept * count_per_ms * 1000u / RTC_HZ;
+    /* RTC ticks to microseconds: 1000000 / 32768 = 15625 / 512. */
+    _Static_assert(RTC_HZ == 32768u, "the shift below is RTC_HZ / 64");
+    us_total += slept * 15625u >> 9;
     last_count = read_c0_count();
     next_compare = last_count + count_per_tick;
     write_c0_compare(next_compare);
