@@ -570,6 +570,28 @@ static int dispatch(const struct gz_msg *m, struct gz_msg *r)
         if (path && (m->w[2] & ~FS_O_READ) && ota_locked(path))
             return GZ_EBUSY;
         return path ? op_open(sess, path, m->w[2]) : GZ_EINVAL;
+    case FS_READ_FILE: {
+        /* Open, read and close in one request: a preference or an Info file
+         * is a few bytes, and three round trips each added up (Settings
+         * reads over a dozen at launch). */
+        uint32_t want = MIN(m->w[2], FS_IO_MAX);
+        int h = path ? op_open(sess, path, FS_O_READ) : GZ_EINVAL;
+
+        if (h < 0)
+            return h;
+        f = &files[h];
+        if (f->card) {
+            rv = card_read(&f->cf, s->buf, want);
+            r->w[1] = rv == (int)want;
+            card_close(&f->cf);
+        } else {
+            rv = gz_err(lfs_file_read(&lfs, &f->f, s->buf, want));
+            r->w[1] = rv >= 0 && lfs_file_size(&lfs, &f->f) > (lfs_soff_t)rv;
+            lfs_file_close(&lfs, &f->f);
+        }
+        f->used = false;
+        return rv;
+    }
     case FS_READ:
         if (!f)
             return GZ_EINVAL;

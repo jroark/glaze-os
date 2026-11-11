@@ -41,6 +41,8 @@ enum {
     FS_CARD_FORMAT,         /* CF-only FAT16 superfloppy: w2 generation, w3 sector count */
     FS_OS_UPDATE,           /* OTA (docs/os/OTA.md): w2 = FS_OTA_*; BEGIN takes buf: path */
     FS_HW_RESCAN,           /* re-register installed hardware packages (glaze/hwpkg.h) -> count */
+    FS_READ_FILE,           /* buf: path, w2 = len <= FS_IO_MAX -> bytes from the start,
+                               buf: data, w1 = 1 when the file may hold more */
 };
 
 /* FS_OS_UPDATE steps. BEGIN checks a staged update file's header with the
