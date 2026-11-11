@@ -366,6 +366,12 @@ gfx-text-test: ../tests/native/gfx_text.c ../lib/gfx/gfx.c ../lib/gfx/text.c
 	../out/host/gfx-text-test ../assets/gen/*.gzf
 .PHONY: gfx-text-test
 
+ftl-bch-test: ../tests/native/ftl_bch.c $(FS)
+	@mkdir -p ../out/host
+	$(CC) $(FS_CFLAGS) -DFTL_SELFTEST -fsanitize=address,undefined -o ../out/host/ftl-bch-test $^
+	../out/host/ftl-bch-test
+.PHONY: ftl-bch-test
+
 ftl-verify-test: ../tests/native/ftl_verify.c $(FS)
 	@mkdir -p ../out/host
 	$(CC) $(FS_CFLAGS) -fsanitize=address,undefined -o ../out/host/ftl-verify-test $^
