@@ -193,6 +193,12 @@ nand-ecc-test: ../tests/native/nand_ecc.c ../kernel/drivers/nand_ecc.c ../kernel
 	$(O)/$@
 .PHONY: nand-ecc-test
 
+# libc's 64-bit division (lib/libc/divdi3.c) against the host's.
+divdi3-test: ../tests/native/divdi3.c ../lib/libc/divdi3.c
+	$(CC) $(CFLAGS) -O2 -fno-builtin -o $(O)/$@ $(filter %.c,$^)
+	$(O)/$@
+.PHONY: divdi3-test
+
 audio-driver-test: ../tests/native/audio_driver.c ../kernel/drivers/audio.c ../kernel/hw.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -fno-strict-aliasing -fsanitize=address,undefined -o ../out/host/$@ ../tests/native/audio_driver.c
