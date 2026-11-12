@@ -58,6 +58,13 @@ CASES = {
     "tables": ("tables.html",
                [r'"r1c2"', r'"loosenote"', r'"inrow"', r'"cellone"', r'"celltwo"', r"browser JS: true true true true"],
                [], 0),
+    # Gradients fall back to a colour; off-canvas and transparent positioned boxes hide;
+    # <dialog open> and <object> fallbacks show; <template> is inert.
+    "hidden": ("hidden.html",
+               [r'"heroband"', r'"slideon"', r'"fadein"', r'"centredbox"', r'"opendialog"', r'"objectfallback"',
+                r"browser JS: rgb\(32, 64, 96\)"],
+               [r'"drawerone"', r'"drawertwo"', r'"slideoff"', r'"rightpanel"', r'"closeddialog"',
+                r'"templatetext"', r"^image .*template-only", r"^browser JS: template ran"], 0),
 }
 
 

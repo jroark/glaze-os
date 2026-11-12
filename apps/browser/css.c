@@ -628,6 +628,7 @@ static const struct {
     { "vertical-align", P_VERTICAL_ALIGN, 0 }, { "visibility", P_VISIBILITY, 0 },
     { "float", P_FLOAT, 0 }, { "clear", P_CLEAR, 0 }, { "position", P_POSITION, 0 },
     { "left", P_LEFT, 0 }, { "top", P_TOP, 0 }, { "overflow", P_OVERFLOW, 0 },
+    { "opacity", P_OPACITY, 0 },
     { "inline-size", P_WIDTH, 0 }, { "max-inline-size", P_MAX_WIDTH, 0 },
     { "margin-inline-start", P_MARGIN_LEFT, 0 }, { "margin-inline-end", P_MARGIN_RIGHT, 0 },
     { "padding-inline-start", P_PADDING_LEFT, 0 }, { "padding-inline-end", P_PADDING_RIGHT, 0 },
@@ -987,6 +988,44 @@ static int fold_math(char *buf, int len, int cap)
     return len;
 }
 
+/* The first opaque colour stop of a gradient token, e.g. the #fff in
+ * linear-gradient(to right, #fff 0%, #eee 100%). */
+static bool gradient_color(const struct tok *t, struct css_value *v)
+{
+    const char *open = memchr(t->s, '(', (size_t)t->len);
+    int nl = open ? (int)(open - t->s) : 0;
+
+    if (nl < 8 || strncasecmp(t->s + nl - 8, "gradient", 8))
+        return false;
+    const char *s = open + 1, *end = t->s + t->len - 1;
+    while (s < end) {
+        const char *e = s;
+        int depth = 0;
+        while (e < end && (depth || *e != ',')) {
+            depth += *e == '(' ? 1 : *e == ')' ? -1 : 0;
+            e++;
+        }
+        /* The colour is the stop's first word; the rest is its position. */
+        while (s < e && is_ws(*s))
+            s++;
+        const char *w = s;
+        depth = 0;
+        while (w < e && (depth || !is_ws(*w))) {
+            depth += *w == '(' ? 1 : *w == ')' ? -1 : 0;
+            w++;
+        }
+        uint32_t c;
+        if (w > s && css_parse_color(s, (int)(w - s), &c) && (c >> 24)) {
+            v->type = V_COLOR;
+            v->unit = 0;
+            v->num = (int32_t)c;
+            return true;
+        }
+        s = e + 1;
+    }
+    return false;
+}
+
 static void declaration(struct dlist *L, const char *name, int nl, const char *val, int vl)
 {
     struct tok t[16];
@@ -1038,12 +1077,42 @@ static void declaration(struct dlist *L, const char *name, int nl, const char *v
         border_side(L, 2, t, n);
     } else if (IS("border-left")) {
         border_side(L, 3, t, n);
-    } else if (IS("background")) {
+    } else if (IS("background") || IS("background-image")) {
         struct css_value c = { V_COLOR, 0, 0 };
-        for (int i = 0; i < n; i++)
-            if (value_of(&t[i], &v, true) && v.type == V_COLOR)
+        bool found = IS("background");      /* the shorthand resets the colour */
+        for (int i = 0; i < n; i++) {
+            if (value_of(&t[i], &v, true) && v.type == V_COLOR) {
                 c = v;
-        add(L, P_BACKGROUND_COLOR, c);
+                found = true;
+            } else if (gradient_color(&t[i], &v)) {
+                /* No gradients here: the first opaque stop stands in, so a
+                 * header drawn as white text on a gradient isn't white on white. */
+                c = v;
+                found = true;
+            }
+        }
+        if (found)
+            add(L, P_BACKGROUND_COLOR, c);
+    } else if (IS("transform") || IS("-webkit-transform")) {
+        /* translate(-100%) on a positioned element is an off-canvas drawer
+         * (style.c hides what sits far off to the left); any other transform
+         * brings it back. */
+        struct css_value off = { V_LENGTH, U_PX, 0 };
+        for (int i = 0; i < n; i++)
+            if (t[i].len > 10 && !strncasecmp(t[i].s, "translate", 9)) {
+                const char *a = memchr(t[i].s, '(', (size_t)t[i].len);
+                int32_t num;
+                int used = a ? parse_num(a + 1, (int)(t[i].s + t[i].len - a - 1), &num) : 0;
+                if (used && a[1 + used] == '%' && (num <= -100 * 64 || num >= 100 * 64))
+                    off.num = -1000 * 64;
+            }
+        add(L, P_LEFT, off);
+    } else if (IS("right") || IS("bottom")) {
+        if (value_of(&t[0], &v, false) &&
+            ((v.type == V_PERCENT && v.num <= -100 * 64) || (v.type == V_LENGTH && v.unit == U_PX && v.num <= -500 * 64))) {
+            struct css_value off = { V_LENGTH, U_PX, -1000 * 64 };
+            add(L, P_LEFT, off);
+        }
     } else if (IS("font")) {
         font_shorthand(L, t, n);
     } else if (IS("font-weight")) {

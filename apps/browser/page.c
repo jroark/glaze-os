@@ -116,17 +116,18 @@ static bool rel_has(const char *rel, const char *word)
 /* Idempotent resource discovery after parsing or a DOM mutation. */
 /* ---- which image to fetch --------------------------------------------------- */
 
+/* Whether a URL's path ends in the extension of a format with no decoder. */
 static bool undecodable(const char *url, int len)
 {
     static const char *const ext[] = { ".webp", ".avif", ".svg", ".jxl" };
+    int end = 0;
 
-    while (len && url[len - 1] != '.' && url[len - 1] != '/' && url[len - 1] != '?')
-        len--;                          /* crude: the last dot before any query */
+    while (end < len && url[end] != '?' && url[end] != '#')
+        end++;
     for (size_t i = 0; i < sizeof(ext) / sizeof(ext[0]); i++) {
         int el = (int)strlen(ext[i]);
-        for (int k = 0; k + el <= len + 8 && url[k]; k++)
-            if (!strncasecmp(url + k, ext[i], (size_t)el) && (!url[k + el] || url[k + el] == '?' || url[k + el] == ' '))
-                return true;
+        if (end >= el && !strncasecmp(url + end - el, ext[i], (size_t)el))
+            return true;
     }
     return false;
 }
@@ -245,7 +246,11 @@ void page_collect(struct page *p)
     for (struct node *c = p->html ? p->html->first : NULL; c; c = c->next)
         if (c->tag == T_BODY)
             p->body = c;
-    for (struct node *n = p->doc; n; n = node_next(n, p->doc, false)) {
+    /* A <template>'s contents are inert: its scripts don't run, and its
+     * styles and images aren't fetched. */
+    bool inert = false;
+    for (struct node *n = p->doc; n; n = node_next(n, p->doc, inert)) {
+        inert = n->tag == T_TEMPLATE;
         if (!n->owner) {
             n->owner = p;
             p->dom_nodes++;

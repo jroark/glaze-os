@@ -22,8 +22,9 @@ static const char ua_css[] =
     " listing, main, menu, nav, ol, p, plaintext, pre, section, article, aside, summary, ul, xmp,"
     " optgroup, frameset, frame { display: block }\n"
     "head, script, style, title, meta, link, base, template, area, map, datalist, param, noframes,"
-    " object, embed, svg, canvas, video, audio, source, track, noembed, math, dialog,"
+    " embed, svg, canvas, video, audio, source, track, noembed, math, dialog,"
     " select option, select optgroup, input[type=hidden], col, colgroup { display: none }\n"
+    "dialog[open] { display: block }\n"
     "li { display: list-item }\n"
     "table { display: table; border-spacing: 2px }\n"
     "thead, tbody, tfoot { display: table-row-group }\n"
@@ -356,7 +357,7 @@ struct cascade {
     int display_kw;
     bool overflow_hidden, abs_pos;
     int left, top;              /* CSS px when positioned */
-    bool left_set, top_set;
+    bool left_set, top_set, transparent;
     bool float_set;
 };
 
@@ -664,9 +665,16 @@ static void apply(struct cascade *C, const struct css_decl *d)
     case P_POSITION:
         C->abs_pos = kw == K_ABSOLUTE || kw == K_FIXED;
         break;
+    case P_OPACITY:
+        C->transparent = v->type == V_NUMBER && v->num == 0;
+        break;
     case P_LEFT:
     case P_TOP:
-        if (v->type == V_LENGTH || v->type == V_NUMBER) {
+        if (v->type == V_PERCENT && d->prop == P_LEFT) {
+            /* left: -100% is as far off as any pixel offset. */
+            C->left = v->num <= -100 * 64 ? -1000 : 0;
+            C->left_set = true;
+        } else if (v->type == V_LENGTH || v->type == V_NUMBER) {
             int px = css_px64(v, f4) / 64;
             if (d->prop == P_LEFT) {
                 C->left = px;
@@ -938,6 +946,10 @@ static void finish(struct cascade *C, const struct node *n)
     /* Content parked off-screen or clipped to a pixel (skip links,
      * screen-reader text) stays hidden here too. */
     if (C->abs_pos && ((C->left_set && C->left <= -500) || (C->top_set && C->top <= -500)))
+        d = D_NONE;
+    /* A positioned element at opacity 0 is a closed menu, an inactive slide
+     * or a tooltip; in the flow at 0 it is usually about to fade in. */
+    if (C->abs_pos && C->transparent)
         d = D_NONE;
     if (C->overflow_hidden && st->height.unit == L_PX && st->height.v <= 1 &&
         (st->width.unit == L_PX && st->width.v <= 1))
