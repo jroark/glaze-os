@@ -987,7 +987,9 @@ static void compute(struct style_ctx *S, struct node *n, const struct style *ps)
     sort_matches(M, author);
     if (n->nsdecl < 0) {
         const char *sa = node_attr(n, "style");
+        css_vars_use(&S->p->vars);
         n->nsdecl = sa ? (int16_t)css_parse_decls(&S->p->arena, sa, (int)strlen(sa), &n->sdecl) : 0;
+        css_vars_use(NULL);
     }
     for (int i = author; i < M->n; i++)
         for (int k = 0; k < M->m[i].rule->ndecls; k++)

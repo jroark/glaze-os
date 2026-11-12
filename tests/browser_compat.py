@@ -36,6 +36,11 @@ CASES = {
                [r'"deskvisible"', r'"printvisible"', r'"widevisible"',
                 r"browser JS: rgb\(0, 128, 0\) rgb\(255, 0, 0\) rgb\(0, 0, 255\) rgb\(128, 0, 128\)"],
                [], 0),
+    # var() from :root and from the rule's own block, fallbacks, calc() and clamp().
+    "vars": ("vars.html",
+             [r"browser JS: a rgb\(13, 110, 253\) b rgb\(220, 53, 69\) c rgb\(25, 135, 84\) e 14px "
+              r"f rgb\(255, 255, 0\) g rgb\(13, 110, 253\) w 30\d"],
+             [], 0),
 }
 
 

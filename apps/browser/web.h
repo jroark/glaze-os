@@ -308,6 +308,17 @@ struct stylesheet {
     bool loaded;
 };
 
+/* A page's custom properties (css.c "custom properties"): css_vars_use()
+ * names the table the parse calls that follow read and extend. */
+struct css_var {
+    char *name, *value;
+};
+struct css_vars {
+    struct css_var *v;
+    int n, cap;
+};
+void css_vars_use(struct css_vars *v);
+void css_vars_free(struct css_vars *v);
 void css_parse_sheet(struct arena *a, struct stylesheet *ss, const char *src, int len);
 bool css_media_matches(const char *s, int len);
 void css_free_sheet(struct stylesheet *ss);
@@ -466,6 +477,7 @@ struct page {
     struct node *doc, *html, *body;
     struct sheet_slot sheets[PAGE_MAX_SHEETS];
     int nsheets;
+    struct css_vars vars;       /* custom properties of :root, html and body */
     struct image_slot *imgs;    /* malloc'd */
     int nimgs, img_cap;
     uint32_t img_bytes;

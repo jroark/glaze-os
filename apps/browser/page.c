@@ -47,6 +47,7 @@ void page_free(struct page *p)
         image_release(&p->imgs[i]);
         free(p->imgs[i].url);
     }
+    css_vars_free(&p->vars);
     for (int i = 0; i < p->nsheets; i++) {
         css_free_sheet(&p->sheets[i].ss);
         free(p->sheets[i].url);
@@ -165,8 +166,10 @@ void page_collect(struct page *p)
             memset(sl, 0, sizeof *sl);
             sl->node = n;
             if (n->tag == T_STYLE) {
+                css_vars_use(&p->vars);
                 if (n->first && n->first->type == N_TEXT)
                     css_parse_sheet(&p->arena, &sl->ss, n->first->text, n->first->len);
+                css_vars_use(NULL);
                 sl->ss.loaded = true;
             } else {
                 sl->url = url_resolve(p->base, node_attr(n, "href"));

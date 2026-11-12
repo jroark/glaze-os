@@ -21,6 +21,7 @@ struct cp {
     struct arena *a;
     const char *s;
     int len;
+    bool vars_only;     /* the pass that only collects the root's custom properties */
 };
 
 static bool is_ws(char c)
@@ -403,10 +404,20 @@ static bool tok_is(const struct tok *t, const char *w)
     return (int)strlen(w) == t->len && !strncasecmp(t->s, w, (size_t)t->len);
 }
 
+#define LOCAL_VARS      24
+
 struct dlist {
     struct css_decl d[MAX_DECLS];
     int n;
     bool important;
+    /* Custom properties declared in this block, and whether its selector
+     * is the root's, which makes them the page's (see "custom properties"). */
+    struct lvar {
+        const char *name, *val;
+        int nl, vl;
+    } local[LOCAL_VARS];
+    int nlocal;
+    bool root;
 };
 
 static void add(struct dlist *L, int prop, struct css_value v)
@@ -615,22 +626,387 @@ static const struct {
     { "margin-block-start", P_MARGIN_TOP, 0 }, { "margin-block-end", P_MARGIN_BOTTOM, 0 },
 };
 
+/* ---- custom properties, var() and the math functions -------------------------
+ *
+ * Nearly every modern sheet writes `color: var(--text)` and `padding:
+ * calc(.375rem + 1px)`; dropping those declarations left pages unstyled.
+ * This engine has no per-element custom properties, so it resolves var() while
+ * parsing, from two places: the block being parsed (Bootstrap 5's components
+ * set and use their variables in one rule), then the page's table, which
+ * holds what rules for :root, html, body and * declare, in any sheet parsed
+ * so far (a sheet is scanned for those before its rules are parsed). A
+ * variable set only by another class's rule isn't seen; the fallback in
+ * var(--x, fallback) is used, or the declaration is dropped as before.
+ *
+ * calc(), min(), max() and clamp() fold to one length when their terms are
+ * absolute (rem is 16 px, vw and vh are the fixed viewport's). A percentage
+ * or em term can't be mixed with pixels here, so the relative term wins:
+ * calc(100% - 2rem) is 100%.
+ */
+
+#define EXPAND_MAX      768
+#define VARS_MAX        512
+
+static struct css_vars *cur_vars;
+
+void css_vars_use(struct css_vars *v)
+{
+    cur_vars = v;
+}
+
+void css_vars_free(struct css_vars *v)
+{
+    for (int i = 0; i < v->n; i++) {
+        free(v->v[i].name);
+        free(v->v[i].value);
+    }
+    free(v->v);
+    memset(v, 0, sizeof(*v));
+}
+
+static void vars_set(const char *name, int nl, const char *val, int vl)
+{
+    struct css_vars *t = cur_vars;
+    char *copy;
+
+    if (!t || vl > EXPAND_MAX / 2 || !(copy = malloc((size_t)vl + 1)))
+        return;
+    memcpy(copy, val, (size_t)vl);
+    copy[vl] = 0;
+    for (int i = 0; i < t->n; i++)
+        if ((int)strlen(t->v[i].name) == nl && !memcmp(t->v[i].name, name, (size_t)nl)) {
+            free(t->v[i].value);
+            t->v[i].value = copy;
+            return;
+        }
+    if (t->n == t->cap) {
+        int cap = t->cap ? t->cap * 2 : 32;
+        struct css_var *nv = cap <= VARS_MAX ? realloc(t->v, sizeof(*nv) * (size_t)cap) : NULL;
+        if (!nv) {
+            free(copy);
+            return;
+        }
+        t->v = nv;
+        t->cap = cap;
+    }
+    char *nm = malloc((size_t)nl + 1);
+    if (!nm) {
+        free(copy);
+        return;
+    }
+    memcpy(nm, name, (size_t)nl);
+    nm[nl] = 0;
+    t->v[t->n].name = nm;
+    t->v[t->n].value = copy;
+    t->n++;
+}
+
+static bool var_lookup(const struct dlist *L, const char *name, int nl, const char **val, int *vl)
+{
+    for (int i = L->nlocal - 1; i >= 0; i--)
+        if (L->local[i].nl == nl && !memcmp(L->local[i].name, name, (size_t)nl)) {
+            *val = L->local[i].val;
+            *vl = L->local[i].vl;
+            return true;
+        }
+    if (cur_vars)
+        for (int i = 0; i < cur_vars->n; i++)
+            if ((int)strlen(cur_vars->v[i].name) == nl && !memcmp(cur_vars->v[i].name, name, (size_t)nl)) {
+                *val = cur_vars->v[i].value;
+                *vl = (int)strlen(*val);
+                return true;
+            }
+    return false;
+}
+
+/* Whether a function called `fn` (with its parenthesis) starts at s[i]. */
+static bool fn_at(const char *s, int len, int i, const char *fn)
+{
+    int fl = (int)strlen(fn);
+
+    return i + fl <= len && !strncasecmp(s + i, fn, (size_t)fl) &&
+           (i == 0 || !(isalnum((unsigned char)s[i - 1]) || s[i - 1] == '_'));
+}
+
+/* The index of the parenthesis closing the one at s[open], or -1. */
+static int close_paren(const char *s, int len, int open)
+{
+    int depth = 0;
+
+    for (int i = open; i < len; i++) {
+        if (s[i] == '(')
+            depth++;
+        else if (s[i] == ')' && --depth == 0)
+            return i;
+    }
+    return -1;
+}
+
+/* Copies s to out with every var() replaced. The new length, or -1 when a
+ * variable is unknown and has no fallback, or the result is too long. */
+static int expand(const struct dlist *L, const char *s, int len, char *out, int cap, int depth)
+{
+    int o = 0;
+
+    if (depth > 8)
+        return -1;
+    for (int i = 0; i < len;) {
+        if (!fn_at(s, len, i, "var(")) {
+            if (o >= cap)
+                return -1;
+            out[o++] = s[i++];
+            continue;
+        }
+        int end = close_paren(s, len, i + 3);
+        if (end < 0)
+            return -1;
+        int a = skip_ws(s, end, i + 4), comma = a;
+        while (comma < end && s[comma] != ',')
+            comma++;
+        int ne = comma;
+        while (ne > a && is_ws(s[ne - 1]))
+            ne--;
+        const char *val;
+        int vl, n = -1;
+        if (var_lookup(L, s + a, ne - a, &val, &vl) && vl)
+            n = expand(L, val, vl, out + o, cap - o, depth + 1);
+        if (n < 0 && comma < end) {
+            int f = skip_ws(s, end, comma + 1);
+            n = expand(L, s + f, end - f, out + o, cap - o, depth + 1);
+        }
+        if (n < 0)
+            return -1;
+        o += n;
+        i = end + 1;
+    }
+    return o;
+}
+
+/* A calc() value: pixels, percent and em in 1/64, or a plain number. */
+struct mval {
+    int32_t abs, pct, em, num;
+    bool is_num;
+};
+
+static bool m_expr(const char *s, int len, int *i, struct mval *v, int depth);
+
+static int32_t m_px(const struct mval *v)
+{
+    return v->abs + v->pct * (WEB_VIEW_CSS_W / 4) / 25 + v->em * 16;
+}
+
+static bool m_args(const char *s, int len, int *i, struct mval *a, int max, int *n, int depth)
+{
+    for (*n = 0; *n < max;) {
+        if (!m_expr(s, len, i, &a[(*n)++], depth))
+            return false;
+        *i = skip_ws(s, len, *i);
+        if (*i < len && s[*i] == ',') {
+            (*i)++;
+            continue;
+        }
+        break;
+    }
+    if (*i >= len || s[*i] != ')')
+        return false;
+    (*i)++;
+    return true;
+}
+
+static bool m_factor(const char *s, int len, int *i, struct mval *v, int depth)
+{
+    struct mval a[4];
+    int n;
+
+    *i = skip_ws(s, len, *i);
+    memset(v, 0, sizeof(*v));
+    if (depth > 8 || *i >= len)
+        return false;
+    if (s[*i] == '(' || fn_at(s, len, *i, "calc(") || fn_at(s, len, *i, "-webkit-calc(")) {
+        while (s[*i] != '(')
+            (*i)++;
+        (*i)++;
+        if (!m_expr(s, len, i, v, depth + 1))
+            return false;
+        *i = skip_ws(s, len, *i);
+        if (*i >= len || s[*i] != ')')
+            return false;
+        (*i)++;
+        return true;
+    }
+    bool mn = fn_at(s, len, *i, "min("), mx = fn_at(s, len, *i, "max("), cl = fn_at(s, len, *i, "clamp(");
+    if (mn || mx || cl) {
+        *i += cl ? 6 : 4;
+        if (!m_args(s, len, i, a, 4, &n, depth + 1) || (cl && n != 3))
+            return false;
+        if (cl) {
+            *v = m_px(&a[1]) < m_px(&a[0]) ? a[0] : m_px(&a[1]) > m_px(&a[2]) ? a[2] : a[1];
+            return true;
+        }
+        *v = a[0];
+        for (int k = 1; k < n; k++)
+            if (mn ? m_px(&a[k]) < m_px(v) : m_px(&a[k]) > m_px(v))
+                *v = a[k];
+        return true;
+    }
+    int e = *i;
+    while (e < len && (isalnum((unsigned char)s[e]) || s[e] == '.' || s[e] == '%' ||
+                       ((s[e] == '-' || s[e] == '+') && e == *i)))
+        e++;
+    struct css_value lv;
+    if (e == *i || !parse_length(s + *i, e - *i, &lv))
+        return false;
+    *i = e;
+    if (lv.type == V_NUMBER) {
+        v->num = lv.num;
+        v->is_num = true;
+    } else if (lv.type == V_PERCENT) {
+        v->pct = lv.num;
+    } else {
+        switch (lv.unit) {
+        case U_PX: v->abs = lv.num; break;
+        case U_REM: case U_PC: v->abs = lv.num * 16; break;
+        case U_PT: v->abs = lv.num * 4 / 3; break;
+        case U_IN: v->abs = lv.num * 96; break;
+        case U_CM: v->abs = lv.num * 378 / 10; break;
+        case U_MM: v->abs = lv.num * 378 / 100; break;
+        case U_VW: v->abs = lv.num * WEB_VIEW_CSS_W / 100; break;
+        case U_VH: v->abs = lv.num * 405 / 100; break;
+        case U_EM: v->em = lv.num; break;
+        default: v->em = lv.num / 2; break;     /* ex, ch */
+        }
+    }
+    return true;
+}
+
+static bool m_term(const char *s, int len, int *i, struct mval *v, int depth)
+{
+    if (!m_factor(s, len, i, v, depth))
+        return false;
+    for (;;) {
+        struct mval r;
+        int k = skip_ws(s, len, *i);
+        if (k >= len || (s[k] != '*' && s[k] != '/'))
+            return true;
+        char op = s[k++];
+        if (!m_factor(s, len, &k, &r, depth))
+            return false;
+        *i = k;
+        if (op == '*' && v->is_num && !r.is_num) {
+            struct mval t = *v;
+            *v = r;
+            r = t;
+        }
+        if (!r.is_num || (op == '/' && !r.num))
+            return false;
+#define SCALE(x) (op == '*' ? (int32_t)((int64_t)(x) * r.num / 64) : (int32_t)((int64_t)(x) * 64 / r.num))
+        v->abs = SCALE(v->abs);
+        v->pct = SCALE(v->pct);
+        v->em = SCALE(v->em);
+        v->num = SCALE(v->num);
+#undef SCALE
+    }
+}
+
+static bool m_expr(const char *s, int len, int *i, struct mval *v, int depth)
+{
+    if (!m_term(s, len, i, v, depth))
+        return false;
+    for (;;) {
+        struct mval r;
+        int k = skip_ws(s, len, *i);
+        if (k >= len || (s[k] != '+' && s[k] != '-'))
+            return true;
+        int sign = s[k++] == '-' ? -1 : 1;
+        if (!m_term(s, len, &k, &r, depth) || r.is_num != v->is_num)
+            return false;
+        *i = k;
+        v->abs += sign * r.abs;
+        v->pct += sign * r.pct;
+        v->em += sign * r.em;
+        v->num += sign * r.num;
+    }
+}
+
+static int m_print(char *out, int cap, int32_t v, const char *unit)
+{
+    int64_t milli = (int64_t)(v < 0 ? -(int64_t)v : v) * 1000 / 64;
+
+    return snprintf(out, (size_t)cap, "%s%d.%03d%s", v < 0 ? "-" : "", (int)(milli / 1000), (int)(milli % 1000), unit);
+}
+
+/* Replaces each calc(), min(), max(), clamp() and env() in buf with one value.
+ * The new length, or -1 when one can't be evaluated. */
+static int fold_math(char *buf, int len, int cap)
+{
+    static const char *const fns[] = { "calc(", "-webkit-calc(", "min(", "max(", "clamp(", "env(", "constant(" };
+
+    for (int i = 0; i < len; i++) {
+        size_t f = 0;
+        for (; f < sizeof(fns) / sizeof(fns[0]); f++)
+            if (fn_at(buf, len, i, fns[f]))
+                break;
+        if (f == sizeof(fns) / sizeof(fns[0]))
+            continue;
+        int open = i + (int)strlen(fns[f]) - 1, end = close_paren(buf, len, open), n;
+        char val[32];
+        if (end < 0)
+            return -1;
+        if (f >= 5) {                   /* env(name, fallback): no insets here */
+            n = snprintf(val, sizeof(val), "0px");
+        } else {
+            struct mval v;
+            int k = i;
+            if (!m_factor(buf, end + 1, &k, &v, 0) || k != end + 1)
+                return -1;
+            if (v.is_num)
+                n = m_print(val, sizeof(val), v.num, "");
+            else if (v.pct)
+                n = m_print(val, sizeof(val), v.pct, "%");
+            else if (v.em)
+                n = m_print(val, sizeof(val), v.em + v.abs / 16, "em");
+            else
+                n = m_print(val, sizeof(val), v.abs, "px");
+        }
+        int tail = len - (end + 1);
+        if (i + n + tail > cap)
+            return -1;
+        memmove(buf + i + n, buf + end + 1, (size_t)tail);
+        memcpy(buf + i, val, (size_t)n);
+        len = i + n + tail;
+        i += n - 1;
+    }
+    return len;
+}
+
 static void declaration(struct dlist *L, const char *name, int nl, const char *val, int vl)
 {
     struct tok t[16];
-    int n = tokens(val, vl, t, 16);
+    char buf[EXPAND_MAX];
     struct css_value v;
 
-    if (!n)
-        return;
-    /* Custom properties, var() and calc() are beyond this engine. */
+    /* Custom properties themselves were collected by parse_block. */
     if (nl >= 2 && name[0] == '-' && name[1] == '-')
         return;
-    for (int i = 0; i < n; i++)
-        if (t[i].len > 4 && (!strncasecmp(t[i].s, "var(", 4) || !strncasecmp(t[i].s, "calc(", 5) ||
-                             !strncasecmp(t[i].s, "env(", 4) || !strncasecmp(t[i].s, "min(", 4) ||
-                             !strncasecmp(t[i].s, "max(", 4) || !strncasecmp(t[i].s, "clamp(", 6)))
-            return;
+    if (memchr(val, '(', (size_t)vl)) {
+        bool math = false;
+        for (int i = 0; i + 3 < vl && !math; i++)
+            math = fn_at(val, vl, i, "var(") || fn_at(val, vl, i, "calc(") || fn_at(val, vl, i, "-webkit-calc(") ||
+                   fn_at(val, vl, i, "min(") || fn_at(val, vl, i, "max(") || fn_at(val, vl, i, "clamp(") ||
+                   fn_at(val, vl, i, "env(") || fn_at(val, vl, i, "constant(");
+        if (math) {
+            int n2 = expand(L, val, vl, buf, EXPAND_MAX, 0);
+            if (n2 > 0)
+                n2 = fold_math(buf, n2, EXPAND_MAX);
+            if (n2 <= 0)
+                return;
+            val = buf;
+            vl = n2;
+        }
+    }
+    int n = tokens(val, vl, t, 16);
+    if (!n)
+        return;
 
 #define IS(s) ((int)sizeof(s) - 1 == nl && !strncasecmp(name, s, (size_t)nl))
     if (IS("margin")) {
@@ -702,8 +1078,9 @@ static void declaration(struct dlist *L, const char *name, int nl, const char *v
 #undef IS
 }
 
-/* Parses "a: b; c: d !important" into L. */
-static void parse_block(struct dlist *L, const char *s, int len)
+/* One pass over "a: b; c: d !important": the block's custom properties when
+ * `vars`, its other declarations into L when not. */
+static void block_pass(struct dlist *L, const char *s, int len, bool vars)
 {
     int i = 0;
 
@@ -759,11 +1136,30 @@ static void parse_block(struct dlist *L, const char *s, int len)
             if (!isalpha((unsigned char)s[k]) && !is_ws(s[k]))
                 break;
         }
-        if (ne > ns && ve > vs)
+        bool custom = ne - ns > 2 && s[ns] == '-' && s[ns + 1] == '-';
+        if (vars && custom && ve > vs) {
+            if (L->nlocal < LOCAL_VARS)
+                L->local[L->nlocal++] = (struct lvar){ s + ns, s + vs, ne - ns, ve - vs };
+            if (L->root)
+                vars_set(s + ns, ne - ns, s + vs, ve - vs);
+        } else if (!vars && !custom && ne > ns && ve > vs) {
             declaration(L, s + ns, ne - ns, s + vs, ve - vs);
+        }
         if (i < len)
             i++;
     }
+}
+
+/* Parses a declaration block into L; L->root is the caller's to set. */
+static void parse_block(struct dlist *L, const char *s, int len)
+{
+    L->nlocal = 0;
+    for (int i = 0; i + 1 < len; i++)
+        if (s[i] == '-' && s[i + 1] == '-') {
+            block_pass(L, s, len, true);
+            break;
+        }
+    block_pass(L, s, len, false);
 }
 
 int css_parse_decls(struct arena *a, const char *src, int len, struct css_decl **out)
@@ -771,6 +1167,7 @@ int css_parse_decls(struct arena *a, const char *src, int len, struct css_decl *
     struct dlist L;
 
     L.n = 0;
+    L.root = false;
     parse_block(&L, src, len);
     *out = NULL;
     if (!L.n)
@@ -1225,10 +1622,44 @@ bool css_media_matches(const char *s, int len)
     return media_matches(s, len);
 }
 
+/* Whether a rule's custom properties are the page's: :root (as in Bootstrap's
+ * `:root, [data-bs-theme=light]`), html, body or the universal selector. */
+static bool root_selector(const char *sel, int sl)
+{
+    for (int i = 0; i < sl;) {
+        int e = i;
+        while (e < sl && sel[e] != ',')
+            e++;
+        int a = skip_ws(sel, e, i), b = e;
+        while (b > a && is_ws(sel[b - 1]))
+            b--;
+        for (int k = a; k + 5 <= b; k++)
+            if (!strncasecmp(sel + k, ":root", 5))
+                return true;
+        if ((b - a == 4 && (!strncasecmp(sel + a, "html", 4) || !strncasecmp(sel + a, "body", 4))) ||
+            (b - a == 1 && sel[a] == '*') || (b - a == 5 && !strncasecmp(sel + a, ":host", 5)))
+            return true;
+        i = e + 1;
+    }
+    return false;
+}
+
 static void add_rule(struct cp *C, struct stylesheet *ss, const char *sel, int sl, const char *body, int bl)
 {
     struct css_selector sels[MAX_SELECTORS];
     int ns = 0, i = 0;
+    bool root = root_selector(sel, sl);
+
+    if (C->vars_only) {
+        struct dlist *V = root ? malloc(sizeof(*V)) : NULL;
+        if (V) {
+            V->n = V->nlocal = 0;
+            V->root = true;
+            block_pass(V, body, bl, true);
+            free(V);
+        }
+        return;
+    }
 
     while (i < sl && ns < MAX_SELECTORS) {
         int e = i, depth = 0;
@@ -1246,6 +1677,7 @@ static void add_rule(struct cp *C, struct stylesheet *ss, const char *sel, int s
     if (!L)
         return;
     L->n = 0;
+    L->root = root;
     parse_block(L, body, bl);
     if (L->n && ss->nrules < 65535) {
         if (ss->nrules == ss->cap) {
@@ -1436,8 +1868,13 @@ static void build_index(struct stylesheet *ss)
 
 void css_parse_sheet(struct arena *a, struct stylesheet *ss, const char *src, int len)
 {
-    struct cp C = { a, src, len };
+    struct cp C = { a, src, len, true };
 
+    /* The root's custom properties first, so rules above their :root block,
+     * or in an @media before it, can use them. */
+    if (cur_vars)
+        parse_rules(&C, ss, src, len, 0);
+    C.vars_only = false;
     parse_rules(&C, ss, src, len, 0);
     build_index(ss);
     ss->loaded = true;

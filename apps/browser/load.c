@@ -207,7 +207,9 @@ static bool route(struct page *p, struct fetch_result *r)
                 int len;
                 char *text = cs_decode(cs_sniff(r->ctype, r->data, r->len), r->data, r->len, &len);
                 if (text) {
+                    css_vars_use(&p->vars);
                     css_parse_sheet(&p->arena, &s->ss, text, len);
+                    css_vars_use(NULL);
                     free(text);
                 }
             }
