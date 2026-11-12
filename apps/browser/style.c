@@ -691,13 +691,28 @@ static void apply(struct cascade *C, const struct css_decl *d)
     }
 }
 
-static void apply_matches(struct cascade *C, const struct matches *M, int from, bool important)
+/* The declarations rules left for the cascade (css.c "scoped custom
+ * properties"), parsed for the element being styled: late[first[i]..] are
+ * match i's, count[i] of them. */
+#define MAX_LATE 96
+
+struct late {
+    struct css_decl d[MAX_LATE];
+    int n;
+    uint8_t first[MAX_MATCHES], count[MAX_MATCHES];
+};
+
+static void apply_matches(struct cascade *C, const struct matches *M, int from, bool important,
+                          const struct late *T)
 {
     for (int i = from; i < M->n; i++) {
         const struct css_rule *r = M->m[i].rule;
         for (int k = 0; k < r->ndecls; k++)
             if (r->decls[k].important == important)
                 apply(C, &r->decls[k]);
+        for (int k = 0; T && k < T->count[i]; k++)
+            if (T->d[T->first[i] + k].important == important)
+                apply(C, &T->d[T->first[i] + k]);
     }
 }
 
@@ -963,9 +978,14 @@ struct style_ctx {
     struct page *p;
     struct stylesheet *ua;
     struct matches M;
+    struct late T;
 };
 
-static void compute(struct style_ctx *S, struct node *n, const struct style *ps)
+/* Styles n. `up` is its parent's custom-property scope and *own is filled
+ * with n's; the scope n's children inherit is returned (up, when n sets no
+ * custom property). */
+static const struct css_scope *compute(struct style_ctx *S, struct node *n, const struct style *ps,
+                                       const struct css_scope *up, struct css_scope *own)
 {
     struct cascade C;
     struct style *st = n->st;
@@ -974,7 +994,7 @@ static void compute(struct style_ctx *S, struct node *n, const struct style *ps)
         st = n->st = arena_alloc(&S->p->arena, sizeof(*st));
         if (!st) {
             S->p->oom = true;
-            return;
+            return up;
         }
     }
     memset(&C, 0, sizeof(C));
@@ -992,7 +1012,7 @@ static void compute(struct style_ctx *S, struct node *n, const struct style *ps)
         for (int k = 0; k < M->m[i].rule->ndecls; k++)
             if (M->m[i].rule->decls[k].prop == P_FONT_SIZE)
                 apply(&C, &M->m[i].rule->decls[k]);
-    apply_matches(&C, M, 0, false);
+    apply_matches(&C, M, 0, false, NULL);
     if (n->tag == T_NOSCRIPT && S->p->scripting_enabled)
         C.display_kw = K_NONE_;
     hints(&C, n);
@@ -1008,38 +1028,86 @@ static void compute(struct style_ctx *S, struct node *n, const struct style *ps)
         n->nsdecl = sa ? (int16_t)css_parse_decls(&S->p->arena, sa, (int)strlen(sa), &n->sdecl) : 0;
         css_vars_use(NULL);
     }
-    for (int i = author; i < M->n; i++)
+    /* The element's custom properties: those of the rules that match it,
+     * the strongest last, then its style attribute's. */
+    struct late *T = NULL;
+    bool any_late = false;
+    own->up = up;
+    own->n = 0;
+    for (int i = author; i < M->n; i++) {
+        const struct css_late *late = M->m[i].rule->late;
+        if (!late)
+            continue;
+        any_late |= late->ndecls != 0;
+        if (late->nvars) {
+            if (own->n == CSS_SCOPE_TEXTS) {    /* the weakest gives way */
+                memmove(&own->text[0], &own->text[1], sizeof(own->text[0]) * (CSS_SCOPE_TEXTS - 1));
+                memmove(&own->len[0], &own->len[1], sizeof(own->len[0]) * (CSS_SCOPE_TEXTS - 1));
+                own->n--;
+            }
+            own->text[own->n] = late->vars;
+            own->len[own->n++] = late->nvars;
+        }
+    }
+    const char *sa = n->nsdecl >= 0 ? node_attr(n, "style") : NULL;
+    if (sa && strstr(sa, "--") && own->n < CSS_SCOPE_TEXTS) {
+        own->text[own->n] = sa;
+        own->len[own->n++] = (int)strlen(sa);
+    }
+    const struct css_scope *scope = own->n ? own : up;
+    if (any_late) {
+        /* Declarations whose var()s wait for this: parsed once per element. */
+        T = &S->T;
+        T->n = 0;
+        css_vars_use(&S->p->vars);
+        css_scope_use(scope);
+        for (int i = author; i < M->n; i++) {
+            T->first[i] = (uint8_t)T->n;
+            T->count[i] = (uint8_t)css_late_decls(M->m[i].rule, T->d + T->n, MAX_LATE - T->n);
+            T->n += T->count[i];
+        }
+        css_scope_use(NULL);
+        css_vars_use(NULL);
+    }
+    for (int i = author; i < M->n; i++) {
         for (int k = 0; k < M->m[i].rule->ndecls; k++)
             if (M->m[i].rule->decls[k].prop == P_FONT_SIZE && !M->m[i].rule->decls[k].important)
                 apply(&C, &M->m[i].rule->decls[k]);
+        for (int k = 0; T && k < T->count[i]; k++)
+            if (T->d[T->first[i] + k].prop == P_FONT_SIZE && !T->d[T->first[i] + k].important)
+                apply(&C, &T->d[T->first[i] + k]);
+    }
     for (int k = 0; k < n->nsdecl; k++)
         if (n->sdecl[k].prop == P_FONT_SIZE && !n->sdecl[k].important)
             apply(&C, &n->sdecl[k]);
-    apply_matches(&C, M, author, false);
+    apply_matches(&C, M, author, false, T);
     for (int k = 0; k < n->nsdecl; k++)
         if (!n->sdecl[k].important)
             apply(&C, &n->sdecl[k]);
-    apply_matches(&C, M, author, true);
+    apply_matches(&C, M, author, true, T);
     for (int k = 0; k < n->nsdecl; k++)
         if (n->sdecl[k].important)
             apply(&C, &n->sdecl[k]);
     finish(&C, n);
+    return scope;
 }
 
-static void style_children(struct style_ctx *S, struct node *n, int depth)
+static void style_children(struct style_ctx *S, struct node *n, int depth, const struct css_scope *scope)
 {
     for (struct node *c = n->first; c; c = c->next) {
+        struct css_scope own;
+
         if (c->type == N_TEXT) {
             c->st = n->st;
             continue;
         }
         if (c->type != N_ELEM)
             continue;
-        compute(S, c, n->st);
+        const struct css_scope *inner = compute(S, c, n->st, scope, &own);
         if (!c->st)
             return;
         if (c->st->display != D_NONE && depth < HTML_MAX_DEPTH + 2)
-            style_children(S, c, depth + 1);
+            style_children(S, c, depth + 1, inner);
     }
 }
 
@@ -1060,10 +1128,11 @@ void style_tree(struct page *p, struct stylesheet *ua)
     root.color = 0x000000;
     root.list_style = LS_DISC;
     rem_f4 = 16 * 4;
-    compute(S, p->html, &root);
+    struct css_scope own;
+    const struct css_scope *scope = compute(S, p->html, &root, NULL, &own);
     if (p->html->st) {
         rem_f4 = p->html->st->font_css ? p->html->st->font_css : 16 * 4;
-        style_children(S, p->html, 1);
+        style_children(S, p->html, 1, scope);
     }
     free(S);
 

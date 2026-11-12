@@ -293,9 +293,18 @@ struct css_selector {
     uint32_t spec;
 };
 
+/* What a rule leaves for the cascade (css.c "scoped custom properties"): the
+ * custom properties it sets, and the declarations whose var()s depend on the
+ * element. Both as text, "name:value;" each. */
+struct css_late {
+    const char *vars, *decls;
+    uint16_t nvars, ndecls;
+};
+
 struct css_rule {
     struct css_selector *sels;
     struct css_decl *decls;
+    const struct css_late *late;    /* NULL for most rules */
     uint16_t nsels, ndecls;
 };
 
@@ -321,7 +330,21 @@ struct css_var {
 struct css_vars {
     struct css_var *v;
     int n, cap;
+    uint32_t *scoped;           /* hashes of the names set outside the root */
+    int nscoped, scoped_cap;
 };
+/* An element's custom properties: the texts that set them, the strongest
+ * last, and its parent's. */
+#define CSS_SCOPE_TEXTS 6
+struct css_scope {
+    const struct css_scope *up;
+    const char *text[CSS_SCOPE_TEXTS];
+    int len[CSS_SCOPE_TEXTS];
+    int n;
+};
+void css_scope_use(const struct css_scope *s);
+/* A rule's late declarations for the element whose scope is in use. */
+int css_late_decls(const struct css_rule *r, struct css_decl *out, int max);
 void css_vars_use(struct css_vars *v);
 void css_vars_free(struct css_vars *v);
 void css_parse_sheet(struct arena *a, struct stylesheet *ss, const char *src, int len);

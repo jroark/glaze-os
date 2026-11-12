@@ -159,11 +159,15 @@ commit that added it says what a page looked like before.
 - `media=` on `<link>` and `<style>`, range media queries (`width >= 600px`),
   and the contents of `@layer` blocks. The screen is 320 CSS px wide, portrait.
   `@import` is not followed.
-- `var()` with fallbacks, for custom properties declared on `:root`, `html` or
-  `body` (in any sheet) or in the same rule; `calc()`, `min()`, `max()` and
-  `clamp()` of lengths in one unit, and of percentages. A custom property set
-  by one class and used by another rule's `var()` is not resolved per element,
-  so that declaration is dropped (some framework component colours).
+- `var()` with fallbacks, and `calc()`, `min()`, `max()` and `clamp()` of
+  lengths in one unit, and of percentages. Custom properties declared on
+  `:root`, `html` or `body` are settled when a sheet is parsed. Ones set by
+  other rules (a component's variant class setting what its base class uses)
+  are scoped: the declarations that use them are kept as text and parsed in
+  the cascade for each element, against the custom properties of the rules
+  matching it, its `style` attribute and its ancestors. A name must be set in
+  the sheet that uses it to be recognized as scoped, and an element takes
+  custom properties from at most six of its rules.
 - `rem` follows the root font size; `font: inherit` keeps weight and style.
 - A background given only as a gradient uses its first opaque colour stop.
 - Positioning and floats are still ignored, so things that are off screen in a
@@ -226,7 +230,6 @@ commit that added it says what a page looked like before.
 | Missing intermediate certificates (AIA fetching) | An HTTP fetch inside certificate verification |
 | Keep-alive connections | Connection pooling in `http.c`/`conn.c`; every request opens its own |
 | CSS positioning, floats, real flex and grid | A new layout pass; the largest item here |
-| Per-element custom properties | Variable resolution in the cascade instead of at parse time |
 | `@import` | Sheets fetched from sheets, within the 24-sheet limit |
 | RegExp named groups and lookbehind, `Intl` | JerryScript features, not the facade |
 | Trying https first for a typed host | A behaviour change with a fallback delay on a slow link |

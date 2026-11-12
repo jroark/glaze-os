@@ -145,6 +145,14 @@ CASES = {
     "unopenable": ("unopenable.html",
                    [r"^note: Can't open mail links$", r"^note: Can't open phone links$",
                     r'<p> "stillhere"'], [r"not supported"], 400),
+    # A variable set by one class and used by another's rule, inherited, and overridden nearer.
+    "scoped_vars": ("scoped_vars.html",
+                    [r"^browser JS: scoped bg rgba\(0, 0, 0, 0\) rgb\(13, 110, 253\) rgb\(220, 53, 69\)$",
+                     r"^browser JS: scoped color rgb\(33, 37, 41\) rgb\(255, 255, 255\)$",
+                     r"^browser JS: scoped size 16px 20px$",
+                     r"^browser JS: scoped tone rgb\(1, 2, 3\) rgb\(0, 128, 0\) rgb\(128, 0, 128\) rgb\(9, 9, 9\)$",
+                     r"^browser JS: scoped alert rgb\(255, 243, 205\)$",
+                     r'item text 12,\d+ .* <a> "plain"', r'item text 126,12 .* <a> "danger"'], [], 0),
     "many_nodes": ("http:many", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
 }
 

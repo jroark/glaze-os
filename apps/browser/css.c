@@ -419,7 +419,14 @@ struct dlist {
     } local[LOCAL_VARS];
     int nlocal;
     bool root;
+    /* A sheet rule that isn't the root's: its custom properties and the
+     * declarations that use scoped ones go to late_vars and late_decls. */
+    bool defer;
+    int nlvars, nldecls;
 };
+
+#define LATE_MAX        4096
+static char late_vars[LATE_MAX], late_decls[LATE_MAX];
 
 static void add(struct dlist *L, int prop, struct css_value v)
 {
@@ -671,6 +678,7 @@ void css_vars_free(struct css_vars *v)
         free(v->v[i].value);
     }
     free(v->v);
+    free(v->scoped);
     memset(v, 0, sizeof(*v));
 }
 
@@ -711,6 +719,136 @@ static void vars_set(const char *name, int nl, const char *val, int vl)
     t->n++;
 }
 
+/*
+ * Scoped custom properties. A component sheet sets a variable in one rule and
+ * uses it in another (".btn { background: var(--btn-bg) }", ".btn-primary
+ * { --btn-bg: blue }"), so what var() means depends on the element. Names set
+ * outside the root's rules are "scoped" (found by the first pass over a
+ * sheet). A declaration using one is not parsed with the sheet: its text is
+ * kept with the rule, and so are the rule's own custom properties. The
+ * cascade (style.c) gives each element a scope, the custom-property texts of
+ * the rules that match it and its ancestors' scopes, and parses those
+ * declarations against it. Everything else is still resolved once, here.
+ */
+#define SCOPED_MAX      4096    /* names; a framework sheet has several hundred */
+static const struct css_scope *cur_scope;
+
+void css_scope_use(const struct css_scope *s)
+{
+    cur_scope = s;
+}
+
+/* The scoped names are a set of hashes: a collision only sends a declaration
+ * to the cascade that could have been settled here. */
+static uint32_t name_hash(const char *name, int nl)
+{
+    uint32_t h = 2166136261u;
+
+    for (int i = 0; i < nl; i++)
+        h = (h ^ (unsigned char)name[i]) * 16777619u;
+    return h ? h : 1;
+}
+
+static bool is_scoped(const char *name, int nl)
+{
+    const struct css_vars *t = cur_vars;
+
+    if (!t || !t->nscoped)
+        return false;
+    uint32_t h = name_hash(name, nl);
+    for (uint32_t i = h & (uint32_t)(t->scoped_cap - 1); t->scoped[i]; i = (i + 1) & (uint32_t)(t->scoped_cap - 1))
+        if (t->scoped[i] == h)
+            return true;
+    return false;
+}
+
+static void scoped_add(const char *name, int nl)
+{
+    struct css_vars *t = cur_vars;
+
+    if (!t || is_scoped(name, nl) || t->nscoped >= SCOPED_MAX)
+        return;
+    if (t->nscoped * 2 >= t->scoped_cap) {
+        int cap = t->scoped_cap ? t->scoped_cap * 2 : 256;
+        uint32_t *g = calloc((size_t)cap, sizeof(*g));
+        if (!g)
+            return;
+        for (int i = 0; i < t->scoped_cap; i++)
+            if (t->scoped[i]) {
+                uint32_t k = t->scoped[i] & (uint32_t)(cap - 1);
+                while (g[k])
+                    k = (k + 1) & (uint32_t)(cap - 1);
+                g[k] = t->scoped[i];
+            }
+        free(t->scoped);
+        t->scoped = g;
+        t->scoped_cap = cap;
+    }
+    uint32_t h = name_hash(name, nl), k = h & (uint32_t)(t->scoped_cap - 1);
+    while (t->scoped[k])
+        k = (k + 1) & (uint32_t)(t->scoped_cap - 1);
+    t->scoped[k] = h;
+    t->nscoped++;
+}
+
+/* Whether a value has a var() of a scoped name. */
+static bool uses_scoped(const char *s, int len)
+{
+    for (int i = 0; i + 6 < len; i++) {
+        if (s[i] != 'v' || strncmp(s + i, "var(", 4))
+            continue;
+        int a = i + 4;
+        while (a < len && (s[a] == ' ' || s[a] == '\t' || s[a] == '\n'))
+            a++;
+        int b = a;
+        while (b < len && s[b] != ',' && s[b] != ')' && s[b] != ' ')
+            b++;
+        if (is_scoped(s + a, b - a))
+            return true;
+    }
+    return false;
+}
+
+/* The last "name: value" for a custom property in a declaration text. */
+static bool scope_find(const char *s, int len, const char *name, int nl, const char **val, int *vl)
+{
+    bool found = false;
+
+    for (int i = 0; i < len;) {
+        while (i < len && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r' || s[i] == ';'))
+            i++;
+        int ns = i;
+        while (i < len && s[i] != ':' && s[i] != ';')
+            i++;
+        int ne = i;
+        if (i < len && s[i] == ':')
+            i++;
+        int vs = i, depth = 0;
+        for (; i < len && (s[i] != ';' || depth > 0); i++) {
+            if (s[i] == '(')
+                depth++;
+            else if (s[i] == ')')
+                depth--;
+            else if (s[i] == '"' || s[i] == '\'')
+                for (char q = s[i++]; i < len && s[i] != q; i++)
+                    ;
+        }
+        while (ne > ns && (s[ne - 1] == ' ' || s[ne - 1] == '\t'))
+            ne--;
+        if (ne - ns != nl || memcmp(s + ns, name, (size_t)nl))
+            continue;
+        int ve = i < len ? i : len;
+        while (vs < ve && (s[vs] == ' ' || s[vs] == '\t' || s[vs] == '\n'))
+            vs++;
+        while (ve > vs && (s[ve - 1] == ' ' || s[ve - 1] == '\t' || s[ve - 1] == '\n'))
+            ve--;
+        *val = s + vs;
+        *vl = ve - vs;
+        found = true;
+    }
+    return found;
+}
+
 static bool var_lookup(const struct dlist *L, const char *name, int nl, const char **val, int *vl)
 {
     for (int i = L->nlocal - 1; i >= 0; i--)
@@ -719,6 +857,10 @@ static bool var_lookup(const struct dlist *L, const char *name, int nl, const ch
             *vl = L->local[i].vl;
             return true;
         }
+    for (const struct css_scope *sc = cur_scope; sc; sc = sc->up)
+        for (int k = sc->n - 1; k >= 0; k--)
+            if (scope_find(sc->text[k], sc->len[k], name, nl, val, vl))
+                return true;
     if (cur_vars)
         for (int i = 0; i < cur_vars->n; i++)
             if ((int)strlen(cur_vars->v[i].name) == nl && !memcmp(cur_vars->v[i].name, name, (size_t)nl)) {
@@ -1220,8 +1362,18 @@ static void block_pass(struct dlist *L, const char *s, int len, bool vars)
                 L->local[L->nlocal++] = (struct lvar){ s + ns, s + vs, ne - ns, ve - vs };
             if (L->root)
                 vars_set(s + ns, ne - ns, s + vs, ve - vs);
+            else if (L->defer && L->nlvars + (ne - ns) + (ve - vs) + 2 <= LATE_MAX)
+                L->nlvars += snprintf(late_vars + L->nlvars, (size_t)(LATE_MAX - L->nlvars), "%.*s:%.*s;",
+                                      ne - ns, s + ns, ve - vs, s + vs);
         } else if (!vars && !custom && ne > ns && ve > vs) {
-            declaration(L, s + ns, ne - ns, s + vs, ve - vs);
+            if (L->defer && uses_scoped(s + vs, ve - vs)) {
+                /* For the cascade to parse, with the element's variables. */
+                if (L->nldecls + (ne - ns) + (ve - vs) + 13 <= LATE_MAX)
+                    L->nldecls += snprintf(late_decls + L->nldecls, (size_t)(LATE_MAX - L->nldecls), "%.*s:%.*s%s;",
+                                           ne - ns, s + ns, ve - vs, s + vs, L->important ? "!important" : "");
+            } else {
+                declaration(L, s + ns, ne - ns, s + vs, ve - vs);
+            }
         }
         if (i < len)
             i++;
@@ -1231,7 +1383,7 @@ static void block_pass(struct dlist *L, const char *s, int len, bool vars)
 /* Parses a declaration block into L; L->root is the caller's to set. */
 static void parse_block(struct dlist *L, const char *s, int len)
 {
-    L->nlocal = 0;
+    L->nlocal = L->nlvars = L->nldecls = 0;
     for (int i = 0; i + 1 < len; i++)
         if (s[i] == '-' && s[i + 1] == '-') {
             block_pass(L, s, len, true);
@@ -1240,12 +1392,27 @@ static void parse_block(struct dlist *L, const char *s, int len)
     block_pass(L, s, len, false);
 }
 
+int css_late_decls(const struct css_rule *r, struct css_decl *out, int max)
+{
+    static struct dlist L;      /* large, and the engine has one thread */
+
+    if (!r->late || !r->late->ndecls)
+        return 0;
+    L.n = L.nlocal = L.nlvars = L.nldecls = 0;
+    L.root = L.defer = false;
+    block_pass(&L, r->late->decls, r->late->ndecls, false);
+    if (L.n > max)
+        L.n = max;
+    memcpy(out, L.d, sizeof(struct css_decl) * (size_t)L.n);
+    return L.n;
+}
+
 int css_parse_decls(struct arena *a, const char *src, int len, struct css_decl **out)
 {
     struct dlist L;
 
     L.n = 0;
-    L.root = false;
+    L.root = L.defer = false;
     parse_block(&L, src, len);
     *out = NULL;
     if (!L.n)
@@ -1733,8 +1900,23 @@ static void add_rule(struct cp *C, struct stylesheet *ss, const char *sel, int s
         if (V) {
             V->n = V->nlocal = 0;
             V->root = true;
+            V->defer = false;
             block_pass(V, body, bl, true);
             free(V);
+        }
+        /* Names set anywhere else are scoped: what they hold depends on
+         * the element. */
+        for (int k = 0; !root && k + 3 < bl; k++) {
+            if (body[k] != '-' || body[k + 1] != '-' ||
+                (k && body[k - 1] != ';' && body[k - 1] != '{' && !is_ws(body[k - 1])))
+                continue;
+            int e = k;
+            while (e < bl && body[e] != ':' && body[e] != ';' && body[e] != ')' && body[e] != ',' && !is_ws(body[e]))
+                e++;
+            int c = skip_ws(body, bl, e);
+            if (c < bl && body[c] == ':')
+                scoped_add(body + k, e - k);
+            k = e;
         }
         return;
     }
@@ -1756,8 +1938,9 @@ static void add_rule(struct cp *C, struct stylesheet *ss, const char *sel, int s
         return;
     L->n = 0;
     L->root = root;
+    L->defer = !root && cur_vars;
     parse_block(L, body, bl);
-    if (L->n && ss->nrules < 65535) {
+    if ((L->n || L->nlvars || L->nldecls) && ss->nrules < 65535) {
         if (ss->nrules == ss->cap) {
             int cap = ss->cap ? ss->cap * 2 : 64;
             struct css_rule *r = realloc(ss->rules, sizeof(*r) * (size_t)cap);
@@ -1770,7 +1953,18 @@ static void add_rule(struct cp *C, struct stylesheet *ss, const char *sel, int s
         }
         struct css_rule *r = &ss->rules[ss->nrules];
         r->sels = arena_alloc(C->a, sizeof(struct css_selector) * (size_t)ns);
-        r->decls = arena_alloc(C->a, sizeof(struct css_decl) * (size_t)L->n);
+        r->decls = arena_alloc(C->a, sizeof(struct css_decl) * (size_t)(L->n ? L->n : 1));
+        r->late = NULL;
+        if (L->nlvars || L->nldecls) {
+            struct css_late *late = arena_alloc(C->a, sizeof(*late));
+            if (late) {
+                late->vars = arena_strndup(C->a, late_vars, L->nlvars);
+                late->decls = arena_strndup(C->a, late_decls, L->nldecls);
+                late->nvars = (uint16_t)(late->vars ? L->nlvars : 0);
+                late->ndecls = (uint16_t)(late->decls ? L->nldecls : 0);
+                r->late = late;
+            }
+        }
         if (r->sels && r->decls) {
             memcpy(r->sels, sels, sizeof(struct css_selector) * (size_t)ns);
             memcpy(r->decls, L->d, sizeof(struct css_decl) * (size_t)L->n);
