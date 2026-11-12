@@ -16,8 +16,10 @@ import gzip
 import http.server
 import os
 import re
+import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -116,18 +118,34 @@ CASES = {
     "cs_greek": ("http:text-iso8859-7", [r'"Kalimera kosme, Ellada"'], [], 0),
     "cs_1253": ("http:text-cp1253", [r'"Kalimera kosme, Ellada"'], [], 0),
     "cs_1254": ("http:text-cp1254", [r'"Istanbul.da g.+nesli bir g.+n, igdir"'], [], 0),
+    # https, then with a clock nobody set: the date is named, and setting the
+    # clock is enough to browse again (it took a restart).
+    "tls": ("https:block_replaced.html", [r"^page after \d+ ms: https://localhost", r"item image \d+,\d+ 24x24 <img>"], [], 0),
+    "tls_clock": ("https:block_replaced.html",
+                  [r'Check the date and', r"^retry after: error page$", r"item image \d+,\d+ 24x24 <img>"],
+                  [], 0, {"BROWSE_CLOCK": "946684800", "BROWSE_RETRY": "1"}),
     "many_nodes": ("http:many", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
 }
 
 
-def run(browse, name, port):
-    page, want, never, settle = CASES[name]
+def run(browse, name, port, tls):
+    page, want, never, settle = CASES[name][:4]
     # "http:page" is fetched from the local server; scripts on file pages
-    # have no origin to fetch or store with.
-    target = (f"http://127.0.0.1:{port}/{page[5:]}" if page.startswith("http:")
-              else os.path.join(PAGES, page))
+    # have no origin to fetch or store with. "https:page" comes from the
+    # one with a certificate made for this run.
+    if page.startswith("https:"):
+        if not tls:
+            print(f"browser compat: SKIP {name} (no openssl)")
+            return True
+        target = f"https://localhost:{tls[0]}/{page[6:]}"
+    else:
+        target = (f"http://127.0.0.1:{port}/{page[5:]}" if page.startswith("http:")
+                  else os.path.join(PAGES, page))
     env = dict(os.environ, BROWSE_ITEMS="1", BROWSE_HTML="1", BROWSE_FORMS="1", BROWSE_FOLLOW="1", BROWSE_SETTLE_MS=str(settle),
                ASAN_OPTIONS="detect_leaks=0")
+    if tls:
+        env["BROWSE_ROOTS"] = tls[1]
+    env.update(CASES[name][4] if len(CASES[name]) > 4 else {})
     p = subprocess.run([os.path.abspath(browse), target, os.devnull],
                        cwd=os.path.join(ROOT, "host"), env=env, stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT, text=True, errors="replace", timeout=120)
@@ -260,12 +278,40 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass            # the browser stops reading at its limit
 
 
+def tls_server(tmp):
+    """An https server on localhost with a certificate from a CA made here;
+    (port, the CA as DER) or None without the openssl command."""
+    def ossl(*args):
+        subprocess.run(("openssl",) + args, cwd=tmp, check=True, capture_output=True)
+    try:
+        ossl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30", "-subj", "/CN=Glaze compat test CA",
+             "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+             "-keyout", "ca.key", "-out", "ca.pem")
+        ossl("req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost", "-keyout", "leaf.key", "-out", "leaf.csr")
+        with open(os.path.join(tmp, "ext"), "w") as f:
+            f.write("subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\n"
+                    "extendedKeyUsage=serverAuth\n")
+        ossl("x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-days", "30",
+             "-extfile", "ext", "-out", "leaf.pem")
+        ossl("x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(os.path.join(tmp, "leaf.pem"), os.path.join(tmp, "leaf.key"))
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server.server_address[1], os.path.join(tmp, "ca.der")
+
+
 def main():
     browse = sys.argv[1]
     names = sys.argv[2:] or list(CASES)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    failed = [n for n in names if not run(browse, n, server.server_address[1])]
+    with tempfile.TemporaryDirectory() as tmp:
+        tls = tls_server(tmp) if any(CASES[n][0].startswith("https:") for n in names) else None
+        failed = [n for n in names if not run(browse, n, server.server_address[1], tls)]
     server.shutdown()
     print(f"browser compat: {len(names) - len(failed)}/{len(names)} cases pass"
           + ("" if failed else " PASS"))

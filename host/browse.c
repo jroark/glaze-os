@@ -10,6 +10,8 @@
  * BROWSE_HTML=1 the document as scripts left it, and BROWSE_SETTLE_MS=n keeps
  * the page running that long after it has loaded, so timers and fetches finish.
  * BROWSE_FOLLOW=1 follows a script's navigations and form submissions.
+ * BROWSE_CLOCK=<seconds> is the time of day, and with BROWSE_RETRY=1 an error
+ * page is followed by a second try with the real clock.
  */
 #include "hostres.h"
 #include "../apps/browser/load.h"
@@ -147,9 +149,14 @@ const void *plat_roots(uint32_t *size)
     return roots;
 }
 
+/* BROWSE_CLOCK=<seconds> is a clock nobody set, until clock_set. */
+static bool clock_set;
+
 long long plat_time(void)
 {
-    return (long long)time(NULL);
+    const char *fake = getenv("BROWSE_CLOCK");
+
+    return fake && !clock_set ? atoll(fake) : (long long)time(NULL);
 }
 
 void plat_noise(uint8_t *buf, int n)
@@ -281,6 +288,19 @@ int main(int argc, char **argv)
             free(post);
             follows++;
             settle_until = 0;
+            continue;
+        }
+        /* BROWSE_RETRY=1: after an error page, the clock gets set and the
+         * address is tried again, as a user would. */
+        if (page && page->is_error && !clock_set && getenv("BROWSE_RETRY") &&
+            (f & LF_DONE || ld.state == LS_IDLE)) {
+            printf("retry after: %s\n", page->title ? "error page" : "error");
+            if (getenv("BROWSE_ITEMS"))
+                dump_items(page);
+            clock_set = true;
+            usleep(3200 * 1000);
+            load_forget(&ld, page);
+            load_begin(&ld, url, NULL, NULL, true, 240);
             continue;
         }
         if (f & LF_DONE || (!(f & ~LF_PAINT) && ld.state == LS_IDLE)) {
