@@ -81,6 +81,11 @@ CASES = {
              r"^browser JS: xhr post 200 posted a=1&b=2 as application/x-www-form-urlencoded$",
              r"^browser JS: xhr missing 404 load$", r"^browser JS: xhr states 2,3,4$"],
             [r"browser JS: .*Error"], 600),
+    # Referer on a page's requests, and Origin with it on a form post.
+    "headers": ("http:headers.html",
+                [r"^browser JS: referer: SELF/headers\.html$", r"^browser JS: no content-type on get$",
+                 r'item text .*"formpost origin=SELF"', r'item text .*"referer=SELF/headers\.html"', r'item text .*"body=a=1"'],
+                [], 300),
 }
 
 
@@ -90,7 +95,7 @@ def run(browse, name, port):
     # have no origin to fetch or store with.
     target = (f"http://127.0.0.1:{port}/{page[5:]}" if page.startswith("http:")
               else os.path.join(PAGES, page))
-    env = dict(os.environ, BROWSE_ITEMS="1", BROWSE_HTML="1", BROWSE_FORMS="1", BROWSE_SETTLE_MS=str(settle),
+    env = dict(os.environ, BROWSE_ITEMS="1", BROWSE_HTML="1", BROWSE_FORMS="1", BROWSE_FOLLOW="1", BROWSE_SETTLE_MS=str(settle),
                ASAN_OPTIONS="detect_leaks=0")
     p = subprocess.run([os.path.abspath(browse), target, os.devnull],
                        cwd=os.path.join(ROOT, "host"), env=env, stdout=subprocess.PIPE,
@@ -138,13 +143,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path == "/form":
+            text = "formpost origin=%s referer=%s body=%s" % (self.headers.get("Origin"), self.headers.get("Referer"), body.decode())
+            self.reply(200, "text/html", ("<p>%s</p>" % text.replace("http://127.0.0.1:%d" % self.server.server_address[1], "SELF")).encode())
+            return
         self.reply(200, "text/plain", b"posted " + body + b" as " + (self.headers.get("Content-Type") or "").encode())
 
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/echo-headers":
             lines = "".join(f"{k.lower()}: {v}\n" for k, v in self.headers.items())
-            self.reply(200, "text/plain", lines.encode())
+            self.reply(200, "text/plain", lines.replace("http://127.0.0.1:%d" % self.server.server_address[1], "SELF").encode())
         elif path == "/json":
             self.reply(200, "application/json", b'{"answer": 42}')
         else:

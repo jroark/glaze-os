@@ -35,6 +35,7 @@ struct fetch {
     char *url, *post, *post_type;
     int post_len;
     char *origin;
+    char *referrer;             /* the page that asked, or NULL (a typed address) */
     int credentials;
     bool same_origin;
     struct http *h;
@@ -43,6 +44,43 @@ struct fetch {
 
 static struct fetch fetches[MAX_FETCHES];
 static int next_id = 1;
+
+/*
+ * The page the fetches started next come from, until changed; NULL for an
+ * address the user typed or picked. It becomes the Referer header (and Origin
+ * on a form post), which sites check: Django refuses an https form post that
+ * carries neither, and some image hosts serve nothing without one.
+ */
+static char *next_referrer;
+
+void ld_referrer(const char *url)
+{
+    free(next_referrer);
+    next_referrer = url && (!strncmp(url, "http://", 7) || !strncmp(url, "https://", 8)) ? strdup(url) : NULL;
+}
+
+/* What to send as Referer for a request to `to` (strict-origin-when-cross-origin):
+ * the whole address within a site, the origin alone across sites, and nothing
+ * from https to http. In `out`; false for nothing. Also gives the origin. */
+static bool referrer_for(const char *from, const char *to, char *out, int cap, char *origin, int ocap)
+{
+    static struct url a, b;
+
+    if (!from || !url_parse(from, &a) || !url_parse(to, &b) || !a.host[0])
+        return false;
+    if (!strcmp(a.scheme, "https") && strcmp(b.scheme, "https"))
+        return false;
+    char port[8] = "";
+    if (a.port > 0 && a.port != url_default_port(a.scheme))
+        snprintf(port, sizeof(port), ":%d", a.port);
+    snprintf(origin, (size_t)ocap, "%s://%s%s", a.scheme, a.host, port);
+    bool same = !strcmp(a.scheme, b.scheme) && !strcasecmp(a.host, b.host) &&
+                (a.port > 0 ? a.port : url_default_port(a.scheme)) == (b.port > 0 ? b.port : url_default_port(b.scheme));
+    int n = same ? snprintf(out, (size_t)cap, "%s%s%s%s", origin, a.path[0] ? a.path : "/", a.has_query ? "?" : "", a.query)
+                 : snprintf(out, (size_t)cap, "%s/", origin);
+    return n > 0 && n < cap;
+}
+
 
 /* ---- cookies ------------------------------------------------------------------- */
 
@@ -534,8 +572,12 @@ static void begin(struct fetch *f)
     }
     char *cookies = !f->origin || f->credentials==2 ||
         (f->credentials==1 && same_origin(f->origin,f->url)) ? cookies_for(&u, false) : NULL;
+    char referer[URL_PART_MAX * 2 + URL_HOST_MAX + 32], from[URL_HOST_MAX + 24];
+    if (referrer_for(f->referrer, f->url, referer, sizeof(referer), from, sizeof(from)))
+        http_page_context(referer, f->post && !f->origin ? from : NULL);
     f->h = f->origin ? http_start_web(f->url,f->post,f->post_len,f->post_type,cookies,f->origin,max_body[f->kind]) :
         http_start(f->url, f->post, f->post_len, f->post_type, cookies, max_body[f->kind]);
+    http_page_context(NULL, NULL);
     free(cookies);
     if (!f->h)
         finish(f, WE_BADURL);
@@ -624,6 +666,7 @@ int ld_start(const char *url, int kind, int tag, const char *post, const char *p
     f->tag = tag;
     f->reload = reload;
     f->url = strdup(url);
+    f->referrer = next_referrer ? strdup(next_referrer) : NULL;
     if (post) {
         f->post_len = (int)strlen(post);
         f->post = strdup(post);
@@ -666,6 +709,7 @@ static void release(struct fetch *f)
     http_free(f->h);
     free(f->url);
     free(f->origin);
+    free(f->referrer);
     free(f->post);
     free(f->post_type);
     if (f->done)

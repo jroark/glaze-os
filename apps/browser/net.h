@@ -47,6 +47,9 @@ int tls_error(int code);
 struct http;
 
 /* GET (post == NULL) or POST of url; cookies may be NULL. */
+/* Referer, and Origin for a form post, for the request started next; both
+ * are cleared by passing NULL. */
+void http_page_context(const char *referer, const char *origin);
 struct http *http_start(const char *url, const char *post, int post_len, const char *post_type,
                         const char *cookies, int max_body);
 /* Identity-encoded API POST, optionally streamed. Header values are bounded
@@ -94,6 +97,7 @@ struct fetch_result {
 };
 
 /* Queues a fetch; tag is the caller's (image slot, sheet index). */
+void ld_referrer(const char *url);  /* the page the fetches started next come from, or NULL */
 int ld_start(const char *url, int kind, int tag, const char *post, const char *post_type, bool reload);
 /* Script requests: HTTP(S), bounded, uncached, CORS-checked at every hop.
  * credentials: 0 omit, 1 same-origin, 2 include. */

@@ -9,6 +9,7 @@
  * each control's form and each label's control,
  * BROWSE_HTML=1 the document as scripts left it, and BROWSE_SETTLE_MS=n keeps
  * the page running that long after it has loaded, so timers and fetches finish.
+ * BROWSE_FOLLOW=1 follows a script's navigations and form submissions.
  */
 #include "hostres.h"
 #include "../apps/browser/load.h"
@@ -258,6 +259,7 @@ int main(int argc, char **argv)
 
     int settle_ms = getenv("BROWSE_SETTLE_MS") ? atoi(getenv("BROWSE_SETTLE_MS")) : 0;
     uint32_t settle_until = 0;
+    int follows = 0;
     uint32_t t0 = plat_ms();
     load_begin(&ld, url, NULL, NULL, false, 240);
     for (;;) {
@@ -266,6 +268,20 @@ int main(int argc, char **argv)
             page_free(page);
             page = ld.shown;
             printf("page after %u ms: %s\n", plat_ms() - t0, page->url);
+        }
+        /* A script's navigation or form submission, followed up to five times. */
+        if (page && page->navigate_url && follows < 5 && getenv("BROWSE_FOLLOW")) {
+            char *to = page->navigate_url, *post = page->navigate_post;
+            page->navigate_url = page->navigate_post = NULL;
+            printf("navigate %s%s\n", to, post ? " (post)" : "");
+            load_referrer(page->url);
+            load_forget(&ld, page);
+            load_begin(&ld, to, post, post ? "application/x-www-form-urlencoded" : NULL, false, 240);
+            free(to);
+            free(post);
+            follows++;
+            settle_until = 0;
+            continue;
         }
         if (f & LF_DONE || (!(f & ~LF_PAINT) && ld.state == LS_IDLE)) {
             /* Timers, fetches and late scripts get their time. */

@@ -1283,6 +1283,7 @@ int main(void)
         if(page && page!=ld.shown && page->navigate_url) {
             char *url=page->navigate_url,*post=page->navigate_post;
             page->navigate_url=page->navigate_post=NULL;
+            load_referrer(page->url);
             if(post)go(url,post,false,-2);else navigate(url);
             free(url);free(post);
         }
@@ -1310,6 +1311,7 @@ int main(void)
             if ((f & LF_NAVIGATE) && ld.shown && ld.shown->navigate_url) {
                 char *url = ld.shown->navigate_url, *post = ld.shown->navigate_post;
                 ld.shown->navigate_url = ld.shown->navigate_post = NULL;
+                load_referrer(ld.shown->url);
                 if (post)
                     go(url, post, false, -2);
                 else

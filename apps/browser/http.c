@@ -114,6 +114,14 @@ static int buf_append(struct http *h, const uint8_t *d, int n)
     return 0;
 }
 
+static const char *ctx_referer, *ctx_origin;
+
+void http_page_context(const char *referer, const char *origin)
+{
+    ctx_referer = referer && !referer[strcspn(referer, "\r\n")] ? referer : NULL;
+    ctx_origin = origin && !origin[strcspn(origin, "\r\n")] ? origin : NULL;
+}
+
 static struct http *start(const char *url, const char *post, int post_len, const char *post_type,
                           const char *cookies, const char *bearer, const char *account, int max_body, int idle_ms, bool api, const char *origin)
 {
@@ -148,7 +156,8 @@ static struct http *start(const char *url, const char *post, int post_len, const
 
     size_t cap = strlen(u.path) + strlen(u.query) + strlen(u.host) + (cookies ? strlen(cookies) : 0) +
                  (size_t)(post ? post_len : 0) + (bearer ? strlen(bearer) + 32 : 0) +
-                 (account ? strlen(account) + 96 : 0) + (origin ? strlen(origin) + 16 : 0) + 1024;
+                 (account ? strlen(account) + 96 : 0) + (origin ? strlen(origin) + 16 : 0) +
+                 (ctx_referer ? strlen(ctx_referer) + 16 : 0) + (ctx_origin ? strlen(ctx_origin) + 16 : 0) + 1024;
     h->req = malloc(cap);
     if (!h->req) {
         free(h);
@@ -169,14 +178,16 @@ static struct http *start(const char *url, const char *post, int post_len, const
                      api ? "identity" : "gzip, deflate");
     if (origin)
         n += snprintf(h->req + n, cap - (size_t)n, "Origin: %s\r\n", origin);
+    else if (ctx_origin && !api)
+        n += snprintf(h->req + n, cap - (size_t)n, "Origin: %s\r\n", ctx_origin);
+    if (ctx_referer && !api)
+        n += snprintf(h->req + n, cap - (size_t)n, "Referer: %s\r\n", ctx_referer);
     if (cookies && *cookies)
         n += snprintf(h->req + n, cap - (size_t)n, "Cookie: %s\r\n", cookies);
     if (bearer)
         n += snprintf(h->req + n, cap - (size_t)n, "Authorization: Bearer %s\r\n", bearer);
     if (account)
         n += snprintf(h->req + n, cap - (size_t)n, "ChatGPT-Account-Id: %s\r\noriginator: glaze_chat\r\n", account);
-    if (!post && post_type)
-        n += snprintf(h->req + n,cap-(size_t)n,"Content-Type: %s\r\n",post_type);
     if (post)
         n += snprintf(h->req + n, cap - (size_t)n, "Content-Type: %s\r\nContent-Length: %d\r\n",
                       post_type ? post_type : "application/x-www-form-urlencoded", post_len);

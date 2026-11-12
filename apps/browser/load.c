@@ -115,9 +115,22 @@ static void retire_scripts(struct page *p)
     p->script_disabled = true;
 }
 
+static char *doc_referrer;
+
+/* Names the page the next load_begin() is a navigation from. */
+void load_referrer(const char *url)
+{
+    free(doc_referrer);
+    doc_referrer = url ? strdup(url) : NULL;
+}
+
 void load_begin(struct load *ld, const char *url, const char *post, const char *post_type,
                 bool reload, int width)
 {
+    /* The page a link or form led here from; none for a typed address. */
+    char *from = doc_referrer;
+    doc_referrer = NULL;
+
     load_stop(ld);
     retire_scripts(ld->shown);
     free(ld->url);
@@ -128,9 +141,13 @@ void load_begin(struct load *ld, const char *url, const char *post, const char *
     ld->state = LS_DOC;
     if (!strncasecmp(url, "about:", 6)) {
         ld->doc_id = 0; /* answered by load_step */
+        free(from);
         return;
     }
+    ld_referrer(from);
     ld->doc_id = ld_start(url, F_DOC, 0, post, post_type, reload);
+    ld_referrer(NULL);
+    free(from);
 }
 
 /* All documents share the bounded fetch queue. Fetch IDs, not per-document
@@ -284,6 +301,7 @@ static void schedule(struct page *p, int *flags)
 {
     if (!p)
         return;
+    ld_referrer(p->url);        /* for this page's style sheets, scripts, images and frames */
     if (p->resources_dirty) {
         /* A rescan may retire child contexts. Clear UI references before the
          * caller handles its next input event. */

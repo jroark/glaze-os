@@ -29,6 +29,7 @@ struct load {
     uint32_t css_deadline;
 };
 
+void load_referrer(const char *url);
 void load_begin(struct load *ld, const char *url, const char *post, const char *post_type,
                 bool reload, int width);
 int load_step(struct load *ld);
