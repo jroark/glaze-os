@@ -140,7 +140,7 @@ bool dom_attr(struct page *p, struct node *n, const char *name, const char *valu
     n->nsdecl = -1;
     if (!strcmp(lower, "src") || !strcmp(lower, "href") || !strcmp(lower, "srcdoc") ||
         !strcmp(lower, "sandbox"))
-        n->collected = 0;
+        n->collected &= 16;             /* keeps "made by a script" */
     if (n->tag == T_IMG && !strcmp(lower, "src")) {
         n->img = -1;
         n->image_event = false;

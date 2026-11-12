@@ -448,6 +448,8 @@ struct script_slot {
     char *url, *source;
     int fetch, len;
     bool module;
+    bool async;                 /* runs when it has loaded; nothing waits for it */
+    bool defer;                 /* runs in order, after the scripts that aren't */
     uint8_t state;
 };
 struct frame_slot {

@@ -114,6 +114,32 @@ static bool rel_has(const char *rel, const char *word)
 }
 
 /* Idempotent resource discovery after parsing or a DOM mutation. */
+/* Whether a <script type> is JavaScript: none, "module", or one of the
+ * names it has gone by, with any ";charset=..." parameter ignored. */
+static bool script_type(const char *type)
+{
+    static const char *const names[] = {
+        "module", "text/javascript", "application/javascript", "text/ecmascript", "application/ecmascript",
+        "application/x-javascript", "text/x-javascript", "text/jscript", "text/livescript",
+        "text/javascript1.0", "text/javascript1.1", "text/javascript1.2", "text/javascript1.3",
+        "text/javascript1.4", "text/javascript1.5",
+    };
+    int len = 0;
+
+    if (!type)
+        return true;
+    while (*type == ' ')
+        type++;
+    while (type[len] && type[len] != ';' && type[len] != ' ')
+        len++;
+    if (!len)
+        return true;
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        if ((int)strlen(names[i]) == len && !strncasecmp(type, names[i], (size_t)len))
+            return true;
+    return false;
+}
+
 /* ---- which image to fetch --------------------------------------------------- */
 
 /* Whether a URL's path ends in the extension of a format with no decoder. */
@@ -333,14 +359,23 @@ void page_collect(struct page *p)
                 if (p->scripts[i].node == n)
                     exists = true;
             const char *type = node_attr(n, "type");
-            if (exists || p->nscripts == PAGE_MAX_SCRIPTS ||
-                (type && *type && strcasecmp(type,"module") && strcasecmp(type, "text/javascript") &&
-                 strcasecmp(type, "application/javascript") && strcasecmp(type, "text/ecmascript")))
+            bool module = type && !strcasecmp(type, "module");
+            /* nomodule marks the fallback bundle for browsers without
+             * modules; running it as well ran every such page's code twice. */
+            if (exists || p->nscripts == PAGE_MAX_SCRIPTS || !script_type(type) ||
+                (!module && node_attr(n, "nomodule")))
                 continue;
             struct script_slot *sl = &p->scripts[p->nscripts++];
+            memset(sl, 0, sizeof(*sl));
             sl->node = n;
-            sl->module = type && !strcasecmp(type,"module");
+            sl->module = module;
             const char *src = node_attr(n, "src");
+            /* An external script marked async, or one a script created and
+             * inserted (analytics, ad and widget loaders), runs whenever it
+             * arrives and holds nothing up. defer and modules keep their
+             * order but come after the plain scripts. */
+            sl->async = src && (node_attr(n, "async") || (n->collected & 16));
+            sl->defer = !sl->async && (module || (src && node_attr(n, "defer")));
             sl->url = src ? url_resolve(p->base, src) : NULL;
             sl->state = src ? RES_WAIT : RES_READY;
             if ((src && !sl->url) || !script_allowed(p, sl->url, n))

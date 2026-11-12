@@ -7,7 +7,8 @@ Each case renders a small page from tests/web/compat/ with host/browse.c and
 checks its output: the display items (BROWSE_ITEMS: "item <kind> x,y wxh
 <tag> ..."), the document as scripts left it (BROWSE_HTML: "html ...") and
 the script console ("browser JS: ..."). `want` patterns must each match a
-line, `never` patterns must match none. The pages are original, written to
+line, `never` patterns must match none (the DOM dump aside, unless the
+pattern starts with ^html). The pages are original, written to
 show one thing a real page does that the engine once dropped.
 """
 
@@ -65,6 +66,9 @@ CASES = {
                 r"browser JS: rgb\(32, 64, 96\)"],
                [r'"drawerone"', r'"drawertwo"', r'"slideoff"', r'"rightpanel"', r'"closeddialog"',
                 r'"templatetext"', r"^image .*template-only", r"^browser JS: template ran"], 0),
+    # Async and script-inserted scripts hold nothing up; defer runs last; nomodule is skipped.
+    "scripts_order": ("scripts_order.html",
+                      [r"^browser JS: order inline1,typed,xjs,inline2,deferred$"], [r"NOMODULE", r"TEMPLATE,"], 0),
 }
 
 
@@ -76,6 +80,15 @@ def run(browse, name):
                        cwd=os.path.join(ROOT, "host"), env=env, stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT, text=True, errors="replace", timeout=120)
     lines = p.stdout.splitlines()
+    # The DOM dump runs from its "html " line to the summary line.
+    in_dump, dump = False, set()
+    for i, line in enumerate(lines):
+        if line.startswith("html "):
+            in_dump = True
+        elif in_dump and re.match(r'^".*": \d+ items', line):
+            in_dump = False
+        if in_dump:
+            dump.add(i)
     bad = []
     if p.returncode:
         bad.append(f"exit status {p.returncode}")
@@ -83,7 +96,10 @@ def run(browse, name):
         if not any(re.search(pat, line) for line in lines):
             bad.append(f"missing: {pat}")
     for pat in never:
-        hit = [line for line in lines if re.search(pat, line)]
+        # The DOM dump quotes the page's own source, so `never` patterns
+        # leave it out unless they ask for it.
+        hit = [line for i, line in enumerate(lines)
+               if re.search(pat, line) and (pat.startswith("^html") or i not in dump)]
         if hit:
             bad.append(f"unwanted: {pat} ({hit[0][:80]})")
     if bad:

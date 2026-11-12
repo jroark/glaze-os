@@ -415,6 +415,45 @@ static bool scripts_pending(struct page *p)
             return true;
     return false;
 }
+/* Scripts DOMContentLoaded waits for: all but the async ones. */
+static bool ordered_scripts_pending(struct page *p)
+{
+    for (int i = 0; i < p->nscripts; i++)
+        if (p->scripts[i].state != RES_DONE && !p->scripts[i].async && node_connected(p->scripts[i].node))
+            return true;
+    return false;
+}
+
+/*
+ * The script to run next. An async script runs as soon as it has arrived
+ * (or failed). The rest run in document order, those without defer first;
+ * the one whose turn it is holds the others back while it loads, which is
+ * why an async one must not: a page's analytics loader, inserted ahead of
+ * its first script, used to stall every script until it came or timed out.
+ */
+static struct script_slot *next_script(struct page *p)
+{
+    struct script_slot *first_deferred = NULL;
+
+    for (int i = 0; i < p->nscripts; i++) {
+        struct script_slot *s = &p->scripts[i];
+        if (s->async && (s->state == RES_READY || s->state == RES_FAILED))
+            return s;
+    }
+    for (struct node *n = p->doc; n; n = node_next(n, p->doc, false))
+        if (n->tag == T_SCRIPT)
+            for (int i = 0; i < p->nscripts; i++) {
+                struct script_slot *s = &p->scripts[i];
+                if (s->node != n || s->state == RES_DONE || s->async)
+                    continue;
+                if (!s->defer)
+                    return s;
+                if (!first_deferred)
+                    first_deferred = s;
+            }
+    return first_deferred;
+}
+
 static bool complete(struct page *p)
 {
     if (!p || p->resources_dirty || scripts_pending(p) || css_pending(p))
@@ -438,14 +477,7 @@ static void execute(struct page *p, int *quota, int *flags, bool wait_css)
     /* Classic scripts run in document order once the DOM has been parsed.
      * Rescanning after each edit also puts document.write scripts in order. */
     while (*quota > 0 && !(wait_css && css_pending(p))) {
-        struct script_slot *s = NULL;
-        for (struct node *n = p->doc; n && !s; n = node_next(n, p->doc, false))
-            if (n->tag == T_SCRIPT)
-                for (int i = 0; i < p->nscripts; i++)
-                    if (p->scripts[i].node == n && p->scripts[i].state != RES_DONE) {
-                        s = &p->scripts[i];
-                        break;
-                    }
+        struct script_slot *s = next_script(p);
         if (!s || s->state == RES_WAIT || s->state == RES_LOADING)
             break;
         bool allowed = script_allowed(p, s->url, s->node);
@@ -472,7 +504,7 @@ static void execute(struct page *p, int *quota, int *flags, bool wait_css)
         if (p->resources_dirty)
             schedule(p, flags);
     }
-    if (!scripts_pending(p) && !p->ready_event) {
+    if (!ordered_scripts_pending(p) && !p->ready_event) {
         p->ready_event = true;
         script_event(p, p->doc, "DOMContentLoaded");
     }

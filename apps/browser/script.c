@@ -515,8 +515,13 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
         } else if (IS("create") || IS("createText")) {
             str = string_arg(a);
             if (str)
-                result = wrap(dom_create(owner, IS("create") ? N_ELEM : N_TEXT,
-                                         IS("create") ? str : NULL, IS("createText") ? str : NULL));
+            {
+                struct node *made = dom_create(owner, IS("create") ? N_ELEM : N_TEXT,
+                                               IS("create") ? str : NULL, IS("createText") ? str : NULL);
+                if (made)
+                    made->collected |= 16;      /* script-made: a <script> among these is async */
+                result = wrap(made);
+            }
         } else if (IS("insert")) {
             struct node *child = node_arg(a), *before = node_arg(b);
             if (dom_insert(owner, n, child, before))
