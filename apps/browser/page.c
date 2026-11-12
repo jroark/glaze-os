@@ -501,12 +501,64 @@ static void cut_note(struct page *p)
     p->dom_nodes += 2;
 }
 
+/*
+ * What a response is, from its type and, when the type says little, its first
+ * bytes: a page, text to show as written (JSON, XML, a script or sheet opened
+ * by itself), a picture, or something the browser has no way to show. Parsing
+ * the last two kinds as HTML filled the screen with their bytes.
+ */
+enum { DOC_HTML, DOC_TEXT, DOC_IMAGE, DOC_OTHER };
+
+static bool ct_is(const char *ct, const char *type)
+{
+    size_t n = strlen(type);
+    return !strncasecmp(ct, type, n) && (!ct[n] || ct[n] == ';' || ct[n] == ' ');
+}
+
+static int document_kind(const char *ct, const uint8_t *data, int len)
+{
+    char sub[64];
+    size_t n = strcspn(ct, "; \t");
+
+    if (!strncasecmp(ct, "image/", 6))
+        return DOC_IMAGE;
+    if (ct_is(ct, "text/html") || ct_is(ct, "application/xhtml+xml"))
+        return DOC_HTML;
+    snprintf(sub, sizeof(sub), "%.*s", (int)(n < sizeof(sub) - 1 ? n : sizeof(sub) - 1), ct);
+    size_t sl = strlen(sub);
+    if (!strncasecmp(sub, "text/", 5) || !strcasecmp(sub, "application/json") ||
+        !strcasecmp(sub, "application/javascript") || !strcasecmp(sub, "application/x-javascript") ||
+        !strcasecmp(sub, "application/ecmascript") || !strcasecmp(sub, "application/xml") ||
+        (sl > 5 && (!strcasecmp(sub + sl - 5, "+json") || !strcasecmp(sub + sl - 4, "+xml"))))
+        return DOC_TEXT;
+    /* No type, or one that says nothing (some servers send every file as
+     * application/octet-stream): markup is a page, bytes are not. */
+    int i = 0, look = len < 512 ? len : 512;
+    while (i < look && (data[i] == ' ' || data[i] == '\t' || data[i] == '\r' || data[i] == '\n' ||
+                        data[i] >= 0x80))       /* a byte-order mark too */
+        i++;
+    if (i < look && data[i] == '<')
+        return DOC_HTML;
+    for (i = 0; i < look; i++)
+        if (data[i] < 9 || (data[i] > 13 && data[i] < 32 && data[i] != 27))
+            return DOC_OTHER;
+    return *ct ? DOC_TEXT : DOC_HTML;
+}
+
 void page_set_document(struct page *p, const uint8_t *data, int len, const char *content_type)
 {
     const char *ct = content_type ? content_type : "";
+    int kind = document_kind(ct, data, len);
 
-    if (!strncasecmp(ct, "image/", 6)) {
-        image_document(p, data, len);
+    if (kind == DOC_OTHER) {
+        p->doc_err = WE_UNSUPPORTED;
+        return;
+    }
+    if (kind == DOC_IMAGE) {
+        /* SVG, WebP and AVIF have no decoder here. */
+        if (!image_document(p, data, len) && !p->oom)
+            p->doc_err = ct_is(ct, "image/png") || ct_is(ct, "image/jpeg") || ct_is(ct, "image/gif")
+                         ? WE_DECODE : WE_UNSUPPORTED;
         return;
     }
     int cs = cs_sniff(content_type, data, len), n;
@@ -515,7 +567,7 @@ void page_set_document(struct page *p, const uint8_t *data, int len, const char 
         p->oom = true;
         return;
     }
-    if (!strncasecmp(ct, "text/plain", 10)) {
+    if (kind == DOC_TEXT) {
         char *html = text_to_html(text, n);
         free(text);
         if (!html) {

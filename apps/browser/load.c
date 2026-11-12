@@ -155,17 +155,23 @@ void load_begin(struct load *ld, const char *url, const char *post, const char *
 static struct page *document(struct fetch_result *r, const char *url)
 {
     struct page *p;
-    if (r->err || (r->status >= 400 && !r->len))
-        return load_error_page(url, r->err ? r->err : WE_NOTFOUND);
+    if (r->err)
+        return load_error_page(url, r->err);
+    /* An error status with a body shows the body; without, say which kind. */
+    if (r->status >= 400 && !r->len)
+        return load_error_page(url, r->status >= 500 ? WE_SERVER
+                               : r->status == 401 || r->status == 403 ? WE_FORBIDDEN
+                               : r->url && !strncasecmp(r->url, "http", 4) ? WE_GONE : WE_NOTFOUND);
     p = page_new(r->url ? r->url : url);
     if (p) {
         p->csp = r->csp ? strdup(r->csp) : NULL;
         p->cut = r->cut;
         page_set_document(p, r->data, r->len, r->ctype);
     }
-    if (!p || p->oom) {
+    if (!p || p->oom || p->doc_err) {
+        int err = p && !p->oom ? p->doc_err : WE_NOMEM;
         page_free(p);
-        p = load_error_page(url, WE_NOMEM);
+        p = load_error_page(url, err);
     }
     return p;
 }
@@ -284,6 +290,8 @@ static bool route(struct page *p, struct fetch_result *r)
                 else {
                     child->cut = r->cut;
                     page_set_document(child, r->data, r->len, r->ctype);
+                    if (child->doc_err && !child->doc)
+                        page_set_html(child, "<p>Cannot show frame</p>");
                 }
             }
             return true;

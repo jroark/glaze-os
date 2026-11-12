@@ -92,6 +92,17 @@ CASES = {
     "big_chunked": ("http:big-chunked", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
     "big_gzip": ("http:big-gzip", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
     "bomb": ("http:bomb", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
+    # What is not a page is shown as text or refused, not parsed as one.
+    "type_json": ("http:json", [r'item text .* <pre> "\{"answer":"', r'<pre> "42\}"'], [], 0),
+    "type_xml": ("http:feed", [r'item text .* <pre> "<\?xml"', r'<pre> "itle>feedtitle</title>'], [], 0),
+    "type_binary": ("http:blob", [r"This kind of file can't be shown\."], [], 0),
+    "type_svg": ("http:svg", [r"This kind of file can't be shown\."], [r'"svgwords"'], 0),
+    "type_sniffed": ("http:mislabelled", [r'<p> "markupanyway"'], [], 0),
+    "type_missing": ("http:untyped", [r'<p> "notypegiven"'], [], 0),
+    "coding_br": ("http:br", [r'"The data could not be decoded\."'], [r"brotlinoise"], 0),
+    "status_503": ("http:down", [r"The server reported an error\. Try"], [], 0),
+    "status_403": ("http:denied", [r"The server refused to show this"], [], 0),
+    "status_404": ("http:lost", [r'"The page could not be found\."'], [], 0),
     "many_nodes": ("http:many", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
 }
 
@@ -163,6 +174,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.reply(200, "text/plain", lines.replace("http://127.0.0.1:%d" % self.server.server_address[1], "SELF").encode())
         elif path == "/json":
             self.reply(200, "application/json", b'{"answer": 42}')
+        elif path == "/feed":
+            self.reply(200, "application/rss+xml; charset=utf-8",
+                       b"<?xml version='1.0'?><rss><channel><title>feedtitle</title></channel></rss>")
+        elif path == "/blob":
+            self.reply(200, "application/octet-stream", bytes(range(256)) * 8)
+        elif path == "/mislabelled":
+            self.reply(200, "application/octet-stream", b"<!doctype html><p>markupanyway</p>")
+        elif path == "/untyped":
+            self.reply(200, "", b"<p>notypegiven</p>")
+        elif path == "/svg":
+            self.reply(200, "image/svg+xml", b"<svg xmlns='http://www.w3.org/2000/svg'><text>svgwords</text></svg>")
+        elif path == "/br":
+            self.reply(200, "text/html", bytes([0x8b, 0x02, 0x80]) + b"<p>brotlinoise</p>" + bytes([3]),
+                       [("Content-Encoding", "br")])
+        elif path in ("/down", "/denied", "/lost"):
+            self.reply({"/down": 503, "/denied": 403, "/lost": 404}[path], "text/html", b"")
         elif path in ("/big", "/big-chunked", "/big-gzip", "/bomb", "/many"):
             # Longer than the engine's 1 MiB document limit, four ways, and
             # one with more nodes than it keeps.
@@ -193,7 +220,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def reply(self, status, ctype, body, extra=()):
         self.send_response(status)
-        self.send_header("Content-Type", ctype)
+        if ctype:
+            self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         for k, v in extra:
             self.send_header(k, v)

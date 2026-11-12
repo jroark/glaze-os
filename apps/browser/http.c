@@ -426,8 +426,12 @@ static int decode_body(struct http *h)
     const char *ce = http_header(h, "content-encoding", 0);
     if (h->identity_only && ce && strcasecmp(ce, "identity")) return WE_PROTOCOL;
 
-    if (!ce || !h->body_len || (!strstr(ce, "gzip") && !strstr(ce, "deflate")))
+    if (!ce || !h->body_len || !strcasecmp(ce, "identity"))
         return 0;
+    /* Brotli or zstd, which were not asked for and can't be read here:
+     * shown as it came, the page was a screen of noise. */
+    if (!strstr(ce, "gzip") && !strstr(ce, "deflate"))
+        return decode_failed(h, ce, "not a coding this browser reads");
     const uint8_t *d = h->body;
     int n = h->body_len, out_len = 0;
     bool zlib = true;

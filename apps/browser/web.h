@@ -41,6 +41,10 @@ enum {
     WE_REDIRECTS,
     WE_BADURL,
     WE_DECODE,              /* bad gzip or image data */
+    WE_SERVER,              /* 5xx with nothing to show */
+    WE_FORBIDDEN,           /* 401 or 403 with nothing to show */
+    WE_GONE,                /* another 4xx with nothing to show */
+    WE_UNSUPPORTED,         /* a kind of file the browser can't show */
 };
 const char *web_strerror(int err);
 
@@ -497,6 +501,7 @@ struct page {
     uint32_t bg;                /* canvas colour */
     uint32_t link_color;        /* <body link=...> or 0 */
     bool oom;                   /* something didn't fit in memory */
+    int doc_err;                /* WE_*: the document can't be shown as a page */
     bool is_error;              /* load_error_page's */
     bool cut;                   /* the document was longer than the limit */
     struct page *parent;
