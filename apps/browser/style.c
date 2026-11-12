@@ -1020,7 +1020,7 @@ static const struct css_scope *compute(struct style_ctx *S, struct node *n, cons
     int author = M->n;
     for (int s = 0; s < S->p->nsheets; s++)
         if (S->p->sheets[s].ss.loaded)
-            collect(&S->p->sheets[s].ss, (uint32_t)(s + 1) << 20, n, M);
+            collect(&S->p->sheets[s].ss, ((uint32_t)S->p->sheets[s].order + 1) << 20, n, M);
     sort_matches(M, author);
     if (n->nsdecl < 0) {
         const char *sa = node_attr(n, "style");

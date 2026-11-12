@@ -348,6 +348,9 @@ int css_late_decls(const struct css_rule *r, struct css_decl *out, int max);
 void css_vars_use(struct css_vars *v);
 void css_vars_free(struct css_vars *v);
 void css_parse_sheet(struct arena *a, struct stylesheet *ss, const char *src, int len);
+/* The @import addresses the last css_parse_sheet() saw (for this screen),
+ * as written; valid until the next parse. */
+int css_imports(const char **urls, int max);
 bool css_media_matches(const char *s, int len);
 void css_free_sheet(struct stylesheet *ss);
 /* Parses a declaration block (style="..."); returns the count. */
@@ -495,6 +498,7 @@ struct sheet_slot {
     char *url;                  /* <link>: absolute URL, malloc'd */
     int fetch;                  /* loader id while loading */
     bool pending;
+    uint16_t order;             /* cascade position: 16 per document sheet, its @imports below it */
 };
 
 struct page {
@@ -560,6 +564,7 @@ int page_anchor_y(struct page *p, const char *frag);
 struct ditem *page_hit(struct page *p, int x, int y);
 struct frame_slot *page_frame_at(struct page *p, int x, int y);
 struct page *page_root(struct page *p);
+void page_sheet_imports(struct page *p, int from);
 bool page_same_origin(const struct page *a,const struct page *b);
 bool page_resource_allowed(const struct page *p,const char *url);
 bool page_navigate(struct page *p,const char *url,const char *target,const char *post);

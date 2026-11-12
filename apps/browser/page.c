@@ -264,6 +264,37 @@ static const char *image_source(struct node *n, char *buf, int cap)
     return src;
 }
 
+/*
+ * The sheets the one just parsed into slot `from` imports get slots of their
+ * own, placed below it in the cascade (an @import comes before its sheet's
+ * own rules). They were skipped, which left a page whose <style> is one
+ * @import line with no style at all.
+ */
+void page_sheet_imports(struct page *p, int from)
+{
+    const char *urls[8];
+    int n = css_imports(urls, 8);
+    const struct sheet_slot *by = &p->sheets[from];
+    bool nested = (by->order & 15) != 15;
+
+    for (int k = 0; k < n && p->nsheets < PAGE_MAX_SHEETS; k++) {
+        char *url = url_resolve(by->url ? by->url : p->base, urls[k]);
+        bool seen = !url;
+        for (int i = 0; !seen && i < p->nsheets; i++)
+            seen = p->sheets[i].url && !strcmp(p->sheets[i].url, url);     /* and import loops */
+        if (seen) {
+            free(url);
+            continue;
+        }
+        struct sheet_slot *sl = &p->sheets[p->nsheets++];
+        memset(sl, 0, sizeof *sl);
+        sl->node = by->node;
+        sl->url = url;
+        sl->pending = true;
+        sl->order = (uint16_t)(nested ? by->order : (by->order & ~15) + (k < 14 ? k : 14));
+    }
+}
+
 void page_collect(struct page *p)
 {
     p->html = node_first_elem(p->doc);
@@ -319,10 +350,13 @@ void page_collect(struct page *p)
             free(sl->url);
             memset(sl, 0, sizeof *sl);
             sl->node = n;
+            sl->order = (uint16_t)(i * 16 + 15);
             if (n->tag == T_STYLE) {
                 css_vars_use(&p->vars);
-                if (n->first && n->first->type == N_TEXT)
+                if (n->first && n->first->type == N_TEXT) {
                     css_parse_sheet(&p->arena, &sl->ss, n->first->text, n->first->len);
+                    page_sheet_imports(p, i);
+                }
                 css_vars_use(NULL);
                 sl->ss.loaded = true;
             } else {

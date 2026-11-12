@@ -158,7 +158,8 @@ commit that added it says what a page looked like before.
   the rest never do.
 - `media=` on `<link>` and `<style>`, range media queries (`width >= 600px`),
   and the contents of `@layer` blocks. The screen is 320 CSS px wide, portrait.
-  `@import` is not followed.
+  `@import` is followed (eight per sheet, within the page's 24 sheets, with its
+  media query), and an imported sheet's rules rank below its importer's.
 - `var()` with fallbacks, and `calc()`, `min()`, `max()` and `clamp()` of
   lengths in one unit, and of percentages. Custom properties declared on
   `:root`, `html` or `body` are settled when a sheet is parsed. Ones set by
@@ -230,7 +231,6 @@ commit that added it says what a page looked like before.
 | Missing intermediate certificates (AIA fetching) | An HTTP fetch inside certificate verification |
 | Keep-alive connections | Connection pooling in `http.c`/`conn.c`; every request opens its own |
 | CSS positioning, floats, real flex and grid | A new layout pass; the largest item here |
-| `@import` | Sheets fetched from sheets, within the 24-sheet limit |
 | RegExp named groups and lookbehind, `Intl` | JerryScript features, not the facade |
 | Trying https first for a typed host | A behaviour change with a fallback delay on a slow link |
 | A JavaScript on/off setting | A Settings entry; script-heavy pages can exhaust the 1 MiB heap |

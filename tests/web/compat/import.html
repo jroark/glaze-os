@@ -1,0 +1,17 @@
+<!doctype html>
+<title>Sheets that import sheets</title>
+<!-- @import was skipped. Older sites often have nothing but an @import in
+     their <style>; the imported sheet goes below the importing one. -->
+<style>
+@import url("imp_base.css");
+@import "imp_print.css" print;
+@import url(imp_wide.css) screen and (min-width: 900px);
+.x { color: rgb(0, 0, 255); }
+</style>
+<p class="x" id="x">x</p><p class="y" id="y">y</p><p class="z" id="z">z</p><p class="w" id="w">w</p>
+<script>
+window.onload = function () {
+  function c(id) { return getComputedStyle(document.getElementById(id)).color; }
+  console.log("import " + c("x") + " " + c("y") + " " + c("z") + " " + c("w"));
+};
+</script>

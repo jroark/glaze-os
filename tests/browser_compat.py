@@ -153,6 +153,9 @@ CASES = {
                      r"^browser JS: scoped tone rgb\(1, 2, 3\) rgb\(0, 128, 0\) rgb\(128, 0, 128\) rgb\(9, 9, 9\)$",
                      r"^browser JS: scoped alert rgb\(255, 243, 205\)$",
                      r'item text 12,\d+ .* <a> "plain"', r'item text 126,12 .* <a> "danger"'], [], 0),
+    # @import, nested and looping, with media; the importing sheet's rules win.
+    "imports": ("http:import.html",
+                [r"^browser JS: import rgb\(0, 0, 255\) rgb\(0, 128, 0\) rgb\(128, 0, 128\) rgb\(0, 0, 0\)$"], [], 200),
     "many_nodes": ("http:many", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
 }
 

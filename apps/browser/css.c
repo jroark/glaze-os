@@ -1976,6 +1976,52 @@ static void add_rule(struct cp *C, struct stylesheet *ss, const char *sel, int s
     free(L);
 }
 
+/* @import "a.css" screen; or @import url(a.css): the address is kept for the
+ * page to fetch, unless its media query is for another kind of screen. */
+#define CSS_IMPORTS     8
+static char import_url[CSS_IMPORTS][384];
+static int nimports;
+
+int css_imports(const char **urls, int max)
+{
+    int n = nimports < max ? nimports : max;
+
+    for (int i = 0; i < n; i++)
+        urls[i] = import_url[i];
+    return n;
+}
+
+static void import_rule(const char *s, int len)
+{
+    int i = skip_ws(s, len, 0), a, b;
+
+    if (i + 4 <= len && !strncasecmp(s + i, "url(", 4)) {
+        a = skip_ws(s, len, i + 4);
+        for (b = a; b < len && s[b] != ')'; b++)
+            ;
+        i = b < len ? b + 1 : len;
+        while (b > a && is_ws(s[b - 1]))
+            b--;
+        if (b - a >= 2 && (s[a] == '"' || s[a] == '\'') && s[b - 1] == s[a]) {
+            a++;
+            b--;
+        }
+    } else if (i < len && (s[i] == '"' || s[i] == '\'')) {
+        a = i + 1;
+        for (b = a; b < len && s[b] != s[i]; b++)
+            ;
+        i = b < len ? b + 1 : len;
+    } else {
+        return;
+    }
+    int m = skip_ws(s, len, i);
+    if (b <= a || b - a >= (int)sizeof(import_url[0]) || nimports == CSS_IMPORTS ||
+        (m < len && !media_matches(s + m, len - m)))
+        return;
+    memcpy(import_url[nimports], s + a, (size_t)(b - a));
+    import_url[nimports++][b - a] = 0;
+}
+
 static void parse_rules(struct cp *C, struct stylesheet *ss, const char *s, int len, int depth)
 {
     int i = 0;
@@ -2010,8 +2056,10 @@ static void parse_rules(struct cp *C, struct stylesheet *ss, const char *s, int 
             if (i >= len)
                 break;
             if (s[i] == ';') {
+                if (!C->vars_only && nl == 6 && !strncasecmp(s + ns, "import", 6))
+                    import_rule(s + ps, i - ps);
                 i++;
-                continue;           /* @import, @charset, @namespace */
+                continue;           /* @charset, @namespace */
             }
             int end = block_end(s, len, i);
             bool media = nl == 5 && !strncasecmp(s + ns, "media", 5);
@@ -2141,6 +2189,8 @@ static void build_index(struct stylesheet *ss)
 void css_parse_sheet(struct arena *a, struct stylesheet *ss, const char *src, int len)
 {
     struct cp C = { a, src, len, true };
+
+    nimports = 0;
 
     /* The root's custom properties first, so rules above their :root block,
      * or in an @media before it, can use them. */
