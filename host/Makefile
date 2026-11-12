@@ -210,6 +210,18 @@ libc-bits-test: ../tests/native/libc_bits.c ../lib/libc/string.c ../lib/libc/bit
 	$(O)/$@
 .PHONY: libc-bits-test
 
+# libc's vsnprintf against the host's: printf.c renamed, with
+# tests/native/libc_printf_sys.h for glaze/sys.h; the test supplies gz_log.
+libc-printf-test: ../tests/native/libc_printf.c ../tests/native/libc_printf_sys.h ../lib/libc/printf.c
+	@mkdir -p $(O)
+	$(CC) -std=gnu11 -O2 -fno-builtin -Wno-ignored-attributes -fsanitize=address,undefined -I../lib/include -I../lib/libc/include \
+		-include ../tests/native/libc_printf_sys.h \
+		-Dvsnprintf=gz_vsnprintf -Dsnprintf=gz_snprintf -Dprintf=gz_printf -Dputs=gz_puts \
+		-c -o $(O)/libc_printf_lib.o ../lib/libc/printf.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ $< $(O)/libc_printf_lib.o
+	$(O)/$@
+.PHONY: libc-printf-test
+
 # libc's 64-bit division (lib/libc/divdi3.c) against the host's.
 divdi3-test: ../tests/native/divdi3.c ../lib/libc/divdi3.c
 	$(CC) $(CFLAGS) -O2 -fno-builtin -o $(O)/$@ $(filter %.c,$^)
