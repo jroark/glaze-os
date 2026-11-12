@@ -46,9 +46,9 @@ DRIVER_FILES := $(foreach d,$(DRIVER_NAMES),$(OUT)/drivers/$(d).ko)
 $(OUT)/kmod/%.o: kernel/modules/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_COMMON) -O2 -Ikernel -MMD -c -o $@ $<
-$(OUT)/drivers/%.ko: $(OUT)/kmod/%.o $(OUT)/kernel/drivers/%.o
+$(OUT)/drivers/%.ko: $(OUT)/kmod/%.o $(OUT)/kernel/drivers/%.o kernel/modules/module.lds
 	@mkdir -p $(dir $@)
-	$(LD) -m elf32ltsmip -r -o $@ $^
+	$(LD) -m elf32ltsmip -r -T kernel/modules/module.lds -o $@ $(filter %.o,$^)
 	$(OBJCOPY) --strip-debug --remove-section=.reginfo --remove-section=.MIPS.abiflags \
 	    --remove-section=.pdr --remove-section=.gnu.attributes --remove-section=.comment \
 	    --strip-unneeded --keep-symbol=glaze_driver $@
