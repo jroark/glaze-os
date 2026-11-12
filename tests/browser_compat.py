@@ -31,6 +31,11 @@ CASES = {
                   [r'item text .*"linked" link', r'"shownpanel"', r'"kept"', r"browser JS: l1=rgb\(0, 0, 238\) q=2 n=1",
                    r'item text .* <li> "two"', r'"greenhead"', r'"plainhead"'],
                   [r'"hiddenpanel"', r'"gone"'], 0),
+    # media= on a sheet, @layer blocks and range media queries.
+    "sheets": ("sheets.html",
+               [r'"deskvisible"', r'"printvisible"', r'"widevisible"',
+                r"browser JS: rgb\(0, 128, 0\) rgb\(255, 0, 0\) rgb\(0, 0, 255\) rgb\(128, 0, 128\)"],
+               [], 0),
 }
 
 

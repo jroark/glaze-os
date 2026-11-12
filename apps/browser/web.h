@@ -309,6 +309,7 @@ struct stylesheet {
 };
 
 void css_parse_sheet(struct arena *a, struct stylesheet *ss, const char *src, int len);
+bool css_media_matches(const char *s, int len);
 void css_free_sheet(struct stylesheet *ss);
 /* Parses a declaration block (style="..."); returns the count. */
 int css_parse_decls(struct arena *a, const char *src, int len, struct css_decl **out);

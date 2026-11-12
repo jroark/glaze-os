@@ -1126,6 +1126,30 @@ static bool media_feature(const char *s, int len)
         if (px.type == V_LENGTH && (px.unit == U_EM || px.unit == U_REM))
             width *= 16;
     }
+    if (!colon) {
+        /* Range syntax: (width >= 600px), (400px <= width), (width < 30em). */
+        const char *op = NULL;
+        for (int k = 0; k < len && !op; k++)
+            if (s[k] == '<' || s[k] == '>')
+                op = s + k;
+        if (op) {
+            bool eq = op + 1 < s + len && op[1] == '=';
+            const char *lhs = s, *rhs = op + 1 + eq;
+            int ll = (int)(op - s), rl = (int)(s + len - rhs);
+            while (ll && is_ws(lhs[ll - 1])) ll--;
+            while (rl && is_ws(*rhs)) rhs++, rl--;
+            bool name_first = ll >= 5 && !strncasecmp(lhs, "width", 5);
+            const char *num = name_first ? rhs : lhs;
+            int numl = name_first ? rl : ll;
+            if ((name_first || (rl >= 5 && !strncasecmp(rhs, "width", 5))) && parse_length(num, numl, &px)) {
+                int lim = px.num / 64 * (px.type == V_LENGTH && (px.unit == U_EM || px.unit == U_REM) ? 16 : 1);
+                bool less = (*op == '<') == name_first;     /* width is below the number */
+                return less ? (eq ? WEB_VIEW_CSS_W <= lim : WEB_VIEW_CSS_W < lim)
+                            : (eq ? WEB_VIEW_CSS_W >= lim : WEB_VIEW_CSS_W > lim);
+            }
+            return false;
+        }
+    }
     if (FIS("max-width") || FIS("max-device-width"))
         return WEB_VIEW_CSS_W <= width;
     if (FIS("min-width") || FIS("min-device-width"))
@@ -1193,6 +1217,12 @@ static bool media_matches(const char *s, int len)
         i = e + 1;
     }
     return false;
+}
+
+/* A media attribute or @media prelude against this screen. */
+bool css_media_matches(const char *s, int len)
+{
+    return media_matches(s, len);
 }
 
 static void add_rule(struct cp *C, struct stylesheet *ss, const char *sel, int sl, const char *body, int bl)
@@ -1282,6 +1312,10 @@ static void parse_rules(struct cp *C, struct stylesheet *ss, const char *s, int 
             int end = block_end(s, len, i);
             bool media = nl == 5 && !strncasecmp(s + ns, "media", 5);
             bool supports = nl == 8 && !strncasecmp(s + ns, "supports", 8);
+            /* @layer name { ... }: the rules count, in source order (layer
+             * precedence isn't modelled). Tailwind 4 and many resets put
+             * everything inside layers. */
+            supports |= nl == 5 && !strncasecmp(s + ns, "layer", 5);
             if (depth < 4 && ((media && media_matches(s + ps, i - ps)) || supports))
                 parse_rules(C, ss, s + i + 1, end - i - 2 > 0 ? end - i - 2 : 0, depth + 1);
             i = end;

@@ -140,8 +140,10 @@ void page_collect(struct page *p)
         }
         if ((n->tag == T_STYLE || n->tag == T_LINK) && !(n->collected & 1)) {
             n->collected |= 1;
+            /* Sheets for other media or other widths don't apply: only
+             * "print" was checked, so desktop-only sheets were used. */
             const char *media = node_attr(n, "media");
-            if (media && strstr(media, "print") && !strstr(media, "screen"))
+            if (media && *media && !css_media_matches(media, (int)strlen(media)))
                 continue;
             if (n->tag == T_LINK &&
                 (!rel_has(node_attr(n, "rel"), "stylesheet") ||
