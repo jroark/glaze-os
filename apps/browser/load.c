@@ -566,6 +566,12 @@ static bool layout_tree(struct page *p, int width)
         page_style(p);
         page_layout(p, width);
         p->dirty = false;
+        /* Style or layout ran out of memory: what is on screen is part of
+         * the page. Said once; it was not said at all. */
+        if (p->oom && !p->oom_told) {
+            p->oom_told = true;
+            page_root(p)->notice = "Low memory: page is incomplete";
+        }
     }
     return dirty;
 }

@@ -18,6 +18,7 @@
 #include "../apps/browser/script.h"
 #include "../apps/browser/net.h"
 #include "../apps/browser/plat.h"
+#include "../apps/browser/url.h"
 
 #include <limits.h>
 #include <netdb.h>
@@ -281,6 +282,15 @@ int main(int argc, char **argv)
     char url[PATH_MAX + 16];
     struct page *page = NULL;
 
+    /* --typed <text>: what the address bar would open for it. */
+    if (argc > 2 && !strcmp(argv[1], "--typed")) {
+        for (int i = 2; i < argc; i++) {
+            char *u = url_from_input(argv[i]);
+            printf("typed \"%s\" -> %s\n", argv[i], u ? u : "(nothing)");
+            free(u);
+        }
+        return 0;
+    }
     signal(SIGPIPE, SIG_IGN);
     if (strstr(arg, ":"))
         snprintf(url, sizeof(url), "%s", arg);
@@ -300,6 +310,10 @@ int main(int argc, char **argv)
             page_free(page);
             page = ld.shown;
             printf("page after %u ms: %s\n", plat_ms() - t0, page->url);
+        }
+        if (page && page->notice) {
+            printf("note: %s\n", page->notice);
+            page->notice = NULL;
         }
         /* A script's navigation or form submission, followed up to five times. */
         if (page && page->navigate_url && follows < 5 && getenv("BROWSE_FOLLOW")) {

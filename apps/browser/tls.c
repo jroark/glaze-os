@@ -126,12 +126,12 @@ static uint32_t der_len(const uint8_t *d, uint32_t avail)
 /* The roots were collected after this (2025-01-01): a clock before it is one
  * nobody has set, as after the battery was out. */
 #define CLOCK_FLOOR     1735689600LL
-#define CTX_RETRY_MS    3000
+#define CTX_RETRY_S     3
 
 static bool make_ctx(int *err)
 {
     static bool inited, old_clock;
-    static uint32_t retry_at;
+    static long long failed_at;
     static int why = WE_TLS;
     uint32_t size;
     const uint8_t *roots;
@@ -148,12 +148,12 @@ static bool make_ctx(int *err)
         return true;
     /* A failure is not for good: memory comes back and clocks get set. It
      * used to leave https dead until the browser was started again. */
-    if (ctx_failed && (int32_t)(plat_ms() - retry_at) < 0) {
+    if (ctx_failed && now >= failed_at && now - failed_at < CTX_RETRY_S) {
         *err = why;
         return false;
     }
     ctx_failed = true;
-    retry_at = plat_ms() + CTX_RETRY_MS;
+    failed_at = now;            /* by the clock: tls.c has no other, and a set clock retries at once */
     *err = why = WE_TLS;
     if (!inited && wolfSSL_Init() != WOLFSSL_SUCCESS)
         return false;

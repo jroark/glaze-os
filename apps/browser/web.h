@@ -501,9 +501,11 @@ struct page {
     uint32_t bg;                /* canvas colour */
     uint32_t link_color;        /* <body link=...> or 0 */
     bool oom;                   /* something didn't fit in memory */
+    bool oom_told;              /* and the user has been told */
     int doc_err;                /* WE_*: the document can't be shown as a page */
     bool is_error;              /* load_error_page's */
     bool cut;                   /* the document was longer than the limit */
+    const char *notice;         /* words for the user (a static string), cleared once shown */
     struct page *parent;
     struct frame_slot *host;
     struct script_slot scripts[PAGE_MAX_SCRIPTS];

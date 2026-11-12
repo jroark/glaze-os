@@ -132,6 +132,19 @@ CASES = {
                     {"first": "cookie-set", "BROWSE_COOKIES": "TMP.cookies"}),
     # A full jar drops the cookies unused longest, not one at random.
     "cookie_lru": ("http:cookie_lru.html", [r"^browser JS: lru kept=64 first=c7 last=c69 touched=true$"], [], 0),
+    # The address bar: addresses, searches with their words encoded, host:port.
+    "address_bar": ("typed:example.org|glaze os|tom & jerry|router:8080|192.168.1.1:8080/admin|localhost:3000/x"
+                    "|what is 3.5 inches|https://a.b/c d|about:blank|intranet/wiki|c++ tutorial|3.5",
+                    [r'^typed "example\.org" -> http://example\.org/$', r'"glaze os" -> http://frogfind\.com/\?q=glaze\+os$',
+                     r'"tom & jerry" -> .*\?q=tom\+%26\+jerry$', r'"router:8080" -> http://router:8080/$',
+                     r'-> http://192\.168\.1\.1:8080/admin$', r'-> http://localhost:3000/x$',
+                     r'"what is 3\.5 inches" -> .*\?q=what\+is\+3\.5\+inches$', r'-> https://a\.b/c%20d$',
+                     r'-> about:blank$', r'-> http://intranet/wiki$', r'\?q=c%2B%2B\+tutorial$', r'"3\.5" -> .*\?q=3\.5$'],
+                    [], 0),
+    # A mailto: link is not opened, and the page stays.
+    "unopenable": ("unopenable.html",
+                   [r"^note: Can't open mail links$", r"^note: Can't open phone links$",
+                    r'<p> "stillhere"'], [r"not supported"], 400),
     "many_nodes": ("http:many", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
 }
 
@@ -141,6 +154,16 @@ def run(browse, name, port, tls, tmp):
     # "http:page" is fetched from the local server; scripts on file pages
     # have no origin to fetch or store with. "https:page" comes from the
     # one with a certificate made for this run.
+    if page.startswith("typed:"):
+        # What the address bar makes of each line of text.
+        p = subprocess.run([os.path.abspath(browse), "--typed"] + page[6:].split("|"),
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", timeout=60)
+        bad = [f"missing: {pat}" for pat in want if not any(re.search(pat, line) for line in p.stdout.splitlines())]
+        if bad:
+            print(f"browser compat: FAIL {name}")
+            for b in bad:
+                print(f"    {b}")
+        return not bad
     if page.startswith("https:"):
         if not tls:
             print(f"browser compat: SKIP {name} (no openssl)")

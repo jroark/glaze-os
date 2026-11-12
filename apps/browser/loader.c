@@ -218,7 +218,8 @@ static void jar_load(void)
             continue;
         struct cookie c;
         memset(&c, 0, sizeof(c));
-        c.expires = strtoll(f[0], NULL, 10);
+        for (const char *d = f[0]; *d >= '0' && *d <= '9' && c.expires < 1000000000000LL; d++)
+            c.expires = c.expires * 10 + (*d - '0');
         int flags = atoi(f[1]);
         if (c.expires <= now || !*f[2] || *f[3] != '/' || !*f[4])
             continue;

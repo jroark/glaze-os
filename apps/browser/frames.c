@@ -84,6 +84,12 @@ bool page_navigate(struct page *p, const char *url, const char *target, const ch
 {
     if (!p || !url)
         return false;
+    /* mailto:, tel: and the like go nowhere; the page's owner says so. */
+    const char *cant = url_unopenable(url);
+    if (cant) {
+        page_root(p)->notice = cant;
+        return false;
+    }
     if (!target || !*target) {
         struct node *base = dom_query(p, p->doc, "base[target]", NULL);
         if (base)
@@ -97,8 +103,9 @@ bool page_navigate(struct page *p, const char *url, const char *target, const ch
             to = page_root(p);
         else
             to = named(page_root(p), target);
+        /* A name no frame has would open a new window: there is one. */
         if (!to)
-            return false;
+            to = page_root(p);
     }
     if (p->host && p->host->sandboxed && (to != p || post))
         return false;

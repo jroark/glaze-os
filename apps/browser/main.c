@@ -25,6 +25,7 @@
 #include <strings.h>
 
 #include "load.h"
+#include "net.h"
 #include "plat.h"
 #include "script.h"
 #include "frames.h"
@@ -92,7 +93,7 @@ static int url_cursor;
 static bool edit_fresh;             /* the first key replaces the whole address */
 static struct ui_list list;
 static bool in_keyboard;
-static char toast[48];
+static char toast[64];
 static uint32_t toast_until;
 static uint32_t scroll_changed;     /* when the scroll last moved, for saving */
 static uint32_t refresh_at;
@@ -323,10 +324,23 @@ static void load_marks(void)
 
 /* ---- navigation ------------------------------------------------------------------- */
 
+/* A line shown over the page for a moment. */
+static void note(const char *text)
+{
+    snprintf(toast, sizeof(toast), "%s", text);
+    toast_until = gz_time_ms() + 2200;
+}
+
 static void go(const char *url, const char *post, bool reload, int hist)
 {
     char *frag = strchr(url, '#');
+    const char *cant = url_unopenable(url);
 
+    /* mailto:, tel: and the like: say so and stay on the page. */
+    if (cant) {
+        note(cant);
+        return;
+    }
     pending_frag[0] = 0;
     if (frag && !post)
         snprintf(pending_frag, sizeof(pending_frag), "%s", frag + 1);
@@ -868,7 +882,7 @@ static void start_url_edit(void)
     snprintf(edit_url, sizeof(edit_url), "%s", page ? page->url : "");
     edit_fresh = true;
     url_cursor = (int)strlen(edit_url);
-    ui_edit_key(edit_url, sizeof(edit_url), &url_cursor, UI_KEY_SELECT_ALL, UI_EDIT_URL);
+    ui_edit_key(edit_url, sizeof(edit_url), &url_cursor, UI_KEY_SELECT_ALL, 0);
     sc.view_h = view_h();
 }
 
@@ -880,17 +894,10 @@ static void finish_url_edit(bool go_there)
         sc.offset = MIN(sc.offset, ui_scroll_max(&sc));
     if (!go_there || !edit_url[0])
         return;
-    char url[URL_MAX + 16];
-    if (strstr(edit_url, ":") && (strstr(edit_url, "://") || !strncasecmp(edit_url, "about:", 6) ||
-                                  !strncasecmp(edit_url, "res:", 4) || !strncasecmp(edit_url, "data:", 5)))
-        snprintf(url, sizeof(url), "%s", edit_url);
-    else if (!strchr(edit_url, '.') && !strchr(edit_url, '/'))
-        snprintf(url, sizeof(url), "http://frogfind.com/?q=%s", edit_url);     /* a search */
-    else
-        snprintf(url, sizeof(url), "http://%s", edit_url);
-    char *abs = url_resolve(NULL, url);
-    navigate(abs ? abs : url);
-    free(abs);
+    char *url = url_from_input(edit_url);
+    if (url)
+        navigate(url);
+    free(url);
 }
 
 static void url_input(const struct gz_input_event *e)
@@ -904,7 +911,8 @@ static void url_input(const struct gz_input_event *e)
         if (ch == '\b' || e->code == GZ_KEY_DELETE) return;
     }
     if (e->type == GZ_EV_KEY_DOWN) edit_fresh = false;
-    if (ch != ' ' && ui_edit_event(edit_url, sizeof(edit_url), &url_cursor, e, UI_EDIT_URL)) edit_fresh = false;
+    /* Spaces are allowed: words are a search. */
+    if (ui_edit_event(edit_url, sizeof(edit_url), &url_cursor, e, 0)) edit_fresh = false;
 }
 
 static void url_key(int ch)
@@ -1346,6 +1354,11 @@ int main(void)
                 drag_frame = NULL;
             }
             dirty |= f != 0 || busy;
+        }
+        if (page && page->notice) {
+            note(page->notice);
+            page->notice = NULL;
+            dirty = true;
         }
         s = view == V_PAGE ? (drag_frame ? &frame_sc : &sc) : &list.sc;
         if (ui_scroll_step(s)) {
