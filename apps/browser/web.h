@@ -165,6 +165,7 @@ char *dom_serialize(struct page *p, struct node *n, bool outer);
 struct node *dom_clone(struct page *p, struct node *n, bool deep);
 struct node *dom_query(struct page *p, struct node *root, const char *selector, struct node *after);
 int dom_select(struct page *p,struct node *root,const char *selector,struct node **out,int max);
+bool dom_matches(struct page *p, struct node *n, const char *selector);
 bool css_node_matches(const struct css_selector *selector,const struct node *n);
 
 /* ---- HTML ----------------------------------------------------------------- */
@@ -503,6 +504,7 @@ struct page {
     struct frame_slot frames[PAGE_MAX_FRAMES];
     int nscripts,nframes,script_next,dom_nodes;
     int viewport_h, scroll_y;
+    int want_scroll;            /* a script's scrollTo, in device px, or -1 */
     unsigned serial;
     uint32_t start_ms;
     double time_origin;

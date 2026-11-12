@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<title>Everyday DOM methods</title>
+<div id="box" class="a b" data-user-id="42" hidden>
+  <p class="item first">one</p><p class="item">two</p><span id="leaf">leaf</span>
+</div>
+<form id="f" name="signup"><input name="email" value="x@example.org"><select name="plan"><option value="s">S<option value="l" selected>L</select></form>
+<img src="a.png" alt=""><a href="#x" name="top">link</a>
+<script>
+  var out = [], box = document.getElementById('box'), leaf = document.getElementById('leaf');
+  function t(name, fn) { try { out.push(name + '=' + fn()); } catch (e) { out.push(name + '!' + e.name); } }
+  t('matches', function () { return leaf.matches('#box > span') && !leaf.matches('p'); });
+  t('closest', function () { return leaf.closest('.a').id + (leaf.closest('table') === null); });
+  t('dataset', function () { box.dataset.fooBar = 'z'; return box.dataset.userId + box.getAttribute('data-foo-bar') + ('userId' in box.dataset); });
+  t('classList', function () { box.classList.add('c', 'd'); box.classList.remove('a', 'x'); box.classList.replace('b', 'e');
+                               return box.className + '/' + box.classList.length + box.classList.contains('e'); });
+  t('hidden', function () { var h = box.hidden; box.hidden = false; return h + ',' + box.hasAttribute('hidden'); });
+  t('append', function () { box.append('tail', document.createElement('b')); box.prepend('head'); leaf.after('after'); leaf.before('before');
+                            return box.firstChild.nodeValue + box.lastChild.nodeName + leaf.nextSibling.nodeValue + leaf.previousSibling.nodeValue; });
+  t('adjacent', function () { leaf.insertAdjacentHTML('beforeend', '<i>x</i><u>y</u>'); leaf.insertAdjacentText('afterbegin', '>');
+                              return leaf.children.length + leaf.firstChild.nodeValue; });
+  t('siblings', function () { var p = box.querySelector('.first'); return p.nextElementSibling.textContent + box.childElementCount + p.localName; });
+  t('attrs', function () { return leaf.getAttributeNames().join('|') + leaf.attributes.length + leaf.toggleAttribute('x') + leaf.hasAttribute('x'); });
+  t('consts', function () { return Node.ELEMENT_NODE + '' + leaf.TEXT_NODE + (leaf.compareDocumentPosition(box) & 8) + (box.compareDocumentPosition(leaf) & 16); });
+  t('collections', function () { return document.forms.length + '' + document.images.length + document.links.length + document.getElementsByName('email').length; });
+  t('form', function () { var f = document.forms[0]; return f.elements.length + f.elements.email.value + f.elements.plan.form.id; });
+  t('events', function () { var got = ''; box.addEventListener('ping', function (e) { got = e.detail.n + e.type; });
+                            box.dispatchEvent(new CustomEvent('ping', { detail: { n: 7 } }));
+                            var old = document.createEvent('Event'); old.initEvent('pong', true, true); return got + old.type + (new MouseEvent('click', { clientX: 5 })).clientX; });
+  t('impl', function () { var b = document.implementation.createHTMLDocument('').body; b.innerHTML = '<form></form><form></form>'; return b.childNodes.length; });
+  t('console', function () { console.info('i'); console.debug('d'); console.group('g'); console.groupEnd(); console.time('t'); console.timeEnd('t'); console.table([1]); return 'ok'; });
+  t('dialogs', function () { return confirm('sure?') + ',' + prompt('name?'); });
+  t('window', function () { return typeof matchMedia('(max-width: 600px)').matches + matchMedia('(max-width: 600px)').matches + matchMedia('(min-width: 900px)').matches +
+                             typeof scrollY + (typeof history.pushState) + (history.pushState({ a: 1 }, '', '/x'), history.state.a) + getSelection().toString().length; });
+  t('scroll', function () { scrollTo(0, 0); window.scroll({ top: 0 }); leaf.scrollIntoView(); leaf.focus(); leaf.blur(); return 'ok'; });
+  t('geometry', function () { box.hidden = false; return (box.offsetWidth > 0) + '' + (leaf.offsetHeight > 0) + (document.documentElement.scrollHeight > 0) + leaf.getClientRects().length; });
+  t('doc', function () { return document.compatMode + document.visibilityState + document.hidden + (document.activeElement === document.body) + document.hasFocus(); });
+  setTimeout("out.push('strtimer=ok')", 5);
+  setTimeout(function () { throw new Error('boom'); }, 6);
+  queueMicrotask(function () { out.push('micro=ok'); });
+  requestIdleCallback(function (d) { out.push('idle=' + (d.timeRemaining() > 0)); });
+  setTimeout(function () { out.forEach(function (l) { console.log('api ' + l); }); }, 60);
+</script>

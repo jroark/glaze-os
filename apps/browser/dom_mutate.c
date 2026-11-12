@@ -341,6 +341,25 @@ int dom_select(struct page *p, struct node *root, const char *selector, struct n
     arena_free(&a);
     return count;
 }
+/* Whether one element matches a selector list (Element.matches, closest). */
+bool dom_matches(struct page *p, struct node *n, const char *selector)
+{
+    (void)p;
+    if (!n || n->type != N_ELEM || !selector || strlen(selector) > 512)
+        return false;
+    char text[540];
+    snprintf(text, sizeof text, "%s{color:black}", selector);
+    struct arena a = {0};
+    struct stylesheet ss = {0};
+    bool match = false;
+    css_parse_sheet(&a, &ss, text, (int)strlen(text));
+    for (int i = 0; i < ss.nrules && !match; i++)
+        for (int j = 0; j < ss.rules[i].nsels && !match; j++)
+            match = css_node_matches(&ss.rules[i].sels[j], n);
+    css_free_sheet(&ss);
+    arena_free(&a);
+    return match;
+}
 struct node *dom_query(struct page *p, struct node *root, const char *selector, struct node *after)
 {
     struct node *nodes[256];

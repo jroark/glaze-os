@@ -27,7 +27,7 @@ struct page *page_new(const char *url)
     p->scripting_enabled = true;
     p->start_ms = plat_ms();
     p->time_origin = (double)plat_time() * 1000.0;
-    p->origin=strdup(url);p->serial=++page_serial;p->viewport_h=226;p->dirty=p->resources_dirty=true;
+    p->origin=strdup(url);p->serial=++page_serial;p->viewport_h=226;p->want_scroll=-1;p->dirty=p->resources_dirty=true;
     if (!p->url || !p->base || !p->origin) {
         page_free(p);
         return NULL;

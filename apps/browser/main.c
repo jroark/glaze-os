@@ -1287,6 +1287,12 @@ int main(void)
             free(url);free(post);
         }
         if (ld.state != LS_IDLE || ld.shown) {
+            if (page && page->want_scroll >= 0) {
+                /* window.scrollTo and scrollIntoView */
+                sc.offset = MAX(0, MIN(page->want_scroll, ui_scroll_max(&sc)));
+                page->want_scroll = -1;
+                dirty = true;
+            }
             if(page)page->scroll_y=sc.offset;
             int f = load_step(&ld);
             if (f & LF_CONTEXT) {

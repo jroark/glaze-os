@@ -12,10 +12,12 @@ pattern starts with ^html). The pages are original, written to
 show one thing a real page does that the engine once dropped.
 """
 
+import http.server
 import os
 import re
 import subprocess
 import sys
+import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGES = os.path.join(ROOT, "tests", "web", "compat")
@@ -69,14 +71,28 @@ CASES = {
     # Async and script-inserted scripts hold nothing up; defer runs last; nomodule is skipped.
     "scripts_order": ("scripts_order.html",
                       [r"^browser JS: order inline1,typed,xjs,inline2,deferred$"], [r"NOMODULE", r"TEMPLATE,"], 0),
+    # Methods and properties pages call without testing for them.
+    "dom_api": ("dom_api.html",
+                [r"^browser JS: api matches=true$", r"^browser JS: api closest=boxtrue$", r"^browser JS: api dataset=42ztrue$", r"^browser JS: api classList=e\ c\ d/3true$", r"^browser JS: api hidden=true,false$", r"^browser JS: api append=headBafterbefore$", r"^browser JS: api adjacent=2>$", r"^browser JS: api siblings=two4p$", r"^browser JS: api attrs=id1truetrue$", r"^browser JS: api consts=13816$", r"^browser JS: api collections=1111$", r"^browser JS: api form=2x@example\.orgf$", r"^browser JS: api events=7pingpong5$", r"^browser JS: api impl=2$", r"^browser JS: api console=ok$", r"^browser JS: api dialogs=true,null$", r"^browser JS: api window=booleantruefalsenumberfunction10$", r"^browser JS: api scroll=ok$", r"^browser JS: api geometry=truetruetrue1$", r"^browser JS: api doc=CSS1Compatvisiblefalsetruetrue$", r"^browser JS: api strtimer=ok$", r"^browser JS: api micro=ok$", r"^browser JS: api idle=true$"],
+                [r"^browser JS: api \\w+!"], 300),
+    # XMLHttpRequest, as old sites and jQuery's $.ajax use it.
+    "xhr": ("http:xhr.html",
+            [r'^browser JS: xhr get 200 4 \{"answer": 42\} application/json 42$',
+             r"^browser JS: xhr post 200 posted a=1&b=2 as application/x-www-form-urlencoded$",
+             r"^browser JS: xhr missing 404 load$", r"^browser JS: xhr states 2,3,4$"],
+            [r"browser JS: .*Error"], 600),
 }
 
 
-def run(browse, name):
+def run(browse, name, port):
     page, want, never, settle = CASES[name]
+    # "http:page" is fetched from the local server; scripts on file pages
+    # have no origin to fetch or store with.
+    target = (f"http://127.0.0.1:{port}/{page[5:]}" if page.startswith("http:")
+              else os.path.join(PAGES, page))
     env = dict(os.environ, BROWSE_ITEMS="1", BROWSE_HTML="1", BROWSE_FORMS="1", BROWSE_SETTLE_MS=str(settle),
                ASAN_OPTIONS="detect_leaks=0")
-    p = subprocess.run([os.path.abspath(browse), os.path.join(PAGES, page), os.devnull],
+    p = subprocess.run([os.path.abspath(browse), target, os.devnull],
                        cwd=os.path.join(ROOT, "host"), env=env, stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT, text=True, errors="replace", timeout=120)
     lines = p.stdout.splitlines()
@@ -111,10 +127,46 @@ def run(browse, name):
     return not bad
 
 
+class Handler(http.server.SimpleHTTPRequestHandler):
+    """The compat pages over HTTP, plus a few answers no file can give."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, directory=PAGES, **kw)
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.reply(200, "text/plain", b"posted " + body + b" as " + (self.headers.get("Content-Type") or "").encode())
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/echo-headers":
+            lines = "".join(f"{k.lower()}: {v}\n" for k, v in self.headers.items())
+            self.reply(200, "text/plain", lines.encode())
+        elif path == "/json":
+            self.reply(200, "application/json", b'{"answer": 42}')
+        else:
+            super().do_GET()
+
+    def reply(self, status, ctype, body, extra=()):
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        for k, v in extra:
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+
 def main():
     browse = sys.argv[1]
     names = sys.argv[2:] or list(CASES)
-    failed = [n for n in names if not run(browse, n)]
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    failed = [n for n in names if not run(browse, n, server.server_address[1])]
+    server.shutdown()
     print(f"browser compat: {len(names) - len(failed)}/{len(names)} cases pass"
           + ("" if failed else " PASS"))
     return 1 if failed else 0
