@@ -16,8 +16,4 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #include "stb_image.h"
 #pragma GCC diagnostic pop
-uint8_t *web_inflate(const uint8_t *in, int len, bool header, int *out_len)
-{
-    return (uint8_t *)stbi_zlib_decode_malloc_guesssize_headerflag((const char *)in, len, len * 4 + 1024,
-                                                                   out_len, header);
-}
+#include "../browser/inflate.h"
