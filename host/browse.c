@@ -5,6 +5,9 @@
  *
  * usage: browse <url | file.html> [out.bmp]     BROWSE_DUMP=1 prints the styled tree,
  * BROWSE_ROOTS=roots.der replaces the trusted roots (concatenated DER certificates)
+ * For tests/browser_compat.py: BROWSE_ITEMS=1 prints the display items,
+ * BROWSE_HTML=1 the document as scripts left it, and BROWSE_SETTLE_MS=n keeps
+ * the page running that long after it has loaded, so timers and fetches finish.
  */
 #include "hostres.h"
 #include "../apps/browser/load.h"
@@ -217,6 +220,23 @@ static void dump(const struct node *n, int depth)
     }
 }
 
+/* One line per display item: what was laid out, and where. */
+static void dump_items(const struct page *p)
+{
+    static const char *const kind[] = { "rect", "text", "image", "ctl", "bullet", "frame", "box" };
+
+    for (int i = 0; i < p->nitems; i++) {
+        const struct ditem *d = &p->items[i];
+        printf("item %s %d,%d %dx%d <%s>", kind[d->kind], d->x, (int)d->y, d->w, d->h,
+               d->node && d->node->type == N_ELEM ? d->node->name : "");
+        if (d->kind == DI_TEXT)
+            printf(" \"%.*s\"", d->u.t.n, d->u.t.s);
+        if (d->link)
+            printf(" link");
+        printf("\n");
+    }
+}
+
 int main(int argc, char **argv)
 {
     static uint16_t px[240 * MAX_H];
@@ -234,6 +254,8 @@ int main(int argc, char **argv)
         snprintf(url, sizeof(url), "file://%s", realpath(arg, abs) ? abs : arg);
     }
 
+    int settle_ms = getenv("BROWSE_SETTLE_MS") ? atoi(getenv("BROWSE_SETTLE_MS")) : 0;
+    uint32_t settle_until = 0;
     uint32_t t0 = plat_ms();
     load_begin(&ld, url, NULL, NULL, false, 240);
     for (;;) {
@@ -243,8 +265,13 @@ int main(int argc, char **argv)
             page = ld.shown;
             printf("page after %u ms: %s\n", plat_ms() - t0, page->url);
         }
-        if (f & LF_DONE || (!(f & ~LF_PAINT) && ld.state == LS_IDLE))
-            break;
+        if (f & LF_DONE || (!(f & ~LF_PAINT) && ld.state == LS_IDLE)) {
+            /* Timers, fetches and late scripts get their time. */
+            if (!settle_until)
+                settle_until = plat_ms() + (uint32_t)settle_ms + 1;
+            if ((int32_t)(plat_ms() - settle_until) >= 0 || !settle_ms)
+                break;
+        }
         if (plat_ms() - t0 > 60000) {
             printf("gave up after 60 s\n");
             break;
@@ -257,6 +284,13 @@ int main(int argc, char **argv)
     }
     if (getenv("BROWSE_DUMP"))
         dump(page->doc, 0);
+    if (getenv("BROWSE_ITEMS"))
+        dump_items(page);
+    if (getenv("BROWSE_HTML")) {
+        char *html = dom_serialize(page, page->doc, false);
+        printf("html %s\n", html ? html : "(out of memory)");
+        free(html);
+    }
     int ok = 0;
     for (int i = 0; i < page->nimgs; i++)
         ok += page->imgs[i].state == IMG_OK;

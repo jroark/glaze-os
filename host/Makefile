@@ -178,6 +178,11 @@ browse: $(O)/browse
 $(O)/browse: browse.c hostres.c $(GFX) $(WEB_OBJS) $(wildcard ../apps/browser/*.h ../apps/browser/js_platform/*) $(O)/libwolfssl.a $(O)/libjerry.a ../out/include/js_bootstrap.h
 	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a -lm
 
+# Pages that show one thing real sites do, checked on what the engine lays out.
+.PHONY: browser-compat-test
+browser-compat-test: $(O)/browse
+	python3 ../tests/browser_compat.py $(O)/browse
+
 .PHONY: mediatest
 mediatest: $(O)/mediatest
 $(O)/mediatest: mediatest.c $(MEDIA)
