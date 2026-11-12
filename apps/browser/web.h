@@ -66,7 +66,7 @@ void arena_free(struct arena *a);
 
 /* ---- charset ------------------------------------------------------------- */
 
-enum { CS_UTF8, CS_1252 };
+enum { CS_UTF8, CS_1252, CS_1250, CS_LATIN2, CS_1251, CS_KOI8, CS_8859_5, CS_8859_7, CS_1253, CS_1254 };
 
 /* Charset label ("utf-8", "iso-8859-1", ...) to CS_*, or -1. */
 int cs_from_label(const char *label, int len);

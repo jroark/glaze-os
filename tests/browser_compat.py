@@ -103,6 +103,19 @@ CASES = {
     "status_503": ("http:down", [r"The server reported an error\. Try"], [], 0),
     "status_403": ("http:denied", [r"The server refused to show this"], [], 0),
     "status_404": ("http:lost", [r'"The page could not be found\."'], [], 0),
+    # Cyrillic and Greek are written in Latin letters (the fonts have no others),
+    # from UTF-8 and from the single-byte sets older sites use.
+    "translit": ("translit.html",
+                 [r'<p> "Privet, mir! Shchuka i yozh"', r'<p> "Kalimera kosme, Ellada"', r'<p> "Kiyiv, Lviv, yizhak"',
+                  r'<p> "Beograd, ljubav, Dzordz"', r'<p> "Zaz.+lc gesla jazn"', r'<p> "Dobryy den No7"'], [], 0),
+    "cs_1251": ("http:text-cp1251", [r'"Privet, mir! Shchuka i yozh No5"'], [], 0),
+    "cs_koi8": ("http:text-koi8-r", [r'"Privet, mir! Shchuka i yozh"'], [], 0),
+    "cs_8859_5": ("http:text-iso8859-5", [r'"Privet, mir! Shchuka i yozh"'], [], 0),
+    "cs_1250": ("http:text-cp1250", [r'"Zaz.+lc gesla jazn, pr.+lis zlutouck.+ kun"'], [], 0),
+    "cs_latin2": ("http:text-iso8859-2", [r'"Zaz.+lc gesla jazn, pr.+lis zlutouck.+ kun"'], [], 0),
+    "cs_greek": ("http:text-iso8859-7", [r'"Kalimera kosme, Ellada"'], [], 0),
+    "cs_1253": ("http:text-cp1253", [r'"Kalimera kosme, Ellada"'], [], 0),
+    "cs_1254": ("http:text-cp1254", [r'"Istanbul.da g.+nesli bir g.+n, igdir"'], [], 0),
     "many_nodes": ("http:many", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
 }
 
@@ -174,6 +187,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.reply(200, "text/plain", lines.replace("http://127.0.0.1:%d" % self.server.server_address[1], "SELF").encode())
         elif path == "/json":
             self.reply(200, "application/json", b'{"answer": 42}')
+        elif path.startswith("/text-"):
+            # The same sentences in each character set a page may still use.
+            enc = path[6:]
+            words = {"cp1251": "Привет, мир! Щука и ёж №5", "koi8-r": "Привет, мир! Щука и ёж",
+                     "iso8859-5": "Привет, мир! Щука и ёж", "cp1250": "Zażółć gęślą jaźń, příliš žluťoučký kůň",
+                     "iso8859-2": "Zażółć gęślą jaźń, příliš žluťoučký kůň", "iso8859-7": "Καλημέρα κόσμε, Ελλάδα",
+                     "cp1253": "Καλημέρα κόσμε, Ελλάδα", "cp1254": "İstanbul'da güneşli bir gün, ığdır"}[enc]
+            label = {"cp1251": "windows-1251", "cp1250": "windows-1250", "cp1253": "windows-1253",
+                     "cp1254": "windows-1254", "iso8859-5": "iso-8859-5", "iso8859-2": "ISO-8859-2",
+                     "iso8859-7": "iso-8859-7"}.get(enc, enc)
+            # One by the header, the next by <meta>.
+            if enc in ("cp1251", "iso8859-2", "cp1253"):
+                self.reply(200, "text/html; charset=" + label, ("<p>%s</p>" % words).encode(enc))
+            else:
+                self.reply(200, "text/html", ('<meta charset="%s"><p>%s</p>' % (label, words)).encode(enc))
         elif path == "/feed":
             self.reply(200, "application/rss+xml; charset=utf-8",
                        b"<?xml version='1.0'?><rss><channel><title>feedtitle</title></channel></rss>")
