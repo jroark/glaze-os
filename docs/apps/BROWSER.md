@@ -38,7 +38,10 @@ legacy framesets. Drag inside a long frame to scroll its contents.
   text/HTML replacement, classes, common style properties, form values,
   checked/disabled state, form submission/reset and `document.write`.
 - Click bubbling, inline handlers, `preventDefault`, `stopPropagation`, input,
-  change, submit/reset, `DOMContentLoaded` and load events.
+  change, submit/reset, `DOMContentLoaded` and load events. A text field gets
+  `focus` when it is tapped, `input` as it is edited, and `change` (if edited)
+  then `blur` when it is left. There are no key events, `hashchange`, or
+  pointer coordinates on `click`.
 - `iframe` (`src` and `srcdoc`) and `frameset`/`frame` (rows, columns, nesting),
   clipped painting, independent scrolling, child links/forms, named targets,
   `_self`, `_parent` and `_top`. `_blank`, and a target no frame is named,

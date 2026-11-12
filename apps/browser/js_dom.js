@@ -148,7 +148,7 @@
     Event.prototype.stopImmediatePropagation=function(){this._stop=this._immediate=true;};
     Event.prototype.composedPath=function(){return (this._path||[]).slice();};
     function dispatch(target,type,event){
-        var e=event||new Event(type,{bubbles:type!=='load',cancelable:true});
+        var e=event||new Event(type,{bubbles:type!=='load'&&type!=='focus'&&type!=='blur',cancelable:true});
         if(e.eventPhase)throw Error('Event is already being dispatched');
         e.target=target;e._stop=e._immediate=false;
         var path=[target];for(var n=target;n&&n!==win;){n=n===document?win:n.parentNode;if(n)path.push(n);}

@@ -802,6 +802,22 @@ static void reveal_focus(void)
     }
 }
 
+/* The text field being edited is left: scripts that check a field when the
+ * user moves on get "change" (if it was edited) and "blur". */
+static bool field_edited;
+
+static void field_blur(void)
+{
+    struct ctl *c = mode == M_FIELD ? focus : NULL;
+
+    if (!c || !c->node)
+        return;
+    if (field_edited)
+        script_event(c->node->owner, c->node, "change");
+    field_edited = false;
+    script_event(c->node->owner, c->node, "blur");
+}
+
 static void activate_ctl(struct ctl *c)
 {
     if (c->disabled)
@@ -810,10 +826,14 @@ static void activate_ctl(struct ctl *c)
     case C_TEXT:
     case C_PASSWORD:
     case C_TEXTAREA:
+        if (focus != c)
+            field_blur();
         focus = c;
+        field_edited = false;
         c->cursor = c->len;
         c->selection_start = c->selection_end = c->cursor;
         mode = M_FIELD;
+        script_event(c->node->owner, c->node, "focus");
         ui_keyboard_edit_init(&kb, c->type == C_PASSWORD ? UI_EDIT_SECRET : c->type == C_TEXTAREA ? UI_EDIT_MULTILINE : 0);
         kb.shift = false;
         sc.view_h = view_h();
@@ -861,7 +881,10 @@ static void field_input(const struct gz_input_event *e)
     ui_edit_event(c->value, c->cap, &c->cursor, e,
         c->type == C_PASSWORD ? UI_EDIT_SECRET : c->type == C_TEXTAREA ? UI_EDIT_MULTILINE : 0);
     c->len = (int)strlen(c->value);
-    if (ui_edit_modified()) script_event(c->node->owner, c->node, "input");
+    if (ui_edit_modified()) {
+        field_edited = true;
+        script_event(c->node->owner, c->node, "input");
+    }
 }
 
 static void field_key(int ch)
@@ -1084,6 +1107,7 @@ static void browser_event(const struct gz_input_event *e)
                     /* A tap elsewhere puts the keyboard away. */
                     struct ditem *d = page ? page_hit(page, e->x, e->y + sc.offset - VIEW_Y) : NULL;
                     if (!d || d->kind != DI_CTL || d->u.ctl != focus) {
+                        field_blur();
                         mode = M_BROWSE;
                         focus = NULL;
                         sc.view_h = view_h();
@@ -1186,6 +1210,7 @@ static void back_key(void)
     } else if (mode == M_URL) {
         finish_url_edit(false);
     } else if (mode == M_FIELD) {
+        field_blur();
         mode = M_BROWSE;
         focus = NULL;
         sc.view_h = view_h();
