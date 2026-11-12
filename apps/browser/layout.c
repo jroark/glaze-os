@@ -1117,6 +1117,41 @@ static void flow_frame(struct lay *L, struct flow *F, struct node *n)
         line_flush(L, F, false);
 }
 
+/*
+ * An image or form control with a block-level display: a line of its own,
+ * with its vertical margins, and centred or pushed right by auto margins.
+ * layout_block() lays out children and these have none to show, so they
+ * used to draw nothing; `img { display: block; margin: 0 auto }` and
+ * Bootstrap's `.form-control { display: block; width: 100% }` are everywhere.
+ */
+static void flow_replaced_block(struct lay *L, struct flow *F, struct node *n)
+{
+    const struct style *st = n->st;
+    bool la = st->margin[3].unit == L_AUTO, ra = st->margin[1].unit == L_AUTO;
+
+    line_flush(L, F, true);
+    F->y += resolve(&st->margin[0], F->w);
+    int first = L->p->nitems;
+    if (n->tag == T_IMG)
+        flow_image(L, F, n);
+    else
+        flow_ctl(L, F, n);
+    line_flush(L, F, true);
+    if (la && L->p->nitems > first) {
+        int x0 = INT32_MAX, x1 = INT32_MIN;
+        for (int i = first; i < L->p->nitems; i++) {
+            const struct ditem *d = &L->p->items[i];
+            x0 = d->x < x0 ? d->x : x0;
+            x1 = d->x + d->w > x1 ? d->x + d->w : x1;
+        }
+        int slack = F->w - (x1 - x0);
+        int shift = F->x0 + (slack > 0 ? (ra ? slack / 2 : slack) : 0) - x0;
+        for (int i = first; i < L->p->nitems; i++)
+            L->p->items[i].x = (int16_t)(L->p->items[i].x + shift);
+    }
+    F->y += resolve(&st->margin[2], F->w);
+}
+
 static void flow_node(struct lay *L, struct flow *F, struct node *n, int depth)
 {
     L->event_node = n;
@@ -1129,6 +1164,10 @@ static void flow_node(struct lay *L, struct flow *F, struct node *n, int depth)
         return;
     const struct style *st = n->st;
     if(n->tag==T_IFRAME || n->tag==T_FRAME) { flow_frame(L,F,n);return; }
+    if (block_level(st) && (n->tag == T_IMG || (n->ctl && n->tag != T_BUTTON))) {
+        flow_replaced_block(L, F, n);
+        return;
+    }
     if (block_level(st)) {
         layout_block(L, F, n);
         return;
