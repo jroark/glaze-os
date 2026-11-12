@@ -46,6 +46,7 @@
 #define STATE_PATH  "/Browser/state"
 #define MARKS_PATH  "/Browser/bookmarks"
 #define SEED_PATH   "/Browser/seed"     /* for TLS's random numbers */
+#define COOKIES_PATH "/Browser/cookies" /* cookies that outlive the session */
 
 enum view { V_PAGE, V_BOOKMARKS, V_PICKER };
 enum mode { M_BROWSE, M_URL, M_FIELD };
@@ -230,6 +231,29 @@ int plat_storage_write(int slot, const void *data, int len)
     return 0;
 }
 
+int plat_cookies_read(void *data, int cap)
+{
+    struct fs_stat st;
+
+    if (fs_stat(COOKIES_PATH, &st) < 0)
+        return 0;
+    if (st.type != FS_FILE || st.size > (uint32_t)cap)
+        return -1;
+    return fs_read_file(COOKIES_PATH, data, (uint32_t)cap);
+}
+
+int plat_cookies_write(const void *data, int len)
+{
+    fs_mkdir("/Browser");
+    if (fs_write_file(COOKIES_PATH ".tmp", data, (uint32_t)len) != len)
+        return -1;
+    if (fs_rename(COOKIES_PATH ".tmp", COOKIES_PATH) < 0) {
+        fs_remove(COOKIES_PATH ".tmp");
+        return -1;
+    }
+    return 0;
+}
+
 /* ---- persistence ---------------------------------------------------------------- */
 
 static int view_h(void)
@@ -241,6 +265,7 @@ static void save_state(void)
 {
     char buf[URL_MAX + 32];
 
+    ld_save_cookies();          /* a no-op unless a kept cookie changed */
     if (hpos < 0)
         return;
     int n = snprintf(buf, sizeof(buf), "%s\n%d\n", history[hpos].url, sc.offset > 0 ? sc.offset : 0);

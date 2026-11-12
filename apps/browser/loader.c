@@ -89,9 +89,12 @@ struct cookie {
     char *name, *value, *domain, *path;
     bool host_only, secure, http_only;
     long long expires;
+    uint32_t used;              /* jar_clock when last set or sent */
 };
 
 static struct cookie jar[MAX_COOKIES];
+static uint32_t jar_clock;
+static bool jar_loaded, jar_dirty;
 
 static void cookie_free(struct cookie *c)
 {
@@ -113,32 +116,52 @@ static char *strndup_trim(const char *s, size_t n)
     return strndup(s, n);
 }
 
-/* The common HTTP-date form emitted by Date.toUTCString and Set-Cookie. */
+/*
+ * A cookie's Expires, read as RFC 6265 5.1.1 does: the time, day, month and
+ * year are picked out wherever they stand, since servers send "Wed, 09 Jun
+ * 2038 10:18:14 GMT", "Wednesday, 09-Jun-38 10:18:14 GMT" and asctime's
+ * "Wed Jun  9 10:18:14 2038". Only the first was read; the others made
+ * session cookies, so "keep me signed in" didn't. 0 for no date.
+ */
 static long long cookie_date(const char *s)
 {
-    const char *comma = strchr(s, ',');
-    if (!comma)
-        return 0;
-    s = comma + 1;
-    while (*s == ' ') s++;
-    char *end;
-    int day = (int)strtol(s, &end, 10);
-    s = end; while (*s == ' ') s++;
-    if (strlen(s) < 4)
-        return 0;
-    char month[4] = {s[0], s[1], s[2], 0};
-    s += 3;
-    int year = (int)strtol(s, &end, 10);
-    s = end;
-    int hour = (int)strtol(s, &end, 10);
-    if (*end != ':') return 0;
-    int minute = (int)strtol(end + 1, &end, 10);
-    if (*end != ':') return 0;
-    int second = (int)strtol(end + 1, &end, 10);
     static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
-    int m;
-    for (m = 0; m < 12 && strncasecmp(month, months + m * 3, 3); m++) {}
-    if (m == 12 || year < 1601 || year > 9999 || day < 1 || day > 31 ||
+    int day = -1, m = -1, year = -1, hour = -1, minute = 0, second = 0;
+
+    while (*s) {
+        while (*s && !isalnum((unsigned char)*s) && *s != ':')
+            s++;
+        const char *t = s;
+        char *end;
+        while (isalnum((unsigned char)*s) || *s == ':')
+            s++;
+        size_t n = (size_t)(s - t);
+        if (!n)
+            break;
+        if (hour < 0 && memchr(t, ':', n) && isdigit((unsigned char)*t)) {
+            hour = (int)strtol(t, &end, 10);
+            if (*end != ':') return 0;
+            minute = (int)strtol(end + 1, &end, 10);
+            if (*end == ':')
+                second = (int)strtol(end + 1, &end, 10);
+        } else if (isdigit((unsigned char)*t)) {
+            long v = strtol(t, &end, 10);
+            int digits = (int)(end - t);
+            if (day < 0 && digits <= 2)
+                day = (int)v;
+            else if (year < 0 && digits >= 2 && digits <= 4)
+                year = (int)v;
+        } else if (m < 0 && n >= 3) {
+            for (int i = 0; i < 12; i++)
+                if (!strncasecmp(t, months + i * 3, 3))
+                    m = i;
+        }
+    }
+    if (year >= 70 && year <= 99)
+        year += 1900;
+    else if (year >= 0 && year <= 69)
+        year += 2000;
+    if (m < 0 || year < 1601 || year > 9999 || day < 1 || day > 31 ||
         hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59)
         return 0;
     long long days = 0;
@@ -152,6 +175,110 @@ static long long cookie_date(const char *s)
     long long stamp = ((days + day - 1) * 24 + hour) * 3600 + minute * 60 + second;
     return stamp ? stamp : 1; /* zero is reserved for session/invalid dates */
 }
+
+/*
+ * Cookies with an expiry are kept across runs, in one small file: a line each
+ * of expiry, flags, domain, path, name and value, tab-separated. Session
+ * cookies are not written. Signing in to a site lasted until the browser was
+ * closed before.
+ */
+#define JAR_FILE_MAX    (24 * 1024)
+#define DAY             86400
+
+static void jar_load(void)
+{
+    if (jar_loaded)
+        return;
+    jar_loaded = true;
+    char *text = malloc(JAR_FILE_MAX + 1);
+    if (!text)
+        return;
+    int len = plat_cookies_read(text, JAR_FILE_MAX);
+    if (len < 0)
+        len = 0;
+    text[len] = 0;
+    long long now = plat_time();
+    int slot = 0;
+    for (char *line = text, *next; *line && slot < MAX_COOKIES; line = next) {
+        next = line + strcspn(line, "\n");
+        if (*next)
+            *next++ = 0;
+        char *f[6];
+        int k = 0;
+        for (char *p = line; k < 6; k++) {
+            f[k] = p;
+            p += strcspn(p, "\t");
+            if (!*p || k == 5) {    /* the value is the rest of the line */
+                k++;
+                break;
+            }
+            *p++ = 0;
+        }
+        if (k != 6)
+            continue;
+        struct cookie c;
+        memset(&c, 0, sizeof(c));
+        c.expires = strtoll(f[0], NULL, 10);
+        int flags = atoi(f[1]);
+        if (c.expires <= now || !*f[2] || *f[3] != '/' || !*f[4])
+            continue;
+        c.host_only = flags & 1;
+        c.secure = flags & 2;
+        c.http_only = flags & 4;
+        c.domain = strdup(f[2]);
+        c.path = strdup(f[3]);
+        c.name = strdup(f[4]);
+        c.value = strdup(f[5]);
+        c.used = ++jar_clock;       /* the file is in order of use */
+        if (!c.domain || !c.path || !c.name || !c.value) {
+            cookie_free(&c);
+            break;
+        }
+        jar[slot++] = c;
+    }
+    free(text);
+}
+
+void ld_save_cookies(void)
+{
+    if (!jar_dirty)
+        return;
+    jar_dirty = false;
+    char *text = malloc(JAR_FILE_MAX);
+    if (!text)
+        return;
+    int len = 0;
+    long long now = plat_time();
+    /* Least recently used first, so that loading keeps the order; when the
+     * file is full the oldest are the ones left out. */
+    bool done[MAX_COOKIES] = { false };
+    size_t need = 0;
+    for (int i = 0; i < MAX_COOKIES; i++)
+        if (jar[i].name && jar[i].expires > now)
+            need += strlen(jar[i].domain) + strlen(jar[i].path) + strlen(jar[i].name) + strlen(jar[i].value) + 32;
+        else
+            done[i] = true;
+    for (;;) {
+        int pick = -1;
+        for (int i = 0; i < MAX_COOKIES; i++)
+            if (!done[i] && (pick < 0 || jar[i].used < jar[pick].used))
+                pick = i;
+        if (pick < 0)
+            break;
+        done[pick] = true;
+        const struct cookie *c = &jar[pick];
+        size_t one = strlen(c->domain) + strlen(c->path) + strlen(c->name) + strlen(c->value) + 32;
+        if (need > JAR_FILE_MAX) {
+            need -= one;            /* over the file's size: drop the oldest */
+            continue;
+        }
+        len += snprintf(text + len, (size_t)(JAR_FILE_MAX - len), "%lld\t%d\t%s\t%s\t%s\t%s\n", c->expires,
+                        c->host_only | c->secure << 1 | c->http_only << 2, c->domain, c->path, c->name, c->value);
+    }
+    plat_cookies_write(text, len);
+    free(text);
+}
+
 static void set_cookie(const struct url *u, const char *v, bool script)
 {
     if (!v || strlen(v) > 4096 || v[strcspn(v, "\r\n")])
@@ -227,14 +354,20 @@ static void set_cookie(const struct url *u, const char *v, bool script)
         cookie_free(&c);
         return;
     }
-    int slot = -1, empty = -1;
+    jar_load();
+    int slot = -1, empty = -1, oldest = 0;
+    long long now = plat_time();
     for (int i = 0; i < MAX_COOKIES; i++) {
+        if (jar[i].name && jar[i].expires && jar[i].expires <= now)
+            cookie_free(&jar[i]);
         if (!jar[i].name) {
             if (empty < 0)
                 empty = i;
         } else if (!strcmp(jar[i].name, c.name) && !strcasecmp(jar[i].domain, c.domain) &&
                    !strcmp(jar[i].path, c.path)) {
             slot = i;
+        } else if (jar[i].used < jar[oldest].used || !jar[oldest].name) {
+            oldest = i;
         }
     }
     if (slot >= 0 && script && (jar[slot].http_only ||
@@ -242,18 +375,30 @@ static void set_cookie(const struct url *u, const char *v, bool script)
         cookie_free(&c);
         return;
     }
-    if (c.expires && c.expires <= plat_time())
+    if (c.expires && c.expires <= now)
         remove = true;
+    /* The file is rewritten when what it holds changes: a kept cookie that
+     * is new, gone, has a new value, or whose expiry moved by a day or more
+     * (sites push it forward on every reply, which is not worth a write). */
+    bool had = slot >= 0 && jar[slot].expires;
+    if (had ? remove || !c.expires || strcmp(jar[slot].value, c.value) ||
+              c.expires - jar[slot].expires >= DAY || jar[slot].expires - c.expires >= DAY
+            : !remove && c.expires)
+        jar_dirty = true;
     if (slot >= 0)
         cookie_free(&jar[slot]);
     else
-        slot = empty >= 0 ? empty : (int)(plat_ms() % MAX_COOKIES);   /* full: evict one */
-    if (jar[slot].name)
+        slot = empty >= 0 ? empty : oldest;     /* full: the one unused longest goes */
+    if (jar[slot].name) {
+        jar_dirty |= jar[slot].expires != 0;
         cookie_free(&jar[slot]);
-    if (remove)
+    }
+    if (remove) {
         cookie_free(&c);
-    else
+    } else {
+        c.used = ++jar_clock;
         jar[slot] = c;
+    }
 }
 
 static char *cookies_for(const struct url *u, bool script)
@@ -262,8 +407,9 @@ static char *cookies_for(const struct url *u, bool script)
     size_t len = 0;
     size_t hl = strlen(u->host);
 
+    jar_load();
     for (int i = 0; i < MAX_COOKIES; i++) {
-        const struct cookie *c = &jar[i];
+        struct cookie *c = &jar[i];
         if (!c->name || (script && c->http_only) ||
             (c->expires && c->expires <= plat_time()) || (c->secure && strcmp(u->scheme, "https")))
             continue;
@@ -276,6 +422,7 @@ static char *cookies_for(const struct url *u, bool script)
         bool pathok = !strncmp(path, c->path, pl) && (path[pl] == 0 || path[pl] == '/' || c->path[pl - 1] == '/');
         if (!dom || !pathok)
             continue;
+        c->used = ++jar_clock;
         size_t add = strlen(c->name) + strlen(c->value) + 3;
         char *n = realloc(out, len + add + 1);
         if (!n)

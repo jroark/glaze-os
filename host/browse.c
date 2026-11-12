@@ -181,6 +181,31 @@ void plat_save_seed(const uint8_t *seed)
     (void)seed;
 }
 
+/* BROWSE_COOKIES=file keeps cookies across runs; nothing is kept otherwise. */
+int plat_cookies_read(void *data, int cap)
+{
+    const char *path = getenv("BROWSE_COOKIES");
+    FILE *f = path ? fopen(path, "rb") : NULL;
+
+    if (!f)
+        return 0;
+    int n = (int)fread(data, 1, (size_t)cap, f);
+    int extra = fgetc(f);
+    fclose(f);
+    return extra != EOF ? -1 : n;
+}
+
+int plat_cookies_write(const void *data, int len)
+{
+    const char *path = getenv("BROWSE_COOKIES");
+    FILE *f = path ? fopen(path, "wb") : NULL;
+
+    if (!f)
+        return -1;
+    bool ok = fwrite(data, 1, (size_t)len, f) == (size_t)len;
+    return fclose(f) || !ok ? -1 : 0;
+}
+
 /* Opt-in directory; no persistent writes from previews/tests by default. */
 int plat_storage_read(int slot, void *data, int cap)
 {
@@ -358,5 +383,6 @@ int main(int argc, char **argv)
     load_forget(&ld, page);
     page_free(page);
     script_shutdown();
+    ld_save_cookies();
     return 0;
 }

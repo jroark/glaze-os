@@ -124,11 +124,19 @@ CASES = {
     "tls_clock": ("https:block_replaced.html",
                   [r'Check the date and', r"^retry after: error page$", r"item image \d+,\d+ 24x24 <img>"],
                   [], 0, {"BROWSE_CLOCK": "946684800", "BROWSE_RETRY": "1"}),
+    # Expires in each form servers write it; an expired cookie is not kept.
+    "cookie_dates": ("http:cookie-set", [r"^browser JS: cookies asc=4,dash=2,rfc=1,session=6,short=3$"], [], 0),
+    # Cookies with an expiry are there in the next run; the session's are not.
+    "cookie_kept": ("http:cookie-show",
+                    [r"^browser JS: cookies asc=4,dash=2,rfc=1,short=3$", r'"sent=.*hidden=7'], [r"session=6"], 0,
+                    {"first": "cookie-set", "BROWSE_COOKIES": "TMP.cookies"}),
+    # A full jar drops the cookies unused longest, not one at random.
+    "cookie_lru": ("http:cookie_lru.html", [r"^browser JS: lru kept=64 first=c7 last=c69 touched=true$"], [], 0),
     "many_nodes": ("http:many", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
 }
 
 
-def run(browse, name, port, tls):
+def run(browse, name, port, tls, tmp):
     page, want, never, settle = CASES[name][:4]
     # "http:page" is fetched from the local server; scripts on file pages
     # have no origin to fetch or store with. "https:page" comes from the
@@ -145,7 +153,15 @@ def run(browse, name, port, tls):
                ASAN_OPTIONS="detect_leaks=0")
     if tls:
         env["BROWSE_ROOTS"] = tls[1]
-    env.update(CASES[name][4] if len(CASES[name]) > 4 else {})
+    extra = dict(CASES[name][4]) if len(CASES[name]) > 4 else {}
+    # "first" is a page to load beforehand, in a run of its own, with the same
+    # state files; TMP is a directory for them.
+    first = extra.pop("first", None)
+    env.update({k: v.replace("TMP", os.path.join(tmp, name)) for k, v in extra.items()})
+    if first:
+        subprocess.run([os.path.abspath(browse), f"http://127.0.0.1:{port}/{first}", os.devnull],
+                       cwd=os.path.join(ROOT, "host"), env=env, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=120)
     p = subprocess.run([os.path.abspath(browse), target, os.devnull],
                        cwd=os.path.join(ROOT, "host"), env=env, stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT, text=True, errors="replace", timeout=120)
@@ -220,6 +236,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.reply(200, "text/html; charset=" + label, ("<p>%s</p>" % words).encode(enc))
             else:
                 self.reply(200, "text/html", ('<meta charset="%s"><p>%s</p>' % (label, words)).encode(enc))
+        elif path in ("/cookie-set", "/cookie-show"):
+            # Cookies with each spelling of a date servers use, one already
+            # past, and one for the session only.
+            extra = []
+            if path == "/cookie-set":
+                extra = [("Set-Cookie", "rfc=1; Expires=Wed, 09 Jun 2038 10:18:14 GMT; Path=/"),
+                         ("Set-Cookie", "dash=2; expires=Wed, 09-Jun-2038 10:18:14 GMT; path=/"),
+                         ("Set-Cookie", "short=3; expires=Wednesday, 09-Jun-38 10:18:14 GMT; path=/"),
+                         ("Set-Cookie", "asc=4; expires=Wed Jun  9 10:18:14 2038; path=/"),
+                         ("Set-Cookie", "past=5; expires=Thu, 01-Jan-1970 00:00:01 GMT; path=/"),
+                         ("Set-Cookie", "session=6; path=/"),
+                         ("Set-Cookie", "hidden=7; Max-Age=3600; HttpOnly; path=/")]
+            self.reply(200, "text/html", b"<script>console.log('cookies ' + document.cookie.split('; ').sort().join(','))"
+                       b"</script><p>sent=" + (self.headers.get("Cookie") or "none").encode() + b"</p>", extra)
         elif path == "/feed":
             self.reply(200, "application/rss+xml; charset=utf-8",
                        b"<?xml version='1.0'?><rss><channel><title>feedtitle</title></channel></rss>")
@@ -311,7 +341,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     with tempfile.TemporaryDirectory() as tmp:
         tls = tls_server(tmp) if any(CASES[n][0].startswith("https:") for n in names) else None
-        failed = [n for n in names if not run(browse, n, server.server_address[1], tls)]
+        failed = [n for n in names if not run(browse, n, server.server_address[1], tls, tmp)]
     server.shutdown()
     print(f"browser compat: {len(names) - len(failed)}/{len(names)} cases pass"
           + ("" if failed else " PASS"))
