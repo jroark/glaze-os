@@ -393,6 +393,7 @@ struct ctl {
 
 struct page;
 void forms_collect(struct page *p);
+struct ctl *forms_label_ctl(struct node *n);
 const char *ctl_label(const struct ctl *c);     /* button or select text */
 /* Builds the submission for form f (submitter may be NULL): returns a
  * malloc'd URL for GET, or the action URL with *post set for POST. */

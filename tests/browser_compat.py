@@ -41,12 +41,19 @@ CASES = {
              [r"browser JS: a rgb\(13, 110, 253\) b rgb\(220, 53, 69\) c rgb\(25, 135, 84\) e 14px "
               r"f rgb\(255, 255, 0\) g rgb\(13, 110, 253\) w 30\d"],
              [], 0),
+    # Controls find their form through form=, and in <table><form><tr>; labels find controls.
+    "forms": ("forms.html",
+              [r"ctl q form search", r"ctl who form legacy", r"ctl send form legacy", r"ctl far form search",
+               r"ctl loose form \(none\)", r"label -> agree", r"label -> far", r"label -> \(nothing\)"],
+              [], 0),
+    # rem follows the root font size; font: inherit keeps weight.
+    "rem": ("rem.html", [r"browser JS: 20px 10px bold"], [], 0),
 }
 
 
 def run(browse, name):
     page, want, never, settle = CASES[name]
-    env = dict(os.environ, BROWSE_ITEMS="1", BROWSE_HTML="1", BROWSE_SETTLE_MS=str(settle),
+    env = dict(os.environ, BROWSE_ITEMS="1", BROWSE_HTML="1", BROWSE_FORMS="1", BROWSE_SETTLE_MS=str(settle),
                ASAN_OPTIONS="detect_leaks=0")
     p = subprocess.run([os.path.abspath(browse), os.path.join(PAGES, page), os.devnull],
                        cwd=os.path.join(ROOT, "host"), env=env, stdout=subprocess.PIPE,

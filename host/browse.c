@@ -5,7 +5,8 @@
  *
  * usage: browse <url | file.html> [out.bmp]     BROWSE_DUMP=1 prints the styled tree,
  * BROWSE_ROOTS=roots.der replaces the trusted roots (concatenated DER certificates)
- * For tests/browser_compat.py: BROWSE_ITEMS=1 prints the display items,
+ * For tests/browser_compat.py: BROWSE_ITEMS=1 prints the display items, BROWSE_FORMS=1
+ * each control's form and each label's control,
  * BROWSE_HTML=1 the document as scripts left it, and BROWSE_SETTLE_MS=n keeps
  * the page running that long after it has loaded, so timers and fetches finish.
  */
@@ -287,6 +288,17 @@ int main(int argc, char **argv)
         dump(page->doc, 0);
     if (getenv("BROWSE_ITEMS"))
         dump_items(page);
+    if (getenv("BROWSE_FORMS")) {
+        /* Each control with its form, and each label with what a tap on it does. */
+        for (const struct ctl *c = page->ctls; c; c = c->next)
+            printf("ctl %s form %s\n", node_attr(c->node, "name") ? node_attr(c->node, "name") : "?",
+                   c->form && node_attr(c->form, "id") ? node_attr(c->form, "id") : c->form ? "(anonymous)" : "(none)");
+        for (struct node *n = page->doc; n; n = node_next(n, page->doc, false))
+            if (n->tag == T_LABEL) {
+                struct ctl *c = forms_label_ctl(n);
+                printf("label -> %s\n", c && node_attr(c->node, "name") ? node_attr(c->node, "name") : "(nothing)");
+            }
+    }
     if (getenv("BROWSE_HTML")) {
         char *html = dom_serialize(page, page->doc, false);
         printf("html %s\n", html ? html : "(out of memory)");

@@ -964,6 +964,8 @@ static void content_tap(int x, int y)
     struct ctl *control = d->kind == DI_CTL ? d->u.ctl : NULL;
     for (struct node *n = target; n && !control; n = n->parent)
         control = n->ctl;
+    if (!control && !d->link && target)
+        control = forms_label_ctl(target);
     if (control && control->disabled)
         return;
     if (target && !script_event(owner, target, "click"))
