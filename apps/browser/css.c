@@ -566,6 +566,14 @@ static void font_shorthand(struct dlist *L, struct tok *t, int n)
     int i = 0;
     struct css_value v;
 
+    /* font: inherit (every element in Eric Meyer's reset, and form controls
+     * in most others) keeps the inherited weight and style; it used to
+     * reset them to normal and then fail to parse "inherit" as a size. */
+    if (n == 1 && tok_is(&t[0], "inherit")) {
+        struct css_value inh = { V_INHERIT, 0, 0 };
+        add(L, P_FONT_SIZE, inh);
+        return;
+    }
     /* Defaults the shorthand resets. */
     add(L, P_FONT_STYLE, kwv(K_NORMAL));
     add(L, P_FONT_WEIGHT, kwv(K_NORMAL));

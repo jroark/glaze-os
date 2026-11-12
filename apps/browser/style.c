@@ -363,6 +363,11 @@ struct cascade {
 #define MAX_CSS_PX  10000
 
 /* A length in CSS px * 64, relative to font size f4 (CSS px * 4). */
+/* The root element's font size in quarter CSS px, which rem is relative
+ * to: 16 px until <html> is styled. `html { font-size: 62.5% }` makes 1rem
+ * 10 px, and pages that do it size everything in rem. */
+static int rem_f4 = 16 * 4;
+
 static int css_px64(const struct css_value *v, int f4)
 {
     int n = v->num;
@@ -375,7 +380,7 @@ static int css_px64(const struct css_value *v, int f4)
         return n;                   /* unitless: px, as quirks mode does */
     switch (v->unit) {
     case U_EM: return n * f4 / 4;
-    case U_REM: return n * 16;
+    case U_REM: return n * rem_f4 / 4;
     case U_EX: case U_CH: return n * f4 / 8;
     case U_PT: return n * 4 / 3;
     case U_PC: return n * 16;
@@ -1042,9 +1047,12 @@ void style_tree(struct page *p, struct stylesheet *ua)
     root.font_css = 16 * 4;
     root.color = 0x000000;
     root.list_style = LS_DISC;
+    rem_f4 = 16 * 4;
     compute(S, p->html, &root);
-    if (p->html->st)
+    if (p->html->st) {
+        rem_f4 = p->html->st->font_css ? p->html->st->font_css : 16 * 4;
         style_children(S, p->html, 1);
+    }
     free(S);
 
     /* The canvas takes the root's background, or the body's. */
