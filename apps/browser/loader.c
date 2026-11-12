@@ -70,10 +70,11 @@ static bool referrer_for(const char *from, const char *to, char *out, int cap, c
         return false;
     if (!strcmp(a.scheme, "https") && strcmp(b.scheme, "https"))
         return false;
-    char port[8] = "";
+    char port[16] = "";
     if (a.port > 0 && a.port != url_default_port(a.scheme))
         snprintf(port, sizeof(port), ":%d", a.port);
-    snprintf(origin, (size_t)ocap, "%s://%s%s", a.scheme, a.host, port);
+    if (snprintf(origin, (size_t)ocap, "%s://%s%s", a.scheme, a.host, port) >= ocap)
+        return false;
     bool same = !strcmp(a.scheme, b.scheme) && !strcasecmp(a.host, b.host) &&
                 (a.port > 0 ? a.port : url_default_port(a.scheme)) == (b.port > 0 ? b.port : url_default_port(b.scheme));
     int n = same ? snprintf(out, (size_t)cap, "%s%s%s%s", origin, a.path[0] ? a.path : "/", a.has_query ? "?" : "", a.query)
@@ -578,6 +579,9 @@ static void begin(struct fetch *f)
     f->h = f->origin ? http_start_web(f->url,f->post,f->post_len,f->post_type,cookies,f->origin,max_body[f->kind]) :
         http_start(f->url, f->post, f->post_len, f->post_type, cookies, max_body[f->kind]);
     http_page_context(NULL, NULL);
+    /* A document longer than the limit is shown cut short. */
+    if (f->kind == F_DOC || f->kind == F_FRAME)
+        http_allow_cut(f->h);
     free(cookies);
     if (!f->h)
         finish(f, WE_BADURL);
@@ -629,6 +633,7 @@ static void response(struct fetch *f)
     f->r.status = status;
     f->r.redirected=f->redirects!=0;
     f->r.cors=f->origin&&!same_origin(f->origin,f->url);
+    f->r.cut = http_cut(f->h);
     f->r.data = http_take_body(f->h, &f->r.len);
     v = http_header(f->h, "content-type", 0);
     f->r.ctype = v ? strdup(v) : NULL;

@@ -246,7 +246,7 @@ int main(int argc, char **argv)
     static struct load ld;
     const char *arg = argc > 1 ? argv[1] : "../tests/web/basic.html";
     const char *out = argc > 2 ? argv[2] : "browse.bmp";
-    char url[1024];
+    char url[PATH_MAX + 16];
     struct page *page = NULL;
 
     signal(SIGPIPE, SIG_IGN);

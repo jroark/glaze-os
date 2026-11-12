@@ -160,6 +160,7 @@ static struct page *document(struct fetch_result *r, const char *url)
     p = page_new(r->url ? r->url : url);
     if (p) {
         p->csp = r->csp ? strdup(r->csp) : NULL;
+        p->cut = r->cut;
         page_set_document(p, r->data, r->len, r->ctype);
     }
     if (!p || p->oom) {
@@ -280,8 +281,10 @@ static bool route(struct page *p, struct fetch_result *r)
                 child->csp = r->csp ? strdup(r->csp) : NULL;
                 if (r->err || (r->status >= 400 && !r->len))
                     page_set_html(child, "<p>Cannot open frame</p>");
-                else
+                else {
+                    child->cut = r->cut;
                     page_set_document(child, r->data, r->len, r->ctype);
+                }
             }
             return true;
         }

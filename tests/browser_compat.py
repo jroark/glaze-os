@@ -12,6 +12,7 @@ pattern starts with ^html). The pages are original, written to
 show one thing a real page does that the engine once dropped.
 """
 
+import gzip
 import http.server
 import os
 import re
@@ -86,6 +87,12 @@ CASES = {
                 [r"^browser JS: referer: SELF/headers\.html$", r"^browser JS: no content-type on get$",
                  r'item text .*"formpost origin=SELF"', r'item text .*"referer=SELF/headers\.html"', r'item text .*"body=a=1"'],
                 [], 300),
+    # A document past the size limit is shown cut short, however it arrives.
+    "big": ("http:big", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
+    "big_chunked": ("http:big-chunked", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
+    "big_gzip": ("http:big-gzip", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
+    "bomb": ("http:bomb", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
+    "many_nodes": ("http:many", [r'"startmark"', r'"This page is too large to show in full'], [r'"endmark"'], 0),
 }
 
 
@@ -156,6 +163,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.reply(200, "text/plain", lines.replace("http://127.0.0.1:%d" % self.server.server_address[1], "SELF").encode())
         elif path == "/json":
             self.reply(200, "application/json", b'{"answer": 42}')
+        elif path in ("/big", "/big-chunked", "/big-gzip", "/bomb", "/many"):
+            # Longer than the engine's 1 MiB document limit, four ways, and
+            # one with more nodes than it keeps.
+            filler = b"<p>filler %06d " + b"of a very long page " * 45 + b"</p>\n"
+            n = 60000 if path == "/bomb" else 2000
+            if path == "/many":
+                filler, n = b"<p>n%06d</p>\n", 30000
+            body = (b"<!doctype html><title>big</title><p>startmark</p>\n"
+                    + b"".join(filler % i for i in range(n)) + b"<p>endmark</p>")
+            if path in ("/big", "/many"):
+                self.reply(200, "text/html", body)
+            elif path == "/big-chunked":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                try:
+                    for i in range(0, len(body), 50000):
+                        part = body[i:i + 50000]
+                        self.wfile.write(b"%x\r\n" % len(part) + part + b"\r\n")
+                    self.wfile.write(b"0\r\n\r\n")
+                except OSError:
+                    pass    # the browser stops reading at its limit
+            else:
+                self.reply(200, "text/html", gzip.compress(body, 6), [("Content-Encoding", "gzip")])
         else:
             super().do_GET()
 
@@ -166,7 +198,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         for k, v in extra:
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except OSError:
+            pass            # the browser stops reading at its limit
 
 
 def main():

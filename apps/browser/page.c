@@ -463,6 +463,44 @@ static char *text_to_html(const char *s, int n)
     return out;
 }
 
+/* Says, at the end of a document that was cut short, that there was more.
+ * Built by hand: the scripts' node and arena budgets are spent on such a page. */
+static void cut_note(struct page *p)
+{
+    static const char style[] = "clear:both;margin:12px 0;padding:6px;border-top:1px solid #999;"
+                                "color:#666;background:#fff;font:italic 13px sans-serif;text-align:center";
+    static const char words[] = "This page is too large to show in full. It ends here.";
+    struct node *box = arena_alloc(&p->arena, sizeof *box);
+    struct node *text = arena_alloc(&p->arena, sizeof *text);
+    struct attr *a = arena_alloc(&p->arena, sizeof *a);
+
+    if (!box || !text || !a || !p->body)
+        return;
+    text->text = arena_strndup(&p->arena, words, (int)sizeof(words) - 1);
+    if (!text->text)
+        return;
+    box->owner = text->owner = p;
+    box->img = box->frame = box->nsdecl = text->img = text->frame = text->nsdecl = -1;
+    box->type = N_ELEM;
+    box->name = "p";
+    box->tag = tag_lookup("p", 1);
+    a->name = "style";
+    a->value = style;
+    box->attrs = a;
+    text->type = N_TEXT;
+    text->len = (int)sizeof(words) - 1;
+    text->parent = box;
+    box->first = box->last = text;
+    box->parent = p->body;
+    box->prev = p->body->last;
+    if (box->prev)
+        box->prev->next = box;
+    else
+        p->body->first = box;
+    p->body->last = box;
+    p->dom_nodes += 2;
+}
+
 void page_set_document(struct page *p, const uint8_t *data, int len, const char *content_type)
 {
     const char *ct = content_type ? content_type : "";
@@ -486,6 +524,8 @@ void page_set_document(struct page *p, const uint8_t *data, int len, const char 
         }
         page_set_html(p, html);
         free(html);
+        if (p->cut && p->doc)
+            cut_note(p);
         return;
     }
     free(p->src);
@@ -497,6 +537,11 @@ void page_set_document(struct page *p, const uint8_t *data, int len, const char 
         return;
     }
     page_collect(p);
+    /* The parser stops at its node limit too, with no word of it before. */
+    if (p->dom_nodes >= HTML_MAX_NODES)
+        p->cut = true;
+    if (p->cut)
+        cut_note(p);
 }
 
 bool image_document(struct page *p, const uint8_t *data, int len)

@@ -70,6 +70,9 @@ struct http *http_start_stream(const char *url, int max_body,
                                int (*sink)(const uint8_t *, int, void *), void *arg);
 int http_step(struct http *h);          /* 1 done, 0 pending, WE_* */
 int http_status(const struct http *h);
+/* Lets a body longer than max_body end there; http_cut() says it did. */
+void http_allow_cut(struct http *h);
+bool http_cut(const struct http *h);
 /* The n-th header with this name (case-insensitive), or NULL. */
 const char *http_header(const struct http *h, const char *name, int n);
 /* Takes the (decoded) body; the caller frees it. */
@@ -78,7 +81,7 @@ void http_progress(const struct http *h, int *got, int *total);
 void http_free(struct http *h);
 
 /* Inflate gzip / zlib data (in image.c, from stb_image). */
-uint8_t *web_inflate(const uint8_t *in, int len, bool zlib_header, int *out_len);
+uint8_t *web_inflate(const uint8_t *in, int len, bool zlib_header, int cap, int hint, int *out_len, bool *cut);
 
 /* ---- loader ------------------------------------------------------------------ */
 
@@ -94,6 +97,7 @@ struct fetch_result {
     char *ctype;                /* malloc'd or NULL */
     char *url;                  /* final URL after redirects, malloc'd */
     char *xfo, *csp;            /* embedding and script policy headers */
+    bool cut;                   /* longer than the limit: data is its start */
 };
 
 /* Queues a fetch; tag is the caller's (image slot, sheet index). */

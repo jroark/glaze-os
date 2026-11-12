@@ -498,6 +498,7 @@ struct page {
     uint32_t link_color;        /* <body link=...> or 0 */
     bool oom;                   /* something didn't fit in memory */
     bool is_error;              /* load_error_page's */
+    bool cut;                   /* the document was longer than the limit */
     struct page *parent;
     struct frame_slot *host;
     struct script_slot scripts[PAGE_MAX_SCRIPTS];
