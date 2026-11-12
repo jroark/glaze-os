@@ -54,6 +54,10 @@ CASES = {
                       r"image .*/lazy\.jpg$", r"image .*/pic-small\.jpg$", r"image .*/plain\.gif$",
                       r"image .*/widest\.jpg$"],
                      [r"^image .*w1600", r"^image .*\.webp", r"^image data:", r"^image .*/two\.png", r"^image .*desktop"], 0),
+    # rowspan keeps later rows in their columns; content outside rows and rowless cells show.
+    "tables": ("tables.html",
+               [r'"r1c2"', r'"loosenote"', r'"inrow"', r'"cellone"', r'"celltwo"', r"browser JS: true true true true"],
+               [], 0),
 }
 
 
