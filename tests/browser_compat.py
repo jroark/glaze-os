@@ -48,6 +48,12 @@ CASES = {
               [], 0),
     # rem follows the root font size; font: inherit keeps weight.
     "rem": ("rem.html", [r"browser JS: 20px 10px bold"], [], 0),
+    # srcset, <picture> and lazy-load attributes choose what is fetched.
+    "image_source": ("image_source.html",
+                     [r"image .*/w480\.jpg$", r"image .*/one\.png$", r"image .*/fallback\.jpg$",
+                      r"image .*/lazy\.jpg$", r"image .*/pic-small\.jpg$", r"image .*/plain\.gif$",
+                      r"image .*/widest\.jpg$"],
+                     [r"^image .*w1600", r"^image .*\.webp", r"^image data:", r"^image .*/two\.png", r"^image .*desktop"], 0),
 }
 
 

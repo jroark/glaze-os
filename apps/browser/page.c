@@ -114,6 +114,129 @@ static bool rel_has(const char *rel, const char *word)
 }
 
 /* Idempotent resource discovery after parsing or a DOM mutation. */
+/* ---- which image to fetch --------------------------------------------------- */
+
+static bool undecodable(const char *url, int len)
+{
+    static const char *const ext[] = { ".webp", ".avif", ".svg", ".jxl" };
+
+    while (len && url[len - 1] != '.' && url[len - 1] != '/' && url[len - 1] != '?')
+        len--;                          /* crude: the last dot before any query */
+    for (size_t i = 0; i < sizeof(ext) / sizeof(ext[0]); i++) {
+        int el = (int)strlen(ext[i]);
+        for (int k = 0; k + el <= len + 8 && url[k]; k++)
+            if (!strncasecmp(url + k, ext[i], (size_t)el) && (!url[k + el] || url[k + el] == '?' || url[k + el] == ' '))
+                return true;
+    }
+    return false;
+}
+
+/*
+ * The best candidate of a srcset for a 240-pixel screen: the narrowest one at
+ * least that wide (or the widest there is), or the lowest density. Formats
+ * the decoder doesn't have lose to any it does. Copies it to out; false when
+ * the list has nothing usable.
+ */
+static bool srcset_pick(const char *set, char *out, int cap)
+{
+    const char *best = NULL;
+    int best_len = 0, best_score = 0;
+    bool best_bad = true;
+
+    for (const char *s = set; *s;) {
+        while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r' || *s == ',')
+            s++;
+        const char *url = s;
+        while (*s && *s != ' ' && *s != '\t' && *s != '\n' && *s != '\r')
+            s++;
+        int len = (int)(s - url);
+        while (len && url[len - 1] == ',')
+            len--;                      /* "a.png, b.png 2x" */
+        if (!len)
+            break;
+        /* The descriptor: "480w" or "2x"; none means 1x. */
+        long value = 0;
+        char kind = 'x';
+        while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')
+            s++;
+        if (*s && *s != ',' && s[-1] != ',' && url[len] != ',') {
+            /* A number with up to two decimals, in hundredths. */
+            const char *e = s;
+            long whole = 0, frac = 0, digits = 0;
+            for (; *e >= '0' && *e <= '9'; e++)
+                whole = whole < 100000 ? whole * 10 + (*e - '0') : whole;
+            if (*e == '.')
+                for (e++; *e >= '0' && *e <= '9'; e++)
+                    if (digits < 2) {
+                        frac = frac * 10 + (*e - '0');
+                        digits++;
+                    }
+            if (digits == 1)
+                frac *= 10;
+            if (e != s && (*e == 'w' || *e == 'x')) {
+                kind = *e;
+                value = kind == 'w' ? whole : whole * 100 + frac;
+            }
+            while (*s && *s != ',')
+                s++;
+        }
+        if (kind == 'x' && !value)
+            value = 100;
+        /* Lower is better: widths below the screen rank after all that fit. */
+        int score = kind == 'w' ? (value >= CSS_TO_DEV(WEB_VIEW_CSS_W) ? (int)value : 1000000 - (int)value) : (int)value;
+        bool bad = undecodable(url, len);
+        if (!best || (best_bad && !bad) || (bad == best_bad && score < best_score)) {
+            best = url;
+            best_len = len;
+            best_score = score;
+            best_bad = bad;
+        }
+    }
+    if (!best || best_len >= cap)
+        return false;
+    memcpy(out, best, (size_t)best_len);
+    out[best_len] = 0;
+    return true;
+}
+
+/*
+ * An <img>'s source. Pages serve one image at several sizes (srcset, or
+ * <picture> with <source>s), and lazy loaders keep the real address in
+ * data-src behind an empty or placeholder src. Taking src alone fetched
+ * desktop-sized files, which often broke the size limits, or a 1x1 GIF.
+ */
+static const char *image_source(struct node *n, char *buf, int cap)
+{
+    static const char *const lazy[] = { "data-src", "data-original", "data-lazy-src", "data-lazy" };
+    const char *src = node_attr(n, "src");
+
+    if (n->parent && n->parent->tag == T_PICTURE)
+        for (struct node *s = n->parent->first; s && s != n; s = s->next) {
+            const char *set = s->tag == T_SOURCE ? node_attr(s, "srcset") : NULL;
+            const char *type = set ? node_attr(s, "type") : NULL, *media = set ? node_attr(s, "media") : NULL;
+            if (!set || (media && *media && !css_media_matches(media, (int)strlen(media))))
+                continue;
+            if (type && strncasecmp(type, "image/jpeg", 10) && strncasecmp(type, "image/png", 9) &&
+                strncasecmp(type, "image/gif", 9))
+                continue;
+            if (srcset_pick(set, buf, cap) && !undecodable(buf, (int)strlen(buf)))
+                return buf;
+        }
+    const char *set = node_attr(n, "srcset");
+    if (!set || !*set)
+        set = node_attr(n, "data-srcset");
+    if (set && *set && srcset_pick(set, buf, cap) && !undecodable(buf, (int)strlen(buf)))
+        return buf;
+    /* A missing src, or a small inline placeholder, with the real one aside. */
+    if (!src || !*src || (!strncasecmp(src, "data:", 5) && strlen(src) < 512))
+        for (size_t i = 0; i < sizeof(lazy) / sizeof(lazy[0]); i++) {
+            const char *v = node_attr(n, lazy[i]);
+            if (v && *v)
+                return v;
+        }
+    return src;
+}
+
 void page_collect(struct page *p)
 {
     p->html = node_first_elem(p->doc);
@@ -184,9 +307,8 @@ void page_collect(struct page *p)
         }
         if (n->tag == T_IMG && !(n->collected & 2)) {
             n->collected |= 2;
-            const char *src = node_attr(n, "src");
-            if (!src || !*src)
-                src = node_attr(n, "data-src");
+            char chosen[URL_PART_MAX];
+            const char *src = image_source(n, chosen, sizeof(chosen));
             if (!src || !*src)
                 continue;
             char *url = url_resolve(p->base, src);

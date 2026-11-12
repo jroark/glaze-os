@@ -288,6 +288,9 @@ int main(int argc, char **argv)
         dump(page->doc, 0);
     if (getenv("BROWSE_ITEMS"))
         dump_items(page);
+    if (getenv("BROWSE_ITEMS"))
+        for (int i = 0; i < page->nimgs; i++)
+            printf("image %s\n", page->imgs[i].url ? page->imgs[i].url : "");
     if (getenv("BROWSE_FORMS")) {
         /* Each control with its form, and each label with what a tap on it does. */
         for (const struct ctl *c = page->ctls; c; c = c->next)
