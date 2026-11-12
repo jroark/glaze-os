@@ -254,7 +254,8 @@ struct css_decl {
 };
 
 enum { SC_NONE, SC_DESC, SC_CHILD, SC_ADJ, SC_SIB };
-enum { PS_LINK = 1, PS_FIRST_CHILD = 2, PS_LAST_CHILD = 4, PS_ROOT = 8, PS_NEVER = 0x80 };
+enum { PS_LINK = 1, PS_FIRST_CHILD = 2, PS_LAST_CHILD = 4, PS_ROOT = 8, PS_EMPTY = 0x10, PS_CHECKED = 0x20,
+       PS_DISABLED = 0x40, PS_NEVER = 0x80 };
 enum { AO_EXISTS, AO_EQ, AO_WORD, AO_PREFIX, AO_SUFFIX, AO_SUBSTR, AO_DASH };
 
 struct css_attrsel {
@@ -273,6 +274,12 @@ struct css_compound {
     const char *id;
     const char **cls;
     struct css_attrsel *attrs;
+    /* :not(a, b): none of `nots` may match. :is(a, b) and :where(): one of
+     * `any` must. :nth-child(an+b) when `nth`. */
+    struct css_compound *nots, *any;
+    uint8_t nnots, nany;
+    bool nth;
+    int16_t nth_a, nth_b;
 };
 
 struct css_selector {

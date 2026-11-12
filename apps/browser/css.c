@@ -815,6 +815,70 @@ static char *ident(struct cp *C, const char *s, int len, int *i)
 }
 
 /* One compound selector from s[*i]; false if unsupported or invalid. */
+static bool compound(struct cp *C, const char *s, int len, int *i, struct css_compound *c, uint32_t *spec);
+
+/* The arguments of :not() or :is(): compound selectors separated by commas.
+ * False when one of them is something else (a combinator, say), which the
+ * caller then treats as it treats any selector it can't evaluate. */
+static bool compound_list(struct cp *C, const char *s, int a, int b, struct css_compound **out, uint8_t *count,
+                          uint32_t *spec)
+{
+    struct css_compound list[8];
+    uint32_t best = 0;
+    int n = 0;
+
+    while (a < b) {
+        int e = a, depth = 0;
+        while (e < b && (depth || s[e] != ',')) {
+            depth += s[e] == '(' ? 1 : s[e] == ')' ? -1 : 0;
+            e++;
+        }
+        int i = skip_ws(s, e, a), end = e;
+        uint32_t sp = 0;
+        while (end > i && is_ws(s[end - 1]))
+            end--;
+        if (n == 8 || !compound(C, s, end, &i, &list[n], &sp) || i != end)
+            return false;
+        best = sp > best ? sp : best;
+        n++;
+        a = e + 1;
+    }
+    if (!n || !(*out = arena_alloc(C->a, sizeof(list[0]) * (size_t)n)))
+        return false;
+    memcpy(*out, list, sizeof(list[0]) * (size_t)n);
+    *count = (uint8_t)n;
+    *spec += best;
+    return true;
+}
+
+/* an+b, odd, even or a number. */
+static bool nth_arg(const char *s, int a, int b, int16_t *na, int16_t *nb)
+{
+    char t[24];
+    int n = 0;
+
+    for (; a < b && n < (int)sizeof(t) - 1; a++)
+        if (!is_ws(s[a]))
+            t[n++] = (char)tolower((unsigned char)s[a]);
+    t[n] = 0;
+    if (!strcmp(t, "odd")) { *na = 2; *nb = 1; return true; }
+    if (!strcmp(t, "even")) { *na = 2; *nb = 0; return true; }
+    char *np = strchr(t, 'n');
+    if (!np) {
+        char *end;
+        long v = strtol(t, &end, 10);
+        if (end == t || *end)
+            return false;
+        *na = 0; *nb = (int16_t)v;
+        return true;
+    }
+    *np = 0;
+    long av = !t[0] || !strcmp(t, "+") ? 1 : !strcmp(t, "-") ? -1 : strtol(t, NULL, 10);
+    long bv = np[1] ? strtol(np + 1, NULL, 10) : 0;
+    *na = (int16_t)av; *nb = (int16_t)bv;
+    return true;
+}
+
 static bool compound(struct cp *C, const char *s, int len, int *i, struct css_compound *c, uint32_t *spec)
 {
     const char *cls[16];
@@ -905,12 +969,14 @@ static bool compound(struct cp *C, const char *s, int len, int *i, struct css_co
                 (*i)++;
             int nl = *i - st;
             const char *nm = s + st;
+            int arg0 = *i + 1, arg1 = *i + 1;
             if (*i < len && s[*i] == '(') {
                 int depth = 0;
                 for (; *i < len; (*i)++) {
                     if (s[*i] == '(')
                         depth++;
                     else if (s[*i] == ')' && --depth == 0) {
+                        arg1 = *i;
                         (*i)++;
                         break;
                     }
@@ -934,7 +1000,43 @@ static bool compound(struct cp *C, const char *s, int len, int *i, struct css_co
             } else if (PIS("root")) {
                 c->pseudo |= PS_ROOT;
                 *spec += 1 << 8;
-            } else if (PIS("not") || PIS("lang") || PIS("dir")) {
+            } else if (PIS("not")) {
+                /* An argument this can't evaluate counts as not matching it,
+                 * so the rule still applies, as every :not() once did. */
+                struct css_compound *more;
+                uint8_t n;
+                if (compound_list(C, s, arg0, arg1, &more, &n, spec)) {
+                    /* a:not(.x):not(.y) lists both. */
+                    struct css_compound *all = arena_alloc(C->a, sizeof(*all) * (size_t)(c->nnots + n));
+                    if (!all)
+                        return false;
+                    if (c->nnots)
+                        memcpy(all, c->nots, sizeof(*all) * c->nnots);
+                    memcpy(all + c->nnots, more, sizeof(*all) * n);
+                    c->nots = all;
+                    c->nnots = (uint8_t)(c->nnots + n);
+                }
+            } else if (PIS("is") || PIS("where") || PIS("matches") || PIS("-webkit-any") || PIS("-moz-any")) {
+                uint32_t sp = 0;
+                if (c->any || !compound_list(C, s, arg0, arg1, &c->any, &c->nany, &sp))
+                    c->pseudo |= PS_NEVER;
+                else if (!PIS("where"))
+                    *spec += sp;
+            } else if (PIS("nth-child")) {
+                if (!nth_arg(s, arg0, arg1, &c->nth_a, &c->nth_b))
+                    c->pseudo |= PS_NEVER;
+                c->nth = true;
+                *spec += 1 << 8;
+            } else if (PIS("empty")) {
+                c->pseudo |= PS_EMPTY;
+                *spec += 1 << 8;
+            } else if (PIS("checked")) {
+                c->pseudo |= PS_CHECKED;
+                *spec += 1 << 8;
+            } else if (PIS("disabled")) {
+                c->pseudo |= PS_DISABLED;
+                *spec += 1 << 8;
+            } else if (PIS("lang") || PIS("dir") || PIS("enabled") || PIS("scope")) {
                 /* Treated as always true. */
             } else {
                 c->pseudo |= PS_NEVER;      /* :hover, :visited, :nth-child, ... */

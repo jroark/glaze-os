@@ -227,8 +227,9 @@ static void dump_items(const struct page *p)
 
     for (int i = 0; i < p->nitems; i++) {
         const struct ditem *d = &p->items[i];
+        const struct node *e = d->node && d->node->type != N_ELEM ? d->node->parent : d->node;
         printf("item %s %d,%d %dx%d <%s>", kind[d->kind], d->x, (int)d->y, d->w, d->h,
-               d->node && d->node->type == N_ELEM ? d->node->name : "");
+               e && e->type == N_ELEM ? e->name : "");
         if (d->kind == DI_TEXT)
             printf(" \"%.*s\"", d->u.t.n, d->u.t.s);
         if (d->link)

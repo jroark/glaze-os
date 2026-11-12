@@ -181,6 +181,30 @@ static bool match_compound(const struct css_compound *c, const struct node *n)
             return false;
         if ((c->pseudo & PS_ROOT) && n->tag != T_HTML)
             return false;
+        if ((c->pseudo & PS_EMPTY) && n->first)
+            return false;
+        if ((c->pseudo & PS_CHECKED) && !node_attr(n, "checked") && !node_attr(n, "selected"))
+            return false;
+        if ((c->pseudo & PS_DISABLED) && !node_attr(n, "disabled"))
+            return false;
+    }
+    if (c->nth) {
+        int index = 1;
+        for (struct node *p = prev_elem(n); p; p = prev_elem(p))
+            index++;
+        int d = index - c->nth_b;
+        if (c->nth_a ? d % c->nth_a || d / c->nth_a < 0 : d)
+            return false;
+    }
+    for (int i = 0; i < c->nnots; i++)
+        if (match_compound(&c->nots[i], n))
+            return false;
+    if (c->any) {
+        bool hit = false;
+        for (int i = 0; i < c->nany && !hit; i++)
+            hit = match_compound(&c->any[i], n);
+        if (!hit)
+            return false;
     }
     if (c->id) {
         const char *id = node_attr(n, "id");

@@ -26,6 +26,11 @@ CASES = {
                        [r"item image \d+,\d+ 24x24 <img>", r"item ctl .* <input>", r"item ctl .* <select>",
                         r"item ctl .* <textarea>", r"item image 108,"],
                        [], 0),
+    # :not() is evaluated, with :is(), :nth-child() and :empty.
+    "selectors": ("selectors.html",
+                  [r'item text .*"linked" link', r'"shownpanel"', r'"kept"', r"browser JS: l1=rgb\(0, 0, 238\) q=2 n=1",
+                   r'item text .* <li> "two"', r'"greenhead"', r'"plainhead"'],
+                  [r'"hiddenpanel"', r'"gone"'], 0),
 }
 
 
