@@ -181,6 +181,11 @@ static void read_page(uint32_t base)
         y += adc_pos(ym, ADC_Y_MIN, ADC_Y_MAX, PANEL_H, true);
         n++;
     }
+    /* Both Y plates past the strip's far edge is no contact (a floating
+     * plate rails high), and would read as a tap on a hard icon. Out of
+     * range above row 0 stays, for calibration at the LCD's top edge. */
+    if (!n && yp > ADC_Y_MAX)
+        return;
     y = n ? y / n : adc_pos(yp, ADC_Y_MIN, ADC_Y_MAX, PANEL_H, false);
 
     touch_sample(x, y);

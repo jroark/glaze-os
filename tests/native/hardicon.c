@@ -100,9 +100,20 @@ static void prefs(void)
     assert(GZ_KEY_ICON7 == GZ_KEY_ICON1 + 6 && GZ_KEY_LAST == GZ_KEY_ICON7 && GZ_KEY_LAST < 32);
 }
 
+static uint32_t clock_ms = 1000;
+
+/* Each event comes a PIU scan (45 ms) after the last; a DOWN starts a new
+ * stroke a while later. */
 static bool feed(struct sb_hardicon *s, uint16_t type, int x, int y, int *fire)
 {
-    struct gz_input_event e = { .type = type, .x = (int16_t)x, .y = (int16_t)y };
+    clock_ms += type == GZ_EV_TOUCH_DOWN ? 500 : 45;
+    struct gz_input_event e = { .type = type, .x = (int16_t)x, .y = (int16_t)y, .time_ms = clock_ms };
+    return sb_hardicon_input(s, &e, x, y, fire);
+}
+
+static bool feed_at(struct sb_hardicon *s, uint16_t type, int x, int y, uint32_t ms, int *fire)
+{
+    struct gz_input_event e = { .type = type, .x = (int16_t)x, .y = (int16_t)y, .time_ms = ms };
     return sb_hardicon_input(s, &e, x, y, fire);
 }
 
@@ -134,6 +145,32 @@ static void strokes(void)
     assert(feed(&s, GZ_EV_TOUCH_DOWN, 50, 340, &fire));
     assert(!feed(&s, GZ_EV_TOUCH_CANCEL, 50, 340, &fire) && !s.active);
     assert(!feed(&s, GZ_EV_TOUCH_UP, 50, 340, &fire) && fire < 0);
+    /* One noisy sample: DOWN and UP at the same moment never fire. */
+    assert(feed_at(&s, GZ_EV_TOUCH_DOWN, 120, 340, 5000, &fire));
+    assert(feed_at(&s, GZ_EV_TOUCH_UP, 120, 340, 5000, &fire) && fire < 0 && !strcmp(s.reject, "short"));
+    assert(feed_at(&s, GZ_EV_TOUCH_DOWN, 120, 340, 6000, &fire));
+    assert(feed_at(&s, GZ_EV_TOUCH_UP, 120, 340, 6000 + HARDICON_MIN_MS - 1, &fire) && fire < 0);
+    assert(feed_at(&s, GZ_EV_TOUCH_DOWN, 120, 340, 7000, &fire));
+    assert(feed_at(&s, GZ_EV_TOUCH_UP, 120, 340, 7000 + HARDICON_MIN_MS, &fire) && fire == 3 && !s.reject);
+    /* Pressed just below the LCD: kept from the app, but never fired. */
+    assert(feed(&s, GZ_EV_TOUCH_DOWN, 120, HARDICON_TOP, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_MOVE, 120, HARDICON_TOP + 10, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_UP, 120, HARDICON_TOP + 10, &fire) && fire < 0 && !strcmp(s.reject, "edge"));
+    assert(feed(&s, GZ_EV_TOUCH_DOWN, 120, HARDICON_TOP + HARDICON_MARGIN, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_UP, 120, HARDICON_TOP + HARDICON_MARGIN, &fire) && fire == 3);
+    /* A stroke that leaves its icon and comes back doesn't fire. */
+    assert(feed(&s, GZ_EV_TOUCH_DOWN, 120, 340, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_MOVE, 160, 340, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_MOVE, 120, 340, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_UP, 120, 340, &fire) && fire < 0 && !strcmp(s.reject, "moved"));
+    assert(feed(&s, GZ_EV_TOUCH_DOWN, 120, 340, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_MOVE, 120, 200, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_MOVE, 120, 340, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_UP, 120, 340, &fire) && fire < 0);
+    /* Moving within its icon and the slop above is fine. */
+    assert(feed(&s, GZ_EV_TOUCH_DOWN, 110, 350, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_MOVE, 130, HARDICON_TOP - HARDICON_SLOP, &fire));
+    assert(feed(&s, GZ_EV_TOUCH_UP, 125, 345, &fire) && fire == 3);
     /* Keys pass through. */
     assert(!feed(&s, GZ_EV_KEY_DOWN, 0, 0, &fire));
 }

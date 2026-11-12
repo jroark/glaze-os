@@ -2193,6 +2193,11 @@ static bool hardicon_event(const struct gz_input_event *e, const struct touch_po
     int fire;
     if (!sb_hardicon_input(&icon_touch, e, p->x, p->y, &fire))
         return false;
+    if (e->type == GZ_EV_TOUCH_UP)      /* stray launches show on the serial log */
+        printf("springboard: icon %d %s%s down %d,%d up %d,%d %d ms\n",
+               icon_touch.zone + 1, fire >= 0 ? "fire" : "reject ",
+               fire >= 0 ? "" : icon_touch.reject, icon_touch.down_x, icon_touch.down_y,
+               p->x, p->y, (int)(e->time_ms - icon_touch.down_ms));
     if (fire >= 0 && state != ST_LOCK && state != ST_PASSCODE && state != ST_UNLOCK)
         hardicon_fire(fire);
     return true;
