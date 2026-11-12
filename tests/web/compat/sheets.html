@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<title>Which style sheets apply</title>
+<style media="(min-width: 1024px)"> .desk { display: none; } </style>
+<style media="screen and (max-width: 600px)"> .phone { color: #008000; } </style>
+<style media="print"> .print { display: none; } </style>
+<style>
+  @layer base, components;
+  @layer base { .layered { color: #ff0000; } }
+  @media (width >= 900px) { .wide { display: none; } }
+  @media (width < 600px) { .narrow { color: #0000ff; } }
+  @media (300px <= width) { .atleast { color: #800080; } }
+</style>
+<p class="desk">deskvisible</p>
+<p class="print">printvisible</p>
+<p class="wide">widevisible</p>
+<p id="a" class="phone">phone</p>
+<p id="b" class="layered">layered</p>
+<p id="c" class="narrow">narrow</p>
+<p id="d" class="atleast">atleast</p>
+<script>
+  function c(id) { return getComputedStyle(document.getElementById(id)).color; }
+  console.log([c('a'), c('b'), c('c'), c('d')].join(' '));
+</script>

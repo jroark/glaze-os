@@ -41,6 +41,10 @@ enum {
     WE_REDIRECTS,
     WE_BADURL,
     WE_DECODE,              /* bad gzip or image data */
+    WE_SERVER,              /* 5xx with nothing to show */
+    WE_FORBIDDEN,           /* 401 or 403 with nothing to show */
+    WE_GONE,                /* another 4xx with nothing to show */
+    WE_UNSUPPORTED,         /* a kind of file the browser can't show */
 };
 const char *web_strerror(int err);
 
@@ -62,7 +66,7 @@ void arena_free(struct arena *a);
 
 /* ---- charset ------------------------------------------------------------- */
 
-enum { CS_UTF8, CS_1252 };
+enum { CS_UTF8, CS_1252, CS_1250, CS_LATIN2, CS_1251, CS_KOI8, CS_8859_5, CS_8859_7, CS_1253, CS_1254 };
 
 /* Charset label ("utf-8", "iso-8859-1", ...) to CS_*, or -1. */
 int cs_from_label(const char *label, int len);
@@ -165,6 +169,7 @@ char *dom_serialize(struct page *p, struct node *n, bool outer);
 struct node *dom_clone(struct page *p, struct node *n, bool deep);
 struct node *dom_query(struct page *p, struct node *root, const char *selector, struct node *after);
 int dom_select(struct page *p,struct node *root,const char *selector,struct node **out,int max);
+bool dom_matches(struct page *p, struct node *n, const char *selector);
 bool css_node_matches(const struct css_selector *selector,const struct node *n);
 
 /* ---- HTML ----------------------------------------------------------------- */
@@ -237,7 +242,7 @@ enum {
     P_BORDER_TOP_COLOR, P_BORDER_RIGHT_COLOR, P_BORDER_BOTTOM_COLOR, P_BORDER_LEFT_COLOR,
     P_WIDTH, P_MAX_WIDTH, P_MIN_WIDTH, P_HEIGHT, P_MAX_HEIGHT, P_LIST_STYLE_TYPE,
     P_LIST_STYLE_POSITION, P_VERTICAL_ALIGN, P_VISIBILITY, P_FLOAT, P_CLEAR, P_POSITION,
-    P_LEFT, P_TOP, P_OVERFLOW,
+    P_LEFT, P_TOP, P_OVERFLOW, P_OPACITY,
     P_COUNT
 };
 
@@ -254,7 +259,8 @@ struct css_decl {
 };
 
 enum { SC_NONE, SC_DESC, SC_CHILD, SC_ADJ, SC_SIB };
-enum { PS_LINK = 1, PS_FIRST_CHILD = 2, PS_LAST_CHILD = 4, PS_ROOT = 8, PS_NEVER = 0x80 };
+enum { PS_LINK = 1, PS_FIRST_CHILD = 2, PS_LAST_CHILD = 4, PS_ROOT = 8, PS_EMPTY = 0x10, PS_CHECKED = 0x20,
+       PS_DISABLED = 0x40, PS_NEVER = 0x80 };
 enum { AO_EXISTS, AO_EQ, AO_WORD, AO_PREFIX, AO_SUFFIX, AO_SUBSTR, AO_DASH };
 
 struct css_attrsel {
@@ -273,6 +279,12 @@ struct css_compound {
     const char *id;
     const char **cls;
     struct css_attrsel *attrs;
+    /* :not(a, b): none of `nots` may match. :is(a, b) and :where(): one of
+     * `any` must. :nth-child(an+b) when `nth`. */
+    struct css_compound *nots, *any;
+    uint8_t nnots, nany;
+    bool nth;
+    int16_t nth_a, nth_b;
 };
 
 struct css_selector {
@@ -281,9 +293,18 @@ struct css_selector {
     uint32_t spec;
 };
 
+/* What a rule leaves for the cascade (css.c "scoped custom properties"): the
+ * custom properties it sets, and the declarations whose var()s depend on the
+ * element. Both as text, "name:value;" each. */
+struct css_late {
+    const char *vars, *decls;
+    uint16_t nvars, ndecls;
+};
+
 struct css_rule {
     struct css_selector *sels;
     struct css_decl *decls;
+    const struct css_late *late;    /* NULL for most rules */
     uint16_t nsels, ndecls;
 };
 
@@ -301,7 +322,36 @@ struct stylesheet {
     bool loaded;
 };
 
+/* A page's custom properties (css.c "custom properties"): css_vars_use()
+ * names the table the parse calls that follow read and extend. */
+struct css_var {
+    char *name, *value;
+};
+struct css_vars {
+    struct css_var *v;
+    int n, cap;
+    uint32_t *scoped;           /* hashes of the names set outside the root */
+    int nscoped, scoped_cap;
+};
+/* An element's custom properties: the texts that set them, the strongest
+ * last, and its parent's. */
+#define CSS_SCOPE_TEXTS 6
+struct css_scope {
+    const struct css_scope *up;
+    const char *text[CSS_SCOPE_TEXTS];
+    int len[CSS_SCOPE_TEXTS];
+    int n;
+};
+void css_scope_use(const struct css_scope *s);
+/* A rule's late declarations for the element whose scope is in use. */
+int css_late_decls(const struct css_rule *r, struct css_decl *out, int max);
+void css_vars_use(struct css_vars *v);
+void css_vars_free(struct css_vars *v);
 void css_parse_sheet(struct arena *a, struct stylesheet *ss, const char *src, int len);
+/* The @import addresses the last css_parse_sheet() saw (for this screen),
+ * as written; valid until the next parse. */
+int css_imports(const char **urls, int max);
+bool css_media_matches(const char *s, int len);
 void css_free_sheet(struct stylesheet *ss);
 /* Parses a declaration block (style="..."); returns the count. */
 int css_parse_decls(struct arena *a, const char *src, int len, struct css_decl **out);
@@ -374,6 +424,7 @@ struct ctl {
 
 struct page;
 void forms_collect(struct page *p);
+struct ctl *forms_label_ctl(struct node *n);
 const char *ctl_label(const struct ctl *c);     /* button or select text */
 /* Builds the submission for form f (submitter may be NULL): returns a
  * malloc'd URL for GET, or the action URL with *post set for POST. */
@@ -428,6 +479,8 @@ struct script_slot {
     char *url, *source;
     int fetch, len;
     bool module;
+    bool async;                 /* runs when it has loaded; nothing waits for it */
+    bool defer;                 /* runs in order, after the scripts that aren't */
     uint8_t state;
 };
 struct frame_slot {
@@ -445,6 +498,7 @@ struct sheet_slot {
     char *url;                  /* <link>: absolute URL, malloc'd */
     int fetch;                  /* loader id while loading */
     bool pending;
+    uint16_t order;             /* cascade position: 16 per document sheet, its @imports below it */
 };
 
 struct page {
@@ -458,6 +512,7 @@ struct page {
     struct node *doc, *html, *body;
     struct sheet_slot sheets[PAGE_MAX_SHEETS];
     int nsheets;
+    struct css_vars vars;       /* custom properties of :root, html and body */
     struct image_slot *imgs;    /* malloc'd */
     int nimgs, img_cap;
     uint32_t img_bytes;
@@ -473,13 +528,18 @@ struct page {
     uint32_t bg;                /* canvas colour */
     uint32_t link_color;        /* <body link=...> or 0 */
     bool oom;                   /* something didn't fit in memory */
+    bool oom_told;              /* and the user has been told */
+    int doc_err;                /* WE_*: the document can't be shown as a page */
     bool is_error;              /* load_error_page's */
+    bool cut;                   /* the document was longer than the limit */
+    const char *notice;         /* words for the user (a static string), cleared once shown */
     struct page *parent;
     struct frame_slot *host;
     struct script_slot scripts[PAGE_MAX_SCRIPTS];
     struct frame_slot frames[PAGE_MAX_FRAMES];
     int nscripts,nframes,script_next,dom_nodes;
     int viewport_h, scroll_y;
+    int want_scroll;            /* a script's scrollTo, in device px, or -1 */
     unsigned serial;
     uint32_t start_ms;
     double time_origin;
@@ -504,6 +564,7 @@ int page_anchor_y(struct page *p, const char *frag);
 struct ditem *page_hit(struct page *p, int x, int y);
 struct frame_slot *page_frame_at(struct page *p, int x, int y);
 struct page *page_root(struct page *p);
+void page_sheet_imports(struct page *p, int from);
 bool page_same_origin(const struct page *a,const struct page *b);
 bool page_resource_allowed(const struct page *p,const char *url);
 bool page_navigate(struct page *p,const char *url,const char *target,const char *post);

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>XMLHttpRequest</title>
+<script>
+  var states = [];
+  var x = new XMLHttpRequest();
+  x.open('GET', '/json');
+  x.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+  x.onreadystatechange = function () { states.push(x.readyState); };
+  x.onload = function () {
+    console.log('xhr get', x.status, x.readyState, x.responseText, x.getResponseHeader('Content-Type'), JSON.parse(x.responseText).answer);
+    console.log('xhr states', states.join(','));
+  };
+  x.send();
+
+  var p = new XMLHttpRequest();
+  p.open('POST', '/submit', true);
+  p.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+  p.addEventListener('load', function () { console.log('xhr post', p.status, p.responseText); });
+  p.send('a=1&b=2');
+
+  var m = new XMLHttpRequest();
+  m.open('GET', '/no-such-file');
+  m.onloadend = function () { console.log('xhr missing', m.status, 'load'); };
+  m.onerror = function () { console.log('xhr missing error'); };
+  m.send(null);
+</script>

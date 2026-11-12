@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<title>Custom properties and calc()</title>
+<style>
+  .early { color: var(--brand); }
+  :root, [data-theme=light] { --brand: #0d6efd; --gap: .5rem; --rgb: 25, 135, 84; --nested: var(--brand); }
+  [data-theme=dark] { --brand: #ffffff; }
+  .btn { --btn-bg: #dc3545; --btn-pad: 4px; background-color: var(--btn-bg); padding: var(--btn-pad) calc(var(--btn-pad) * 2);
+         border: 1px solid var(--missing, #000000); color: #fff; display: inline-block; }
+  .tint { background-color: rgba(var(--rgb), 1); }
+  .calc { width: calc(100% - 2rem); padding-left: calc(.25rem + 2px); margin-top: calc(1rem * 2); }
+  .clamp { font-size: clamp(12px, 5vw, 14px); }
+  .gone { color: var(--nowhere); background-color: #ffff00; }
+  .nested { color: var(--nested); }
+</style>
+<p id="a" class="early">early</p>
+<p><span id="b" class="btn">button</span></p>
+<p id="c" class="tint">tint</p>
+<div id="d" class="calc">calc</div>
+<p id="e" class="clamp">clamp</p>
+<p id="f" class="gone">fallbackless</p>
+<p id="g" class="nested" style="margin-left: var(--gap)">nested</p>
+<script>
+  function s(id) { return getComputedStyle(document.getElementById(id)); }
+  var r = document.getElementById('d').getBoundingClientRect();
+  console.log(['a', s('a').color, 'b', s('b').backgroundColor, 'c', s('c').backgroundColor,
+               'e', s('e').fontSize, 'f', s('f').backgroundColor, 'g', s('g').color, 'w', Math.round(r.width)].join(' '));
+</script>

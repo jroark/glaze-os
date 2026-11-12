@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<title>Request headers</title>
+<form id="f" method="post" action="/form"><input name="a" value="1"></form>
+<script>
+  fetch('/echo-headers').then(function (r) { return r.text(); }).then(function (t) {
+    t.split('\n').forEach(function (l) { if (l.indexOf('referer:') === 0) console.log(l); });
+    if (t.indexOf('content-type:') < 0) console.log('no content-type on get');
+    document.getElementById('f').submit();
+  });
+</script>

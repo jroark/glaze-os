@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<title>Script scheduling</title>
+<script>
+  var log = [];
+  // An analytics-style loader: a script inserted ahead of the first one,
+  // from an address that never answers.
+  var s = document.createElement('script');
+  s.src = 'http://127.0.0.1:9/never.js';
+  var first = document.getElementsByTagName('script')[0];
+  first.parentNode.insertBefore(s, first);
+  log.push('inline1');
+</script>
+<script async src="http://127.0.0.1:9/async.js"></script>
+<script defer src="deferred.js"></script>
+<script type="text/javascript; charset=utf-8">log.push('typed');</script>
+<script type="application/x-javascript">log.push('xjs');</script>
+<script nomodule>log.push('NOMODULE');</script>
+<script type="text/template"><p>log.push('TEMPLATE')</p></script>
+<script>
+  log.push('inline2');
+  document.addEventListener('DOMContentLoaded', function () { console.log('order ' + log.join(',')); });
+</script>

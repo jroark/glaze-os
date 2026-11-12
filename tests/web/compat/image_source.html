@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<title>Which image is fetched</title>
+<!-- The narrowest candidate that still fills a 240-pixel screen. -->
+<img alt="a" src="w1600.jpg" srcset="w160.jpg 160w, w480.jpg 480w, w1600.jpg 1600w">
+<!-- Density descriptors: 1x. -->
+<img alt="b" srcset="two.png 2x, one.png" src="two.png">
+<!-- Formats without a decoder lose to the fallback. -->
+<img alt="c" src="fallback.jpg" srcset="modern.webp 480w">
+<!-- Lazy loading with a placeholder. -->
+<img alt="d" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="lazy.jpg">
+<picture>
+  <source type="image/webp" srcset="pic.webp">
+  <source media="(min-width: 900px)" srcset="pic-desktop.jpg">
+  <source srcset="pic-small.jpg 320w, pic-large.jpg 1280w">
+  <img alt="e" src="pic-desktop-default.jpg">
+</picture>
+<img alt="f" src="plain.gif">
+<!-- Nothing reaches the screen width: the widest. -->
+<img alt="g" srcset="tiny.jpg 60w, widest.jpg 120w">

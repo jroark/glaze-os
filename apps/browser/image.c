@@ -145,8 +145,4 @@ void image_release(struct image_slot *s)
         s->state = IMG_NONE;
 }
 
-uint8_t *web_inflate(const uint8_t *in, int len, bool zlib_header, int *out_len)
-{
-    return (uint8_t *)stbi_zlib_decode_malloc_guesssize_headerflag((const char *)in, len, len * 4 + 1024, out_len,
-                                                                   zlib_header);
-}
+#include "inflate.h"

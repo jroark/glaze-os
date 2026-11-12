@@ -25,6 +25,7 @@
 #include <strings.h>
 
 #include "load.h"
+#include "net.h"
 #include "plat.h"
 #include "script.h"
 #include "frames.h"
@@ -46,6 +47,7 @@
 #define STATE_PATH  "/Browser/state"
 #define MARKS_PATH  "/Browser/bookmarks"
 #define SEED_PATH   "/Browser/seed"     /* for TLS's random numbers */
+#define COOKIES_PATH "/Browser/cookies" /* cookies that outlive the session */
 
 enum view { V_PAGE, V_BOOKMARKS, V_PICKER };
 enum mode { M_BROWSE, M_URL, M_FIELD };
@@ -91,7 +93,7 @@ static int url_cursor;
 static bool edit_fresh;             /* the first key replaces the whole address */
 static struct ui_list list;
 static bool in_keyboard;
-static char toast[48];
+static char toast[64];
 static uint32_t toast_until;
 static uint32_t scroll_changed;     /* when the scroll last moved, for saving */
 static uint32_t refresh_at;
@@ -230,6 +232,29 @@ int plat_storage_write(int slot, const void *data, int len)
     return 0;
 }
 
+int plat_cookies_read(void *data, int cap)
+{
+    struct fs_stat st;
+
+    if (fs_stat(COOKIES_PATH, &st) < 0)
+        return 0;
+    if (st.type != FS_FILE || st.size > (uint32_t)cap)
+        return -1;
+    return fs_read_file(COOKIES_PATH, data, (uint32_t)cap);
+}
+
+int plat_cookies_write(const void *data, int len)
+{
+    fs_mkdir("/Browser");
+    if (fs_write_file(COOKIES_PATH ".tmp", data, (uint32_t)len) != len)
+        return -1;
+    if (fs_rename(COOKIES_PATH ".tmp", COOKIES_PATH) < 0) {
+        fs_remove(COOKIES_PATH ".tmp");
+        return -1;
+    }
+    return 0;
+}
+
 /* ---- persistence ---------------------------------------------------------------- */
 
 static int view_h(void)
@@ -241,6 +266,7 @@ static void save_state(void)
 {
     char buf[URL_MAX + 32];
 
+    ld_save_cookies();          /* a no-op unless a kept cookie changed */
     if (hpos < 0)
         return;
     int n = snprintf(buf, sizeof(buf), "%s\n%d\n", history[hpos].url, sc.offset > 0 ? sc.offset : 0);
@@ -298,10 +324,23 @@ static void load_marks(void)
 
 /* ---- navigation ------------------------------------------------------------------- */
 
+/* A line shown over the page for a moment. */
+static void note(const char *text)
+{
+    snprintf(toast, sizeof(toast), "%s", text);
+    toast_until = gz_time_ms() + 2200;
+}
+
 static void go(const char *url, const char *post, bool reload, int hist)
 {
     char *frag = strchr(url, '#');
+    const char *cant = url_unopenable(url);
 
+    /* mailto:, tel: and the like: say so and stay on the page. */
+    if (cant) {
+        note(cant);
+        return;
+    }
     pending_frag[0] = 0;
     if (frag && !post)
         snprintf(pending_frag, sizeof(pending_frag), "%s", frag + 1);
@@ -763,6 +802,22 @@ static void reveal_focus(void)
     }
 }
 
+/* The text field being edited is left: scripts that check a field when the
+ * user moves on get "change" (if it was edited) and "blur". */
+static bool field_edited;
+
+static void field_blur(void)
+{
+    struct ctl *c = mode == M_FIELD ? focus : NULL;
+
+    if (!c || !c->node)
+        return;
+    if (field_edited)
+        script_event(c->node->owner, c->node, "change");
+    field_edited = false;
+    script_event(c->node->owner, c->node, "blur");
+}
+
 static void activate_ctl(struct ctl *c)
 {
     if (c->disabled)
@@ -771,10 +826,14 @@ static void activate_ctl(struct ctl *c)
     case C_TEXT:
     case C_PASSWORD:
     case C_TEXTAREA:
+        if (focus != c)
+            field_blur();
         focus = c;
+        field_edited = false;
         c->cursor = c->len;
         c->selection_start = c->selection_end = c->cursor;
         mode = M_FIELD;
+        script_event(c->node->owner, c->node, "focus");
         ui_keyboard_edit_init(&kb, c->type == C_PASSWORD ? UI_EDIT_SECRET : c->type == C_TEXTAREA ? UI_EDIT_MULTILINE : 0);
         kb.shift = false;
         sc.view_h = view_h();
@@ -822,7 +881,10 @@ static void field_input(const struct gz_input_event *e)
     ui_edit_event(c->value, c->cap, &c->cursor, e,
         c->type == C_PASSWORD ? UI_EDIT_SECRET : c->type == C_TEXTAREA ? UI_EDIT_MULTILINE : 0);
     c->len = (int)strlen(c->value);
-    if (ui_edit_modified()) script_event(c->node->owner, c->node, "input");
+    if (ui_edit_modified()) {
+        field_edited = true;
+        script_event(c->node->owner, c->node, "input");
+    }
 }
 
 static void field_key(int ch)
@@ -843,7 +905,7 @@ static void start_url_edit(void)
     snprintf(edit_url, sizeof(edit_url), "%s", page ? page->url : "");
     edit_fresh = true;
     url_cursor = (int)strlen(edit_url);
-    ui_edit_key(edit_url, sizeof(edit_url), &url_cursor, UI_KEY_SELECT_ALL, UI_EDIT_URL);
+    ui_edit_key(edit_url, sizeof(edit_url), &url_cursor, UI_KEY_SELECT_ALL, 0);
     sc.view_h = view_h();
 }
 
@@ -855,17 +917,10 @@ static void finish_url_edit(bool go_there)
         sc.offset = MIN(sc.offset, ui_scroll_max(&sc));
     if (!go_there || !edit_url[0])
         return;
-    char url[URL_MAX + 16];
-    if (strstr(edit_url, ":") && (strstr(edit_url, "://") || !strncasecmp(edit_url, "about:", 6) ||
-                                  !strncasecmp(edit_url, "res:", 4) || !strncasecmp(edit_url, "data:", 5)))
-        snprintf(url, sizeof(url), "%s", edit_url);
-    else if (!strchr(edit_url, '.') && !strchr(edit_url, '/'))
-        snprintf(url, sizeof(url), "http://frogfind.com/?q=%s", edit_url);     /* a search */
-    else
-        snprintf(url, sizeof(url), "http://%s", edit_url);
-    char *abs = url_resolve(NULL, url);
-    navigate(abs ? abs : url);
-    free(abs);
+    char *url = url_from_input(edit_url);
+    if (url)
+        navigate(url);
+    free(url);
 }
 
 static void url_input(const struct gz_input_event *e)
@@ -879,7 +934,8 @@ static void url_input(const struct gz_input_event *e)
         if (ch == '\b' || e->code == GZ_KEY_DELETE) return;
     }
     if (e->type == GZ_EV_KEY_DOWN) edit_fresh = false;
-    if (ch != ' ' && ui_edit_event(edit_url, sizeof(edit_url), &url_cursor, e, UI_EDIT_URL)) edit_fresh = false;
+    /* Spaces are allowed: words are a search. */
+    if (ui_edit_event(edit_url, sizeof(edit_url), &url_cursor, e, 0)) edit_fresh = false;
 }
 
 static void url_key(int ch)
@@ -964,6 +1020,8 @@ static void content_tap(int x, int y)
     struct ctl *control = d->kind == DI_CTL ? d->u.ctl : NULL;
     for (struct node *n = target; n && !control; n = n->parent)
         control = n->ctl;
+    if (!control && !d->link && target)
+        control = forms_label_ctl(target);
     if (control && control->disabled)
         return;
     if (target && !script_event(owner, target, "click"))
@@ -1049,6 +1107,7 @@ static void browser_event(const struct gz_input_event *e)
                     /* A tap elsewhere puts the keyboard away. */
                     struct ditem *d = page ? page_hit(page, e->x, e->y + sc.offset - VIEW_Y) : NULL;
                     if (!d || d->kind != DI_CTL || d->u.ctl != focus) {
+                        field_blur();
                         mode = M_BROWSE;
                         focus = NULL;
                         sc.view_h = view_h();
@@ -1151,6 +1210,7 @@ static void back_key(void)
     } else if (mode == M_URL) {
         finish_url_edit(false);
     } else if (mode == M_FIELD) {
+        field_blur();
         mode = M_BROWSE;
         focus = NULL;
         sc.view_h = view_h();
@@ -1281,10 +1341,17 @@ int main(void)
         if(page && page!=ld.shown && page->navigate_url) {
             char *url=page->navigate_url,*post=page->navigate_post;
             page->navigate_url=page->navigate_post=NULL;
+            load_referrer(page->url);
             if(post)go(url,post,false,-2);else navigate(url);
             free(url);free(post);
         }
         if (ld.state != LS_IDLE || ld.shown) {
+            if (page && page->want_scroll >= 0) {
+                /* window.scrollTo and scrollIntoView */
+                sc.offset = MAX(0, MIN(page->want_scroll, ui_scroll_max(&sc)));
+                page->want_scroll = -1;
+                dirty = true;
+            }
             if(page)page->scroll_y=sc.offset;
             int f = load_step(&ld);
             if (f & LF_CONTEXT) {
@@ -1302,6 +1369,7 @@ int main(void)
             if ((f & LF_NAVIGATE) && ld.shown && ld.shown->navigate_url) {
                 char *url = ld.shown->navigate_url, *post = ld.shown->navigate_post;
                 ld.shown->navigate_url = ld.shown->navigate_post = NULL;
+                load_referrer(ld.shown->url);
                 if (post)
                     go(url, post, false, -2);
                 else
@@ -1311,6 +1379,11 @@ int main(void)
                 drag_frame = NULL;
             }
             dirty |= f != 0 || busy;
+        }
+        if (page && page->notice) {
+            note(page->notice);
+            page->notice = NULL;
+            dirty = true;
         }
         s = view == V_PAGE ? (drag_frame ? &frame_sc : &sc) : &list.sc;
         if (ui_scroll_step(s)) {

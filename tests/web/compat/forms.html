@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<title>Form owners and labels</title>
+<form id="search" action="/s"><input name="q"></form>
+<table>
+  <form id="legacy" action="/old" method="post">
+  <tr><td>Name</td><td><input name="who"></td></tr>
+  <tr><td colspan="2"><input type="submit" name="send" value="Send"></td></tr>
+  </form>
+</table>
+<p><input name="far" id="far" form="search"> <input name="loose"></p>
+<label><input type="checkbox" name="agree"> I agree</label>
+<label for="far">Far field</label>
+<label for="nosuch">Dangling</label>

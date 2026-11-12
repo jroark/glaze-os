@@ -323,3 +323,128 @@ int url_form_encode(char *out, int len, int max, const char *s)
     out[len] = 0;
     return len;
 }
+
+/*
+ * What the user typed in the address bar, as a URL (malloc'd). An address is
+ * anything with a scheme, a host that looks like one ("example.org", an IPv4
+ * address, "localhost", "router:8080") or a path ("intranet/wiki"); anything
+ * else, and anything with a space in it, is a search. The search words are
+ * form-encoded: "tom & jerry" sent as written lost everything from the "&".
+ */
+char *url_from_input(const char *text)
+{
+    static const char search[] = "http://frogfind.com/?q=";
+    static char buf[URL_PART_MAX * 3 + sizeof(search)], t[URL_PART_MAX];
+
+    while (*text == ' ')
+        text++;
+    size_t n = strlen(text);
+    while (n && text[n - 1] == ' ')
+        n--;
+    if (!n || n >= URL_PART_MAX)
+        return NULL;
+    memcpy(t, text, n);
+    t[n] = 0;
+
+    bool space = strchr(t, ' ') != NULL;
+    size_t scheme = 0;
+    while (isalnum((unsigned char)t[scheme]) || (scheme && (t[scheme] == '+' || t[scheme] == '-' || t[scheme] == '.')))
+        scheme++;
+    /* "http://...", and the schemes with no "//": but not "host:8080". */
+    if (scheme && t[scheme] == ':' && !strncmp(t + scheme, "://", 3)) {
+        /* An address pasted with spaces in it keeps them, encoded. */
+        size_t o = 0;
+        for (size_t i = 0; t[i] && o + 4 < sizeof(buf); i++)
+            if (t[i] == ' ') {
+                memcpy(buf + o, "%20", 3);
+                o += 3;
+            } else {
+                buf[o++] = t[i];
+            }
+        buf[o] = 0;
+        return strdup(buf);
+    }
+    if (scheme && t[scheme] == ':' && !space &&
+        (!strncasecmp(t, "about:", 6) || !strncasecmp(t, "res:", 4) || !strncasecmp(t, "data:", 5) ||
+         !strncasecmp(t, "file:", 5) || !strncasecmp(t, "javascript:", 11)))
+        return strdup(t);
+
+    size_t host = strcspn(t, "/?#");
+    bool address = !space && host > 0;
+    if (address) {
+        /* host[:port], the host with a dot and a name or number after the
+         * last one, or one word followed by a path or a port. */
+        size_t colon = host;
+        for (size_t i = 0; i < host; i++)
+            if (t[i] == ':') {
+                colon = i;
+                break;
+            }
+        bool port = colon < host;
+        for (size_t i = colon + 1; i < host; i++)
+            port = port && isdigit((unsigned char)t[i]);
+        if (colon < host && (!port || colon + 1 == host || !colon))
+            address = false;
+        size_t dot = colon;
+        while (dot && t[dot - 1] != '.')
+            dot--;
+        bool dotted = dot > 1, alpha = colon - dot >= 2, digits = colon > dot, ip = true;
+        for (size_t i = dot; i < colon; i++) {
+            alpha = alpha && isalpha((unsigned char)t[i]);
+            digits = digits && isdigit((unsigned char)t[i]);
+        }
+        int dots = 0;
+        for (size_t i = 0; i < colon; i++) {
+            if (t[i] == '.')
+                dots++;
+            else if (!isdigit((unsigned char)t[i]))
+                ip = false;
+            if (!isalnum((unsigned char)t[i]) && t[i] != '.' && t[i] != '-' && t[i] != '_')
+                address = false;
+        }
+        bool local = colon == 9 && !strncasecmp(t, "localhost", 9);
+        if (!(local || (dotted && alpha) || (ip && dots == 3 && digits) || (!dotted && (port || t[host] == '/'))))
+            address = false;
+    }
+    if (address) {
+        snprintf(buf, sizeof(buf), "http://%s", t);
+    } else {
+        int len = snprintf(buf, sizeof(buf), "%s", search);
+        len = url_form_encode(buf, len, (int)sizeof(buf), t);
+        if (len < 0)
+            return NULL;
+        buf[len] = 0;
+    }
+    char *abs = url_resolve(NULL, buf);
+    return abs ? abs : strdup(buf);
+}
+
+/*
+ * A link the browser has nowhere to send: mail, telephone, an app's own
+ * scheme. NULL for an address it opens; otherwise a few words to show the
+ * user while the page they were reading stays up. Following one used to
+ * replace the page with "This kind of address is not supported".
+ */
+const char *url_unopenable(const char *url)
+{
+    static const char *const opens[] = { "http", "https", "res", "file", "about", "data" };
+    size_t n = 0;
+
+    while (*url && (unsigned char)*url <= ' ')
+        url++;
+    while (isalnum((unsigned char)url[n]) || (n && (url[n] == '+' || url[n] == '-' || url[n] == '.')))
+        n++;
+    if (!n || url[n] != ':')
+        return NULL;                /* relative: for the loader to judge */
+    for (size_t i = 0; i < sizeof(opens) / sizeof(opens[0]); i++)
+        if (strlen(opens[i]) == n && !strncasecmp(url, opens[i], n))
+            return NULL;
+    if (n == 6 && !strncasecmp(url, "mailto", 6))
+        return "Can't open mail links";
+    if ((n == 3 && (!strncasecmp(url, "tel", 3) || !strncasecmp(url, "sms", 3))) ||
+        (n == 6 && !strncasecmp(url, "callto", 6)))
+        return "Can't open phone links";
+    if (n == 10 && !strncasecmp(url, "javascript", 10))
+        return "This link only runs a script";
+    return "Can't open this kind of link";
+}

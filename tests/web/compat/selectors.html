@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<title>Selector pseudo-classes</title>
+<style>
+  /* Bootstrap 4's reboot: must not touch links that have an href. */
+  a:not([href]):not([class]) { color: inherit; text-decoration: none; }
+  a { color: #0000ee; }
+  .collapse:not(.show) { display: none; }
+  li:nth-child(even) { color: #ff0000; }
+  :is(h2, h3).title { color: #008000; }
+  p:empty { display: none; }
+  .hide:not(span, .keep) { display: none; }
+</style>
+<p><a id="l1" href="#x">linked</a> <a id="l2">anchor</a></p>
+<div class="collapse">hiddenpanel</div>
+<div class="collapse show">shownpanel</div>
+<ul><li>one</li><li>two</li><li>three</li><li>four</li></ul>
+<h2 class="title">greenhead</h2>
+<h4 class="title">plainhead</h4>
+<div class="hide">gone</div>
+<div class="hide keep">kept</div>
+<script>
+  var out = [];
+  function col(id) { return getComputedStyle(document.getElementById(id)).color; }
+  out.push('l1=' + col('l1'));
+  out.push('q=' + document.querySelectorAll('li:nth-child(odd)').length);
+  out.push('n=' + document.querySelectorAll('a:not([href])').length);
+  console.log(out.join(' '));
+</script>

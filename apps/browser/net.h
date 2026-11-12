@@ -47,6 +47,9 @@ int tls_error(int code);
 struct http;
 
 /* GET (post == NULL) or POST of url; cookies may be NULL. */
+/* Referer, and Origin for a form post, for the request started next; both
+ * are cleared by passing NULL. */
+void http_page_context(const char *referer, const char *origin);
 struct http *http_start(const char *url, const char *post, int post_len, const char *post_type,
                         const char *cookies, int max_body);
 /* Identity-encoded API POST, optionally streamed. Header values are bounded
@@ -67,6 +70,9 @@ struct http *http_start_stream(const char *url, int max_body,
                                int (*sink)(const uint8_t *, int, void *), void *arg);
 int http_step(struct http *h);          /* 1 done, 0 pending, WE_* */
 int http_status(const struct http *h);
+/* Lets a body longer than max_body end there; http_cut() says it did. */
+void http_allow_cut(struct http *h);
+bool http_cut(const struct http *h);
 /* The n-th header with this name (case-insensitive), or NULL. */
 const char *http_header(const struct http *h, const char *name, int n);
 /* Takes the (decoded) body; the caller frees it. */
@@ -75,7 +81,7 @@ void http_progress(const struct http *h, int *got, int *total);
 void http_free(struct http *h);
 
 /* Inflate gzip / zlib data (in image.c, from stb_image). */
-uint8_t *web_inflate(const uint8_t *in, int len, bool zlib_header, int *out_len);
+uint8_t *web_inflate(const uint8_t *in, int len, bool zlib_header, int cap, int hint, int *out_len, bool *cut);
 
 /* ---- loader ------------------------------------------------------------------ */
 
@@ -91,9 +97,11 @@ struct fetch_result {
     char *ctype;                /* malloc'd or NULL */
     char *url;                  /* final URL after redirects, malloc'd */
     char *xfo, *csp;            /* embedding and script policy headers */
+    bool cut;                   /* longer than the limit: data is its start */
 };
 
 /* Queues a fetch; tag is the caller's (image slot, sheet index). */
+void ld_referrer(const char *url);  /* the page the fetches started next come from, or NULL */
 int ld_start(const char *url, int kind, int tag, const char *post, const char *post_type, bool reload);
 /* Script requests: HTTP(S), bounded, uncached, CORS-checked at every hop.
  * credentials: 0 omit, 1 same-origin, 2 include. */
@@ -110,6 +118,8 @@ bool ld_take(struct fetch_result *r);
 /* Bytes received and expected (0 if unknown) for one fetch. */
 void ld_progress(int id, int *got, int *total);
 void ld_free_result(struct fetch_result *r);
+/* Writes the cookies that outlive the session, if they changed. */
+void ld_save_cookies(void);
 /* document.cookie shares the HTTP jar; returned text is malloc'd. */
 char *ld_document_cookie(const char *url);
 void ld_set_document_cookie(const char *url, const char *value);

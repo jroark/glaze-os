@@ -51,6 +51,7 @@ struct http {
     uint32_t last;              /* ms of the last progress */
     int idle_ms;
     bool identity_only;
+    bool cut_ok, cut;           /* a body past max_body is cut short, not refused */
 };
 
 /* Recent lookups: every image on a page would otherwise ask again (on the
@@ -89,8 +90,17 @@ static void dns_remember(const char *host, uint32_t addr)
 
 static int buf_append(struct http *h, const uint8_t *d, int n)
 {
-    if (n < 0 || n > h->max_body - h->body_len)
+    if (n < 0)
         return WE_TOO_BIG;
+    if (n > h->max_body - h->body_len) {
+        if (!h->cut_ok || h->sink)
+            return WE_TOO_BIG;
+        /* Keep what fits and stop reading: the start of a long page is
+         * worth more than an error. */
+        n = h->max_body - h->body_len;
+        h->cut = true;
+        h->state = H_DONE;
+    }
     if (h->sink) {
         int rv = h->sink(d, n, h->sink_arg);
         if (rv) return rv;
@@ -112,6 +122,14 @@ static int buf_append(struct http *h, const uint8_t *d, int n)
     memcpy(h->body + h->body_len, d, (size_t)n);
     h->body_len += n;
     return 0;
+}
+
+static const char *ctx_referer, *ctx_origin;
+
+void http_page_context(const char *referer, const char *origin)
+{
+    ctx_referer = referer && !referer[strcspn(referer, "\r\n")] ? referer : NULL;
+    ctx_origin = origin && !origin[strcspn(origin, "\r\n")] ? origin : NULL;
 }
 
 static struct http *start(const char *url, const char *post, int post_len, const char *post_type,
@@ -148,7 +166,8 @@ static struct http *start(const char *url, const char *post, int post_len, const
 
     size_t cap = strlen(u.path) + strlen(u.query) + strlen(u.host) + (cookies ? strlen(cookies) : 0) +
                  (size_t)(post ? post_len : 0) + (bearer ? strlen(bearer) + 32 : 0) +
-                 (account ? strlen(account) + 96 : 0) + (origin ? strlen(origin) + 16 : 0) + 1024;
+                 (account ? strlen(account) + 96 : 0) + (origin ? strlen(origin) + 16 : 0) +
+                 (ctx_referer ? strlen(ctx_referer) + 16 : 0) + (ctx_origin ? strlen(ctx_origin) + 16 : 0) + 1024;
     h->req = malloc(cap);
     if (!h->req) {
         free(h);
@@ -169,14 +188,16 @@ static struct http *start(const char *url, const char *post, int post_len, const
                      api ? "identity" : "gzip, deflate");
     if (origin)
         n += snprintf(h->req + n, cap - (size_t)n, "Origin: %s\r\n", origin);
+    else if (ctx_origin && !api)
+        n += snprintf(h->req + n, cap - (size_t)n, "Origin: %s\r\n", ctx_origin);
+    if (ctx_referer && !api)
+        n += snprintf(h->req + n, cap - (size_t)n, "Referer: %s\r\n", ctx_referer);
     if (cookies && *cookies)
         n += snprintf(h->req + n, cap - (size_t)n, "Cookie: %s\r\n", cookies);
     if (bearer)
         n += snprintf(h->req + n, cap - (size_t)n, "Authorization: Bearer %s\r\n", bearer);
     if (account)
         n += snprintf(h->req + n, cap - (size_t)n, "ChatGPT-Account-Id: %s\r\noriginator: glaze_chat\r\n", account);
-    if (!post && post_type)
-        n += snprintf(h->req + n,cap-(size_t)n,"Content-Type: %s\r\n",post_type);
     if (post)
         n += snprintf(h->req + n, cap - (size_t)n, "Content-Type: %s\r\nContent-Length: %d\r\n",
                       post_type ? post_type : "application/x-www-form-urlencoded", post_len);
@@ -288,9 +309,20 @@ static int parse_head(struct http *h)
     }
     v = http_header(h, "transfer-encoding", 0);
     h->chunked = v && strstr(v, "chunked");
-    if (h->content_length > h->max_body)
+    if (h->content_length > h->max_body && !h->cut_ok)
         return WE_TOO_BIG;
     return 0;
+}
+
+void http_allow_cut(struct http *h)
+{
+    if (h)
+        h->cut_ok = true;
+}
+
+bool http_cut(const struct http *h)
+{
+    return h->cut;
 }
 
 const char *http_header(const struct http *h, const char *name, int n)
@@ -394,8 +426,12 @@ static int decode_body(struct http *h)
     const char *ce = http_header(h, "content-encoding", 0);
     if (h->identity_only && ce && strcasecmp(ce, "identity")) return WE_PROTOCOL;
 
-    if (!ce || !h->body_len || (!strstr(ce, "gzip") && !strstr(ce, "deflate")))
+    if (!ce || !h->body_len || !strcasecmp(ce, "identity"))
         return 0;
+    /* Brotli or zstd, which were not asked for and can't be read here:
+     * shown as it came, the page was a screen of noise. */
+    if (!strstr(ce, "gzip") && !strstr(ce, "deflate"))
+        return decode_failed(h, ce, "not a coding this browser reads");
     const uint8_t *d = h->body;
     int n = h->body_len, out_len = 0;
     bool zlib = true;
@@ -422,12 +458,23 @@ static int decode_body(struct http *h)
     } else if (n < 2 || (d[0] & 0x0F) != 8 || ((d[0] << 8) | d[1]) % 31) {
         zlib = false;           /* "deflate" sent as raw deflate */
     }
-    uint8_t *out = web_inflate(d, n, zlib, &out_len);
+    /* The trailer's ISIZE sizes the buffer when the stream is whole. */
+    int hint = 0;
+    bool cut = false;
+    if (!zlib && !h->cut && strstr(ce, "gzip") && n > 8)
+        hint = (int)((uint32_t)d[n - 4] | (uint32_t)d[n - 3] << 8 | (uint32_t)d[n - 2] << 16 |
+                     (uint32_t)(d[n - 1] & 0x7f) << 24);
+    uint8_t *out = web_inflate(d, n, zlib, h->max_body, hint, &out_len, &cut);
     if (!out)
-        return decode_failed(h, ce, "inflate failed (bad or cut-off data, or out of memory)");
-    if (out_len > h->max_body) {
-        free(out);
-        return WE_TOO_BIG;
+        return decode_failed(h, ce, "inflate failed (bad data or out of memory)");
+    if (cut) {
+        /* More than max_body of output, or a stream that stops early. */
+        if (!h->cut_ok) {
+            free(out);
+            return out_len > h->max_body - 512 ? WE_TOO_BIG
+                : decode_failed(h, ce, "inflate stopped early (bad or cut-off data)");
+        }
+        h->cut = true;
     }
     free(h->body);
     h->body = out;

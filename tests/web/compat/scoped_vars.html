@@ -1,0 +1,42 @@
+<!doctype html>
+<title>Custom properties set by one class and used by another</title>
+<!-- Component sheets give a base class its declarations in terms of
+     variables, and each variant only sets the variables. What var() means
+     then depends on the element, so it can't be settled when the sheet is
+     parsed. These came out with the base class's defaults, or with nothing. -->
+<style>
+:root { --accent: rgb(13, 110, 253); }
+.btn {
+  --btn-bg: transparent; --btn-color: rgb(33, 37, 41); --btn-pad: 4px; --btn-size: 16px;
+  display: inline-block; background-color: var(--btn-bg); color: var(--btn-color);
+  padding: var(--btn-pad) calc(var(--btn-pad) * 2); font-size: var(--btn-size);
+}
+.btn-primary { --btn-bg: var(--accent); --btn-color: rgb(255, 255, 255); }
+.btn-danger { --btn-bg: rgb(220, 53, 69); --btn-color: rgb(255, 255, 255); }
+.btn-lg { --btn-pad: 8px; --btn-size: 20px; }
+.theme { --tone: rgb(0, 128, 0); }
+.theme .inner { --tone: rgb(128, 0, 128); }
+.note { color: var(--tone, rgb(1, 2, 3)); }
+.alert { --alert-bg: rgb(207, 226, 255); background: var(--alert-bg); }
+.alert-warning { --alert-bg: rgb(255, 243, 205) !important; }
+</style>
+<a class="btn" id="plain">plain</a>
+<a class="btn btn-primary" id="primary">primary</a>
+<a class="btn btn-danger btn-lg" id="danger">danger</a>
+<p class="note" id="outside">outside</p>
+<div class="theme">
+  <p class="note" id="inherited">inherited</p>
+  <div class="inner"><p class="note" id="nearer">nearer</p></div>
+  <p class="note" id="inline" style="--tone: rgb(9, 9, 9)">inline</p>
+</div>
+<div class="alert alert-warning" id="alert">alert</div>
+<script>
+function cs(id, p) { return getComputedStyle(document.getElementById(id))[p]; }
+console.log("scoped bg " + cs("plain", "backgroundColor") + " " + cs("primary", "backgroundColor") + " " +
+            cs("danger", "backgroundColor"));
+console.log("scoped color " + cs("plain", "color") + " " + cs("primary", "color"));
+console.log("scoped size " + cs("plain", "fontSize") + " " + cs("danger", "fontSize"));
+console.log("scoped tone " + cs("outside", "color") + " " + cs("inherited", "color") + " " + cs("nearer", "color") +
+            " " + cs("inline", "color"));
+console.log("scoped alert " + cs("alert", "backgroundColor"));
+</script>

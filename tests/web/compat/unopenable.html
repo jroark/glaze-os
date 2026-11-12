@@ -1,0 +1,11 @@
+<!doctype html>
+<title>Links with nowhere to go</title>
+<!-- mailto: and tel: have no app to hand them to. Following one replaced the
+     page with an error; now a line says so and the page stays. -->
+<p>stillhere</p>
+<a id="mail" href="mailto:someone@example.org">write</a>
+<a id="call" href="tel:+15550100">call</a>
+<script>
+location.href = document.getElementById("mail").href;
+setTimeout(function () { location.href = document.getElementById("call").href; }, 100);
+</script>

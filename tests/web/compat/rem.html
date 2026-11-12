@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<title>rem and font: inherit</title>
+<style>
+  html { font-size: 62.5%; }
+  body { font-size: 1.6rem; }
+  h2 { font-size: 2rem; }
+  small.r { font-size: 1rem; }
+  b span { font: inherit; }
+</style>
+<h2 id="a">heading</h2>
+<p><small id="b" class="r">small</small> <b><span id="c">bold stays</span></b></p>
+<script>
+  function s(id) { return getComputedStyle(document.getElementById(id)); }
+  console.log(s('a').fontSize, s('b').fontSize, s('c').fontWeight);
+</script>

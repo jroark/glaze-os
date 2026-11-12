@@ -197,6 +197,10 @@ const char *web_strerror(int err)
     case WE_REDIRECTS: return "Too many redirects.";
     case WE_BADURL: return "The address is not valid.";
     case WE_DECODE: return "The data could not be decoded.";
+    case WE_SERVER: return "The server reported an error. Try again later.";
+    case WE_FORBIDDEN: return "The server refused to show this page.";
+    case WE_GONE: return "The page could not be found.";
+    case WE_UNSUPPORTED: return "This kind of file can't be shown.";
     default: return "The page could not be opened.";
     }
 }

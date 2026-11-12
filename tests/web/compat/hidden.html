@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<title>What is shown and what is not</title>
+<style>
+  .hero { background: linear-gradient(to right, rgba(0,0,0,0), #204060 40%, #102030); color: #fff; }
+  .drawer { position: fixed; top: 0; left: 0; transform: translateX(-100%); }
+  .drawer2 { position: absolute; left: -100%; }
+  .slide { position: absolute; opacity: 0; }
+  .slide.active { opacity: 1; }
+  .fade { opacity: 0; }
+  .centered { position: absolute; left: 50%; transform: translate(-50%, -50%); }
+  .right { position: fixed; right: -600px; }
+</style>
+<div id="hero" class="hero">heroband</div>
+<nav class="drawer">drawerone</nav>
+<nav class="drawer2">drawertwo</nav>
+<div class="slide">slideoff</div>
+<div class="slide active">slideon</div>
+<p class="fade">fadein</p>
+<div class="centered">centredbox</div>
+<aside class="right">rightpanel</aside>
+<dialog open>opendialog</dialog>
+<dialog>closeddialog</dialog>
+<object data="movie.swf"><p>objectfallback</p></object>
+<template><p>templatetext</p><img src="template-only.png"><script>console.log('template ran');</script></template>
+<script>console.log(getComputedStyle(document.getElementById('hero')).backgroundColor);</script>

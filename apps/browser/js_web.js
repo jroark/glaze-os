@@ -165,6 +165,40 @@ win.fetch=function(input,options){return new Promise(function(resolve,reject){
         if(signal)signal.addEventListener('abort',abort,{once:true});
     }catch(e){if(id>0)dom('fetchCancel',null,id);reject(e);}
 });};
+/* XMLHttpRequest, asynchronous, on fetch and within its limits (GET and POST,
+   text bodies, 64 KiB responses). Older sites and every jQuery $.ajax use it. */
+function XMLHttpRequest(){this.readyState=0;this.status=0;this.statusText='';this.responseText='';this.response='';
+    this.responseType='';this.responseURL='';this.timeout=0;this.withCredentials=false;this.upload={addEventListener:function(){},removeEventListener:function(){}};
+    this._h={};this._l={};this._res=null;}
+['UNSENT','OPENED','HEADERS_RECEIVED','LOADING','DONE'].forEach(function(n,i){XMLHttpRequest[n]=XMLHttpRequest.prototype[n]=i;});
+XMLHttpRequest.prototype.addEventListener=function(t,f){(this._l[t]=this._l[t]||[]).push(f);};
+XMLHttpRequest.prototype.removeEventListener=function(t,f){var a=this._l[t]||[],i=a.indexOf(f);if(i>=0)a.splice(i,1);};
+XMLHttpRequest.prototype._fire=function(t){var e={type:t,target:this,currentTarget:this,lengthComputable:false,loaded:this.responseText.length,total:0},x=this;
+    [this['on'+t]].concat(this._l[t]||[]).forEach(function(f){if(typeof f==='function')try{f.call(x,e);}catch(err){console.error(err);}});};
+XMLHttpRequest.prototype._state=function(n){this.readyState=n;this._fire('readystatechange');};
+XMLHttpRequest.prototype.open=function(method,url){this._method=String(method).toUpperCase();this._url=String(url);this._h={};this._sent=false;
+    this.status=0;this.responseText='';this.response='';this._res=null;this._state(1);};
+XMLHttpRequest.prototype.setRequestHeader=function(k,v){if(this.readyState!==1||this._sent)throw namedError('InvalidStateError','Not open');this._h[String(k).toLowerCase()]=String(v);};
+XMLHttpRequest.prototype.overrideMimeType=function(){};
+XMLHttpRequest.prototype.getResponseHeader=function(k){return this._res?this._res.headers.get(k):null;};
+XMLHttpRequest.prototype.getAllResponseHeaders=function(){var out='';if(this._res)this._res.headers.forEach(function(v,k){out+=k+': '+v+'\r\n';});return out;};
+XMLHttpRequest.prototype.abort=function(){if(this._ctl)this._ctl.abort();};
+XMLHttpRequest.prototype.send=function(body){
+    if(this.readyState!==1||this._sent)throw namedError('InvalidStateError','Not open');
+    var x=this,o={method:this._method,credentials:this.withCredentials?'include':'same-origin'};
+    this._sent=true;this._ctl=new AbortController();o.signal=this._ctl.signal;
+    /* Only a content type can be sent; the other request headers are advisory. */
+    if(this._h['content-type'])o.headers={'Content-Type':this._h['content-type']};
+    if(body!==undefined&&body!==null&&this._method!=='GET')o.body=body instanceof URLSearchParams?body:String(body);
+    function end(kind){x._ctl=null;x._state(4);x._fire(kind);x._fire('loadend');}
+    this._fire('loadstart');
+    win.fetch(this._url,o).then(function(res){x._res=res;x.status=res.status;x.statusText=res.ok?'OK':'';x.responseURL=res.url;x._state(2);return res.text();})
+        .then(function(text){x.responseText=text;x.response=text;
+            if(x.responseType==='json')try{x.response=JSON.parse(text);}catch(e){x.response=null;}
+            x._state(3);end('load');},
+        function(err){x.status=0;end(err&&err.name==='AbortError'?'abort':'error');});
+};
+win.XMLHttpRequest=XMLHttpRequest;
 var storageKinds=new WeakMap();
 function Storage(){throw TypeError('Illegal constructor');}
 Storage.prototype._read=function(){var kind=storageKinds.get(this);if(!kind)throw TypeError('Illegal invocation');var s=dom('storageGet',null,kind);if(typeof s==='number')throw namedError('UnknownError','Storage read failed');if(s===null)throw namedError('SecurityError','Storage requires an HTTP(S) origin');return JSON.parse(s||'[]');};

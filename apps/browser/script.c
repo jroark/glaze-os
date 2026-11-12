@@ -17,7 +17,14 @@
 #include <strings.h>
 
 #define JS_PAGES (PAGE_MAX_FRAMES + 1)
-#define JS_NODES 1024
+/* Node handles per document. Each keeps its JS object alive for as long as
+ * the document lives (scripts hang listeners and data on them), so the limit
+ * is what the 1 MiB script heap can carry, about 40 bytes apiece. It was
+ * 1024, which a page with a long list or table ran out of: past it every
+ * node came back to the script as null. */
+#define JS_NODES 4096
+#define JS_NODE_SLOTS 8192      /* the pointer hash, a power of two */
+#define JS_QUERY_MAX 1024       /* nodes one querySelectorAll returns */
 #define WEB_REQUESTS 8
 #define WEB_MODULES 32
 struct module_entry {
@@ -36,8 +43,9 @@ struct handle {
 struct runtime {
     struct page *page;
     jerry_value_t realm, proto, dispatch, tick;
-    struct handle nodes[JS_NODES];
-    int nnodes;
+    struct handle *nodes;       /* by ascending id; malloc'd, grows to JS_NODES */
+    int nnodes, node_cap;
+    uint16_t *slots;            /* node pointer -> index + 1 in nodes, open addressing */
     struct node *current, *write_after;
     uint32_t next_tick;
     struct web_request requests[WEB_REQUESTS];
@@ -84,6 +92,8 @@ static void failed(void)
             pages[i]->page->js = NULL;
             web_free(pages[i]);
             modules_free(pages[i],false);
+            free(pages[i]->nodes);
+            free(pages[i]->slots);
             free(pages[i]);
             pages[i] = NULL;
         }
@@ -134,23 +144,47 @@ static struct node *node_arg(jerry_value_t v)
     uintptr_t id = (uintptr_t)jerry_object_get_native_ptr(v, &node_info);
     if (!id)
         return NULL;
-    for (int i = 0; i < JS_PAGES; i++)
-        if (pages[i])
-            for (int j = 0; j < pages[i]->nnodes; j++)
-                if (pages[i]->nodes[j].id == id)
-                    return pages[i]->nodes[j].node;
+    for (int i = 0; i < JS_PAGES; i++) {
+        const struct runtime *s = pages[i];
+        int lo = 0, hi = s ? s->nnodes : 0;
+        while (lo < hi) {               /* ids were handed out in order */
+            int mid = (lo + hi) / 2;
+            if (s->nodes[mid].id == id)
+                return s->nodes[mid].node;
+            if (s->nodes[mid].id < id)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+    }
     return NULL;
+}
+static unsigned node_slot(const struct node *n)
+{
+    return (unsigned)(((uintptr_t)n >> 3) * 2654435761u) & (JS_NODE_SLOTS - 1);
 }
 static jerry_value_t wrap(struct node *n)
 {
     if (!n || !n->owner || !n->owner->js)
         return jerry_null();
     struct runtime *s = n->owner->js;
-    for (int i = 0; i < s->nnodes; i++)
-        if (s->nodes[i].node == n)
-            return jerry_value_copy(s->nodes[i].value);
+    unsigned slot = node_slot(n);
+    if (!s->slots && !(s->slots = calloc(JS_NODE_SLOTS, sizeof(*s->slots))))
+        return jerry_null();
+    for (; s->slots[slot]; slot = (slot + 1) & (JS_NODE_SLOTS - 1))
+        if (s->nodes[s->slots[slot] - 1].node == n)
+            return jerry_value_copy(s->nodes[s->slots[slot] - 1].value);
     if (s->nnodes >= JS_NODES)
         return jerry_null();
+    if (s->nnodes == s->node_cap) {
+        int cap = s->node_cap ? s->node_cap * 2 : 128;
+        struct handle *grown = realloc(s->nodes, sizeof(*grown) * (size_t)cap);
+        if (!grown)
+            return jerry_null();
+        s->nodes = grown;
+        s->node_cap = cap;
+    }
+    s->slots[slot] = (uint16_t)(s->nnodes + 1);
     struct handle *h = &s->nodes[s->nnodes++];
     h->node = n;
     h->id = next_handle++;
@@ -372,6 +406,16 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
         result = jerry_number((uint32_t)(plat_ms() - p->start_ms));
     else if (IS("timeOrigin"))
         result = jerry_number(p->time_origin);
+    else if (IS("matchMedia")) {
+        str = string_arg(a);
+        result = jerry_boolean(str && css_media_matches(str, (int)strlen(str)));
+    } else if (IS("scrollY"))
+        result = jerry_number(p->scroll_y * 4 / 3);
+    else if (IS("scrollTo")) {
+        double y = jerry_value_as_number(a);
+        p->want_scroll = y > 0 ? (int)(y * 3 / 4) : 0;
+    } else if (IS("contentHeight"))
+        result = jerry_number(p->content_h * 4 / 3);
     else if (IS("innerWidth"))
         result = jerry_number((p->width > 0 ? p->width : SB_APP_W) * 4 / 3);
     else if (IS("innerHeight"))
@@ -479,6 +523,18 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
             result = wrap(n->prev);
         else if (IS("connected"))
             result = jerry_boolean(node_connected(n));
+        else if (IS("matches")) {
+            str = string_arg(a);
+            result = jerry_boolean(str && dom_matches(owner, n, str));
+        } else if (IS("attrNames")) {
+            result = jerry_array(0);
+            uint32_t i = 0;
+            for (const struct attr *at = n->type == N_ELEM ? n->attrs : NULL; at && i < 64; at = at->next) {
+                jerry_value_t v = text_value(at->name);
+                jerry_value_free(jerry_object_set_index(result, i++, v));
+                jerry_value_free(v);
+            }
+        }
         else if (IS("children")) {
             result = jerry_array(0);
             unsigned i = 0;
@@ -515,8 +571,13 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
         } else if (IS("create") || IS("createText")) {
             str = string_arg(a);
             if (str)
-                result = wrap(dom_create(owner, IS("create") ? N_ELEM : N_TEXT,
-                                         IS("create") ? str : NULL, IS("createText") ? str : NULL));
+            {
+                struct node *made = dom_create(owner, IS("create") ? N_ELEM : N_TEXT,
+                                               IS("create") ? str : NULL, IS("createText") ? str : NULL);
+                if (made)
+                    made->collected |= 16;      /* script-made: a <script> among these is async */
+                result = wrap(made);
+            }
         } else if (IS("insert")) {
             struct node *child = node_arg(a), *before = node_arg(b);
             if (dom_insert(owner, n, child, before))
@@ -525,14 +586,15 @@ static jerry_value_t native(const jerry_call_info_t *info, const jerry_value_t a
             dom_remove(owner, n);
         else if (IS("query")) {
             str = string_arg(a);
-            struct node *nodes[256];
-            int num = str ? dom_select(owner, n, str, nodes, 256) : 0;
+            struct node **nodes = malloc(sizeof(*nodes) * JS_QUERY_MAX);
+            int num = str && nodes ? dom_select(owner, n, str, nodes, JS_QUERY_MAX) : 0;
             result = jerry_array(0);
             for (int i = 0; i < num; i++) {
                 jerry_value_t v = wrap(nodes[i]);
                 jerry_value_free(jerry_object_set_index(result, (uint32_t)i, v));
                 jerry_value_free(v);
             }
+            free(nodes);
         } else if (IS("id")) {
             str = string_arg(a);
             result = jerry_null();
@@ -743,6 +805,8 @@ void script_free(struct page *p)
         jerry_value_free(s->tick);
         jerry_value_free(s->realm);
     }
+    free(s->nodes);
+    free(s->slots);
     free(s);
 }
 bool script_eval(struct page *p, const char *code, int len, struct node *current)

@@ -35,5 +35,9 @@ bool url_same_document(const char *a, const char *b);
 /* Appends s, percent-encoded as application/x-www-form-urlencoded (Latin-1
  * text encoded as UTF-8), to out; returns the new length or -1 if full. */
 int url_form_encode(char *out, int len, int max, const char *s);
+/* Address-bar text as a URL (malloc'd): an address, or a search for it. */
+char *url_from_input(const char *text);
+/* NULL if the browser opens this address; else why not, for the user. */
+const char *url_unopenable(const char *url);
 
 #endif

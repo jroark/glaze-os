@@ -5,12 +5,20 @@
  *
  * usage: browse <url | file.html> [out.bmp]     BROWSE_DUMP=1 prints the styled tree,
  * BROWSE_ROOTS=roots.der replaces the trusted roots (concatenated DER certificates)
+ * For tests/browser_compat.py: BROWSE_ITEMS=1 prints the display items, BROWSE_FORMS=1
+ * each control's form and each label's control,
+ * BROWSE_HTML=1 the document as scripts left it, and BROWSE_SETTLE_MS=n keeps
+ * the page running that long after it has loaded, so timers and fetches finish.
+ * BROWSE_FOLLOW=1 follows a script's navigations and form submissions.
+ * BROWSE_CLOCK=<seconds> is the time of day, and with BROWSE_RETRY=1 an error
+ * page is followed by a second try with the real clock.
  */
 #include "hostres.h"
 #include "../apps/browser/load.h"
 #include "../apps/browser/script.h"
 #include "../apps/browser/net.h"
 #include "../apps/browser/plat.h"
+#include "../apps/browser/url.h"
 
 #include <limits.h>
 #include <netdb.h>
@@ -142,9 +150,14 @@ const void *plat_roots(uint32_t *size)
     return roots;
 }
 
+/* BROWSE_CLOCK=<seconds> is a clock nobody set, until clock_set. */
+static bool clock_set;
+
 long long plat_time(void)
 {
-    return (long long)time(NULL);
+    const char *fake = getenv("BROWSE_CLOCK");
+
+    return fake && !clock_set ? atoll(fake) : (long long)time(NULL);
 }
 
 void plat_noise(uint8_t *buf, int n)
@@ -167,6 +180,31 @@ int plat_load_seed(uint8_t *seed)
 void plat_save_seed(const uint8_t *seed)
 {
     (void)seed;
+}
+
+/* BROWSE_COOKIES=file keeps cookies across runs; nothing is kept otherwise. */
+int plat_cookies_read(void *data, int cap)
+{
+    const char *path = getenv("BROWSE_COOKIES");
+    FILE *f = path ? fopen(path, "rb") : NULL;
+
+    if (!f)
+        return 0;
+    int n = (int)fread(data, 1, (size_t)cap, f);
+    int extra = fgetc(f);
+    fclose(f);
+    return extra != EOF ? -1 : n;
+}
+
+int plat_cookies_write(const void *data, int len)
+{
+    const char *path = getenv("BROWSE_COOKIES");
+    FILE *f = path ? fopen(path, "wb") : NULL;
+
+    if (!f)
+        return -1;
+    bool ok = fwrite(data, 1, (size_t)len, f) == (size_t)len;
+    return fclose(f) || !ok ? -1 : 0;
 }
 
 /* Opt-in directory; no persistent writes from previews/tests by default. */
@@ -217,15 +255,42 @@ static void dump(const struct node *n, int depth)
     }
 }
 
+/* One line per display item: what was laid out, and where. */
+static void dump_items(const struct page *p)
+{
+    static const char *const kind[] = { "rect", "text", "image", "ctl", "bullet", "frame", "box" };
+
+    for (int i = 0; i < p->nitems; i++) {
+        const struct ditem *d = &p->items[i];
+        const struct node *e = d->node && d->node->type != N_ELEM ? d->node->parent : d->node;
+        printf("item %s %d,%d %dx%d <%s>", kind[d->kind], d->x, (int)d->y, d->w, d->h,
+               e && e->type == N_ELEM ? e->name : "");
+        if (d->kind == DI_TEXT)
+            printf(" \"%.*s\"", d->u.t.n, d->u.t.s);
+        if (d->link)
+            printf(" link");
+        printf("\n");
+    }
+}
+
 int main(int argc, char **argv)
 {
     static uint16_t px[240 * MAX_H];
     static struct load ld;
     const char *arg = argc > 1 ? argv[1] : "../tests/web/basic.html";
     const char *out = argc > 2 ? argv[2] : "browse.bmp";
-    char url[1024];
+    char url[PATH_MAX + 16];
     struct page *page = NULL;
 
+    /* --typed <text>: what the address bar would open for it. */
+    if (argc > 2 && !strcmp(argv[1], "--typed")) {
+        for (int i = 2; i < argc; i++) {
+            char *u = url_from_input(argv[i]);
+            printf("typed \"%s\" -> %s\n", argv[i], u ? u : "(nothing)");
+            free(u);
+        }
+        return 0;
+    }
     signal(SIGPIPE, SIG_IGN);
     if (strstr(arg, ":"))
         snprintf(url, sizeof(url), "%s", arg);
@@ -234,6 +299,9 @@ int main(int argc, char **argv)
         snprintf(url, sizeof(url), "file://%s", realpath(arg, abs) ? abs : arg);
     }
 
+    int settle_ms = getenv("BROWSE_SETTLE_MS") ? atoi(getenv("BROWSE_SETTLE_MS")) : 0;
+    uint32_t settle_until = 0;
+    int follows = 0;
     uint32_t t0 = plat_ms();
     load_begin(&ld, url, NULL, NULL, false, 240);
     for (;;) {
@@ -243,8 +311,44 @@ int main(int argc, char **argv)
             page = ld.shown;
             printf("page after %u ms: %s\n", plat_ms() - t0, page->url);
         }
-        if (f & LF_DONE || (!(f & ~LF_PAINT) && ld.state == LS_IDLE))
-            break;
+        if (page && page->notice) {
+            printf("note: %s\n", page->notice);
+            page->notice = NULL;
+        }
+        /* A script's navigation or form submission, followed up to five times. */
+        if (page && page->navigate_url && follows < 5 && getenv("BROWSE_FOLLOW")) {
+            char *to = page->navigate_url, *post = page->navigate_post;
+            page->navigate_url = page->navigate_post = NULL;
+            printf("navigate %s%s\n", to, post ? " (post)" : "");
+            load_referrer(page->url);
+            load_forget(&ld, page);
+            load_begin(&ld, to, post, post ? "application/x-www-form-urlencoded" : NULL, false, 240);
+            free(to);
+            free(post);
+            follows++;
+            settle_until = 0;
+            continue;
+        }
+        /* BROWSE_RETRY=1: after an error page, the clock gets set and the
+         * address is tried again, as a user would. */
+        if (page && page->is_error && !clock_set && getenv("BROWSE_RETRY") &&
+            (f & LF_DONE || ld.state == LS_IDLE)) {
+            printf("retry after: %s\n", page->title ? "error page" : "error");
+            if (getenv("BROWSE_ITEMS"))
+                dump_items(page);
+            clock_set = true;
+            usleep(3200 * 1000);
+            load_forget(&ld, page);
+            load_begin(&ld, url, NULL, NULL, true, 240);
+            continue;
+        }
+        if (f & LF_DONE || (!(f & ~LF_PAINT) && ld.state == LS_IDLE)) {
+            /* Timers, fetches and late scripts get their time. */
+            if (!settle_until)
+                settle_until = plat_ms() + (uint32_t)settle_ms + 1;
+            if ((int32_t)(plat_ms() - settle_until) >= 0 || !settle_ms)
+                break;
+        }
         if (plat_ms() - t0 > 60000) {
             printf("gave up after 60 s\n");
             break;
@@ -257,6 +361,27 @@ int main(int argc, char **argv)
     }
     if (getenv("BROWSE_DUMP"))
         dump(page->doc, 0);
+    if (getenv("BROWSE_ITEMS"))
+        dump_items(page);
+    if (getenv("BROWSE_ITEMS"))
+        for (int i = 0; i < page->nimgs; i++)
+            printf("image %s\n", page->imgs[i].url ? page->imgs[i].url : "");
+    if (getenv("BROWSE_FORMS")) {
+        /* Each control with its form, and each label with what a tap on it does. */
+        for (const struct ctl *c = page->ctls; c; c = c->next)
+            printf("ctl %s form %s\n", node_attr(c->node, "name") ? node_attr(c->node, "name") : "?",
+                   c->form && node_attr(c->form, "id") ? node_attr(c->form, "id") : c->form ? "(anonymous)" : "(none)");
+        for (struct node *n = page->doc; n; n = node_next(n, page->doc, false))
+            if (n->tag == T_LABEL) {
+                struct ctl *c = forms_label_ctl(n);
+                printf("label -> %s\n", c && node_attr(c->node, "name") ? node_attr(c->node, "name") : "(nothing)");
+            }
+    }
+    if (getenv("BROWSE_HTML")) {
+        char *html = dom_serialize(page, page->doc, false);
+        printf("html %s\n", html ? html : "(out of memory)");
+        free(html);
+    }
     int ok = 0;
     for (int i = 0; i < page->nimgs; i++)
         ok += page->imgs[i].state == IMG_OK;
@@ -272,5 +397,6 @@ int main(int argc, char **argv)
     load_forget(&ld, page);
     page_free(page);
     script_shutdown();
+    ld_save_cookies();
     return 0;
 }

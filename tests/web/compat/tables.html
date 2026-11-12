@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>Table spans and loose content</title>
+<style>.t { display: table; } .c { display: table-cell; padding: 2px; }</style>
+<table border="1" id="span">
+  <tr><td id="tall" rowspan="2">tall</td><td id="a2">r1c2</td><td id="a3">r1c3</td></tr>
+  <tr><td id="b2">r2c2</td><td id="b3">r2c3</td></tr>
+  <tr><td id="c1">r3c1</td><td colspan="2">r3wide</td></tr>
+</table>
+<table id="loose">
+  <div class="note">loosenote</div>
+  <tr><td>inrow</td></tr>
+</table>
+<div class="t"><span id="k1" class="c">cellone</span><span id="k2" class="c">celltwo</span></div>
+<script>
+  function r(id) { return document.getElementById(id).getBoundingClientRect(); }
+  console.log(r('b2').left == r('a2').left, r('b3').left == r('a3').left, r('c1').left == r('tall').left,
+              r('k1').top == r('k2').top && r('k2').left > r('k1').left);
+</script>
