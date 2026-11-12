@@ -219,9 +219,9 @@ commit that added it says what a page looked like before.
 
 **Using it**
 
-- The address bar takes words: anything with a space, or without a host
-  (`example.org`, an IPv4 address, `localhost`, `name:port`, `name/path`), is
-  a search with its words encoded.
+- The address bar takes words. `example.org`, an IPv4 address, `localhost`,
+  `name:port` and `name/path` are addresses; text with a space, or with
+  nothing that looks like a host, is a search with its words encoded.
 - `mailto:`, `tel:` and other schemes with nowhere to go leave the page up and
   say so; so does running out of memory while laying a page out.
 
@@ -235,6 +235,7 @@ commit that added it says what a page looked like before.
 | Keep-alive connections | Connection pooling in `http.c`/`conn.c`; every request opens its own |
 | CSS positioning, floats, real flex and grid | A new layout pass; the largest item here |
 | RegExp named groups and lookbehind, `Intl` | JerryScript features, not the facade |
+| Key events, `hashchange`, pointer coordinates | The app passes scripts an event's type only; a fragment link scrolls without changing `location` |
 | Trying https first for a typed host | A behaviour change with a fallback delay on a slow link |
 | A JavaScript on/off setting | A Settings entry; script-heavy pages can exhaust the 1 MiB heap |
 | Detecting an unlabelled legacy encoding | A byte-frequency guess per language |
