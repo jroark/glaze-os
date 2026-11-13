@@ -224,6 +224,7 @@ struct cis {
     unsigned manufacturer, product;
     uint32_t cor;                       /* attribute address, 0: none */
     int index, io_index;                /* default entry; one decoding 0x300 */
+    int presenter_index;                /* 2 KiB MQ200 I/O aperture */
     int uart_index;                     /* an entry decoding UART_IO_BASE */
     bool modem;                         /* serial FUNCE names a modem function */
 };
@@ -276,12 +277,15 @@ static void cis_entry(unsigned at, unsigned len, struct cis *c, bool verbose)
         kprintf(" %u lines%s%s", io & 0x1F, io & 0x20 ? " 8-bit" : "", io & 0x40 ? " 16-bit" : "");
     /* Eight registers: three address lines and the window picks the base. */
     bool uart = !(io & 0x80) && (io & 0x1F) >= 3;
+    bool presenter = !(io & 0x80) && (io & 0x40) && (io & 0x1F) >= 11;
+    bool complete = true;
     if (io & 0x80) {
         uint8_t r = NEXT();
         unsigned asz = (r >> 4) & 3, lsz = (r >> 6) & 3;
         asz = asz == 3 ? 4 : asz;
         lsz = lsz == 3 ? 4 : lsz;
         for (unsigned n = (r & 0x0F) + 1; n; n--) {
+            if (asz + lsz > end - p) complete = false;
             uint32_t base = 0;
             for (unsigned b = 0; b < asz; b++)
                 base |= (uint32_t)NEXT() << (8 * b);
@@ -290,6 +294,7 @@ static void cis_entry(unsigned at, unsigned len, struct cis *c, bool verbose)
                 length |= (uint32_t)NEXT() << (8 * b);
             decodes = decodes || base == NET_IO_BASE;
             uart = uart || base == UART_IO_BASE;
+            presenter = presenter || ((io & 0x40) && base == 0 && length >= 0x7ff);
             if (verbose)
                 kprintf(" %x+%x", base, length + 1);
         }
@@ -303,6 +308,8 @@ static void cis_entry(unsigned at, unsigned len, struct cis *c, bool verbose)
     }
     if (decodes && c->io_index < 0)
         c->io_index = index;
+    if (presenter && complete && c->presenter_index < 0)
+        c->presenter_index = index;
     if (uart && c->uart_index < 0)
         c->uart_index = index;
 #undef NEXT
@@ -313,7 +320,7 @@ static void read_cis(struct cis *c, bool verbose)
     unsigned i = 0;
 
     memset(c, 0, sizeof(*c));
-    c->function = c->index = c->io_index = c->uart_index = -1;
+    c->function = c->index = c->io_index = c->uart_index = c->presenter_index = -1;
     for (int n = 0; n < 64 && i + 2 < CIS_LIMIT; n++) {
         uint8_t code = CF_CIS(i);
         if (code == TPL_END)
@@ -407,16 +414,23 @@ static void capture_card(const struct cis *c)
      * with no modem FUNCE. gps.c only listens until it hears NMEA. */
     else if (c->function == FUNCID_SERIAL && c->cor && c->uart_index >= 0)
         card_info.kind = BT_CARD_GPS;
+    /* R57791 ptgload.dll 0x10149c: MANFID 01d8, product & fff0 == 2000.
+     * This is a graphics card; it must never see ATA commands or a UART. */
+    if (c->manufacturer == 0x01d8 && (c->product & 0xfff0) == 0x2000) {
+        card_info.kind = BT_CARD_PRESENTER;
+        presenter_insert(c->cor, c->presenter_index);
+    }
     if (card_info.kind == BT_CARD_BLUETOOTH) bt_insert();
     if (card_info.kind == BT_CARD_MODEM) modem_insert(c->cor, (unsigned)c->uart_index);
     if (card_info.kind == BT_CARD_GPS) gps_insert(c->cor, (unsigned)c->uart_index);
 }
 
-/* A serial card owns the socket: never ATA-probe or reset it. */
+/* Serial and display cards own the socket: never ATA-probe or reset them. */
 static bool serial_card(void)
 {
     return card_info.kind == BT_CARD_SERIAL || card_info.kind == BT_CARD_BLUETOOTH ||
-           card_info.kind == BT_CARD_MODEM || card_info.kind == BT_CARD_GPS;
+           card_info.kind == BT_CARD_MODEM || card_info.kind == BT_CARD_GPS ||
+           card_info.kind == BT_CARD_PRESENTER;
 }
 
 static void forget_card(void)
@@ -425,6 +439,7 @@ static void forget_card(void)
     bt_removed();
     modem_removed();
     gps_removed();
+    presenter_removed();
     uint32_t generation = card_info.generation + 1;
     memset(&card_info, 0, sizeof(card_info));
     card_info.version = BT_CIS_VERSION;
@@ -910,6 +925,7 @@ static void insert_jacket(void)
     read_cis(&c, false);
     capture_card(&c);           /* modems go to modem_insert here */
     log_cis();
+    if (card_info.kind == BT_CARD_PRESENTER) return;
     if (c.function == FUNCID_NETWORK) {
         configure_network(&c);
         if (!net_insert(c.manufacturer, c.product))
@@ -963,6 +979,7 @@ static void insert(bool power_up)
             log_cis();
         if (kind < 0)
             kind = c.function;
+        if (card_info.kind == BT_CARD_PRESENTER) return;
         if (kind == FUNCID_NETWORK) {
             if (c.function != FUNCID_NETWORK)
                 continue;       /* its CIS didn't read this time */
@@ -1093,7 +1110,7 @@ void cf_init(void)
     booted = true;
 }
 
-/* Before a sleep (drivers/power.c): a network card, a radio especially,
+/* Before a sleep (drivers/power.c): a network or display card, a radio especially,
  * draws far more than the suspended CPU, and SUSPEND leaves the socket
  * powered. The card goes as if pulled and its socket loses power;
  * pcmcia_resume() inserts it afresh at the wake, and the network server
@@ -1101,8 +1118,9 @@ void cf_init(void)
  * docs/hardware/POWER.md "Network cards". */
 bool pcmcia_suspend(void)
 {
-    if (!net_present())
+    if (!net_present() && card_info.kind != BT_CARD_PRESENTER)
         return false;
+    presenter_removed();
     net_removed();
     if (socket == 1) {
         /* As probe() does for a card pulled from the jacket. */
@@ -1117,7 +1135,7 @@ bool pcmcia_suspend(void)
         PCMCIA_BRIDGE &= ~PCMCIA_BRIDGE_EN;
         PCMCIA_A034 &= ~0x0Cu;
     }
-    kprintf("cf: network card in socket %u powered off for the sleep\n", socket);
+    kprintf("cf: I/O card in socket %u powered off for the sleep\n", socket);
     return true;
 }
 

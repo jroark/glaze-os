@@ -783,3 +783,12 @@ wifi-retry-test: ../tests/native/wifi_retry.c ../servers/net/wifi_retry.h
 	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/wifi_retry.c -o ../out/host/wifi-retry-test
 	../out/host/wifi-retry-test
 .PHONY: wifi-retry-test
+
+presenter-test:
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/presenter.c -o $(O)/presenter-test
+	$(O)/presenter-test
+.PHONY: presenter-test
+presenter-lifecycle-test:
+	$(CC) $(CFLAGS) -fsanitize=address,undefined ../tests/native/presenter_lifecycle.c -o $(O)/presenter-lifecycle-test
+	$(O)/presenter-lifecycle-test
+.PHONY: presenter-lifecycle-test

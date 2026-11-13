@@ -30,7 +30,7 @@ endif
 
 # Optional card drivers are independent relocatable kernel images. Only the
 # CIS-selected image is read into RAM; the dispatcher stays in the kernel.
-DRIVER_NAMES := ne2000 xi825 wl54cf cfuart
+DRIVER_NAMES := ne2000 xi825 wl54cf cfuart presenter
 # PC Cards in the PCMCIA jacket (docs/hardware/PCCARDS.md): the 3c589 and
 # Hermes drivers. The NAND romfs has no room for them beside the default
 # apps, so, like MODEM (mk/libs.mk), GlazeBoot builds default to them and

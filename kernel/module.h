@@ -37,6 +37,15 @@ struct uart_driver {
     void (*set_lines)(uint8_t mcr);   /* DTR bit 0, RTS bit 1; OUT2 is kept */
     uint8_t (*status)(void);          /* 16550 MSR: CTS 0x10, DSR 0x20, RI 0x40, DCD 0x80 */
 };
+/* Presenter-to-Go's trusted display module; no userspace MMIO exposure. */
+#define PRESENTER_DRIVER_MAGIC 0x47505447u
+#define PRESENTER_DRIVER_ABI 1u
+struct presenter_driver {
+    uint32_t magic, abi, size;
+    int (*init)(uint32_t cor, unsigned index);
+    void (*poll)(void);
+    void (*stop)(bool present);
+};
 #define NET_DRIVER_MAGIC 0x474e4452u
 #define NET_DRIVER_ABI 1u
 /* Built together with the kernel; these callbacks are not a userspace ABI. */

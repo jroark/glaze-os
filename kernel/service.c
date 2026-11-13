@@ -122,8 +122,9 @@ static void service_worker(void)
         uint32_t flags = irq_save();
         pcmcia_poll();
         net_retry();
+        presenter_poll();
         reconcile();
-        thread_sleep_until(time_us() + 100000u);
+        thread_sleep_until(time_us() + (presenter_active() ? 10000u : 100000u));
         irq_restore(flags);
     }
 }
