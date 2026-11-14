@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<title>Block-level images and controls</title>
+<style>
+  img.hero { display: block; margin: 0 auto; }
+  .form-control { display: block; width: 100%; }
+  select.form-select { display: block; }
+</style>
+<p>Before</p>
+<img class="hero" src="../../../assets/web/globe.png" width="32" height="32" alt="globe">
+<form>
+  <input class="form-control" type="text" name="q" value="query">
+  <select class="form-select" name="s"><option>One</option><option>Two</option></select>
+  <textarea class="form-control" name="t" rows="2">text</textarea>
+</form>
+<p>After</p>

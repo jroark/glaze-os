@@ -37,4 +37,9 @@ void plat_save_seed(const uint8_t *seed);
 int plat_storage_read(int slot, void *data, int cap);
 int plat_storage_write(int slot, const void *data, int len);
 
+/* The cookie file: read returns its length (0 if there is none, -1 on
+ * failure or if it is larger than cap); write replaces it atomically. */
+int plat_cookies_read(void *data, int cap);
+int plat_cookies_write(const void *data, int len);
+
 #endif

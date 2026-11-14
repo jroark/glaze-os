@@ -140,7 +140,7 @@ bool dom_attr(struct page *p, struct node *n, const char *name, const char *valu
     n->nsdecl = -1;
     if (!strcmp(lower, "src") || !strcmp(lower, "href") || !strcmp(lower, "srcdoc") ||
         !strcmp(lower, "sandbox"))
-        n->collected = 0;
+        n->collected &= 16;             /* keeps "made by a script" */
     if (n->tag == T_IMG && !strcmp(lower, "src")) {
         n->img = -1;
         n->image_event = false;
@@ -340,6 +340,25 @@ int dom_select(struct page *p, struct node *root, const char *selector, struct n
     css_free_sheet(&ss);
     arena_free(&a);
     return count;
+}
+/* Whether one element matches a selector list (Element.matches, closest). */
+bool dom_matches(struct page *p, struct node *n, const char *selector)
+{
+    (void)p;
+    if (!n || n->type != N_ELEM || !selector || strlen(selector) > 512)
+        return false;
+    char text[540];
+    snprintf(text, sizeof text, "%s{color:black}", selector);
+    struct arena a = {0};
+    struct stylesheet ss = {0};
+    bool match = false;
+    css_parse_sheet(&a, &ss, text, (int)strlen(text));
+    for (int i = 0; i < ss.nrules && !match; i++)
+        for (int j = 0; j < ss.rules[i].nsels && !match; j++)
+            match = css_node_matches(&ss.rules[i].sels[j], n);
+    css_free_sheet(&ss);
+    arena_free(&a);
+    return match;
 }
 struct node *dom_query(struct page *p, struct node *root, const char *selector, struct node *after)
 {

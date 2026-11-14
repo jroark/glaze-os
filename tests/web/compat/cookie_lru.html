@@ -1,0 +1,14 @@
+<!doctype html>
+<title>A full cookie jar</title>
+<!-- The jar holds 64. With it full, the next cookie replaces the one that has
+     gone unused longest; it used to replace one picked by the clock. -->
+<script>
+for (var i = 0; i < 64; i++) document.cookie = "c" + i + "=v";
+document.cookie = "c0=again";               // used again: no longer the oldest
+for (var i = 64; i < 70; i++) document.cookie = "c" + i + "=v";
+var names = document.cookie.split("; ").map(function (c) { return c.split("=")[0]; });
+var nums = names.map(function (n) { return +n.slice(1); }).filter(function (n) { return n > 0; });
+nums.sort(function (a, b) { return a - b; });
+console.log("lru kept=" + names.length + " first=c" + nums[0] + " last=c" + nums[nums.length - 1] +
+            " touched=" + (names.indexOf("c0") >= 0));
+</script>

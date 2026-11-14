@@ -1117,6 +1117,41 @@ static void flow_frame(struct lay *L, struct flow *F, struct node *n)
         line_flush(L, F, false);
 }
 
+/*
+ * An image or form control with a block-level display: a line of its own,
+ * with its vertical margins, and centred or pushed right by auto margins.
+ * layout_block() lays out children and these have none to show, so they
+ * used to draw nothing; `img { display: block; margin: 0 auto }` and
+ * Bootstrap's `.form-control { display: block; width: 100% }` are everywhere.
+ */
+static void flow_replaced_block(struct lay *L, struct flow *F, struct node *n)
+{
+    const struct style *st = n->st;
+    bool la = st->margin[3].unit == L_AUTO, ra = st->margin[1].unit == L_AUTO;
+
+    line_flush(L, F, true);
+    F->y += resolve(&st->margin[0], F->w);
+    int first = L->p->nitems;
+    if (n->tag == T_IMG)
+        flow_image(L, F, n);
+    else
+        flow_ctl(L, F, n);
+    line_flush(L, F, true);
+    if (la && L->p->nitems > first) {
+        int x0 = INT32_MAX, x1 = INT32_MIN;
+        for (int i = first; i < L->p->nitems; i++) {
+            const struct ditem *d = &L->p->items[i];
+            x0 = d->x < x0 ? d->x : x0;
+            x1 = d->x + d->w > x1 ? d->x + d->w : x1;
+        }
+        int slack = F->w - (x1 - x0);
+        int shift = F->x0 + (slack > 0 ? (ra ? slack / 2 : slack) : 0) - x0;
+        for (int i = first; i < L->p->nitems; i++)
+            L->p->items[i].x = (int16_t)(L->p->items[i].x + shift);
+    }
+    F->y += resolve(&st->margin[2], F->w);
+}
+
 static void flow_node(struct lay *L, struct flow *F, struct node *n, int depth)
 {
     L->event_node = n;
@@ -1129,6 +1164,10 @@ static void flow_node(struct lay *L, struct flow *F, struct node *n, int depth)
         return;
     const struct style *st = n->st;
     if(n->tag==T_IFRAME || n->tag==T_FRAME) { flow_frame(L,F,n);return; }
+    if (block_level(st) && (n->tag == T_IMG || (n->ctl && n->tag != T_BUTTON))) {
+        flow_replaced_block(L, F, n);
+        return;
+    }
     if (block_level(st)) {
         layout_block(L, F, n);
         return;
@@ -1314,6 +1353,7 @@ struct tgrid {
     struct node **rows;
     int row_cap;
     struct node *caption;
+    uint16_t held[MAX_COLS];    /* rows a rowspan cell above still covers each column for */
 };
 
 static bool is_cell(const struct node *c)
@@ -1331,13 +1371,23 @@ static void add_row(struct tgrid *G, struct node *tr)
         G->rows = r;
         G->row_cap = cap;
     }
+    /* Columns a cell above spans down into are taken: this row's cells go
+     * around them. (The spanning cell itself is laid out in its first row
+     * only; what matters is that the cells after it stay in their columns.) */
+    uint16_t taken[MAX_COLS];
     int col = 0;
+    memcpy(taken, G->held, sizeof(taken));
+    for (int k = 0; k < MAX_COLS; k++)
+        if (G->held[k])
+            G->held[k]--;
     for (struct node *c = tr->first; c; c = c->next) {
         if (!is_cell(c) || G->ncells >= MAX_CELLS)
             continue;
+        while (col < MAX_COLS && taken[col])
+            col++;
         struct tcell *tc = &G->cells[G->ncells++];
-        const char *cs = node_attr(c, "colspan");
-        int span = cs ? atoi(cs) : 1;
+        const char *cs = node_attr(c, "colspan"), *rs = node_attr(c, "rowspan");
+        int span = cs ? atoi(cs) : 1, down = rs ? atoi(rs) : 1;
         span = span < 1 ? 1 : span > MAX_COLS ? MAX_COLS : span;
         if (col + span > MAX_COLS)
             span = MAX_COLS - col;
@@ -1349,8 +1399,14 @@ static void add_row(struct tgrid *G, struct node *tr)
         tc->row = G->nrows;
         tc->col = col;
         tc->span = span;
+        if (down > 1)
+            for (int k = 0; k < span; k++)
+                G->held[col + k] = (uint16_t)(down > 1000 ? 999 : down - 1);
         col += span;
     }
+    for (int k = col; k < MAX_COLS; k++)
+        if (taken[k])
+            col = k + 1;
     if (col > G->ncols)
         G->ncols = col;
     G->rows[G->nrows++] = tr;
@@ -1358,6 +1414,8 @@ static void add_row(struct tgrid *G, struct node *tr)
 
 static bool build_grid(struct tgrid *G, struct node *t)
 {
+    bool loose = false;
+
     memset(G, 0, sizeof(*G));
     G->cells = malloc(sizeof(struct tcell) * MAX_CELLS);
     if (!G->cells)
@@ -1367,7 +1425,12 @@ static bool build_grid(struct tgrid *G, struct node *t)
             continue;
         if (c->st->display == D_TABLE_CAPTION && !G->caption)
             G->caption = c;
-        else if (c->st->display == D_TABLE_ROW)
+        else if (c->st->display == D_TABLE_CELL && !loose) {
+            /* Cells with no row (display: table-cell under display: table):
+             * one row made of all of them. */
+            loose = true;
+            add_row(G, t);
+        } else if (c->st->display == D_TABLE_ROW)
             add_row(G, c);
         else if (c->st->display == D_TABLE_ROW_GROUP)
             for (struct node *r = c->first; r; r = r->next)
@@ -1420,6 +1483,14 @@ static void column_widths(struct lay *L, struct tgrid *G, int *cmin, int *cmax, 
             cmax[c] = cmin[c];
 }
 
+/* A table's child with content that is no caption, row, row group or cell. */
+static bool loose_in_table(const struct node *c)
+{
+    return c->type == N_ELEM && c->st && c->first && c->tag != T_COLGROUP && c->st->display != D_NONE &&
+           c->st->display != D_TABLE_ROW && c->st->display != D_TABLE_ROW_GROUP &&
+           c->st->display != D_TABLE_CELL && c->st->display != D_TABLE_CAPTION;
+}
+
 static void measure_table(struct lay *L, struct node *t, int *mn, int *mx, int depth)
 {
     struct tgrid G;
@@ -1445,6 +1516,13 @@ static void measure_table(struct lay *L, struct node *t, int *mn, int *mx, int d
     else
         *mn += sp;
     *mx += sp;
+    for (struct node *c = t->first; c; c = c->next)
+        if (loose_in_table(c)) {
+            int cmn, cmx;
+            measure_box(L, c, &cmn, &cmx, depth + 1);
+            *mn = cmn > *mn ? cmn : *mn;
+            *mx = cmx > *mx ? cmx : *mx;
+        }
     free_grid(&G);
 }
 
@@ -1460,6 +1538,12 @@ static int layout_table(struct lay *L, struct node *t, int x, int y, int w)
         int h = layout_box(L, G.caption, x, y, w, w, NULL, -1, NULL);
         y += h;
     }
+    /* Content that is in the table but in no row or cell: a browser's parser
+     * moves it out in front of the table; this one leaves it there, where
+     * it used to be dropped. It goes above the rows. */
+    for (struct node *c = t->first; c; c = c->next)
+        if (loose_in_table(c))
+            y += layout_box(L, c, x, y, w, w, NULL, -1, NULL);
     if (!G.ncells) {
         free_grid(&G);
         return y - y0;

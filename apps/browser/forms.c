@@ -39,12 +39,39 @@ static void set_value(struct ctl *c, const char *v)
     c->len = n;
 }
 
+/*
+ * A control's form: the one its form="id" names, else its nearest <form>
+ * ancestor. Failing both, the old layout-table pattern `<table><form><tr>`:
+ * the parser closes the form when the row starts (html.c, no form element
+ * pointer), which leaves an empty <form> in the table and its controls with
+ * no form, so Submit did nothing. Such a control belongs to the last empty
+ * form before it in its table.
+ */
 static struct node *form_of(struct node *n)
 {
-    for (struct node *a = n->parent; a; a = a->parent)
+    const char *id = node_attr(n, "form");
+    struct node *table = NULL, *found = NULL;
+
+    if (id && *id) {
+        struct node *root = n;
+        while (root->parent)
+            root = root->parent;
+        for (struct node *x = root; x; x = node_next(x, root, false)) {
+            const char *xid = x->tag == T_FORM ? node_attr(x, "id") : NULL;
+            if (xid && !strcmp(xid, id))
+                return x;
+        }
+    }
+    for (struct node *a = n->parent; a; a = a->parent) {
         if (a->tag == T_FORM)
             return a;
-    return NULL;
+        if (a->tag == T_TABLE && !table)
+            table = a;
+    }
+    for (struct node *x = table; x && x != n; x = node_next(x, table, false))
+        if (x->tag == T_FORM && !node_first_elem(x))
+            found = x;
+    return found;
 }
 
 static void collect_options(struct page *p, struct ctl *c)
@@ -278,4 +305,35 @@ char *forms_submit(struct page *p, struct node *form, struct ctl *submitter, cha
     free(url);
     free(data);
     return full;
+}
+
+/*
+ * The control a tap on `n` should act on when n is in a <label>: the one its
+ * for="id" names, else the first control inside it. A 13-pixel checkbox is a
+ * small target on a resistive screen; its label is the usual one.
+ */
+struct ctl *forms_label_ctl(struct node *n)
+{
+    struct node *label = n;
+
+    while (label && label->tag != T_LABEL)
+        label = label->parent;
+    if (!label)
+        return NULL;
+    const char *id = node_attr(label, "for");
+    if (id && *id) {
+        struct node *root = label;
+        while (root->parent)
+            root = root->parent;
+        for (struct node *x = root; x; x = node_next(x, root, false)) {
+            const char *xid = x->type == N_ELEM ? node_attr(x, "id") : NULL;
+            if (xid && !strcmp(xid, id))
+                return x->ctl;
+        }
+        return NULL;
+    }
+    for (struct node *x = label; x; x = node_next(x, label, false))
+        if (x->ctl)
+            return x->ctl;
+    return NULL;
 }

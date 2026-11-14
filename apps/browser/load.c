@@ -115,9 +115,22 @@ static void retire_scripts(struct page *p)
     p->script_disabled = true;
 }
 
+static char *doc_referrer;
+
+/* Names the page the next load_begin() is a navigation from. */
+void load_referrer(const char *url)
+{
+    free(doc_referrer);
+    doc_referrer = url ? strdup(url) : NULL;
+}
+
 void load_begin(struct load *ld, const char *url, const char *post, const char *post_type,
                 bool reload, int width)
 {
+    /* The page a link or form led here from; none for a typed address. */
+    char *from = doc_referrer;
+    doc_referrer = NULL;
+
     load_stop(ld);
     retire_scripts(ld->shown);
     free(ld->url);
@@ -128,9 +141,13 @@ void load_begin(struct load *ld, const char *url, const char *post, const char *
     ld->state = LS_DOC;
     if (!strncasecmp(url, "about:", 6)) {
         ld->doc_id = 0; /* answered by load_step */
+        free(from);
         return;
     }
+    ld_referrer(from);
     ld->doc_id = ld_start(url, F_DOC, 0, post, post_type, reload);
+    ld_referrer(NULL);
+    free(from);
 }
 
 /* All documents share the bounded fetch queue. Fetch IDs, not per-document
@@ -138,16 +155,23 @@ void load_begin(struct load *ld, const char *url, const char *post, const char *
 static struct page *document(struct fetch_result *r, const char *url)
 {
     struct page *p;
-    if (r->err || (r->status >= 400 && !r->len))
-        return load_error_page(url, r->err ? r->err : WE_NOTFOUND);
+    if (r->err)
+        return load_error_page(url, r->err);
+    /* An error status with a body shows the body; without, say which kind. */
+    if (r->status >= 400 && !r->len)
+        return load_error_page(url, r->status >= 500 ? WE_SERVER
+                               : r->status == 401 || r->status == 403 ? WE_FORBIDDEN
+                               : r->url && !strncasecmp(r->url, "http", 4) ? WE_GONE : WE_NOTFOUND);
     p = page_new(r->url ? r->url : url);
     if (p) {
         p->csp = r->csp ? strdup(r->csp) : NULL;
+        p->cut = r->cut;
         page_set_document(p, r->data, r->len, r->ctype);
     }
-    if (!p || p->oom) {
+    if (!p || p->oom || p->doc_err) {
+        int err = p && !p->oom ? p->doc_err : WE_NOMEM;
         page_free(p);
-        p = load_error_page(url, WE_NOMEM);
+        p = load_error_page(url, err);
     }
     return p;
 }
@@ -207,7 +231,10 @@ static bool route(struct page *p, struct fetch_result *r)
                 int len;
                 char *text = cs_decode(cs_sniff(r->ctype, r->data, r->len), r->data, r->len, &len);
                 if (text) {
+                    css_vars_use(&p->vars);
                     css_parse_sheet(&p->arena, &s->ss, text, len);
+                    css_vars_use(NULL);
+                    page_sheet_imports(p, i);
                     free(text);
                 }
             }
@@ -261,8 +288,12 @@ static bool route(struct page *p, struct fetch_result *r)
                 child->csp = r->csp ? strdup(r->csp) : NULL;
                 if (r->err || (r->status >= 400 && !r->len))
                     page_set_html(child, "<p>Cannot open frame</p>");
-                else
+                else {
+                    child->cut = r->cut;
                     page_set_document(child, r->data, r->len, r->ctype);
+                    if (child->doc_err && !child->doc)
+                        page_set_html(child, "<p>Cannot show frame</p>");
+                }
             }
             return true;
         }
@@ -282,6 +313,7 @@ static void schedule(struct page *p, int *flags)
 {
     if (!p)
         return;
+    ld_referrer(p->url);        /* for this page's style sheets, scripts, images and frames */
     if (p->resources_dirty) {
         /* A rescan may retire child contexts. Clear UI references before the
          * caller handles its next input event. */
@@ -413,6 +445,45 @@ static bool scripts_pending(struct page *p)
             return true;
     return false;
 }
+/* Scripts DOMContentLoaded waits for: all but the async ones. */
+static bool ordered_scripts_pending(struct page *p)
+{
+    for (int i = 0; i < p->nscripts; i++)
+        if (p->scripts[i].state != RES_DONE && !p->scripts[i].async && node_connected(p->scripts[i].node))
+            return true;
+    return false;
+}
+
+/*
+ * The script to run next. An async script runs as soon as it has arrived
+ * (or failed). The rest run in document order, those without defer first;
+ * the one whose turn it is holds the others back while it loads, which is
+ * why an async one must not: a page's analytics loader, inserted ahead of
+ * its first script, used to stall every script until it came or timed out.
+ */
+static struct script_slot *next_script(struct page *p)
+{
+    struct script_slot *first_deferred = NULL;
+
+    for (int i = 0; i < p->nscripts; i++) {
+        struct script_slot *s = &p->scripts[i];
+        if (s->async && (s->state == RES_READY || s->state == RES_FAILED))
+            return s;
+    }
+    for (struct node *n = p->doc; n; n = node_next(n, p->doc, false))
+        if (n->tag == T_SCRIPT)
+            for (int i = 0; i < p->nscripts; i++) {
+                struct script_slot *s = &p->scripts[i];
+                if (s->node != n || s->state == RES_DONE || s->async)
+                    continue;
+                if (!s->defer)
+                    return s;
+                if (!first_deferred)
+                    first_deferred = s;
+            }
+    return first_deferred;
+}
+
 static bool complete(struct page *p)
 {
     if (!p || p->resources_dirty || scripts_pending(p) || css_pending(p))
@@ -436,14 +507,7 @@ static void execute(struct page *p, int *quota, int *flags, bool wait_css)
     /* Classic scripts run in document order once the DOM has been parsed.
      * Rescanning after each edit also puts document.write scripts in order. */
     while (*quota > 0 && !(wait_css && css_pending(p))) {
-        struct script_slot *s = NULL;
-        for (struct node *n = p->doc; n && !s; n = node_next(n, p->doc, false))
-            if (n->tag == T_SCRIPT)
-                for (int i = 0; i < p->nscripts; i++)
-                    if (p->scripts[i].node == n && p->scripts[i].state != RES_DONE) {
-                        s = &p->scripts[i];
-                        break;
-                    }
+        struct script_slot *s = next_script(p);
         if (!s || s->state == RES_WAIT || s->state == RES_LOADING)
             break;
         bool allowed = script_allowed(p, s->url, s->node);
@@ -470,7 +534,7 @@ static void execute(struct page *p, int *quota, int *flags, bool wait_css)
         if (p->resources_dirty)
             schedule(p, flags);
     }
-    if (!scripts_pending(p) && !p->ready_event) {
+    if (!ordered_scripts_pending(p) && !p->ready_event) {
         p->ready_event = true;
         script_event(p, p->doc, "DOMContentLoaded");
     }
@@ -503,6 +567,12 @@ static bool layout_tree(struct page *p, int width)
         page_style(p);
         page_layout(p, width);
         p->dirty = false;
+        /* Style or layout ran out of memory: what is on screen is part of
+         * the page. Said once; it was not said at all. */
+        if (p->oom && !p->oom_told) {
+            p->oom_told = true;
+            page_root(p)->notice = "Low memory: page is incomplete";
+        }
     }
     return dirty;
 }

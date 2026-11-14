@@ -178,6 +178,11 @@ browse: $(O)/browse
 $(O)/browse: browse.c hostres.c $(GFX) $(WEB_OBJS) $(wildcard ../apps/browser/*.h ../apps/browser/js_platform/*) $(O)/libwolfssl.a $(O)/libjerry.a ../out/include/js_bootstrap.h
 	$(CC) $(WEB_CFLAGS) -o $@ browse.c hostres.c $(GFX) $(WEB_OBJS) $(O)/libwolfssl.a $(O)/libjerry.a -lm
 
+# Pages that show one thing real sites do, checked on what the engine lays out.
+.PHONY: browser-compat-test
+browser-compat-test: $(O)/browse
+	python3 ../tests/browser_compat.py $(O)/browse
+
 .PHONY: mediatest
 mediatest: $(O)/mediatest
 $(O)/mediatest: mediatest.c $(MEDIA)
@@ -204,6 +209,18 @@ libc-bits-test: ../tests/native/libc_bits.c ../lib/libc/string.c ../lib/libc/bit
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ $< $(O)/libc_bits_string.o $(O)/libc_bits_bitops.o
 	$(O)/$@
 .PHONY: libc-bits-test
+
+# libc's vsnprintf against the host's: printf.c renamed, with
+# tests/native/libc_printf_sys.h for glaze/sys.h; the test supplies gz_log.
+libc-printf-test: ../tests/native/libc_printf.c ../tests/native/libc_printf_sys.h ../lib/libc/printf.c
+	@mkdir -p $(O)
+	$(CC) -std=gnu11 -O2 -fno-builtin -Wno-ignored-attributes -fsanitize=address,undefined -I../lib/include -I../lib/libc/include \
+		-include ../tests/native/libc_printf_sys.h \
+		-Dvsnprintf=gz_vsnprintf -Dsnprintf=gz_snprintf -Dprintf=gz_printf -Dputs=gz_puts \
+		-c -o $(O)/libc_printf_lib.o ../lib/libc/printf.c
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $(O)/$@ $< $(O)/libc_printf_lib.o
+	$(O)/$@
+.PHONY: libc-printf-test
 
 # libc's 64-bit division (lib/libc/divdi3.c) against the host's.
 divdi3-test: ../tests/native/divdi3.c ../lib/libc/divdi3.c

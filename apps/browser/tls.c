@@ -123,19 +123,41 @@ static uint32_t der_len(const uint8_t *d, uint32_t avail)
     return len <= avail ? len : 0;
 }
 
-static bool make_ctx(void)
+/* The roots were collected after this (2025-01-01): a clock before it is one
+ * nobody has set, as after the battery was out. */
+#define CLOCK_FLOOR     1735689600LL
+#define CTX_RETRY_S     3
+
+static bool make_ctx(int *err)
 {
+    static bool inited, old_clock;
+    static long long failed_at;
+    static int why = WE_TLS;
     uint32_t size;
     const uint8_t *roots;
     int loaded = 0;
+    long long now = plat_time();
 
+    /* Roots "not yet valid" by an unset clock were left out; with the clock
+     * set, load them. */
+    if (ctx && old_clock && now >= CLOCK_FLOOR) {
+        wolfSSL_CTX_free(ctx);
+        ctx = NULL;
+    }
     if (ctx)
         return true;
-    if (ctx_failed)
+    /* A failure is not for good: memory comes back and clocks get set. It
+     * used to leave https dead until the browser was started again. */
+    if (ctx_failed && now >= failed_at && now - failed_at < CTX_RETRY_S) {
+        *err = why;
         return false;
+    }
     ctx_failed = true;
-    if (wolfSSL_Init() != WOLFSSL_SUCCESS)
+    failed_at = now;            /* by the clock: tls.c has no other, and a set clock retries at once */
+    *err = why = WE_TLS;
+    if (!inited && wolfSSL_Init() != WOLFSSL_SUCCESS)
         return false;
+    inited = true;
     ctx = wolfSSL_CTX_new(wolfSSLv23_client_method());
     if (!ctx)
         return false;
@@ -153,9 +175,13 @@ static bool make_ctx(void)
     if (!loaded) {
         wolfSSL_CTX_free(ctx);
         ctx = NULL;
+        /* Every root refused, and the clock unset: say it is the date. */
+        if (roots && now < CLOCK_FLOOR)
+            *err = why = WE_CERT_DATE;
         return false;
     }
     save_seed();
+    old_clock = now < CLOCK_FLOOR;
     ctx_failed = false;
     return true;
 }
@@ -172,11 +198,9 @@ WOLFSSL *tls_new(const char *host, int port, int *err)
 {
     WOLFSSL *ssl;
 
-    *err = WE_NOMEM;
-    if (!make_ctx()) {
-        *err = WE_TLS;
+    if (!make_ctx(err))
         return NULL;
-    }
+    *err = WE_NOMEM;
     ssl = wolfSSL_new(ctx);
     if (!ssl)
         return NULL;
