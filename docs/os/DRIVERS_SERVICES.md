@@ -198,3 +198,7 @@ Observed emulator results for this change:
   available, versus 13,828 KiB with NE2000: a 628 KiB difference. These values
   include reclaimable ROM cache and compare the two hardware configurations,
   rather than a before/after build benchmark (`gui-empty`, `gui-ne2000`).
+
+The MARGI Presenter-to-Go CF VGA card loads `drivers/presenter.ko` and mirrors
+the LCD through the service worker; see [Presenter-to-Go](../hardware/PRESENTER.md)
+for scope, protocol evidence and the physical validation still required.

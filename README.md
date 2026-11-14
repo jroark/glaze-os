@@ -374,3 +374,9 @@ over USB or paired TLS. macOS can use its built-in Screen Sharing viewer.
 keyboard. Tap Write, print a letter or digit, and choose a candidate; Settings
 → Input Method selects the default and includes a practice pad. Recognition
 runs offline on the device.
+
+### Presenter-to-Go VGA output
+
+Initial native support for the MARGI Presenter-to-Go CF card mirrors the LCD on
+a VGA monitor. Physical output remains unverified; see
+[Presenter-to-Go](docs/hardware/PRESENTER.md) for supported cards and validation.

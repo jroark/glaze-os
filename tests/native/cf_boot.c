@@ -83,6 +83,10 @@ void modem_removed(void) { modem_removals++; }
 static uint32_t gps_cor; static unsigned gps_index, gps_inserts, gps_removals;
 void gps_insert(uint32_t cor, unsigned index) { gps_cor = cor; gps_index = index; gps_inserts++; }
 void gps_removed(void) { gps_removals++; }
+static unsigned presenter_inserts, presenter_removals;
+static int presenter_index;
+void presenter_insert(uint32_t cor, int index) { presenter_inserts++; presenter_index = index; }
+void presenter_removed(void) { presenter_removals++; }
 bool net_present(void) { return false; }
 static unsigned net_inserts, net_product;
 bool net_insert(unsigned m, unsigned p) { (void)m; net_product = p; net_inserts++; return false; }
@@ -334,8 +338,37 @@ static void wl54cf_socket_tests(void)
     booted = false;
 }
 
+static void presenter_card_test(void)
+{
+    uint8_t saved[sizeof(attr)]; memcpy(saved, attr, sizeof(attr));
+    struct cis entry = { .index = -1, .io_index = -1, .uart_index = -1, .presenter_index = -1 };
+    attr[0] = 1; attr[2] = 8; attr[4] = 0x6b; /* 16-bit, 11 lines */
+    cis_entry(0,3,&entry,false); assert(entry.presenter_index == 1);
+    entry.presenter_index = -1; attr[4] = 0x2b; /* 8-bit only */
+    cis_entry(0,3,&entry,false); assert(entry.presenter_index == -1);
+    attr[4] = 0xe0; attr[6] = 0xa0;
+    attr[8] = attr[10] = 0; attr[12] = 0xff; attr[14] = 7;
+    cis_entry(0,8,&entry,false); assert(entry.presenter_index == 1);
+    entry.presenter_index = -1; attr[8] = 0x10; /* nonzero fixed base */
+    cis_entry(0,8,&entry,false); assert(entry.presenter_index == -1);
+    attr[8] = 0; attr[6] = 0xe0; /* truncated 32-bit length */
+    cis_entry(0,8,&entry,false); assert(entry.presenter_index == -1);
+    memcpy(attr, saved, sizeof(attr));
+    struct cis c = { .function = 3, .manufacturer = 0x1d8, .product = 0x2001,
+                     .cor = 0x200, .presenter_index = 1, .uart_index = -1 };
+    capture_card(&c);
+    assert(card_info.kind == BT_CARD_PRESENTER && presenter_inserts == 1);
+    assert(presenter_index == 1 && serial_card());
+    socket_full = true; ata[ATA_COMMAND] = 0x5a;
+    assert(!identify() && ata[ATA_COMMAND] == 0x5a);
+    forget_card(); assert(presenter_removals);
+    c.product = 0x2010; capture_card(&c);
+    assert(card_info.kind != BT_CARD_PRESENTER && presenter_inserts == 1);
+}
+
 int main(void)
 {
+    presenter_card_test();
     bluetooth_card_tests();
     modem_card_tests();
     gps_card_tests();

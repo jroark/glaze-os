@@ -57,7 +57,7 @@ $(OUT)/kernel/hwfile.o: KERNEL_CFLAGS += $(KCRYPTO_INC) -I$(OUT)/gen
 # when a card or package changes, or an update is staged, is built for size,
 # as are the CF socket driver (CIS and insertion; its ATA transfers are
 # bound by 8-bit PIO) and the 4800-baud GPS reader.
-KERNEL_COLD := hwfile module service ota_stage drivers/net drivers/cf gps
+KERNEL_COLD := hwfile module service ota_stage drivers/net drivers/cf gps presenter
 $(foreach o,$(KERNEL_COLD),$(OUT)/kernel/$(o).o): KERNEL_CFLAGS += -Os
 
 # These bake in INIT/BUILD_ID/INPUT_SCRIPT/VERSION/STOWAWAY_TRACE; rebuild them every time.
