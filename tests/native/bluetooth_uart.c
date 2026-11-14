@@ -31,6 +31,7 @@ static const struct uart_config bcsp = {
     .cor_address = 0xe0, .io_base = 0x3f8, .divisor = 1, .cor = 0x43, .lcr = 0x1b, .mcr = 0x0b, .fcr = 7,
 };
 void kprintf(const char *format,...){}
+void kputs(const char *s){}
 static uint8_t uart_read(unsigned r)
 {
     mmio++;

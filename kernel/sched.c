@@ -182,6 +182,14 @@ static void idle_loop(void)
 #ifdef GLAZE_NO_STANDBY
         irq_restore(s);
 #else
+        /* A real BE-300 stops servicing even timer-polled USB with the
+         * BCSP card active in STANDBY (VR4131 UM 12). Repeated discovery
+         * works with the CPU running, including through remote-name bursts.
+         * Keep the tick and UART alive until the card is removed. */
+        if (bt_present()) {
+            irq_restore(s);
+            continue;
+        }
         /* Nothing to run until an interrupt: the timer tick at the latest,
          * which polls every device that has no interrupt of its own. IE is
          * set first: STANDBY sets it on a VR4131, but not in every emulator

@@ -111,6 +111,14 @@ When nothing is runnable, the idle thread executes STANDBY
 stops until any interrupt, and the 100 Hz tick wakes it at the latest. That
 tick also polls every device without an interrupt of its own.
 
+The Bluetooth CF driver inhibits CPU STANDBY while it owns a present card.
+On a real BE-300, Bluetooth initialization and inquiry could stop timer and
+USB servicing until the watchdog reset the device. Disabling STANDBY allowed
+repeated discovery and remote-name requests to complete; making standby entry
+atomic alone did not prevent the lockup. The scheduler keeps the CPU running
+with this card and resumes normal idle STANDBY on removal. This increases idle
+CPU power consumption while the Bluetooth card is inserted.
+
 A real VR4131's STANDBY sets Status.IE itself; Linux's `vr41xx_cpu_wait`
 relies on that. be300's gxemul used to run STANDBY as WAIT and never set IE.
 The idle loop therefore enables interrupts first and checks `need_resched`
