@@ -92,6 +92,22 @@ loaded again, and the new service returned to Ready. Settings and the status
 icon recovered. Cold NAND boot, swaps between different card types, and
 hibernate/resume still need an acceptance pass with this recovery change.
 
+The scheduler inhibits CPU idle STANDBY while this card is present. Hardware
+testing on 2026-11-13 reproduced a whole-system stall during initialization
+and discovery: even timer-driven USB diagnostics stopped, followed by a
+watchdog reset. Three scans with STANDBY disabled completed and resolved the
+nearby `BT-R5` device. Atomic standby entry alone still stalled. The targeted
+workaround then completed two further scans with normal idle STANDBY otherwise
+enabled. It keeps the CPU awake for Bluetooth and restores normal idle power
+saving when the card is removed; idle CPU power consumption is higher with
+the card inserted. See [Power](POWER.md#idle-standby).
+
+The full-app RAM image with packet tracing disabled also completed discovery
+through USB and Settings → Bluetooth → Scan Devices, returning to Ready with
+`BT-R5` displayed and error 0. A subsequent scan found the JBL Flip 2 and an
+authenticated, encrypted A2DP connection negotiated 44.1 kHz stereo.
+The installed NAND firmware was not changed.
+
 The card can briefly return nonzero open-bus bytes after insertion. The socket
 requires a recognized CIS tuple before attempting ATA identification, then
 retries unreadable CIS data at 500 ms intervals, for up to twenty deferred
@@ -230,7 +246,7 @@ without controller errors. Tests used a RAM image with NAND left read-only.
 ## Validation
 
 ```sh
-make -C host bluetooth-audio-test bluetooth-source-sdp-test bluetooth-uart-test audio-output-test audio-volume-test bluetooth-test bluetooth-serial-test bluetooth-driver-test bluetooth-client-test connectivity-test cf-boot-test settings-test \
+make -C host sched-idle-test bluetooth-audio-test bluetooth-source-sdp-test bluetooth-uart-test audio-output-test audio-volume-test bluetooth-test bluetooth-serial-test bluetooth-driver-test bluetooth-client-test connectivity-test cf-boot-test settings-test \
     service-test net-driver-test boot-init-test
 python3 tests/services_catalog.py
 ./build.sh all glazeboot GB_APPS=all HWDUMP=1

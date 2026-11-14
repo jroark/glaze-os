@@ -355,6 +355,12 @@ display-test: ../tests/native/display.c ../tests/native/display_sys.h ../kernel/
 	../out/host/display-test
 .PHONY: display-test
 
+sched-idle-test: ../tests/native/sched_idle.c ../kernel/sched.c
+	@mkdir -p ../out/host
+	$(CC) $(CFLAGS) -Wno-pointer-to-int-cast -fsanitize=address,undefined ../tests/native/sched_idle.c -o ../out/host/sched-idle-test
+	../out/host/sched-idle-test
+.PHONY: sched-idle-test
+
 idle-test: ../tests/native/idle.c ../servers/springboard/idle.c ../servers/springboard/idle.h ../lib/include/glaze/display.h
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -o ../out/host/idle-test ../tests/native/idle.c ../servers/springboard/idle.c
