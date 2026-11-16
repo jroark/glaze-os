@@ -130,7 +130,17 @@ int main(void)
     v.jiggle_phase = 1;
     sb_draw_home(&s, &v);
     host_write_bmp("../out/host/home_switcher_jiggle.bmp", &s);
-    v.switcher_open = v.switcher_edit = false;
+    v.switcher_edit = false;
+
+    /* The tray's controls page: the rotate button, off and on. */
+    v.switcher_page = 1;
+    sb_draw_home(&s, &v);
+    host_write_bmp("../out/host/home_switcher_portrait.bmp", &s);
+    v.landscape = true;
+    sb_draw_home(&s, &v);
+    host_write_bmp("../out/host/home_switcher_landscape.bmp", &s);
+    v.switcher_open = v.landscape = false;
+    v.switcher_page = 0;
 
     /* Home editing: Photos dropped on Clock made a folder; Calendar is
      * being dragged towards the toolbar, over Calculator's centre. */

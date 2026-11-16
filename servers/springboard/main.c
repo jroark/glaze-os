@@ -62,6 +62,7 @@ enum state {
 #define EDGE_W          14
 #define KB_Y            (SCREEN_H - UI_KB_H)
 #define DOUBLE_HOME_MS  400     /* double-press Home opens the multitasking bar */
+#define TRAY_SWIPE      30      /* px across the tray that turn its page */
 #define CARD_POLL_MS    2000    /* look for apps on a card coming or going */
 #define SURFACE_BYTES   (SB_APP_W * GZ_FB_HEIGHT * 2)
 #define SHM_HEADER      4096
@@ -920,6 +921,8 @@ static void open_switcher(void)
     view.switcher_edit = false;
     view.switcher_pressed = -1;
     view.switcher_minus_pressed = -1;
+    view.switcher_page = 0;
+    view.switcher_control_pressed = false;
     sync_switcher();
 }
 
@@ -929,6 +932,19 @@ static void close_switcher(void)
     view.switcher_edit = false;
     view.switcher_pressed = -1;
     view.switcher_minus_pressed = -1;
+    view.switcher_page = 0;
+    view.switcher_control_pressed = false;
+}
+
+/* The rotate button: landscape-capable apps take the new shape when they
+ * next come up (docs/os/LANDSCAPE.md). */
+static void set_landscape(bool on)
+{
+    uint8_t v = on;
+
+    landscape_on = view.landscape = on;
+    if (pref_put(SB_LANDSCAPE_PREF, &v, 1) < 0)
+        puts("springboard: cannot save sb.landscape");
 }
 
 /* Move the foreground app into the background pool instead of killing it. */
@@ -1839,7 +1855,10 @@ static void switcher_touch(const struct gz_input_event *e)
         down_x = e->x;
         down_y = e->y;
         down_ms = now_ms();
-        if (view.switcher_edit) {
+        if (view.switcher_page == 1) {
+            view.switcher_control_pressed = sb_hit_switcher_control(e->x, e->y);
+            view.switcher_pressed = view.switcher_minus_pressed = -1;
+        } else if (view.switcher_edit) {
             view.switcher_minus_pressed = sb_hit_switcher_minus(e->x, e->y, view.num_switcher_apps);
             view.switcher_pressed = -1;
         } else {
@@ -1848,9 +1867,24 @@ static void switcher_touch(const struct gz_input_event *e)
         }
         render_home();
         break;
-    case GZ_EV_TOUCH_MOVE:
-        if (!touching)
+    case GZ_EV_TOUCH_MOVE: {
+        if (!touching || swiping)
             break;
+        /* Across the tray: the controls page is to the left of the apps. */
+        int dx = e->x - down_x, dy = e->y - down_y;
+        if (!view.switcher_edit && down_y >= top && (dx >= TRAY_SWIPE || dx <= -TRAY_SWIPE) &&
+            dx * dx > dy * dy) {
+            swiping = true;
+            view.switcher_page = dx > 0;
+            view.switcher_pressed = -1;
+            view.switcher_control_pressed = false;
+            render_home();
+            break;
+        }
+        if (view.switcher_control_pressed && !sb_hit_switcher_control(e->x, e->y)) {
+            view.switcher_control_pressed = false;
+            render_home();
+        }
         if (view.switcher_minus_pressed >= 0 &&
             sb_hit_switcher_minus(e->x, e->y, view.num_switcher_apps) != view.switcher_minus_pressed) {
             view.switcher_minus_pressed = -1;
@@ -1862,11 +1896,26 @@ static void switcher_touch(const struct gz_input_event *e)
             render_home();
         }
         break;
+    }
     case GZ_EV_TOUCH_UP: {
         if (!touching)
             break;
         touching = false;
+        if (swiping) {
+            swiping = false;
+            break;
+        }
         audio_sound(AUDIO_SND_TAP);
+        if (view.switcher_page == 1) {
+            bool hit = view.switcher_control_pressed && sb_hit_switcher_control(e->x, e->y);
+            view.switcher_control_pressed = false;
+            if (hit)
+                set_landscape(!landscape_on);
+            else if (e->y < top)
+                close_switcher();
+            render_home();
+            break;
+        }
         if (view.switcher_edit) {
             int m = view.switcher_minus_pressed;
             view.switcher_minus_pressed = -1;
@@ -3026,7 +3075,7 @@ int main(void)
 {
     init_surfaces();
     uint8_t landscape = 0;
-    landscape_on = pref_get(SB_LANDSCAPE_PREF, &landscape, 1) == 1 && landscape == 1;
+    landscape_on = view.landscape = pref_get(SB_LANDSCAPE_PREF, &landscape, 1) == 1 && landscape == 1;
     sb_draw_init();
     load_settings();
     uint32_t marker_size = 0;

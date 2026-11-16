@@ -117,6 +117,9 @@ struct sb_view {
     int num_switcher_apps;
     int switcher_pressed;       /* switcher slot under finger, or -1 */
     int switcher_minus_pressed; /* switcher '-' badge under finger, or -1 */
+    int switcher_page;          /* 0: running apps; 1: controls, swiped in from the left */
+    bool switcher_control_pressed; /* the rotate button is under the finger */
+    bool landscape;             /* the rotate button is on (docs/os/LANDSCAPE.md) */
     struct gz_power_status power;   /* the kernel's battery status */
     bool battery_pct;           /* show the level as a percentage */
 };
@@ -173,6 +176,9 @@ gfx_rect sb_switcher_icon_rect(int slot);
 gfx_rect sb_switcher_minus_rect(int slot);
 int sb_hit_switcher_icon(int x, int y, int count);
 int sb_hit_switcher_minus(int x, int y, int count);
+/* The controls page's rotate button, where the first app icon is. */
+gfx_rect sb_switcher_control_rect(void);
+bool sb_hit_switcher_control(int x, int y);
 /* Notification banner over the top of the screen, below the status bar. */
 void sb_draw_banner(gfx_surface *s, const struct sb_note *n);
 
