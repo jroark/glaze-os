@@ -6,7 +6,7 @@
  * blocks, images and form controls are atoms on the line. Tables use the
  * automatic algorithm (column min/max widths); a table whose minimum
  * doesn't fit the screen is linearized, cell after cell, which reads better
- * at 240 px than a sideways scroll. Floats and positioning are ignored:
+ * at 240 px (320 in landscape) than a sideways scroll. Floats and positioning are ignored:
  * floats are laid out as blocks.
  *
  * Flows (one per nesting level) live in a pool rather than on the 64 KiB
@@ -822,11 +822,11 @@ static void measure_flow(struct lay *L, struct node *n, struct measure *M, int d
         } else if (c->tag == T_IMG) {
             int w, h;
             bool known;
-            image_size(L, c, 240, &w, &h, &known);
+            image_size(L, c, CSS_TO_DEV(WEB_VIEW_CSS_W), &w, &h, &known);
             m_atom(M, known ? w : 16);
         } else if (c->ctl) {
             int w, h;
-            ctl_size(c->ctl, c->st, 240, &w, &h);
+            ctl_size(c->ctl, c->st, CSS_TO_DEV(WEB_VIEW_CSS_W), &w, &h);
             m_atom(M, w + 4);
         } else if (block_level(c->st)) {
             m_flush(M);
@@ -1511,7 +1511,7 @@ static void measure_table(struct lay *L, struct node *t, int *mn, int *mx, int d
     for (int i = 0; i < G.ncells; i++)
         if (G.cells[i].mn > widest)
             widest = G.cells[i].mn;
-    if (*mn + sp > 240)
+    if (*mn + sp > CSS_TO_DEV(WEB_VIEW_CSS_W))
         *mn = widest;
     else
         *mn += sp;
