@@ -334,14 +334,16 @@ static const struct key keys[] = {
 };
 #define NKEYS ((int)(sizeof(keys) / sizeof(keys[0])))
 
-#define DISPLAY_H   78
-#define PAD_TOP     (DISPLAY_H + 4)
-#define ROW_H       37
-#define COL_W       59
+/* Portrait: a 78 px display over 37 x 59 keys. Landscape: the same keypad,
+ * wider keys under a shorter display. */
+static int display_h(void) { return ui_landscape() ? 50 : 78; }
+static int pad_top(void) { return display_h() + 4; }
+static int row_h(void) { return (ui_h() - pad_top()) / 6; }
+static int col_w(void) { return (ui_w() - 4) / 4; }
 
 static gfx_rect key_rect(const struct key *k)
 {
-    return gfx_r(2 + k->col * COL_W, PAD_TOP + k->row * ROW_H, k->cols * COL_W - 3, k->rows * ROW_H - 3);
+    return gfx_r(2 + k->col * col_w(), pad_top() + k->row * row_h(), k->cols * col_w() - 3, k->rows * row_h() - 3);
 }
 
 static int pressed = -1;
@@ -351,8 +353,9 @@ static void draw_display(gfx_surface *s)
     char text[48];
     const int fonts[] = { FONT_R44, FONT_R24, FONT_R17 };
 
-    gfx_vgradient(s, gfx_r(0, 0, UI_W, DISPLAY_H), 0x3B3B3B, 0x0D0D0D, 255);
-    gfx_vgradient(s, gfx_r(0, 0, UI_W, DISPLAY_H / 2), 0xFFFFFF, 0xFFFFFF, 12);
+    int dh = display_h();
+    gfx_vgradient(s, gfx_r(0, 0, ui_w(), dh), 0x3B3B3B, 0x0D0D0D, 255);
+    gfx_vgradient(s, gfx_r(0, 0, ui_w(), dh / 2), 0xFFFFFF, 0xFFFFFF, 12);
     if (error)
         strcpy(text, "Error");
     else if (entry[0]) {
@@ -379,10 +382,10 @@ static void draw_display(gfx_surface *s)
     const gfx_font *f = ui_font(FONT_R44);
     for (unsigned i = 0; i < 3; i++) {
         f = ui_font(fonts[i]);
-        if (gfx_text_width(f, text) <= UI_W - 20)
+        if (gfx_text_width(f, text) <= ui_w() - 20 && f->line_height <= dh)
             break;
     }
-    gfx_text(s, UI_W - 12 - gfx_text_width(f, text), (DISPLAY_H - f->line_height) / 2 + 2, f, text, 0xFFFFFF, 255);
+    gfx_text(s, ui_w() - 12 - gfx_text_width(f, text), (dh - f->line_height) / 2 + 2, f, text, 0xFFFFFF, 255);
     if (has_memory)
         gfx_text(s, 10, 6, ui_font(FONT_B11), "M", 0xBBBBBB, 255);
 }
@@ -415,7 +418,7 @@ static void draw(void)
 {
     gfx_surface *s = &ui.surf;
 
-    gfx_fill(s, gfx_r(0, DISPLAY_H, UI_W, UI_H - DISPLAY_H), 0x000000);
+    gfx_fill(s, gfx_r(0, display_h(), ui_w(), ui_h() - display_h()), 0x000000);
     draw_display(s);
     for (int i = 0; i < NKEYS; i++)
         draw_key(s, i);
@@ -451,6 +454,7 @@ static void activate(const struct key *k)
 int main(void)
 {
     ui_init(SB_STATUS_BLACK);
+    ui_set_orientations(SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE);
     draw();
     ui_present();
 
@@ -472,6 +476,8 @@ int main(void)
                 activate(&keys[pressed]);
             pressed = -1;
             redraw = true;
+        } else if (ev.type == GZ_EV_APP_RESIZE) {
+            redraw = true;              /* key_rect() follows the new shape */
         }
         if (redraw) {
             draw();
