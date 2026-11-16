@@ -88,6 +88,56 @@ void gfx_blit_scaled(gfx_surface *dst, gfx_rect dr, const gfx_surface *src, gfx_
     }
 }
 
+void gfx_blit_rot90(gfx_surface *dst, gfx_rect dr, const gfx_surface *src, gfx_rect sr, int alpha)
+{
+    gfx_rect c;
+
+    if (alpha <= 0 || dr.w <= 0 || dr.h <= 0 || sr.w <= 0 || sr.h <= 0 ||
+        !gfx_rect_intersect(dr, dst->clip, &c))
+        return;
+    /* Turned counter-clockwise, sr's columns become dr's rows, read from
+     * sr's right edge down to its left, and sr's rows become dr's columns.
+     * 16.16 steps sample pixel centres, as gfx_blit_scaled does. */
+    int32_t stepu = (sr.w << 16) / dr.h, stepv = (sr.h << 16) / dr.w;
+    int32_t fv0 = sr.y * 65536 + stepv / 2 + (c.x - dr.x) * stepv;
+    bool unit = stepv == 65536;
+
+    /* Each destination row walks one source column: writes stay
+     * contiguous (the framebuffer is uncached), and a column of a
+     * 320-wide surface fits the D-cache, so the next row's reads hit. */
+    for (int y = c.y; y < c.y + c.h; y++) {
+        int u = (sr.x * 65536 + stepu / 2 + (dr.y + dr.h - 1 - y) * stepu) >> 16;
+        if (u < 0 || u >= src->w)
+            continue;
+        uint16_t *d = dst->px + y * dst->stride;
+        const uint16_t *col = src->px + u;
+        int stride = src->stride;
+        if (unit) {
+            int x0 = c.x, x1 = c.x + c.w, v = fv0 >> 16;
+            if (v < 0)
+                x0 -= v, v = 0;
+            if (x1 - x0 > src->h - v)
+                x1 = x0 + src->h - v;
+            const uint16_t *sp = col + v * stride;
+            if (alpha >= 255) {
+                for (int x = x0; x < x1; x++, sp += stride)
+                    d[x] = *sp;
+            } else {
+                for (int x = x0; x < x1; x++, sp += stride)
+                    d[x] = blend565(d[x], *sp, alpha);
+            }
+            continue;
+        }
+        int32_t fv = fv0;
+        for (int x = c.x; x < c.x + c.w; x++, fv += stepv) {
+            int v = fv >> 16;
+            if (v < 0 || v >= src->h)
+                continue;
+            d[x] = alpha >= 255 ? col[v * stride] : blend565(d[x], col[v * stride], alpha);
+        }
+    }
+}
+
 bool gfx_image_parse(gfx_image *img, const void *data, size_t size)
 {
     const uint8_t *b = data;

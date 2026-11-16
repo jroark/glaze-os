@@ -101,6 +101,35 @@ static void slice_reference(gfx_surface *s, gfx_rect r, const gfx_image *img, in
     }
 }
 
+/* Counter-clockwise quarter turn: dr pixel (x, y) shows sr column
+ * (from sr's right edge) dr.y + dr.h - 1 - y and row x - dr.x. Scaled
+ * cases sample centres in 16.16 like gfx_blit_scaled, per pixel. */
+static void rot_reference(gfx_surface *d, gfx_rect dr, const gfx_surface *s, gfx_rect sr, int alpha)
+{
+    if (alpha <= 0 || dr.w <= 0 || dr.h <= 0 || sr.w <= 0 || sr.h <= 0)
+        return;
+    bool unit = dr.w == sr.h && dr.h == sr.w;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (!gfx_rect_contains(dr, x, y) || !gfx_rect_contains(d->clip, x, y))
+                continue;
+            int u, v;
+            if (unit) {
+                u = sr.x + dr.y + dr.h - 1 - y;
+                v = sr.y + x - dr.x;
+            } else {
+                int32_t su = (sr.w << 16) / dr.h, sv = (sr.h << 16) / dr.w;
+                u = (sr.x * 65536 + su / 2 + (dr.y + dr.h - 1 - y) * su) >> 16;
+                v = (sr.y * 65536 + sv / 2 + (x - dr.x) * sv) >> 16;
+            }
+            if (u < 0 || v < 0 || u >= s->w || v >= s->h)
+                continue;
+            uint16_t c = s->px[v * s->stride + u], *p = d->px + y * d->stride + x;
+            *p = alpha >= 255 ? c : gfx_blend565(*p, c, alpha);
+        }
+    }
+}
+
 static void check(const char *what, int iteration)
 {
     for (int i = 0; i < WORDS; i++) {
@@ -167,6 +196,30 @@ int main(void)
         gfx_draw_3slice(&a, gfx_r(4, 4, 60, 24), &img, bad_caps[i][0], bad_caps[i][1], 255);
         check("three-slice bad caps", (int)i);
     }
-    puts("gfx: 8005 pixel comparisons PASS (including padding, guards and bad caps)");
+    /* Rotated blits from an odd-strided source, at 1:1 (the landscape
+     * present path), scaled (the zoom), partly outside either surface. */
+    static uint16_t source[45 * 37];
+    for (unsigned i = 0; i < sizeof(source) / 2; i++)
+        source[i] = (uint16_t)next();
+    for (int i = 0; i < 3000; i++) {
+        for (int j = 0; j < WORDS; j++)
+            actual[j] = expected[j] = (uint16_t)next();
+        gfx_surface a, e, s;
+        gfx_surface_init(&a, actual + 3, W, H, STRIDE);
+        gfx_surface_init(&e, expected + 3, W, H, STRIDE);
+        gfx_surface_init(&s, source + 1, 41, 36, 45);
+        gfx_rect clip = i % 3 ? gfx_r(next() % W, next() % H, next() % W, next() % H) : gfx_r(0, 0, W, H);
+        gfx_set_clip(&a, clip);
+        gfx_set_clip(&e, clip);
+        gfx_rect sr = gfx_r((int)(next() % 50) - 5, (int)(next() % 44) - 4, (int)(next() % 48), (int)(next() % 42));
+        gfx_rect dr = gfx_r((int)(next() % 100) - 10, (int)(next() % 76) - 10, sr.h, sr.w);
+        if (i % 4 == 3)
+            dr.w = (int)(next() % 90), dr.h = (int)(next() % 70);
+        int alpha = alphas[i % 8];
+        rot_reference(&e, dr, &s, sr, alpha);
+        gfx_blit_rot90(&a, dr, &s, sr, alpha);
+        check("rot90", i);
+    }
+    puts("gfx: 11005 pixel comparisons PASS (including padding, guards, bad caps and rotation)");
     return 0;
 }

@@ -98,6 +98,11 @@ void gfx_line_aa(gfx_surface *s, int x0_16, int y0_16, int x1_16, int y1_16, int
 void gfx_blit(gfx_surface *dst, int x, int y, const gfx_surface *src, gfx_rect sr);
 void gfx_blit_alpha(gfx_surface *dst, int x, int y, const gfx_surface *src, gfx_rect sr, int alpha);
 void gfx_blit_scaled(gfx_surface *dst, gfx_rect dr, const gfx_surface *src, gfx_rect sr, int alpha);
+/* sr turned 90 degrees counter-clockwise into dr: sr's top edge lands on
+ * dr's left edge, its top-left corner at dr's bottom-left. Nearest-neighbour
+ * scaled unless dr is sr's size on its side (dr.w == sr.h, dr.h == sr.w).
+ * SpringBoard draws landscape apps this way (docs/os/LANDSCAPE.md). */
+void gfx_blit_rot90(gfx_surface *dst, gfx_rect dr, const gfx_surface *src, gfx_rect sr, int alpha);
 void gfx_draw_image(gfx_surface *dst, int x, int y, const gfx_image *img, int alpha);
 void gfx_draw_image_scaled(gfx_surface *dst, gfx_rect dr, const gfx_image *img, int alpha);
 /* Tint an alpha-only use of `img` (its A8 plane) with a solid colour. */
