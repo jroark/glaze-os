@@ -31,6 +31,7 @@ Start with the [top-level README](../README.md) for building and running.
 - [Copy, cut and paste](os/CLIPBOARD.md)
 - [Handwriting input](os/HANDWRITING.md)
 - [Hard icons](os/HARD_ICONS.md)
+- [Landscape](os/LANDSCAPE.md)
 - [Device entropy](os/ENTROPY.md)
 - [Rendering and flash performance](os/PERFORMANCE.md)
 
