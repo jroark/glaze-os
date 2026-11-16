@@ -20,10 +20,10 @@ int main(void)
     struct sb_view v={0};
     assert(!sb_update_connectivity(&v));
     storage=true;assert(sb_update_connectivity(&v) && v.card_mounted);
-    assert(!gfx_rect_empty(sb_status_icon_rect(&v,SB_ICON_STORAGE)));
+    assert(!gfx_rect_empty(sb_status_icon_rect(&v,SB_ICON_STORAGE,SCREEN_W)));
     storage=false;net_kind=GZ_NET_XI825;net_state=NET_CONFIGURING;
     assert(sb_update_connectivity(&v) && !v.card_mounted && !v.network_connected);
-    assert(gfx_rect_empty(sb_status_icon_rect(&v,SB_ICON_STORAGE)));
+    assert(gfx_rect_empty(sb_status_icon_rect(&v,SB_ICON_STORAGE,SCREEN_W)));
     net_state=NET_UP;assert(sb_update_connectivity(&v) && v.network_connected);
     net_kind=GZ_NET_NE2000;assert(sb_update_connectivity(&v));
     net_kind=GZ_NET_USB;storage=true;
@@ -49,11 +49,11 @@ int main(void)
         v.card_mounted=row==0 || row==4;v.network_kind=kinds[row];
         v.bluetooth_present=row>=3;v.bluetooth_connected=row>=3;
         for(unsigned a=SB_ICON_STORAGE;a<SB_ICON_COUNT;a++) {
-            gfx_rect first=sb_status_icon_rect(&v,a);
+            gfx_rect first=sb_status_icon_rect(&v,a,SCREEN_W);
             if(gfx_rect_empty(first))continue;
             assert(first.x>=83 && first.x+first.w<=214);
             for(unsigned b=a+1;b<SB_ICON_COUNT;b++) {
-                gfx_rect second=sb_status_icon_rect(&v,b),overlap;
+                gfx_rect second=sb_status_icon_rect(&v,b,SCREEN_W),overlap;
                 assert(!gfx_rect_intersect(first,second,&overlap));
             }
         }

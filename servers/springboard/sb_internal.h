@@ -134,7 +134,7 @@ void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt);
 void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool padlock);
 enum { SB_ICON_NONE, SB_ICON_STORAGE, SB_ICON_NETWORK, SB_ICON_BLUETOOTH, SB_ICON_COUNT };
 bool sb_update_connectivity(struct sb_view *v);
-gfx_rect sb_status_icon_rect(const struct sb_view *v, unsigned icon);
+gfx_rect sb_status_icon_rect(const struct sb_view *v, unsigned icon, int width);
 struct sb_card_details {
     char title[32];
     char lines[8][48];
