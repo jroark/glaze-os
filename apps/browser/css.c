@@ -31,6 +31,8 @@ static bool is_ws(char c)
 }
 
 /* Skip whitespace and comments from i. */
+int web_view_css_w = 320;
+
 static int skip_ws(const char *s, int len, int i)
 {
     for (;;) {
@@ -1796,8 +1798,8 @@ static bool media_feature(const char *s, int len)
         return WEB_VIEW_CSS_W <= width;
     if (FIS("min-width") || FIS("min-device-width"))
         return WEB_VIEW_CSS_W >= width;
-    if (FIS("orientation"))
-        return VIS("portrait");
+    if (FIS("orientation"))     /* wider than the portrait screen is landscape */
+        return VIS(WEB_VIEW_CSS_W > 320 ? "landscape" : "portrait");
     if (FIS("prefers-color-scheme"))
         return VIS("light");
     if (FIS("prefers-reduced-motion"))

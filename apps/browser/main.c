@@ -34,8 +34,8 @@
 #define BAR_H       44
 #define TOOL_H      34
 #define VIEW_Y      BAR_H
-#define VIEW_H      (UI_H - BAR_H - TOOL_H)
-#define KB_Y        (UI_H - UI_KB_H)
+#define VIEW_H      (ui_h() - BAR_H - TOOL_H)
+#define KB_Y        (ui_h() - (ui_landscape() ? UI_KB_LAND_H : UI_KB_H))
 #define FIELD_X     6
 #define FIELD_Y     18
 #define FIELD_H     22
@@ -259,7 +259,7 @@ int plat_cookies_write(const void *data, int len)
 
 static int view_h(void)
 {
-    return mode == M_BROWSE ? VIEW_H : UI_H - ui_keyboard_height() - VIEW_Y;
+    return mode == M_BROWSE ? VIEW_H : ui_h() - ui_keyboard_height() - VIEW_Y;
 }
 
 static void save_state(void)
@@ -360,7 +360,7 @@ static void go(const char *url, const char *post, bool reload, int hist)
     if (hist >= 0)
         pending_scroll = history[hist].scroll;
     drag_frame = NULL;
-    load_begin(&ld, url, post, post ? "application/x-www-form-urlencoded" : NULL, reload, UI_W);
+    load_begin(&ld, url, post, post ? "application/x-www-form-urlencoded" : NULL, reload, ui_w());
 }
 
 static void navigate(const char *url)
@@ -440,6 +440,29 @@ static void show_page(struct page *p)
     }
 }
 
+/* Styles and layout depend on the viewport (vw, %, media queries), so a
+ * turned page is restyled as well as laid out again. */
+static void mark_dirty(struct page *p)
+{
+    if (!p)
+        return;
+    p->dirty = true;
+    for (int i = 0; i < p->nframes; i++)
+        mark_dirty(p->frames[i].page);
+}
+
+/* The surface was turned while the app was away (GZ_EV_APP_RESIZE): the
+ * next load_step restyles and lays out the page at the new width. */
+static void resize(void)
+{
+    web_view_css_w = ui_w() * 4 / 3;
+    ld.width = ui_w();
+    mark_dirty(ld.shown);
+    ui_list_set_area(&list, gfx_r(0, UI_NAV_H, ui_w(), ui_h() - UI_NAV_H));
+    sc.view_h = view_h();
+    sc.offset = MIN(sc.offset, ui_scroll_max(&sc));
+}
+
 static void relayout(void)
 {
     int old = sc.offset;
@@ -473,7 +496,7 @@ static const char *display_url(const char *u)
 
 static void draw_field(gfx_surface *s, bool editing)
 {
-    int w = editing ? UI_W - FIELD_X - 64 : UI_W - 2 * FIELD_X;
+    int w = editing ? ui_w() - FIELD_X - 64 : ui_w() - 2 * FIELD_X;
     gfx_rect r = gfx_r(FIELD_X, FIELD_Y, w, FIELD_H);
     const gfx_font *f = ui_font(FONT_R12);
 
@@ -541,26 +564,26 @@ static void draw_field(gfx_surface *s, bool editing)
 
 static void draw_bar(gfx_surface *s)
 {
-    gfx_vgradient(s, gfx_r(0, 0, UI_W, BAR_H / 2), 0xB4C0D0, 0x8B9DB5, 255);
-    gfx_vgradient(s, gfx_r(0, BAR_H / 2, UI_W, BAR_H - BAR_H / 2), 0x8093AD, 0x6D84A2, 255);
-    gfx_fill(s, gfx_r(0, BAR_H - 1, UI_W, 1), UI_NAV_LINE);
-    gfx_fill_alpha(s, gfx_r(0, 0, UI_W, 1), 0xFFFFFF, 90);
+    gfx_vgradient(s, gfx_r(0, 0, ui_w(), BAR_H / 2), 0xB4C0D0, 0x8B9DB5, 255);
+    gfx_vgradient(s, gfx_r(0, BAR_H / 2, ui_w(), BAR_H - BAR_H / 2), 0x8093AD, 0x6D84A2, 255);
+    gfx_fill(s, gfx_r(0, BAR_H - 1, ui_w(), 1), UI_NAV_LINE);
+    gfx_fill_alpha(s, gfx_r(0, 0, ui_w(), 1), 0xFFFFFF, 90);
     const gfx_font *tf = ui_font(FONT_B10);
     const char *title = page && page->title && *page->title ? page->title : "Web";
     if (ld.state == LS_DOC)
         title = "Loading" GFX_CH_ELLIPSIS;
     int tw = gfx_text_width(tf, title);
-    if (tw > UI_W - 16) {
+    if (tw > ui_w() - 16) {
         gfx_rect old = s->clip;
-        gfx_set_clip(s, gfx_r(8, 0, UI_W - 16, 18));
-        gfx_text_fit(s, 8, 3, UI_W - 16, tf, title, 0xFFFFFF, 255);
+        gfx_set_clip(s, gfx_r(8, 0, ui_w() - 16, 18));
+        gfx_text_fit(s, 8, 3, ui_w() - 16, tf, title, 0xFFFFFF, 255);
         s->clip = old;
     } else {
-        gfx_text_shadow(s, (UI_W - tw) / 2, 3, tf, title, 0xFFFFFF, 0x3E4E66, -1, 255);
+        gfx_text_shadow(s, (ui_w() - tw) / 2, 3, tf, title, 0xFFFFFF, 0x3E4E66, -1, 255);
     }
     draw_field(s, mode == M_URL);
     if (mode == M_URL) {
-        gfx_rect b = gfx_r(UI_W - 58, FIELD_Y - 1, 52, 24);
+        gfx_rect b = gfx_r(ui_w() - 58, FIELD_Y - 1, 52, 24);
         gfx_round_rect_vgradient(s, b, 5, pressed == P_CANCEL ? 0x5A6F8C : 0x7E93AF,
                                  pressed == P_CANCEL ? 0x3A4C68 : 0x4A6383, 255);
         gfx_text_center(s, b.x, b.y + (b.h - ui_font(FONT_B10)->line_height) / 2, b.w, ui_font(FONT_B10),
@@ -575,12 +598,12 @@ static int tool_x(int i)
 
 static void draw_toolbar(gfx_surface *s)
 {
-    int y = UI_H - TOOL_H, cy = y + TOOL_H / 2;
+    int y = ui_h() - TOOL_H, cy = y + TOOL_H / 2;
 
-    gfx_vgradient(s, gfx_r(0, y, UI_W, TOOL_H / 2), 0x8B9DB5, 0x7187A5, 255);
-    gfx_vgradient(s, gfx_r(0, y + TOOL_H / 2, UI_W, TOOL_H - TOOL_H / 2), 0x667D9C, 0x58708F, 255);
-    gfx_fill(s, gfx_r(0, y, UI_W, 1), UI_NAV_LINE);
-    gfx_fill_alpha(s, gfx_r(0, y + 1, UI_W, 1), 0xFFFFFF, 70);
+    gfx_vgradient(s, gfx_r(0, y, ui_w(), TOOL_H / 2), 0x8B9DB5, 0x7187A5, 255);
+    gfx_vgradient(s, gfx_r(0, y + TOOL_H / 2, ui_w(), TOOL_H - TOOL_H / 2), 0x667D9C, 0x58708F, 255);
+    gfx_fill(s, gfx_r(0, y, ui_w(), 1), UI_NAV_LINE);
+    gfx_fill_alpha(s, gfx_r(0, y + 1, ui_w(), 1), 0xFFFFFF, 70);
     static const enum press order[5] = { P_BACK, P_FWD, P_MARKS, P_ADD, P_HOME };
     for (int i = 0; i < 5; i++) {
         int cx = tool_x(i);
@@ -622,7 +645,7 @@ static void draw_toolbar(gfx_surface *s)
 
 static void draw_page(gfx_surface *s)
 {
-    gfx_rect v = gfx_r(0, VIEW_Y, UI_W, view_h());
+    gfx_rect v = gfx_r(0, VIEW_Y, ui_w(), view_h());
 
     if (!page) {
         gfx_fill(s, v, 0xFFFFFF);
@@ -636,7 +659,7 @@ static void draw_page(gfx_surface *s)
             int h = MAX(v.h * v.h / page->content_h, 20);
             int off = MAX(0, MIN(sc.offset, max));
             int y = v.y + 2 + (v.h - 4 - h) * off / max;
-            gfx_round_rect(s, gfx_r(UI_W - 6, y, 4, h), 2, 0x000000, 110);
+            gfx_round_rect(s, gfx_r(ui_w() - 6, y, 4, h), 2, 0x000000, 110);
         }
     }
 }
@@ -649,7 +672,7 @@ static void draw_toast(gfx_surface *s)
     }
     const gfx_font *f = ui_font(FONT_B12);
     int w = gfx_text_width(f, toast) + 24;
-    gfx_rect r = gfx_r((UI_W - w) / 2, VIEW_Y + VIEW_H / 2 - 18, w, 36);
+    gfx_rect r = gfx_r((ui_w() - w) / 2, VIEW_Y + VIEW_H / 2 - 18, w, 36);
     gfx_round_rect(s, r, 8, 0x000000, 170);
     gfx_text_center(s, r.x, r.y + (r.h - f->line_height) / 2, r.w, f, toast, 0xFFFFFF, 255);
 }
@@ -681,7 +704,7 @@ static int list_count(void)
 
 static void draw_list_row(gfx_surface *s, int i, gfx_rect row, bool pressed_here, void *ctx)
 {
-    gfx_rect r = gfx_r(CELL_X, row.y, UI_W - 2 * CELL_X, ROW_H);
+    gfx_rect r = gfx_r(CELL_X, row.y, ui_w() - 2 * CELL_X, ROW_H);
     bool sel = pressed_here && !marks_editing;
     uint32_t ink = sel ? 0xFFFFFF : 0x000000;
     int x = TEXT_X;
@@ -719,7 +742,7 @@ static void draw_list(gfx_surface *s)
     ui_draw_pinstripes(s, list.area);
     ui_list_draw(s, &list, draw_list_row, NULL);
     if (!list.count)
-        gfx_text_center(s, 0, UI_NAV_H + 60, UI_W, ui_font(FONT_B14), "No Bookmarks", 0x6A7280, 255);
+        gfx_text_center(s, 0, UI_NAV_H + 60, ui_w(), ui_font(FONT_B14), "No Bookmarks", 0x6A7280, 255);
     ui_draw_navbar(s, title, NULL, &back, 0);
     if (!marks_editing)         /* the left button ends editing */
         ui_draw_bar_button(s, "Done", true, pressed == P_DONE, true, 0);
@@ -748,7 +771,7 @@ static void open_list(enum view v)
     pressed = P_NONE;
     marks_editing = false;
     confirm_mark = -1;
-    ui_list_init(&list, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), ROW_H);
+    ui_list_init(&list, gfx_r(0, UI_NAV_H, ui_w(), ui_h() - UI_NAV_H), ROW_H);
     list.pad = list.footer_h = 10;
     ui_list_reset(&list, list_count());
     ui_transition(draw_view, true);
@@ -957,12 +980,12 @@ static enum press bar_hit(int x, int y)
 {
     if (y < BAR_H) {
         if (mode == M_URL)
-            return x >= UI_W - 64 ? P_CANCEL : P_FIELD;
-        if (y >= FIELD_Y - 4 && x >= UI_W - FIELD_X - 26)
+            return x >= ui_w() - 64 ? P_CANCEL : P_FIELD;
+        if (y >= FIELD_Y - 4 && x >= ui_w() - FIELD_X - 26)
             return P_RELOAD;
         return y >= FIELD_Y - 6 ? P_FIELD : P_NONE;
     }
-    if (mode == M_BROWSE && y >= UI_H - TOOL_H) {
+    if (mode == M_BROWSE && y >= ui_h() - TOOL_H) {
         static const enum press order[5] = { P_BACK, P_FWD, P_MARKS, P_ADD, P_HOME };
         return order[MIN(x / 48, 4)];
     }
@@ -1148,7 +1171,7 @@ static void list_event(const struct gz_input_event *e)
         pressed = P_NONE;
         badge_press = false;
         if (e->y < UI_NAV_H) {
-            if (e->x >= UI_W - 70 && !marks_editing)
+            if (e->x >= ui_w() - 70 && !marks_editing)
                 pressed = P_DONE;
             else if (e->x < 70 && view == V_BOOKMARKS)
                 pressed = P_EDIT;
@@ -1295,6 +1318,8 @@ static void start(void)
 int main(void)
 {
     ui_init(SB_STATUS_GRAY);
+    ui_set_orientations(SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE);
+    web_view_css_w = ui_w() * 4 / 3;
     ui_scroll_reset(&sc, 0, VIEW_H);
     start();
     redraw();
@@ -1312,6 +1337,8 @@ int main(void)
                     key_event(&ev);
                 else if (ev.type == GZ_EV_APP_ACTIVATE)
                     ;
+                else if (ev.type == GZ_EV_APP_RESIZE)
+                    resize();
                 else if (ev.type == GZ_EV_TOUCH_CANCEL) {
                     /* Home mid-touch: drop the touch without acting on it. */
                     bool changed;

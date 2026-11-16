@@ -39,7 +39,7 @@
 
 #define MAX_SOURCE_PIXELS   (1600u * 1200u)     /* decoded RGBA must fit in RAM */
 #define IMAGE_BUDGET        (3u << 20)          /* document plus frames, decoded */
-#define MAX_W               240
+#define MAX_W               CSS_TO_DEV(WEB_VIEW_CSS_W)     /* the screen's width */
 
 static uint32_t tree_image_bytes(struct page *p)
 {

@@ -80,7 +80,7 @@ void sb_clock_from(struct sb_clock *c, const struct gz_datetime *dt)
 
 /* ---- status bar --------------------------------------------------------- */
 
-#define BATTERY_X   (SCREEN_W - 26)
+#define BATTERY_X(w) ((w) - 26)    /* w: the status bar's width */
 
 /* The battery from the kernel's status (glaze/abi.h gz_power_status):
  * filled to the level, amber at 20 % and red when critical on battery,
@@ -119,13 +119,13 @@ static void draw_battery(gfx_surface *s, int x, int y, uint32_t fg, const struct
 }
 
 /* Left edge of the battery and its percentage, for the card icon. */
-static int battery_left(const struct sb_view *v, const gfx_font *f, char *pct, size_t cap)
+static int battery_left(const struct sb_view *v, const gfx_font *f, char *pct, size_t cap, int w)
 {
     pct[0] = 0;
     if (!v->battery_pct || !(v->power.flags & GZ_POWER_VALID))
-        return BATTERY_X;
+        return BATTERY_X(w);
     snprintf(pct, cap, "%d%%", v->power.level);
-    return BATTERY_X - 2 - gfx_text_width(f, pct);
+    return BATTERY_X(w) - 2 - gfx_text_width(f, pct);
 }
 
 static void draw_padlock(gfx_surface *s, int cx, int y, uint32_t fg)
@@ -151,11 +151,11 @@ static bool status_icon_visible(const struct sb_view *v, unsigned icon)
            icon == SB_ICON_BLUETOOTH && v->bluetooth_present;
 }
 
-gfx_rect sb_status_icon_rect(const struct sb_view *v, unsigned icon)
+gfx_rect sb_status_icon_rect(const struct sb_view *v, unsigned icon, int width)
 {
     if (!status_icon_visible(v, icon)) return gfx_r(0, 0, 0, 0);
     char pct[8];
-    int left = battery_left(v, ui_font(FONT_B10), pct, sizeof(pct));
+    int left = battery_left(v, ui_font(FONT_B10), pct, sizeof(pct), width);
     for (unsigned i = SB_ICON_STORAGE; i <= icon; i++)
         if (status_icon_visible(v, i)) left -= 16;
     return gfx_r(left - 1, 0, 16, SB_STATUS_H);
@@ -211,17 +211,18 @@ gfx_rect sb_draw_card_details(gfx_surface *s, const struct sb_card_details *d, b
 
 void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool padlock)
 {
-    gfx_rect r = gfx_r(0, 0, SCREEN_W, SB_STATUS_H);
+    int w = s->w;               /* 320 over a landscape app */
+    gfx_rect r = gfx_r(0, 0, w, SB_STATUS_H);
     uint32_t fg;
     const gfx_font *f = ui_font(FONT_B10);
 
     if (style == SB_STATUS_GRAY) {
         gfx_vgradient(s, r, 0xE1E5EA, 0xA4ACB7, 255);
-        gfx_fill(s, gfx_r(0, SB_STATUS_H - 1, SCREEN_W, 1), 0x5B6470);
+        gfx_fill(s, gfx_r(0, SB_STATUS_H - 1, w, 1), 0x5B6470);
         fg = 0x111111;
     } else {
         gfx_fill_alpha(s, r, 0x000000, style == SB_STATUS_BLACK ? 255 : 150);
-        gfx_vgradient(s, gfx_r(0, 0, SCREEN_W, SB_STATUS_H / 2), 0xFFFFFF, 0xFFFFFF, 18);
+        gfx_vgradient(s, gfx_r(0, 0, w, SB_STATUS_H / 2), 0xFFFFFF, 0xFFFFFF, 18);
         fg = 0xFFFFFF;
     }
     /* Show the device name, like iPod touch did. */
@@ -242,10 +243,10 @@ void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool pad
         } else gfx_fill(s, gfx_r(74, 6, 2, 2), 0xFFFFFF);
     }
     char pct[8];
-    int left = battery_left(v, f, pct, sizeof(pct));
+    int left = battery_left(v, f, pct, sizeof(pct), w);
     int icons_left = left;
     for (unsigned icon = SB_ICON_STORAGE; icon < SB_ICON_COUNT; icon++) {
-        gfx_rect r = sb_status_icon_rect(v, icon);
+        gfx_rect r = sb_status_icon_rect(v, icon, w);
         if (gfx_rect_empty(r)) continue;
         icons_left = MIN(icons_left, r.x);
         uint32_t color = fg;
@@ -260,18 +261,18 @@ void sb_draw_status(gfx_surface *s, const struct sb_view *v, int style, bool pad
         else draw_network(s, r.x+1, 2, color);
     }
     if (padlock)
-        draw_padlock(s, SCREEN_W / 2, 3, fg);
+        draw_padlock(s, w / 2, 3, fg);
     else {
         int width = gfx_text_width(f, v->clk.status);
         int min_x = v->debugger & GU_DEBUG_CONNECTED ? 83 : 48;
-        int x = MAX(min_x, MIN((SCREEN_W-width)/2, icons_left-width-3));
+        int x = MAX(min_x, MIN((w-width)/2, icons_left-width-3));
         gfx_surface clock = *s;
         gfx_rect_intersect(s->clip, gfx_r(min_x, 0, MAX(0, icons_left-min_x-2), SB_STATUS_H), &clock.clip);
         gfx_text(&clock, x, 2, f, v->clk.status, fg, 255);
     }
     if (pct[0])
         gfx_text(s, left, 2, f, pct, fg, 255);
-    draw_battery(s, BATTERY_X, 3, fg, &v->power);
+    draw_battery(s, BATTERY_X(w), 3, fg, &v->power);
 }
 
 /* ---- shared wallpaper --------------------------------------------------- */
@@ -395,7 +396,7 @@ static void draw_lock_notes(gfx_surface *s, const struct sb_view *v)
 
 void sb_draw_banner(gfx_surface *s, const struct sb_note *n)
 {
-    gfx_rect r = gfx_r(0, SB_STATUS_H, SCREEN_W, BANNER_H);
+    gfx_rect r = gfx_r(0, SB_STATUS_H, s->w, BANNER_H);
 
     gfx_fill_alpha(s, r, 0x000000, 215);
     gfx_vgradient(s, gfx_r(r.x, r.y, r.w, r.h / 2), 0xFFFFFF, 0xFFFFFF, 26);
@@ -676,6 +677,18 @@ int sb_hit_switcher_minus(int x, int y, int count)
     return -1;
 }
 
+gfx_rect sb_switcher_control_rect(void)
+{
+    return sb_switcher_icon_rect(0);
+}
+
+bool sb_hit_switcher_control(int x, int y)
+{
+    gfx_rect r = sb_switcher_control_rect();
+
+    return gfx_rect_contains(gfx_r(r.x - 6, r.y - 4, r.w + 12, r.h + 18), x, y);
+}
+
 /* Red circled '-' at the icon's top-left corner, for quitting a background app. */
 static void draw_minus_button(gfx_surface *s, gfx_rect icon, bool pressed)
 {
@@ -883,6 +896,43 @@ static void draw_dragged(gfx_surface *s, const struct sb_view *v)
     draw_item(s, &dv, v->drag_item, r);
 }
 
+/* A handset outline, upright or on its side, for the rotate button. */
+static void draw_handset(gfx_surface *s, int cx, int cy, bool sideways, uint32_t fg, uint32_t bg)
+{
+    int w = sideways ? 26 : 16, h = sideways ? 16 : 26;
+    gfx_rect r = gfx_r(cx - w / 2, cy - h / 2, w, h);
+
+    gfx_round_rect(s, r, 3, fg, 255);
+    gfx_round_rect(s, gfx_r(r.x + 2, r.y + 2, r.w - 4, r.h - 4), 2, bg, 255);
+    /* The screen, and the hard-icon strip under it (on the left, sideways). */
+    if (sideways) {
+        gfx_fill(s, gfx_r(r.x + 7, r.y + 4, r.w - 11, r.h - 8), fg);
+        gfx_fill(s, gfx_r(r.x + 4, r.y + 5, 1, r.h - 10), fg);
+    } else {
+        gfx_fill(s, gfx_r(r.x + 4, r.y + 4, r.w - 8, r.h - 11), fg);
+        gfx_fill(s, gfx_r(r.x + 5, r.y + r.h - 5, r.w - 10, 1), fg);
+    }
+}
+
+/* The controls page: the rotate button, in the first icon's place, as
+ * iPhone OS 4 kept its orientation lock left of the running apps. */
+static void draw_switcher_controls(gfx_surface *s, const struct sb_view *v)
+{
+    gfx_rect r = sb_switcher_control_rect();
+    const gfx_font *lab = ui_font(FONT_B9);
+    const char *label = v->landscape ? "Landscape" : "Portrait";
+
+    gfx_round_rect_vgradient(s, r, 9, v->landscape ? 0x5F9BE0 : 0x6B7380,
+                             v->landscape ? 0x1F5DAA : 0x2E343D, 255);
+    gfx_fill_alpha(s, gfx_r(r.x + 3, r.y + 1, r.w - 6, r.h / 2 - 1), 0xFFFFFF, 30);
+    draw_handset(s, r.x + r.w / 2, r.y + r.h / 2, v->landscape, 0xFFFFFF,
+                 v->landscape ? 0x2E6FBD : 0x40474F);
+    if (v->switcher_control_pressed)
+        gfx_round_rect(s, r, 8, 0x000000, 110);
+    int tw = gfx_text_width(lab, label);
+    gfx_text_shadow(s, r.x + (r.w - tw) / 2, r.y + r.h + 2, lab, label, 0xFFFFFF, 0x000000, 1, 255);
+}
+
 static void draw_switcher(gfx_surface *s, const struct sb_view *v)
 {
     int top = SCREEN_H - SWITCHER_H;
@@ -895,6 +945,15 @@ static void draw_switcher(gfx_surface *s, const struct sb_view *v)
     gfx_vgradient(s, gfx_r(0, top, SCREEN_W, SWITCHER_H), 0x2F3640, 0x15191F, 255);
     gfx_fill(s, gfx_r(0, top, SCREEN_W, 1), 0x0A0C0F);
     gfx_fill_alpha(s, gfx_r(0, top + 1, SCREEN_W, 1), 0xFFFFFF, 85);
+
+    /* Page dots: controls on the left, apps on the right. */
+    for (int i = 0; i < 2; i++)
+        gfx_circle(s, SCREEN_W / 2 - 5 + i * 10, top + SWITCHER_H - 3, 2,
+                   0xFFFFFF, (v->switcher_page == 1) == (i == 0) ? 220 : 70);
+    if (v->switcher_page == 1) {
+        draw_switcher_controls(s, v);
+        return;
+    }
 
     int n = MIN(v->num_switcher_apps, SWITCHER_SLOTS);
     if (n <= 0) {

@@ -70,8 +70,8 @@
 /* Overlay layout. */
 #define BAR_Y           (UI_NAV_H + 14)
 #define BAR_X0          44
-#define BAR_X1          (UI_W - 44)
-#define PANEL           gfx_r(70, UI_H - 54, UI_W - 140, 44)
+#define BAR_X1          (ui_w() - 44)
+#define PANEL           gfx_r(70, ui_h() - 54, ui_w() - 140, 44)
 
 struct video {
     char name[FS_NAME_MAX];
@@ -490,12 +490,12 @@ static void draw_video(gfx_surface *s, int i, gfx_rect r, bool sel, void *ctx)
         gfx_fill(s, tr, 0x202020);
     }
     int tx = tr.x + THUMB_W + 10;
-    gfx_text_fit(s, tx, r.y + 11, UI_W - tx - 24, f, v->title, sel ? 0xFFFFFF : UI_TEXT, 255);
+    gfx_text_fit(s, tx, r.y + 11, ui_w() - tx - 24, f, v->title, sel ? 0xFFFFFF : UI_TEXT, 255);
     if (v->duration_ms) {
         fmt_time(dur, sizeof(dur), v->duration_ms, false);
         gfx_text(s, tx, r.y + 31, sf, dur, sel ? 0xFFFFFF : 0x808080, 255);
     }
-    ui_draw_chevron(s, UI_W - 16, r.y + ROW_H / 2 - 5, sel ? 0xFFFFFF : 0x9A9A9A);
+    ui_draw_chevron(s, ui_w() - 16, r.y + ROW_H / 2 - 5, sel ? 0xFFFFFF : 0x9A9A9A);
 }
 
 static void draw_list(gfx_surface *s)
@@ -507,9 +507,9 @@ static void draw_list(gfx_surface *s)
     gfx_fill(s, body, 0xFFFFFF);
     ui_list_draw(s, &list, draw_video, NULL);
     if (!nvideos) {
-        gfx_text_center(s, 0, UI_NAV_H + 100, UI_W, ui_font(FONT_B17), "No Videos", 0x666666, 255);
-        gfx_text_center(s, 0, UI_NAV_H + 126, UI_W, sf, "Motion-JPEG AVI files you add", 0x888888, 255);
-        gfx_text_center(s, 0, UI_NAV_H + 144, UI_W, sf, "to " MOVIES " appear here.", 0x888888, 255);
+        gfx_text_center(s, 0, UI_NAV_H + 100, ui_w(), ui_font(FONT_B17), "No Videos", 0x666666, 255);
+        gfx_text_center(s, 0, UI_NAV_H + 126, ui_w(), sf, "Motion-JPEG AVI files you add", 0x888888, 255);
+        gfx_text_center(s, 0, UI_NAV_H + 144, ui_w(), sf, "to " MOVIES " appear here.", 0x888888, 255);
     }
     gfx_reset_clip(s);
     ui_draw_navbar(s, "Videos", NULL, NULL, 1);
@@ -517,13 +517,13 @@ static void draw_list(gfx_surface *s)
 
 static gfx_rect video_rect(void)
 {
-    int w = UI_W, h = (int)((uint32_t)UI_W * avi.height / avi.width);
+    int w = ui_w(), h = (int)((uint32_t)ui_w() * avi.height / avi.width);
 
-    if (h > UI_H) {
-        h = UI_H;
-        w = (int)((uint32_t)UI_H * avi.width / avi.height);
+    if (h > ui_h()) {
+        h = ui_h();
+        w = (int)((uint32_t)ui_h() * avi.width / avi.height);
     }
-    return gfx_r((UI_W - w) / 2, (UI_H - h) / 2, w, h);
+    return gfx_r((ui_w() - w) / 2, (ui_h() - h) / 2, w, h);
 }
 
 static uint32_t shown_ms(void)
@@ -533,28 +533,28 @@ static uint32_t shown_ms(void)
 
 static void draw_overlay(gfx_surface *s)
 {
-    static uint16_t barbuf[UI_W * (UI_NAV_H + 28)];
+    static uint16_t barbuf[SB_LAND_W * (UI_NAV_H + 28)];     /* either way round */
     const gfx_font *nf = ui_font(FONT_B11);
     gfx_surface bar;
     char a[16], b[16];
     int bh = UI_NAV_H + 28;
 
     /* Translucent top bar: Done, then the scrubber under it. */
-    gfx_surface_init(&bar, barbuf, UI_W, bh, UI_W);
-    gfx_vgradient(&bar, gfx_r(0, 0, UI_W, bh), 0x3A3A3A, 0x0A0A0A, 255);
+    gfx_surface_init(&bar, barbuf, ui_w(), bh, ui_w());
+    gfx_vgradient(&bar, gfx_r(0, 0, ui_w(), bh), 0x3A3A3A, 0x0A0A0A, 255);
     done_rect = ui_draw_bar_button(&bar, "Done", false, pressed_done, true, 1);
-    gfx_text_center(&bar, 0, (UI_NAV_H - ui_font(FONT_B14)->line_height) / 2, UI_W, ui_font(FONT_B14),
+    gfx_text_center(&bar, 0, (UI_NAV_H - ui_font(FONT_B14)->line_height) / 2, ui_w(), ui_font(FONT_B14),
                     videos[current].title, 0xFFFFFF, 255);
     uint32_t pos = shown_ms(), dur = duration();
     fmt_time(a, sizeof(a), pos, false);
     fmt_time(b, sizeof(b), dur - MIN(pos, dur), true);
     gfx_text(&bar, 6, BAR_Y - nf->line_height / 2, nf, a, 0xFFFFFF, 255);
-    gfx_text(&bar, UI_W - 6 - gfx_text_width(nf, b), BAR_Y - nf->line_height / 2, nf, b, 0xFFFFFF, 255);
+    gfx_text(&bar, ui_w() - 6 - gfx_text_width(nf, b), BAR_Y - nf->line_height / 2, nf, b, 0xFFFFFF, 255);
     int kx = BAR_X0 + (dur ? (int)((uint64_t)MIN(pos, dur) * (BAR_X1 - BAR_X0) / dur) : 0);
     gfx_round_rect(&bar, gfx_r(BAR_X0, BAR_Y - 2, BAR_X1 - BAR_X0, 5), 2, 0x4A4A4A, 255);
     gfx_round_rect(&bar, gfx_r(BAR_X0, BAR_Y - 2, kx - BAR_X0 + 2, 5), 2, 0xD8D8D8, 255);
     gfx_circle(&bar, kx, BAR_Y, scrubbing ? 8 : 6, 0xFFFFFF, 255);
-    gfx_blit_alpha(s, 0, 0, &bar, gfx_r(0, 0, UI_W, bh), 190);
+    gfx_blit_alpha(s, 0, 0, &bar, gfx_r(0, 0, ui_w(), bh), 190);
 
     /* Play/pause on a rounded glass panel. */
     gfx_rect p = PANEL;
@@ -575,7 +575,7 @@ static void draw_player(gfx_surface *s)
 {
     gfx_rect vr = video_rect();
 
-    gfx_fill(s, gfx_r(0, 0, UI_W, UI_H), 0x000000);
+    gfx_fill(s, gfx_r(0, 0, ui_w(), ui_h()), 0x000000);
     if (frame_ok)
         gfx_blit_scaled(s, vr, &frame, gfx_r(0, 0, frame.w, frame.h), 255);
     if (overlay)
@@ -795,8 +795,9 @@ static void key_event(const struct gz_input_event *e)
 int main(void)
 {
     ui_init(SB_STATUS_BLACK);
+    ui_set_orientations(SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE);
     list_videos();
-    ui_list_init(&list, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), ROW_H);
+    ui_list_init(&list, gfx_r(0, UI_NAV_H, ui_w(), ui_h() - UI_NAV_H), ROW_H);
     ui_list_reset(&list, nvideos);
     redraw();
 
@@ -817,6 +818,10 @@ int main(void)
                 bool changed;
                 pressed_done = pressed_play = scrubbing = false;
                 ui_list_event(&list, &ev, &changed);
+                redraw();
+            } else if (ev.type == GZ_EV_APP_RESIZE) {
+                /* Turned while away: the picture and controls follow ui_w/ui_h. */
+                ui_list_set_area(&list, gfx_r(0, UI_NAV_H, ui_w(), ui_h() - UI_NAV_H));
                 redraw();
             } else if (ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
                 key_event(&ev);

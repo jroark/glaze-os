@@ -196,13 +196,13 @@ static void draw_note_row(gfx_surface *s, int i, gfx_rect r, bool sel, void *ctx
 
     (void)ctx;
     if (sel)
-        gfx_vgradient(s, gfx_r(0, r.y, UI_W, r.h - 1), UI_SELECT_TOP, UI_SELECT_BOTTOM, 255);
+        gfx_vgradient(s, gfx_r(0, r.y, ui_w(), r.h - 1), UI_SELECT_TOP, UI_SELECT_BOTTOM, 255);
     short_time(&notes[i].dt, tbuf, sizeof(tbuf));
     int tw = gfx_text_width(tf, tbuf);
-    gfx_text_fit(s, MARGIN, r.y + (r.h - f->line_height) / 2, UI_W - MARGIN * 2 - tw - 24, f, titles[i],
+    gfx_text_fit(s, MARGIN, r.y + (r.h - f->line_height) / 2, ui_w() - MARGIN * 2 - tw - 24, f, titles[i],
                  sel ? 0xFFFFFF : INK, 255);
-    gfx_text(s, UI_W - 26 - tw, r.y + (r.h - tf->line_height) / 2 + 1, tf, tbuf, sel ? 0xFFFFFF : 0x8A7650, 255);
-    ui_draw_chevron(s, UI_W - 16, r.y + r.h / 2 - 5, sel ? 0xFFFFFF : 0x9A8A60);
+    gfx_text(s, ui_w() - 26 - tw, r.y + (r.h - tf->line_height) / 2 + 1, tf, tbuf, sel ? 0xFFFFFF : 0x8A7650, 255);
+    ui_draw_chevron(s, ui_w() - 16, r.y + r.h / 2 - 5, sel ? 0xFFFFFF : 0x9A8A60);
 }
 
 static void draw_list(gfx_surface *s)
@@ -214,7 +214,7 @@ static void draw_list(gfx_surface *s)
     gfx_fill(s, body, PAPER);
     /* The paper stays ruled at row pitch below the last note. */
     for (int y = ui_list_row_y(&list, 0) + LIST_ROW_H - 1; y < body.y + body.h; y += LIST_ROW_H)
-        gfx_fill(s, gfx_r(0, y, UI_W, 1), RULE);
+        gfx_fill(s, gfx_r(0, y, ui_w(), 1), RULE);
     ui_list_draw(s, &list, draw_note_row, NULL);
     gfx_reset_clip(s);
 
@@ -234,7 +234,7 @@ static void refresh_titles(void)
 
 static int paper_h(void)
 {
-    return UI_H - UI_NAV_H - (editing ? ui_keyboard_height() : TOOLBAR_H);
+    return ui_h() - UI_NAV_H - (editing ? ui_keyboard_height() : TOOLBAR_H);
 }
 
 static int text_top(void)
@@ -244,7 +244,7 @@ static int text_top(void)
 
 static void layout(void)
 {
-    nlines = ui_wrap(ui_font(FONT_R14), text, UI_W - MARGIN * 2, line_starts, 600);
+    nlines = ui_wrap(ui_font(FONT_R14), text, ui_w() - MARGIN * 2, line_starts, 600);
     edit_scroll.content_h = 30 + nlines * LINE_H + 20;
     edit_scroll.view_h = paper_h();
 }
@@ -272,13 +272,13 @@ static void keep_cursor_visible(void)
 
 static void draw_toolbar(gfx_surface *s)
 {
-    gfx_rect r = gfx_r(0, UI_H - TOOLBAR_H, UI_W, TOOLBAR_H);
+    gfx_rect r = gfx_r(0, ui_h() - TOOLBAR_H, ui_w(), TOOLBAR_H);
 
-    gfx_vgradient(s, gfx_r(0, r.y, UI_W, r.h / 2), 0xC79A6A, 0xA27243, 255);
-    gfx_vgradient(s, gfx_r(0, r.y + r.h / 2, UI_W, r.h - r.h / 2), 0x93653A, 0x74471F, 255);
-    gfx_fill(s, gfx_r(0, r.y, UI_W, 1), 0x3A220C);
+    gfx_vgradient(s, gfx_r(0, r.y, ui_w(), r.h / 2), 0xC79A6A, 0xA27243, 255);
+    gfx_vgradient(s, gfx_r(0, r.y + r.h / 2, ui_w(), r.h - r.h / 2), 0x93653A, 0x74471F, 255);
+    gfx_fill(s, gfx_r(0, r.y, ui_w(), 1), 0x3A220C);
     /* Trash can glyph. */
-    int cx = UI_W / 2, cy = r.y + 8;
+    int cx = ui_w() / 2, cy = r.y + 8;
     uint32_t c = pressed_trash ? 0x3A220C : 0xFFFFFF;
     gfx_fill(s, gfx_r(cx - 7, cy + 2, 14, 2), c);
     gfx_fill(s, gfx_r(cx - 3, cy, 6, 2), c);
@@ -292,7 +292,7 @@ static void draw_edit(gfx_surface *s)
 {
     char date[48];
     const gfx_font *f = ui_font(FONT_R14), *df = ui_font(FONT_R11);
-    gfx_rect paper = gfx_r(0, UI_NAV_H, UI_W, paper_h());
+    gfx_rect paper = gfx_r(0, UI_NAV_H, ui_w(), paper_h());
     int off = edit_scroll.offset;
 
     layout();
@@ -304,7 +304,7 @@ static void draw_edit(gfx_surface *s)
         int h = dt->hour % 12 ? dt->hour % 12 : 12;
         snprintf(date, sizeof(date), "%s %d   %d:%02d %s", month_abbr[(dt->month + 11) % 12], dt->day, h,
                  dt->minute, dt->hour < 12 ? "AM" : "PM");
-        gfx_text(s, UI_W - MARGIN - gfx_text_width(df, date), paper.y + 8 - off, df, date, 0x8A7650, 255);
+        gfx_text(s, ui_w() - MARGIN - gfx_text_width(df, date), paper.y + 8 - off, df, date, 0x8A7650, 255);
     }
     for (int l = 0; l < nlines; l++) {
         int y = text_top() + l * LINE_H - off;
@@ -330,7 +330,7 @@ static void draw_edit(gfx_surface *s)
         done_rect = gfx_r(0, 0, 0, 0);
     if (editing) {
         if (!ui_has_hardware_keyboard())
-            ui_draw_keyboard(s, &kb, UI_H - UI_KB_H);
+            ui_draw_keyboard(s, &kb, ui_h() - ui_keyboard_height());
     } else
         draw_toolbar(s);
     if (alert_open) {
@@ -454,7 +454,7 @@ static void list_event(const struct gz_input_event *e)
 
 static void edit_event(const struct gz_input_event *e)
 {
-    int kb_y = UI_H - UI_KB_H;
+    int kb_y = ui_h() - ui_keyboard_height();
 
     if (alert_open) {
         int h = gfx_rect_contains(alert_cancel, e->x, e->y) ? 0
@@ -565,7 +565,8 @@ static void physical_event(const struct gz_input_event *e)
 int main(void)
 {
     ui_init(SB_STATUS_GRAY);
-    ui_list_init(&list, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), LIST_ROW_H);
+    ui_set_orientations(SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE);
+    ui_list_init(&list, gfx_r(0, UI_NAV_H, ui_w(), ui_h() - UI_NAV_H), LIST_ROW_H);
     load_index();
     refresh_titles();
     redraw();
@@ -587,6 +588,15 @@ int main(void)
                 ui_list_event(&list, &ev, &changed);
                 ui_scroll_event(&edit_scroll, &ev, 0);
                 ui_keyboard_event(&kb, &ev, 0, &changed);
+                redraw();
+            } else if (ev.type == GZ_EV_APP_RESIZE) {
+                /* Turned while away: the list and the text wrap again. */
+                ui_list_set_area(&list, gfx_r(0, UI_NAV_H, ui_w(), ui_h() - UI_NAV_H));
+                layout();
+                if (edit_scroll.offset > ui_scroll_max(&edit_scroll))
+                    edit_scroll.offset = ui_scroll_max(&edit_scroll);
+                if (editing)
+                    keep_cursor_visible();
                 redraw();
             } else if (ev.type == GZ_EV_TEXT || ev.type == GZ_EV_KEY_DOWN || ev.type == GZ_EV_KEY_UP)
                 physical_event(&ev);

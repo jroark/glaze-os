@@ -62,6 +62,7 @@ enum state {
 #define EDGE_W          14
 #define KB_Y            (SCREEN_H - UI_KB_H)
 #define DOUBLE_HOME_MS  400     /* double-press Home opens the multitasking bar */
+#define TRAY_SWIPE      30      /* px across the tray that turn its page */
 #define CARD_POLL_MS    2000    /* look for apps on a card coming or going */
 #define SURFACE_BYTES   (SB_APP_W * GZ_FB_HEIGHT * 2)
 #define SHM_HEADER      4096
@@ -73,6 +74,10 @@ _Static_assert(sizeof(struct sb_shared) <= SHM_HEADER, "sb_shared must fit befor
 static gfx_surface fb;          /* the hardware framebuffer */
 static gfx_surface bb;          /* back buffer, flushed to fb by rect */
 static gfx_surface snap;        /* cached frame underneath animations */
+/* The status bar and banner over a landscape app, drawn upright and then
+ * turned onto the LCD (docs/os/LANDSCAPE.md). */
+static gfx_surface strip;
+static bool landscape_on;       /* the switcher's rotate button; sb.landscape */
 static struct sb_view view;
 static enum state state;
 static int sb_port;
@@ -116,6 +121,8 @@ struct sb_running {
     gfx_surface surf;
     bool ready;
     bool fullscreen;
+    unsigned orient_mask;       /* SB_ORIENT_* from SB_SET_ORIENTATIONS, 0 until then */
+    bool landscape;             /* its surface is SB_LAND_W wide, turned on the LCD */
     bool suspend_due;           /* background: freeze at last_active_ms + SUSPEND_MS */
     uint32_t last_active_ms;
 };
@@ -129,7 +136,19 @@ static struct sb_running *front(void) { return front_slot >= 0 ? &running[front_
 static int front_app(void) { return front_slot >= 0 ? running[front_slot].app_index : -1; }
 static bool front_fullscreen(void) { return front_slot >= 0 && running[front_slot].fullscreen; }
 static int app_top(void) { return front_fullscreen() ? 0 : SB_STATUS_H; }
-static int app_height(void) { return front_fullscreen() ? GZ_FB_HEIGHT : SB_APP_H; }
+static int app_width(void) { return front_slot >= 0 ? running[front_slot].surf.w : SB_APP_W; }
+static int app_height(void) { return front_slot >= 0 ? running[front_slot].surf.h : SB_APP_H; }
+static bool front_landscape(void) { return front_slot >= 0 && running[front_slot].landscape; }
+/* SpringBoard's own status bar and banner turn with an app on screen. */
+static bool turned(void) { return state == ST_APP && front_landscape(); }
+
+/* Landscape coordinates are the LCD turned clockwise under the user's
+ * hands: (x, y) on the 320 x 240 screen is LCD (y, 319 - x), so the LCD's
+ * left edge is the top. A rectangle of the screen, on the LCD: */
+static gfx_rect lcd_rect(gfx_rect r)
+{
+    return front_landscape() ? gfx_r(r.y, SCREEN_H - r.x - r.w, r.h, r.w) : r;
+}
 
 struct anim {
     bool active;
@@ -236,6 +255,13 @@ static void flush(gfx_rect r)
 static void flush_all(void)
 {
     flush(gfx_r(0, 0, SCREEN_W, SCREEN_H));
+}
+
+/* Shows a rectangle of `strip`, in landscape screen coordinates. */
+static void flush_strip(gfx_rect r)
+{
+    if (!flush_blocked())
+        gfx_blit_rot90(&fb, lcd_rect(r), &strip, r, 255);
 }
 
 static void overlay_banner(void);
@@ -391,6 +417,11 @@ static void render_app_status(void)
 
     if (app < 0 || front_fullscreen())
         return;
+    if (front_landscape()) {
+        sb_draw_status(&strip, &view, sb_apps[app].status_style, false);
+        flush_strip(gfx_r(0, 0, SB_LAND_W, SB_STATUS_H));
+        return;
+    }
     sb_draw_status(&bb, &view, sb_apps[app].status_style, false);
     flush(gfx_r(0, 0, SCREEN_W, SB_STATUS_H));
 }
@@ -402,19 +433,23 @@ static void present_app_rect(gfx_rect r)
 
     if (card_dialog.open || idle.dark || installer.active)
         return;
-    if (!s || !gfx_rect_intersect(r, gfx_r(0, 0, SB_APP_W, app_height()), &c))
+    if (!s || !gfx_rect_intersect(r, gfx_r(0, 0, s->surf.w, s->surf.h), &c))
         return;
     if (installer.active) return;
-    gfx_blit(&fb, c.x, c.y + app_top(), &s->surf, c);
+    if (s->landscape)
+        gfx_blit_rot90(&fb, lcd_rect(gfx_r(c.x, c.y + app_top(), c.w, c.h)), &s->surf, c, 255);
+    else
+        gfx_blit(&fb, c.x, c.y + app_top(), &s->surf, c);
     if (c.y + app_top() < SB_STATUS_H + BANNER_H)
         overlay_banner();
 }
 
 /* ---- notification banner ------------------------------------------------ */
 
+/* On the LCD, for touches. */
 static gfx_rect banner_rect(void)
 {
-    return gfx_r(0, SB_STATUS_H, SCREEN_W, BANNER_H);
+    return turned() ? lcd_rect(gfx_r(0, SB_STATUS_H, SB_LAND_W, BANNER_H)) : gfx_r(0, SB_STATUS_H, SCREEN_W, BANNER_H);
 }
 
 /* Draws the banner over whatever is under it: the app or the home screen. */
@@ -424,6 +459,13 @@ static void overlay_banner(void)
 
     if (!banner_visible)
         return;
+    if (turned()) {
+        gfx_rect l = gfx_r(0, SB_STATUS_H, SB_LAND_W, BANNER_H);
+        gfx_blit(&strip, 0, SB_STATUS_H, &front()->surf, gfx_r(0, SB_STATUS_H - app_top(), SB_LAND_W, BANNER_H));
+        sb_draw_banner(&strip, &banner);
+        flush_strip(l);
+        return;
+    }
     if (state == ST_APP && front()) {
         gfx_blit(&bb, 0, SB_STATUS_H, &front()->surf,
                  gfx_r(0, SB_STATUS_H - app_top(), SB_APP_W, BANNER_H));
@@ -443,7 +485,7 @@ static void hide_banner(void)
     banner_visible = false;
     banner_touch = false;
     if (state == ST_APP)
-        present_app_rect(gfx_r(0, SB_STATUS_H - app_top(), SB_APP_W, BANNER_H));
+        present_app_rect(gfx_r(0, SB_STATUS_H - app_top(), app_width(), BANNER_H));
     else if (state == ST_HOME)
         render_home();
 }
@@ -464,7 +506,7 @@ static void show_queued_banner(void)
 static void render_app(void)
 {
     render_app_status();
-    present_app_rect(gfx_r(0, 0, SB_APP_W, app_height()));
+    present_app_rect(gfx_r(0, 0, app_width(), app_height()));
 }
 
 /* ---- CF card details ---------------------------------------------------- */
@@ -584,6 +626,14 @@ static void show_card_details(void)
     render_card_dialog();
 }
 
+/* A status-bar icon's touch area on the LCD. */
+static gfx_rect status_icon_lcd_rect(unsigned icon)
+{
+    if (!turned())
+        return sb_status_icon_rect(&view, icon, SCREEN_W);
+    return lcd_rect(sb_status_icon_rect(&view, icon, SB_LAND_W));
+}
+
 /* Swallow the entire icon gesture, so its release never reaches an app. */
 static bool card_details_event(const struct gz_input_event *e)
 {
@@ -618,7 +668,7 @@ static bool card_details_event(const struct gz_input_event *e)
     }
     unsigned icon = SB_ICON_NONE;
     for (unsigned i = SB_ICON_STORAGE; i < SB_ICON_COUNT; i++)
-        if (gfx_rect_contains(sb_status_icon_rect(&view, i), e->x, e->y)) { icon = i; break; }
+        if (gfx_rect_contains(status_icon_lcd_rect(i), e->x, e->y)) { icon = i; break; }
     bool hit = icon != SB_ICON_NONE && (!card_icon_touch || icon == card_icon_touch);
     bool stable = !anim.active && !touching && !dragging_knob && !alert.open &&
                   (state == ST_LOCK || state == ST_PASSCODE || state == ST_HOME ||
@@ -641,6 +691,29 @@ static bool card_details_event(const struct gz_input_event *e)
 
 /* ---- app management ----------------------------------------------------- */
 
+/* Lays the slot's surface out for an orientation, and tells the app
+ * through its shared header (it reads that on HELLO, SB_SET_ORIENTATIONS
+ * and ACTIVATE). The surface memory fits either shape. */
+static void slot_shape(struct sb_running *s, bool landscape)
+{
+    int w = landscape ? SB_LAND_W : SB_APP_W;
+    int h = landscape ? (s->fullscreen ? GZ_FB_WIDTH : SB_LAND_H) : (s->fullscreen ? GZ_FB_HEIGHT : SB_APP_H);
+
+    s->landscape = landscape;
+    gfx_surface_init(&s->surf, s->surf.px, w, h, w);
+    s->shared->stride = (uint32_t)w;
+    s->shared->width = (uint32_t)w;
+    s->shared->height = (uint32_t)h;
+    s->shared->orientation = landscape ? SB_ORIENT_LANDSCAPE : SB_ORIENT_PORTRAIT;
+}
+
+/* Landscape when the app can draw it and the user has it on, or always for
+ * an app that draws nothing else. */
+static bool slot_wants_landscape(const struct sb_running *s)
+{
+    return (s->orient_mask & SB_ORIENT_LANDSCAPE) && (landscape_on || !(s->orient_mask & SB_ORIENT_PORTRAIT));
+}
+
 static bool slot_ensure_shm(struct sb_running *s)
 {
     if (s->shm_base)
@@ -656,8 +729,9 @@ static bool slot_ensure_shm(struct sb_running *s)
     s->shared = (struct sb_shared *)base;
     memset(s->shared, 0, sizeof(*s->shared));
     s->shared->surface_offset = SHM_HEADER;
-    s->shared->stride = SB_APP_W;
-    gfx_surface_init(&s->surf, (uint16_t *)(base + SHM_HEADER), SB_APP_W, SB_APP_H, SB_APP_W);
+    s->surf.px = (uint16_t *)(base + SHM_HEADER);
+    s->fullscreen = false;
+    slot_shape(s, false);
     return true;
 }
 
@@ -688,15 +762,16 @@ static void slot_reset(int i)
     s->port = 0;
     s->ready = false;
     s->fullscreen = false;
+    s->orient_mask = 0;
     s->suspend_due = false;
     s->last_active_ms = 0;
     if (front_slot == i)
         front_slot = -1;
     slot_release_shm(i);
-    if (s->shm_base) {
-        s->surf.h = SB_APP_H;
-        gfx_reset_clip(&s->surf);
-    }
+    if (s->shm_base)
+        slot_shape(s, false);
+    else
+        s->landscape = false;
 }
 
 static void slot_kill(int i)
@@ -735,8 +810,16 @@ static void send_slot_event(struct sb_running *s, const struct gz_input_event *e
     if (!s || !s->ready || !s->shared || s->shared->head - s->shared->tail >= SB_RING)
         return;
     struct gz_input_event e = *ev;
-    if (e.type == GZ_EV_TOUCH_DOWN || e.type == GZ_EV_TOUCH_MOVE || e.type == GZ_EV_TOUCH_UP)
+    /* Touches arrive in LCD coordinates and go out in the surface's. */
+    if (e.type == GZ_EV_TOUCH_DOWN || e.type == GZ_EV_TOUCH_MOVE || e.type == GZ_EV_TOUCH_UP ||
+        e.type == GZ_EV_TOUCH_CANCEL) {
+        if (s->landscape) {
+            int16_t x = (int16_t)(SCREEN_H - 1 - e.y);
+            e.y = e.x;
+            e.x = x;
+        }
         e.y -= s->fullscreen ? 0 : SB_STATUS_H;
+    }
     s->shared->ev[s->shared->head % SB_RING] = e;
     s->shared->head++;
     gz_notify(s->port, SB_NOTIFY_EVENTS);
@@ -838,6 +921,8 @@ static void open_switcher(void)
     view.switcher_edit = false;
     view.switcher_pressed = -1;
     view.switcher_minus_pressed = -1;
+    view.switcher_page = 0;
+    view.switcher_control_pressed = false;
     sync_switcher();
 }
 
@@ -847,6 +932,19 @@ static void close_switcher(void)
     view.switcher_edit = false;
     view.switcher_pressed = -1;
     view.switcher_minus_pressed = -1;
+    view.switcher_page = 0;
+    view.switcher_control_pressed = false;
+}
+
+/* The rotate button: landscape-capable apps take the new shape when they
+ * next come up (docs/os/LANDSCAPE.md). */
+static void set_landscape(bool on)
+{
+    uint8_t v = on;
+
+    landscape_on = view.landscape = on;
+    if (pref_put(SB_LANDSCAPE_PREF, &v, 1) < 0)
+        puts("springboard: cannot save sb.landscape");
 }
 
 /* Move the foreground app into the background pool instead of killing it. */
@@ -960,9 +1058,19 @@ static void launch(int index)
             s->shared->background = 0;
             s->suspend_due = false;
             s->last_active_ms = now_ms();
+            /* Turned since it was last up: its picture is stale, so wait
+             * for the app to draw the new shape, as for a launch. */
+            bool turn = slot_wants_landscape(s) != s->landscape;
+            if (turn)
+                slot_shape(s, !s->landscape);
             gz_proc_set_bg(s->pid, GZ_PROC_FG);     /* also thaws it */
             struct gz_input_event e = { .type = GZ_EV_APP_ACTIVATE, .time_ms = s->last_active_ms };
             send_slot_event(s, &e);
+            if (turn) {
+                state = ST_LAUNCH_WAIT;
+                launch_t0 = s->last_active_ms;
+                return;
+            }
             bench_log("launch", sb_apps[index].path, 0);
             begin_zoom_in();
             return;
@@ -1001,8 +1109,8 @@ static void launch(int index)
     s->shared->hard_icons = 0;
     s->ready = false;
     s->fullscreen = false;
-    s->surf.h = SB_APP_H;
-    gfx_reset_clip(&s->surf);
+    s->orient_mask = 0;
+    slot_shape(s, false);
     memset(s->surf.px, 0xFF, SURFACE_BYTES);
     if (sb_apps[index].installed) {
         strlcpy(s->shared->bundle, sb_apps[index].path, sizeof(s->shared->bundle));
@@ -1057,7 +1165,7 @@ static void screen_lock_dark(void)
     if (front() && idle.touch_down) {
         struct gz_input_event cancel = {
             .type = GZ_EV_TOUCH_CANCEL, .time_ms = now_ms(),
-            .x = idle.touch_x, .y = (int16_t)(idle.touch_y - app_top()),
+            .x = idle.touch_x, .y = idle.touch_y,
         };
         send_event(&cancel);
     }
@@ -1210,7 +1318,16 @@ static void begin_unlock(void)
     audio_sound(AUDIO_SND_UNLOCK);
     notify_clear_delivered();
     view.num_lock_notes = 0;
-    if (lock_over_app && front()) {
+    if (lock_over_app && front() && front_landscape()) {
+        struct sb_running *s = front();
+        gfx_blit_rot90(&snap, lcd_rect(gfx_r(0, app_top(), s->surf.w, s->surf.h)), &s->surf,
+                       gfx_r(0, 0, s->surf.w, s->surf.h), 255);
+        if (!front_fullscreen()) {
+            gfx_rect bar = gfx_r(0, 0, SB_LAND_W, SB_STATUS_H);
+            sb_draw_status(&strip, &view, sb_apps[front_app()].status_style, false);
+            gfx_blit_rot90(&snap, lcd_rect(bar), &strip, bar, 255);
+        }
+    } else if (lock_over_app && front()) {
         gfx_blit(&snap, 0, app_top(), &front()->surf, gfx_r(0, 0, SB_APP_W, app_height()));
         if (!front_fullscreen())
             sb_draw_status(&snap, &view, sb_apps[front_app()].status_style, false);
@@ -1738,7 +1855,10 @@ static void switcher_touch(const struct gz_input_event *e)
         down_x = e->x;
         down_y = e->y;
         down_ms = now_ms();
-        if (view.switcher_edit) {
+        if (view.switcher_page == 1) {
+            view.switcher_control_pressed = sb_hit_switcher_control(e->x, e->y);
+            view.switcher_pressed = view.switcher_minus_pressed = -1;
+        } else if (view.switcher_edit) {
             view.switcher_minus_pressed = sb_hit_switcher_minus(e->x, e->y, view.num_switcher_apps);
             view.switcher_pressed = -1;
         } else {
@@ -1747,9 +1867,24 @@ static void switcher_touch(const struct gz_input_event *e)
         }
         render_home();
         break;
-    case GZ_EV_TOUCH_MOVE:
-        if (!touching)
+    case GZ_EV_TOUCH_MOVE: {
+        if (!touching || swiping)
             break;
+        /* Across the tray: the controls page is to the left of the apps. */
+        int dx = e->x - down_x, dy = e->y - down_y;
+        if (!view.switcher_edit && down_y >= top && (dx >= TRAY_SWIPE || dx <= -TRAY_SWIPE) &&
+            dx * dx > dy * dy) {
+            swiping = true;
+            view.switcher_page = dx > 0;
+            view.switcher_pressed = -1;
+            view.switcher_control_pressed = false;
+            render_home();
+            break;
+        }
+        if (view.switcher_control_pressed && !sb_hit_switcher_control(e->x, e->y)) {
+            view.switcher_control_pressed = false;
+            render_home();
+        }
         if (view.switcher_minus_pressed >= 0 &&
             sb_hit_switcher_minus(e->x, e->y, view.num_switcher_apps) != view.switcher_minus_pressed) {
             view.switcher_minus_pressed = -1;
@@ -1761,11 +1896,26 @@ static void switcher_touch(const struct gz_input_event *e)
             render_home();
         }
         break;
+    }
     case GZ_EV_TOUCH_UP: {
         if (!touching)
             break;
         touching = false;
+        if (swiping) {
+            swiping = false;
+            break;
+        }
         audio_sound(AUDIO_SND_TAP);
+        if (view.switcher_page == 1) {
+            bool hit = view.switcher_control_pressed && sb_hit_switcher_control(e->x, e->y);
+            view.switcher_control_pressed = false;
+            if (hit)
+                set_landscape(!landscape_on);
+            else if (e->y < top)
+                close_switcher();
+            render_home();
+            break;
+        }
         if (view.switcher_edit) {
             int m = view.switcher_minus_pressed;
             view.switcher_minus_pressed = -1;
@@ -2279,7 +2429,9 @@ static void handle_input(void)
                 home_touch(e);
                 break;
             case ST_APP:
-                if (e->y >= app_top() || e->type == GZ_EV_TOUCH_UP)
+                /* Not a touch that starts on the status bar (the LCD's
+                 * left columns in landscape). */
+                if ((front_landscape() ? e->x : e->y) >= app_top() || e->type == GZ_EV_TOUCH_UP)
                     send_event(e);
                 break;
             default:
@@ -2574,10 +2726,9 @@ static void handle_msg(int token, struct gz_msg *m)
         s->port = (int)m->w[1];
         s->ready = true;
         s->fullscreen = m->w[2] == SB_STATUS_FULLSCREEN;
-        s->surf.h = s->fullscreen ? GZ_FB_HEIGHT : SB_APP_H;
-        gfx_reset_clip(&s->surf);
+        slot_shape(s, s->landscape);
         r.w[1] = (uint32_t)s->shm_id;
-        r.w[2] = SB_APP_W;
+        r.w[2] = (uint32_t)s->surf.w;
         r.w[3] = (uint32_t)s->surf.h;
         r.w[4] = (uint32_t)gz_input_status();
         break;
@@ -2595,6 +2746,29 @@ static void handle_msg(int token, struct gz_msg *m)
             bench_log("launch", app >= 0 ? sb_apps[app].path : "?", now_ms() - launch_t0);
             begin_zoom_in();
         }
+        break;
+    }
+    case SB_SET_ORIENTATIONS: {
+        int slot = find_slot_by_pid((int)m->w[3]);
+        unsigned mask = m->w[1] & (SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE);
+        if (slot < 0 || !running[slot].shared || !mask) {
+            r.w[0] = (uint32_t)(slot < 0 ? GZ_EPERM : GZ_EINVAL);
+            break;
+        }
+        struct sb_running *s = &running[slot];
+        s->orient_mask = mask;
+        if (slot_wants_landscape(s) != s->landscape) {
+            slot_shape(s, !s->landscape);
+            /* The app is waiting on this reply, so its ring can be cleared
+             * of touches in the old shape; it presents a whole frame next. */
+            s->shared->tail = s->shared->head;
+            if (slot == front_slot && state == ST_APP)
+                render_app_status();
+        }
+        r.w[1] = s->shared->orientation;
+        r.w[2] = (uint32_t)s->surf.w;
+        r.w[3] = (uint32_t)s->surf.h;
+        r.w[4] = s->shared->stride;
         break;
     }
     case SB_SET_STATUS:
@@ -2723,7 +2897,7 @@ static void frame(void)
     case ST_ZOOM_OUT: {
         int app = front_app();
         gfx_rect icon = app >= 0 ? sb_icon_rect(&view, app) : gfx_r(SCREEN_W / 2, SCREEN_H / 2, 1, 1);
-        gfx_rect full = gfx_r(0, app_top(), SB_APP_W, app_height());
+        gfx_rect full = lcd_rect(gfx_r(0, app_top(), app_width(), app_height()));
         int q = state == ST_ZOOM_IN ? p : 1024 - p;
         gfx_rect r = lerp_rect(icon, full, q);
         /* Only the app's rectangle changes between frames: put the home
@@ -2736,7 +2910,9 @@ static void frame(void)
             dirty = gfx_r(0, 0, 0, 0);
         gfx_blit(&bb, dirty.x, dirty.y, &snap, dirty);
         int alpha = q > 512 ? 255 : 80 + q * 175 / 512;
-        if (front())
+        if (front_landscape())
+            gfx_blit_rot90(&bb, r, &front()->surf, gfx_r(0, 0, app_width(), app_height()), alpha);
+        else if (front())
             gfx_blit_scaled(&bb, r, &front()->surf, gfx_r(0, 0, SB_APP_W, app_height()), alpha);
         flush(dirty);
         zoom_whole = flush_blocked();
@@ -2781,10 +2957,12 @@ static void init_surfaces(void)
     gfx_surface_init(&fb, fbp, GZ_FB_WIDTH, GZ_FB_HEIGHT, GZ_FB_STRIDE);
     gfx_surface_init(&bb, malloc(SCREEN_W * SCREEN_H * 2), SCREEN_W, SCREEN_H, SCREEN_W);
     gfx_surface_init(&snap, malloc(SCREEN_W * SCREEN_H * 2), SCREEN_W, SCREEN_H, SCREEN_W);
+    gfx_surface_init(&strip, malloc(SB_LAND_W * (SB_STATUS_H + BANNER_H) * 2), SB_LAND_W,
+                     SB_STATUS_H + BANNER_H, SB_LAND_W);
 
     for (int i = 0; i < SB_MAX_RUNNING; i++)
         slot_reset(i);
-    if (!bb.px || !snap.px || !slot_ensure_shm(&running[0])) {
+    if (!bb.px || !snap.px || !strip.px || !slot_ensure_shm(&running[0])) {
         puts("springboard: out of memory");
         gz_exit(1);
     }
@@ -2896,6 +3074,8 @@ static void clear_installed_update(void)
 int main(void)
 {
     init_surfaces();
+    uint8_t landscape = 0;
+    landscape_on = view.landscape = pref_get(SB_LANDSCAPE_PREF, &landscape, 1) == 1 && landscape == 1;
     sb_draw_init();
     load_settings();
     uint32_t marker_size = 0;
@@ -3138,9 +3318,9 @@ int main(void)
         bool card_changed = false;
         if (!anim.active && (int)(now_ms() - card_status_next) >= 0)
             card_changed = update_card_status();
-        if (card_changed && card_dialog.open && !gfx_rect_empty(sb_status_icon_rect(&view, card_dialog.icon)))
+        if (card_changed && card_dialog.open && !gfx_rect_empty(sb_status_icon_rect(&view, card_dialog.icon, SCREEN_W)))
             close_card_dialog();
-        if (card_changed && card_dialog.open && gfx_rect_empty(sb_status_icon_rect(&view, card_dialog.icon))) {
+        if (card_changed && card_dialog.open && gfx_rect_empty(sb_status_icon_rect(&view, card_dialog.icon, SCREEN_W))) {
             struct sb_card_details *d = &card_dialog.details;
             strlcpy(d->lines[0], "Device removed or unavailable.", sizeof(d->lines[0]));
             d->num_lines = 1;

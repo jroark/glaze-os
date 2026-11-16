@@ -23,7 +23,8 @@
 #define NSLOTS      3
 #define THUMB       56
 #define GAP         4
-#define COLS        4
+/* Columns of thumbnails: 4 on a portrait screen, 5 in landscape. */
+#define COLS        (ui_w() / (THUMB + GAP))
 #define PAGE_MS     260
 #define THUMB_MAGIC 0x31544D47u     /* "GMT1" */
 
@@ -224,7 +225,9 @@ static int next_thumb(void)
 
 static gfx_rect thumb_rect(int i)
 {
-    return gfx_r(GAP + (i % COLS) * (THUMB + GAP),
+    int x0 = MAX(0, (ui_w() - COLS * (THUMB + GAP) - GAP) / 2);   /* centred in landscape */
+
+    return gfx_r(x0 + GAP + (i % COLS) * (THUMB + GAP),
                  UI_NAV_H + GAP + (i / COLS) * (THUMB + GAP) - grid_scroll.offset, THUMB, THUMB);
 }
 
@@ -237,10 +240,10 @@ static void draw_grid(gfx_surface *s)
 {
     const gfx_font *f = ui_font(FONT_R14);
 
-    gfx_fill(s, gfx_r(0, UI_NAV_H, UI_W, UI_H - UI_NAV_H), 0xFFFFFF);
+    gfx_fill(s, gfx_r(0, UI_NAV_H, ui_w(), ui_h() - UI_NAV_H), 0xFFFFFF);
     for (int i = 0; i < nphotos; i++) {
         gfx_rect r = thumb_rect(i);
-        if (r.y + THUMB <= UI_NAV_H || r.y >= UI_H)
+        if (r.y + THUMB <= UI_NAV_H || r.y >= ui_h())
             continue;
         if (photos[i].thumb.px)
             gfx_blit(s, r.x, r.y, &photos[i].thumb, gfx_r(0, 0, THUMB, THUMB));
@@ -252,11 +255,11 @@ static void draw_grid(gfx_surface *s)
     if (nphotos) {
         char count[24];
         snprintf(count, sizeof(count), nphotos == 1 ? "%d Photo" : "%d Photos", nphotos);
-        gfx_text_center(s, 0, thumb_rect(nphotos - 1).y + THUMB + 12, UI_W, f, count, 0x666666, 255);
+        gfx_text_center(s, 0, thumb_rect(nphotos - 1).y + THUMB + 12, ui_w(), f, count, 0x666666, 255);
     } else {
-        gfx_text_center(s, 0, UI_NAV_H + 100, UI_W, ui_font(FONT_B17), "No Photos", 0x666666, 255);
-        gfx_text_center(s, 0, UI_NAV_H + 126, UI_W, f, "Pictures you add to " PICTURES, 0x888888, 255);
-        gfx_text_center(s, 0, UI_NAV_H + 144, UI_W, f, "appear here.", 0x888888, 255);
+        gfx_text_center(s, 0, UI_NAV_H + 100, ui_w(), ui_font(FONT_B17), "No Photos", 0x666666, 255);
+        gfx_text_center(s, 0, UI_NAV_H + 126, ui_w(), f, "Pictures you add to " PICTURES, 0x888888, 255);
+        gfx_text_center(s, 0, UI_NAV_H + 144, ui_w(), f, "appear here.", 0x888888, 255);
     }
     ui_draw_navbar(s, "Camera Roll", NULL, NULL, 1);
 }
@@ -270,36 +273,43 @@ static void draw_photo(gfx_surface *s, int i, int x)
 
     sh.px -= SB_STATUS_H * s->stride;
     sh.clip = gfx_r(s->clip.x, s->clip.y + SB_STATUS_H, s->clip.w, s->clip.h);
-    if (img)
+    if (img && ui_landscape()) {
+        /* Pictures are portrait screens: fitted, the screen's height. */
+        int sw = ui_w(), sh_h = ui_h() + SB_STATUS_H;      /* the screen, under the status bar too */
+        int w = img->w * sh_h / MAX(1, img->h), h = sh_h;
+        if (w > sw)
+            w = sw, h = img->h * sw / MAX(1, img->w);
+        gfx_draw_image_scaled(&sh, gfx_r(x + (sw - w) / 2, (sh_h - h) / 2, w, h), img, 255);
+    } else if (img)
         gfx_draw_image(&sh, x, 0, img, 255);
     else
-        gfx_text_center(s, x, UI_H / 2 - 8, UI_W, ui_font(FONT_R14), "Can't open this picture", 0x999999, 255);
+        gfx_text_center(s, x, ui_h() / 2 - 8, ui_w(), ui_font(FONT_R14), "Can't open this picture", 0x999999, 255);
 }
 
 static void draw_viewer(gfx_surface *s)
 {
-    gfx_fill(s, gfx_r(0, 0, UI_W, UI_H), 0x000000);
+    gfx_fill(s, gfx_r(0, 0, ui_w(), ui_h()), 0x000000);
     draw_photo(s, current, -scroll_x);
     if (scroll_x > 0 && current + 1 < nphotos)
-        draw_photo(s, current + 1, UI_W - scroll_x + 8);
+        draw_photo(s, current + 1, ui_w() - scroll_x + 8);
     if (scroll_x < 0 && current > 0)
-        draw_photo(s, current - 1, -UI_W - scroll_x - 8);
+        draw_photo(s, current - 1, -ui_w() - scroll_x - 8);
     if (bars) {
         char title[24];
         snprintf(title, sizeof(title), "%d of %d", current + 1, nphotos);
         /* Translucent bar: render it aside, then blend over the photo. */
-        static uint16_t barbuf[UI_W * UI_NAV_H];
+        static uint16_t barbuf[SB_LAND_W * UI_NAV_H];
         gfx_surface bar;
-        gfx_surface_init(&bar, barbuf, UI_W, UI_NAV_H, UI_W);
+        gfx_surface_init(&bar, barbuf, ui_w(), UI_NAV_H, ui_w());
         ui_draw_navbar(&bar, title, "Camera Roll", &back_rect, 1);
-        gfx_blit_alpha(s, 0, 0, &bar, gfx_r(0, 0, UI_W, UI_NAV_H), 200);
-        gfx_rect tb = gfx_r(0, UI_H - 34, UI_W, 34);
+        gfx_blit_alpha(s, 0, 0, &bar, gfx_r(0, 0, ui_w(), UI_NAV_H), 200);
+        gfx_rect tb = gfx_r(0, ui_h() - 34, ui_w(), 34);
         gfx_fill_alpha(s, tb, 0x000000, 140);
-        gfx_vgradient(s, gfx_r(0, tb.y, UI_W, 17), 0xFFFFFF, 0xFFFFFF, 20);
+        gfx_vgradient(s, gfx_r(0, tb.y, ui_w(), 17), 0xFFFFFF, 0xFFFFFF, 20);
         /* Previous / next arrows. */
         const gfx_font *f = ui_font(FONT_B20);
         gfx_text_center(s, 40, tb.y + 4, 40, f, GFX_CH_LARROW, current > 0 ? 0xFFFFFF : 0x666666, 255);
-        gfx_text_center(s, UI_W - 80, tb.y + 4, 40, f, GFX_CH_RARROW, current + 1 < nphotos ? 0xFFFFFF : 0x666666, 255);
+        gfx_text_center(s, ui_w() - 80, tb.y + 4, 40, f, GFX_CH_RARROW, current + 1 < nphotos ? 0xFFFFFF : 0x666666, 255);
     }
 }
 
@@ -344,7 +354,7 @@ static void go_neighbour(int dir)
         animate_to(0, current);
         return;
     }
-    animate_to(dir * (UI_W + 8), next);
+    animate_to(dir * (ui_w() + 8), next);
 }
 
 static void viewer_event(const struct gz_input_event *e)
@@ -358,8 +368,8 @@ static void viewer_event(const struct gz_input_event *e)
             ui_transition(draw_current, false);
             return;
         }
-        if (bars && e->y >= UI_H - 34) {
-            if (e->x < UI_W / 2)
+        if (bars && e->y >= ui_h() - 34) {
+            if (e->x < ui_w() / 2)
                 go_neighbour(-1);
             else
                 go_neighbour(1);
@@ -394,9 +404,9 @@ static void viewer_event(const struct gz_input_event *e)
         if (!panning) {
             bars = !bars;
             redraw();
-        } else if (scroll_x > UI_W / 3 || velocity < -400) {
+        } else if (scroll_x > ui_w() / 3 || velocity < -400) {
             go_neighbour(1);
-        } else if (scroll_x < -UI_W / 3 || velocity > 400) {
+        } else if (scroll_x < -ui_w() / 3 || velocity > 400) {
             go_neighbour(-1);
         } else {
             animate_to(0, current);
@@ -480,11 +490,12 @@ static bool idle_work(void)
 int main(void)
 {
     ui_init(SB_STATUS_BLACK);
+    ui_set_orientations(SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE);
     for (int k = 0; k < NSLOTS; k++)
         slots[k].index = -1;
     list_pictures();
     prune_thumbs();
-    ui_scroll_reset(&grid_scroll, grid_content_h(), UI_H - UI_NAV_H);
+    ui_scroll_reset(&grid_scroll, grid_content_h(), ui_h() - UI_NAV_H);
     redraw();
 
     for (;;) {
@@ -501,7 +512,13 @@ int main(void)
                 idle_work();
             continue;
         }
-        if (ev.type == GZ_EV_TOUCH_CANCEL) {
+        if (ev.type == GZ_EV_APP_RESIZE) {
+            /* Turned while away: more or fewer columns, a shorter view. */
+            grid_scroll.content_h = grid_content_h();
+            grid_scroll.view_h = ui_h() - UI_NAV_H;
+            grid_scroll.offset = MIN(grid_scroll.offset, ui_scroll_max(&grid_scroll));
+            redraw();
+        } else if (ev.type == GZ_EV_TOUCH_CANCEL) {
             /* Home mid-touch: drop the touch without acting on it. */
             pressed_thumb = -1;
             ui_scroll_event(&grid_scroll, &ev, 0);

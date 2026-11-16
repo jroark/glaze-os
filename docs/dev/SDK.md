@@ -215,7 +215,11 @@ The headers under `sysroot/usr/include/glaze` are the API reference:
 Call `ui_init(SB_STATUS_GRAY)`, draw into `ui.surf`, invalidate changed
 rectangles and call `ui_present()`. The drawable area is 240×304 pixels;
 the top 16 screen rows belong to SpringBoard. Touch coordinates received
-by apps are already relative to the app surface. Pass RGB888 colors to
+by apps are already relative to the app surface. An app that can also lay
+itself out at 320×224 calls `ui_set_orientations(SB_ORIENT_PORTRAIT |
+SB_ORIENT_LANDSCAPE)` after `ui_init`, sizes everything from `ui_w()` and
+`ui_h()` instead of `UI_W`/`UI_H`, and lays out again on
+`GZ_EV_APP_RESIZE`; see `docs/os/LANDSCAPE.md`. Pass RGB888 colors to
 drawing functions; the surface stores RGB565. Fonts come from OS resources.
 
 Wait in `ui_next_event()` rather than busy-polling. Process

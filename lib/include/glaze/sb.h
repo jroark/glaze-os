@@ -25,6 +25,14 @@
  * the *_FOR requests, after SB_CLIENT_OPEN hands them a request page of their
  * own (client in lib/libc/notify.c). The kernel does not identify senders,
  * so these are not authenticated: any process may badge or notify any app.
+ *
+ * Landscape (docs/os/LANDSCAPE.md): an app that can lay itself out at
+ * 320 x 224 sends SB_SET_ORIENTATIONS after HELLO, before drawing. While the
+ * user has landscape on (the switcher tray's rotate button), SpringBoard
+ * reshapes its surface to SB_LAND_W x SB_LAND_H (240 rows full-screen),
+ * turns it a quarter counter-clockwise onto the LCD, and delivers touches in
+ * its coordinates. A later change reaches the app on its next ACTIVATE, with
+ * the new size in sb_shared.width/height (libui: GZ_EV_APP_RESIZE).
  */
 #ifndef GLAZE_SB_H
 #define GLAZE_SB_H
@@ -35,6 +43,8 @@
 #define SB_STATUS_H         16
 #define SB_APP_W            240
 #define SB_APP_H            (GZ_FB_HEIGHT - SB_STATUS_H)
+#define SB_LAND_W           GZ_FB_HEIGHT
+#define SB_LAND_H           (GZ_FB_WIDTH - SB_STATUS_H)
 
 enum {
     SB_HELLO = 1,           /* w1 = app event port, w2 = status style; reply w4 = GZ_INPUT_* */
@@ -84,7 +94,15 @@ enum {
     SB_DEBUG_POWER,
     SB_DEBUG_RECLAIM,       /* development client: end background apps before a reload; w3 = client pid */
     SB_GO_HOME,             /* the foreground app returns to the home screen, as Home does; w3 = its pid */
+    /* w1 = SB_ORIENT_* the app can draw, w3 = pid. Reply w0 status, w1 the
+     * surface's SB_ORIENT_*, w2/w3 its width/height, w4 its stride. */
+    SB_SET_ORIENTATIONS,
 };
+
+#define SB_ORIENT_PORTRAIT  0x1u
+#define SB_ORIENT_LANDSCAPE 0x2u    /* LCD's left edge up, hard icons on the user's left */
+/* SpringBoard's preference: 1 while the user has landscape on. */
+#define SB_LANDSCAPE_PREF   "sb.landscape"
 #define SB_DEBUG_POWER_IDLE 0x100u
 
 enum {
@@ -132,6 +150,10 @@ struct sb_shared {
     /* app: bit n sends icon n as GZ_KEY_ICON1 + n instead of its action
      * (ui_claim_hard_icons). Appended, so older apps leave it zero. */
     volatile uint32_t hard_icons;
+    /* SpringBoard: the surface's SB_ORIENT_* and size, set before ACTIVATE
+     * (stride above matches). Appended; zero from an older SpringBoard. */
+    volatile uint32_t orientation;
+    volatile uint32_t width, height;
 };
 
 /* App-level events beyond the kernel's input codes. */
@@ -145,5 +167,7 @@ struct sb_shared {
 #define GZ_EV_TOUCH_CAL_END     0x104
 /* A system transition reverted a display drag; x/y = brightness/contrast. */
 #define GZ_EV_DISPLAY_REVERT    0x105
+/* From libui after ACTIVATE: the surface changed shape (x, y: new size). */
+#define GZ_EV_APP_RESIZE        0x106
 
 #endif

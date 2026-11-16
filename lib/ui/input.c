@@ -3,7 +3,10 @@
 #include <string.h>
 
 bool ui_has_hardware_keyboard(void) { return ui.hardware_keyboard; }
-int ui_keyboard_height(void) { return ui_has_hardware_keyboard() ? 0 : UI_KB_H; }
+int ui_keyboard_height(void)
+{
+    return ui_has_hardware_keyboard() ? 0 : ui_landscape() ? UI_KB_LAND_H : UI_KB_H;
+}
 int ui_input_char(const struct gz_input_event *e)
 {
     if (e->type == GZ_EV_TEXT)

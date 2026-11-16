@@ -5,7 +5,8 @@
  * 0x7f-0x87 (charset.c maps other code points onto them or onto ASCII), so
  * strings go straight to gfx_text(). CSS lengths are integers: values are
  * parsed as 1/64ths and resolved to device pixels at 3/4 of a CSS pixel,
- * which makes the 240 px screen 320 CSS px wide. Nothing here touches
+ * which makes the 240 px screen 320 CSS px wide (a 320 px landscape screen,
+ * 426: the app sets web_view_css_w and restyles). Nothing here touches
  * syscalls or libui, so the engine also builds on the host (host/Makefile).
  */
 #ifndef BROWSER_WEB_H
@@ -17,7 +18,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WEB_VIEW_CSS_W  320         /* viewport width in CSS px */
+extern int web_view_css_w;          /* viewport width in CSS px, 320 by default */
+#define WEB_VIEW_CSS_W  web_view_css_w
 #define CSS_TO_DEV(v)   ((v) * 3 / 4)
 
 /* ---- errors (negative results of the network and loader layers) ---------- */
