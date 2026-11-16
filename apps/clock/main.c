@@ -75,26 +75,35 @@ static void draw_world(gfx_surface *s)
 {
     struct gz_datetime now;
     const gfx_font *nf = ui_font(FONT_B13), *df = ui_font(FONT_R11), *tf = ui_font(FONT_R24);
-    int row_h = 60, y0 = UI_NAV_H;
+    /* A column of 60 px rows; in landscape, two columns of shorter cells
+     * with the time under the city. */
+    bool land = ui_landscape();
+    int y0 = UI_NAV_H, body = ui_h() - y0 - UI_TAB_H, cols = land ? 2 : 1;
+    int cell_w = ui_w() / cols, row_h = land ? body / ((NCITIES + 1) / 2) : 60;
 
     gz_rtc_get(&now);
-    gfx_fill(s, gfx_r(0, y0, UI_W, UI_H - y0 - UI_TAB_H), 0x101010);
+    gfx_fill(s, gfx_r(0, y0, ui_w(), body), 0x101010);
     for (int i = 0; i < NCITIES; i++) {
-        int y = y0 + i * row_h;
-        gfx_vgradient(s, gfx_r(0, y, UI_W, row_h - 1), 0x3B3B3B, 0x1E1E1E, 255);
-        gfx_fill(s, gfx_r(0, y + row_h - 1, UI_W, 1), 0x000000);
+        int x = i % cols * cell_w, y = y0 + i / cols * row_h;
+        gfx_vgradient(s, gfx_r(x, y, cell_w - (cols > 1 && x == 0), row_h - 1), 0x3B3B3B, 0x1E1E1E, 255);
+        gfx_fill(s, gfx_r(x, y + row_h - 1, cell_w, 1), 0x000000);
+        if (cols > 1 && x == 0)
+            gfx_fill(s, gfx_r(cell_w - 1, y, 1, row_h), 0x000000);
         uint32_t local = gz_dt_to_secs(&now);
         uint32_t there = tz_utc_to_local(city_zone[i], tz_local_to_utc(home_zone, local));
         int day = (int)(there / 86400u) - (int)(local / 86400u);
         int h = (int)(there % 86400u / 3600), m = (int)(there % 3600 / 60);
-        analog_clock(s, 28, y + row_h / 2, 21, h, m, now.second);
-        gfx_text(s, 56, y + 12, nf, cities[i], 0xFFFFFF, 255);
-        gfx_text(s, 56, y + 34, df, day < 0 ? "Yesterday" : day > 0 ? "Tomorrow" : "Today", 0xA0A0A0, 255);
+        analog_clock(s, x + 28, y + row_h / 2, 21, h, m, now.second);
+        int ty = land ? (row_h - 66) / 2 : 0;
+        gfx_text(s, x + 56, y + ty + 12, nf, cities[i], 0xFFFFFF, 255);
+        gfx_text(s, x + 56, y + ty + (land ? 28 : 34), df, day < 0 ? "Yesterday" : day > 0 ? "Tomorrow" : "Today",
+                 0xA0A0A0, 255);
         char t[12];
         snprintf(t, sizeof(t), "%d:%02d", h % 12 ? h % 12 : 12, m);
         int tw = gfx_text_width(tf, t);
-        gfx_text(s, UI_W - 36 - tw, y + 14, tf, t, 0xFFFFFF, 255);
-        gfx_text(s, UI_W - 32, y + 24, df, h < 12 ? "AM" : "PM", 0xC0C0C0, 255);
+        int tx = land ? x + 56 : x + cell_w - 36 - tw, tty = land ? y + ty + 40 : y + 14;
+        gfx_text(s, tx, tty, tf, t, 0xFFFFFF, 255);
+        gfx_text(s, land ? tx + tw + 4 : x + cell_w - 32, tty + 10, df, h < 12 ? "AM" : "PM", 0xC0C0C0, 255);
     }
 }
 
@@ -134,35 +143,39 @@ static void round_button(gfx_surface *s, gfx_rect r, const char *label, uint32_t
 static void draw_stopwatch(gfx_surface *s)
 {
     char buf[24];
-    int y0 = UI_NAV_H;
+    int y0 = UI_NAV_H, bottom = ui_h() - UI_TAB_H;
     const gfx_font *big = ui_font(FONT_R44), *lf = ui_font(FONT_R13);
+    /* The time and buttons span a portrait screen above the laps; in
+     * landscape they make a left panel, with the laps to its right. */
+    bool land = ui_landscape();
+    int pw = land ? 176 : ui_w(), bw = (pw - 36) / 2;
 
-    gfx_vgradient(s, gfx_r(0, y0, UI_W, 84), 0xE6E9ED, 0xB9C0C9, 255);
+    gfx_vgradient(s, gfx_r(0, y0, pw, 84), 0xE6E9ED, 0xB9C0C9, 255);
     fmt_sw(sw_elapsed(), buf, sizeof(buf));
-    gfx_text_center(s, 0, y0 + 16, UI_W, big, buf, 0x111111, 255);
+    gfx_text_center(s, 0, y0 + 16, pw, big, buf, 0x111111, 255);
 
-    gfx_fill(s, gfx_r(0, y0 + 84, UI_W, 52), 0x2A2A2A);
-    left_btn = gfx_r(12, y0 + 92, 102, 36);
-    right_btn = gfx_r(126, y0 + 92, 102, 36);
+    gfx_fill(s, gfx_r(0, y0 + 84, pw, land ? bottom - y0 - 84 : 52), 0x2A2A2A);
+    left_btn = gfx_r(12, y0 + 92, bw, 36);
+    right_btn = gfx_r(24 + bw, y0 + 92, bw, 36);
     if (sw_running)
         round_button(s, left_btn, "Stop", 0xF06A5E, 0xB51D15, pressed == B_LEFT);
     else
         round_button(s, left_btn, "Start", 0x6BD267, 0x22891E, pressed == B_LEFT);
     round_button(s, right_btn, sw_running ? "Lap" : "Reset", 0x8A8A8A, 0x4A4A4A, pressed == B_RIGHT);
 
-    int ly = y0 + 136, lh = 22;
-    gfx_fill(s, gfx_r(0, ly, UI_W, UI_H - UI_TAB_H - ly), 0xFFFFFF);
-    for (int i = 0; ly + (i + 1) * lh <= UI_H - UI_TAB_H; i++) {
+    int lx = land ? pw : 0, ly = land ? y0 : y0 + 136, lw = ui_w() - lx, lh = 22;
+    gfx_fill(s, gfx_r(lx, ly, lw, bottom - ly), 0xFFFFFF);
+    for (int i = 0; ly + (i + 1) * lh <= bottom; i++) {
         int y = ly + i * lh;
-        gfx_fill(s, gfx_r(0, y + lh - 1, UI_W, 1), 0xDDDDDD);
+        gfx_fill(s, gfx_r(lx, y + lh - 1, lw, 1), 0xDDDDDD);
         int lap = nlaps - 1 - i;
         if (lap < 0)
             continue;
         char name[16];
         snprintf(name, sizeof(name), "Lap %d", lap + 1);
-        gfx_text(s, 12, y + 4, lf, name, 0x333333, 255);
+        gfx_text(s, lx + 12, y + 4, lf, name, 0x333333, 255);
         fmt_sw(laps[lap] - (lap ? laps[lap - 1] : 0), buf, sizeof(buf));
-        gfx_text(s, UI_W - 12 - gfx_text_width(lf, buf), y + 4, lf, buf, 0x111111, 255);
+        gfx_text(s, ui_w() - 12 - gfx_text_width(lf, buf), y + 4, lf, buf, 0x111111, 255);
     }
 }
 
@@ -214,36 +227,42 @@ static void stepper(gfx_surface *s, gfx_rect r, const char *label, int id)
 static void draw_timer(gfx_surface *s)
 {
     char buf[24];
-    int y0 = UI_NAV_H;
+    int y0 = UI_NAV_H, bottom = ui_h() - UI_TAB_H;
     const gfx_font *big = ui_font(FONT_R44), *lf = ui_font(FONT_B11);
+    /* Landscape: the picker moves up and left, Start goes to its right. */
+    bool land = ui_landscape();
+    int dx = land ? -8 : 0, dy = land ? -20 : 0, pw = land ? 220 : ui_w();
 
-    gfx_vgradient(s, gfx_r(0, y0, UI_W, UI_H - UI_TAB_H - y0), 0x3A3A3A, 0x121212, 255);
+    gfx_vgradient(s, gfx_r(0, y0, ui_w(), bottom - y0), 0x3A3A3A, 0x121212, 255);
     if (tm_running) {
         int32_t left = (int32_t)(tm_end - ui_now_secs());
         uint32_t secs = left > 0 ? (uint32_t)left : 0;
         snprintf(buf, sizeof(buf), "%u:%02u:%02u", secs / 3600, secs / 60 % 60, secs % 60);
-        gfx_text_center(s, 0, y0 + 50, UI_W, big, buf, 0xFFFFFF, 255);
+        gfx_text_center(s, 0, y0 + 50, pw, big, buf, 0xFFFFFF, 255);
     } else {
         /* Hours and minutes columns with steppers, standing in for the
          * original's picker wheels. */
-        gfx_round_rect(s, gfx_r(20, y0 + 30, 200, 96), 8, 0xFFFFFF, 255);
-        gfx_round_rect(s, gfx_r(20, y0 + 30, 200, 48), 8, 0xDDDDDD, 140);
+        int top = y0 + dy;
+        gfx_round_rect(s, gfx_r(dx + 20, top + 30, 200, 96), 8, 0xFFFFFF, 255);
+        gfx_round_rect(s, gfx_r(dx + 20, top + 30, 200, 48), 8, 0xDDDDDD, 140);
         snprintf(buf, sizeof(buf), "%d", tm_hours);
-        gfx_text_center(s, 20, y0 + 48, 70, big, buf, 0x111111, 255);
-        gfx_text(s, 88, y0 + 76, lf, "hours", 0x333333, 255);
+        gfx_text_center(s, dx + 20, top + 48, 70, big, buf, 0x111111, 255);
+        gfx_text(s, dx + 88, top + 76, lf, "hours", 0x333333, 255);
         snprintf(buf, sizeof(buf), "%d", tm_minutes);
-        gfx_text_center(s, 120, y0 + 48, 70, big, buf, 0x111111, 255);
-        gfx_text(s, 186, y0 + 76, lf, "min", 0x333333, 255);
-        step_rects[0] = gfx_r(28, y0 + 136, 40, 30);
-        step_rects[1] = gfx_r(72, y0 + 136, 40, 30);
-        step_rects[2] = gfx_r(128, y0 + 136, 40, 30);
-        step_rects[3] = gfx_r(172, y0 + 136, 40, 30);
+        gfx_text_center(s, dx + 120, top + 48, 70, big, buf, 0x111111, 255);
+        gfx_text(s, dx + 186, top + 76, lf, "min", 0x333333, 255);
+        int sy = land ? top + 132 : top + 136;
+        step_rects[0] = gfx_r(dx + 28, sy, 40, 30);
+        step_rects[1] = gfx_r(dx + 72, sy, 40, 30);
+        step_rects[2] = gfx_r(dx + 128, sy, 40, 30);
+        step_rects[3] = gfx_r(dx + 172, sy, 40, 30);
         stepper(s, step_rects[0], GFX_CH_MINUS, B_H_DOWN);
         stepper(s, step_rects[1], "+", B_H_UP);
         stepper(s, step_rects[2], GFX_CH_MINUS, B_M_DOWN);
         stepper(s, step_rects[3], "+", B_M_UP);
     }
-    left_btn = gfx_r(30, UI_H - UI_TAB_H - 52, 180, 38);
+    left_btn = land ? gfx_r(pw + 6, y0 + (bottom - y0 - 38) / 2, ui_w() - pw - 14, 38)
+                    : gfx_r(30, bottom - 52, 180, 38);
     if (tm_running)
         round_button(s, left_btn, "Cancel", 0xF06A5E, 0xB51D15, pressed == B_LEFT);
     else
@@ -315,6 +334,7 @@ static int hit(int x, int y)
 int main(void)
 {
     ui_init(SB_STATUS_BLACK);
+    ui_set_orientations(SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE);
     home_zone = tz_current();
     for (int i = 0; i < NCITIES; i++) {
         for (int z = 0; z < tz_count(); z++) {
@@ -355,6 +375,8 @@ int main(void)
                 pressed = -1;
             } else if (ev.type == GZ_EV_TOUCH_CANCEL) {
                 pressed = -1;                   /* Home mid-touch: not a press */
+            } else if (ev.type == GZ_EV_APP_RESIZE) {
+                pressed = -1;                   /* laid out again as it draws */
             } else if (ev.type == GZ_EV_APP_NOTIFY && ev.code == TIMER_NOTE && tm_running) {
                 tm_end = ui_now_secs();         /* SpringBoard's clock got there first */
                 rung = true;                    /* and it rang the timer */
