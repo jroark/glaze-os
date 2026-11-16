@@ -3,7 +3,9 @@
  * Home ends with GZ_EV_TOUCH_CANCEL before GZ_EV_APP_DEACTIVATE, the next
  * ui_next_event suspends the process and returns the ACTIVATE that resumes
  * it (dropping what came in between), and ui_set_background_running turns
- * suspension off. Also the libui widgets' handling of the cancel.
+ * suspension off. Also the libui widgets' handling of the cancel, and
+ * landscape: ui_set_orientations, and a surface reshaped while away coming
+ * back as ACTIVATE then GZ_EV_APP_RESIZE.
  *   make -C host ui-events-test
  */
 
@@ -17,7 +19,7 @@
 #define SELF 42
 
 static struct sb_shared *sh;
-static uint16_t pixels[UI_W * UI_H];
+static uint16_t pixels[SB_APP_W * GZ_FB_HEIGHT];
 static uint32_t now;
 static int suspends, sounds, set_bg_rv;
 /* Queued by the fake SpringBoard when the app suspends itself. */
@@ -27,7 +29,25 @@ static int input_status;          /* GZ_INPUT_* the kernel reports */
 
 int gz_port_create(void) { return 1; }
 int gz_port_lookup(const char *name) { return 2; }
-int gz_send(int port, const struct gz_msg *m, struct gz_msg *r) { return 0; }
+/* SpringBoard's answer to SB_SET_ORIENTATIONS: status, w, h, stride. */
+static uint32_t orient_reply[4];
+static unsigned orient_mask;
+int gz_send(int port, const struct gz_msg *m, struct gz_msg *r)
+{
+    memset(r, 0, sizeof(*r));
+    if (m->w[0] == SB_SET_ORIENTATIONS) {
+        orient_mask = m->w[1];
+        assert(m->w[3] == SELF);
+        r->w[0] = orient_reply[0];
+        r->w[2] = orient_reply[1];
+        r->w[3] = orient_reply[2];
+        r->w[4] = orient_reply[3];
+    }
+    return 0;
+}
+
+/* The shape SpringBoard gives the surface while the app is away. */
+static uint32_t away_shape[3];
 void *gz_shm_map(int id) { return NULL; }
 int gz_getpid(void) { return SELF; }
 void gz_sleep_ms(uint32_t ms) { now += ms; }
@@ -57,6 +77,11 @@ int gz_proc_set_bg(int pid, int state)
         push(while_away[i].type, while_away[i].x, while_away[i].y);
     n_away = 0;
     sh->background = 0;
+    if (away_shape[0]) {
+        sh->width = away_shape[0];
+        sh->height = away_shape[1];
+        sh->stride = away_shape[2];
+    }
     push(GZ_EV_APP_ACTIVATE, 0, 0);
     return set_bg_rv;
 }
@@ -85,6 +110,7 @@ static void home(void)
 static void reset(void)
 {
     memset(sh, 0, sizeof(*sh));
+    memset(away_shape, 0, sizeof(away_shape));
     suspends = sounds = n_away = 0;
     set_bg_rv = 0;
     ui_set_background_running(false);
@@ -213,6 +239,67 @@ int main(void)
     assert(!ui.hardware_keyboard);
     push(GZ_EV_TOUCH_UP, 1, 1); next(0);
     printf("a docked keyboard is noticed on the next event: PASS\n");
+
+    /* An older SpringBoard refuses SB_SET_ORIENTATIONS: still portrait. */
+    reset();
+    orient_reply[0] = (uint32_t)GZ_EINVAL;
+    ui_set_orientations(SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE);
+    assert(orient_mask == (SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE));
+    assert(ui.surf.w == UI_W && ui.surf.h == UI_H && !ui_landscape());
+    /* Landscape on: the surface is reshaped at once, all of it dirty. */
+    uint32_t land[4] = {0, SB_LAND_W, SB_LAND_H, SB_LAND_W};
+    memcpy(orient_reply, land, sizeof(land));
+    ui.dirty = gfx_r(0, 0, 0, 0);
+    ui_set_orientations(SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE);
+    assert(ui_landscape() && ui_w() == SB_LAND_W && ui_h() == SB_LAND_H && ui.surf.stride == SB_LAND_W);
+    assert(ui.dirty.w == SB_LAND_W && ui.dirty.h == SB_LAND_H);
+    assert(ui_keyboard_height() == UI_KB_LAND_H);
+    printf("orientations at launch: PASS\n");
+
+    /* The keyboard is the portrait layout scaled: the same key answers. */
+    ui_keyboard_init(&kb);
+    int land_y = SB_LAND_H - UI_KB_LAND_H;
+    key = (struct gz_input_event){.type = GZ_EV_TOUCH_DOWN, .x = 100 * SB_LAND_W / UI_W,
+                                  .y = (int16_t)(land_y + 50 * UI_KB_LAND_H / UI_KB_H)};
+    ui_keyboard_event(&kb, &key, land_y, &changed);
+    int land_key = kb.pressed;
+    gfx_surface_init(&ui.surf, pixels, UI_W, UI_H, UI_W);
+    ui_keyboard_init(&kb);
+    key = (struct gz_input_event){.type = GZ_EV_TOUCH_DOWN, .x = 100, .y = (int16_t)(kb_y + 50)};
+    ui_keyboard_event(&kb, &key, kb_y, &changed);
+    assert(land_key >= 0 && land_key == kb.pressed);
+    printf("landscape keyboard keeps the layout: PASS\n");
+
+    /* Turned while suspended: ACTIVATE, then RESIZE with the new size. */
+    reset();
+    away_shape[0] = SB_LAND_W; away_shape[1] = SB_LAND_H; away_shape[2] = SB_LAND_W;
+    home();
+    assert(next(0).type == GZ_EV_APP_DEACTIVATE);
+    assert(next(0).type == GZ_EV_APP_ACTIVATE && ui_landscape());
+    e = next(0);
+    assert(e.type == GZ_EV_APP_RESIZE && e.x == SB_LAND_W && e.y == SB_LAND_H);
+    assert(ui_next_event(&e, 0) == 0);
+    /* And back, for an app that kept running: the queued ACTIVATE does it. */
+    reset();
+    ui_set_background_running(true);
+    home();
+    assert(next(0).type == GZ_EV_APP_DEACTIVATE);
+    sh->width = UI_W; sh->height = UI_H; sh->stride = UI_W;
+    push(GZ_EV_APP_ACTIVATE, 0, 0);
+    assert(next(0).type == GZ_EV_APP_ACTIVATE && !ui_landscape());
+    e = next(0);
+    assert(e.type == GZ_EV_APP_RESIZE && e.x == UI_W && e.y == UI_H);
+    /* The same shape again is no resize; nor is an older SpringBoard's zero. */
+    push(GZ_EV_APP_ACTIVATE, 0, 0);
+    assert(next(0).type == GZ_EV_APP_ACTIVATE && ui_next_event(&e, 0) == 0);
+    sh->width = 0;
+    push(GZ_EV_APP_ACTIVATE, 0, 0);
+    assert(next(0).type == GZ_EV_APP_ACTIVATE && ui_next_event(&e, 0) == 0);
+    /* A shape the shared memory can't hold is ignored. */
+    sh->width = 400; sh->height = 300; sh->stride = 400;
+    push(GZ_EV_APP_ACTIVATE, 0, 0);
+    assert(next(0).type == GZ_EV_APP_ACTIVATE && ui_next_event(&e, 0) == 0 && ui.surf.w == UI_W);
+    printf("turned while away, ACTIVATE then RESIZE: PASS\n");
 
     printf("ui events: PASS\n");
     free(sh);

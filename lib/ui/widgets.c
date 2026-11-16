@@ -29,16 +29,17 @@ static const uint32_t nav_shadow[3] = { 0x3E4E66, 0x000000, 0x4A2C10 };
 
 gfx_rect ui_draw_navbar(gfx_surface *s, const char *title, const char *back, gfx_rect *back_rect, int style)
 {
-    gfx_rect r = gfx_r(0, 0, UI_W, UI_NAV_H);
+    int w = s->w;
+    gfx_rect r = gfx_r(0, 0, w, UI_NAV_H);
     int half = UI_NAV_H / 2;
 
     if (style < 0 || style > 2)
         style = 0;
     const uint32_t *pal = nav_pal[style];
-    gfx_vgradient(s, gfx_r(0, 0, UI_W, half), pal[0], pal[1], 255);
-    gfx_vgradient(s, gfx_r(0, half, UI_W, UI_NAV_H - half), pal[2], pal[3], 255);
-    gfx_fill(s, gfx_r(0, UI_NAV_H - 1, UI_W, 1), pal[4]);
-    gfx_fill_alpha(s, gfx_r(0, 0, UI_W, 1), 0xFFFFFF, 90);
+    gfx_vgradient(s, gfx_r(0, 0, w, half), pal[0], pal[1], 255);
+    gfx_vgradient(s, gfx_r(0, half, w, UI_NAV_H - half), pal[2], pal[3], 255);
+    gfx_fill(s, gfx_r(0, UI_NAV_H - 1, w, 1), pal[4]);
+    gfx_fill_alpha(s, gfx_r(0, 0, w, 1), 0xFFFFFF, 90);
 
     const gfx_font *tf = ui_font(FONT_B14);
     int left_edge = 6;
@@ -54,7 +55,7 @@ gfx_rect ui_draw_navbar(gfx_surface *s, const char *title, const char *back, gfx
     }
     if (title) {
         int tw = gfx_text_width(tf, title);
-        int tx = (UI_W - tw) / 2;
+        int tx = (w - tw) / 2;
         if (tx < left_edge)
             tx = left_edge;
         gfx_text_shadow(s, tx, (UI_NAV_H - tf->line_height) / 2, tf, title, 0xFFFFFF, nav_shadow[style], -1, 255);
@@ -66,7 +67,7 @@ gfx_rect ui_draw_bar_button(gfx_surface *s, const char *label, bool right, bool 
 {
     const gfx_font *f = ui_font(FONT_B10);
     int w = MAX(gfx_text_width(f, label) + 16, 30);
-    gfx_rect r = gfx_r(right ? UI_W - w - 5 : 5, (UI_NAV_H - 24) / 2, w, 24);
+    gfx_rect r = gfx_r(right ? s->w - w - 5 : 5, (UI_NAV_H - 24) / 2, w, 24);
     uint32_t top, bottom;
 
     if (blue) {
@@ -210,9 +211,9 @@ static const char *tab_icon_names[8];
 
 void ui_draw_tabbar(gfx_surface *s, const struct ui_tab *tabs, int n, int selected)
 {
-    gfx_rect r = gfx_r(0, UI_H - UI_TAB_H, UI_W, UI_TAB_H);
+    gfx_rect r = gfx_r(0, s->h - UI_TAB_H, s->w, UI_TAB_H);
     const gfx_font *f = ui_font(FONT_B8);
-    int w = UI_W / n;
+    int w = s->w / n;
 
     gfx_vgradient(s, gfx_r(r.x, r.y, r.w, r.h / 2), 0x3A3A3A, 0x202020, 255);
     gfx_fill(s, gfx_r(r.x, r.y + r.h / 2, r.w, r.h - r.h / 2), 0x0C0C0C);
@@ -243,9 +244,9 @@ void ui_draw_tabbar(gfx_surface *s, const struct ui_tab *tabs, int n, int select
 
 int ui_tabbar_hit(int n, int x, int y)
 {
-    if (y < UI_H - UI_TAB_H || x < 0 || x >= UI_W)
+    if (y < ui_h() - UI_TAB_H || x < 0 || x >= ui_w())
         return -1;
-    return x / (UI_W / n);
+    return MIN(x / (ui_w() / n), n - 1);
 }
 
 /* ---- alert -------------------------------------------------------------- */
@@ -253,10 +254,13 @@ int ui_tabbar_hit(int n, int x, int y)
 void ui_draw_alert(gfx_surface *s, const char *title, const char *msg, const char *b1, const char *b2,
                    gfx_rect *r1, gfx_rect *r2, int pressed)
 {
-    gfx_rect box = gfx_r(14, 90, UI_W - 28, 124);
+    /* Where it always was on a portrait surface (and SpringBoard's screen);
+     * centred, a little wider, in landscape. */
+    int bw0 = s->w > UI_W ? 260 : UI_W - 28;
+    gfx_rect box = gfx_r((s->w - bw0) / 2, s->w > UI_W ? (s->h - 124) / 2 : 90, bw0, 124);
     const gfx_font *tf = ui_font(FONT_B14), *mf = ui_font(FONT_R12), *bf = ui_font(FONT_B12);
 
-    gfx_fill_alpha(s, gfx_r(0, 0, UI_W, UI_H), 0x000000, 110);
+    gfx_fill_alpha(s, s->w > UI_W ? gfx_r(0, 0, s->w, s->h) : gfx_r(0, 0, UI_W, UI_H), 0x000000, 110);
     gfx_round_rect(s, gfx_r(box.x - 2, box.y - 2, box.w + 4, box.h + 4), 10, 0xE4E8F0, 230);
     gfx_round_rect_vgradient(s, box, 9, 0x2F4A7D, 0x0E2550, 235);
     gfx_round_rect(s, gfx_r(box.x, box.y, box.w, 40), 9, 0xFFFFFF, 30);

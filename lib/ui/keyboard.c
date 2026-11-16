@@ -1,4 +1,5 @@
-/* On-screen QWERTY keyboard (iPhone OS 1-3 style), 240 x 150. */
+/* On-screen QWERTY keyboard (iPhone OS 1-3 style), 240 x 150 (320 x 120 in
+ * landscape, scaled from the same layout: ink_internal.h). */
 
 #include "sound.h"
 #include <glaze/audio.h>
@@ -149,12 +150,13 @@ static bool special(const struct key *k)
     return k->ch == KEY_SHIFT || k->ch == KEY_MODE || k->ch == KEY_INPUT || k->ch == KEY_EDIT || k->ch == '\b' || k->ch == '\n' || k->ch == KEY_DOTCOM;
 }
 
-static gfx_rect edit_rect(int i, int y)
+/* In design coordinates (ink_internal.h). */
+static gfx_rect edit_rect(int i)
 {
-    if (i < 2) return gfx_r(6 + i * 116, y + 22, 112, 27);
-    if (i < 5) return gfx_r(6 + (i - 2) * 79, y + 55, 70, 27);
-    if (i < 8) return gfx_r(6 + (i - 5) * 79, y + 88, 70, 27);
-    return gfx_r(6, y + 121, 228, 24);
+    if (i < 2) return gfx_r(6 + i * 116, 22, 112, 27);
+    if (i < 5) return gfx_r(6 + (i - 2) * 79, 55, 70, 27);
+    if (i < 8) return gfx_r(6 + (i - 5) * 79, 88, 70, 27);
+    return gfx_r(6, 121, 228, 24);
 }
 static bool edit_disabled(int i)
 {
@@ -164,10 +166,10 @@ static bool edit_disabled(int i)
 static void draw_edit(gfx_surface *s, const struct ui_keyboard *kb, int y)
 {
     static const char *labels[] = {"Select all", "Paste", "Copy", "Cut", "Clear clip", "<", "Select", ">", "Keys"};
-    gfx_vgradient(s, gfx_r(0, y, UI_W, UI_KB_H), 0xB7BDC7, 0x7E8696, 255);
-    gfx_text_center(s, 0, y + 4, UI_W, ui_font(FONT_R10), ui_edit_notice(), 0x172134, 255);
+    gfx_vgradient(s, gfx_r(0, y, ui_w(), uikb_h()), 0xB7BDC7, 0x7E8696, 255);
+    gfx_text_center(s, 0, y + uikb_y(4), ui_w(), ui_font(FONT_R10), ui_edit_notice(), 0x172134, 255);
     for (int i = 0; i < 9; i++) {
-        gfx_rect r = edit_rect(i, y);
+        gfx_rect r = uikb_rect(edit_rect(i), y);
         bool pressed = kb->pressed == i || (i == 6 && ui_edit_selecting());
         gfx_round_rect(s, gfx_r(r.x, r.y + 1, r.w, r.h), 5, 0x3C424D, 200);
         gfx_round_rect_vgradient(s, r, 5, pressed ? 0x6784AB : 0xFFFFFF, pressed ? 0x385A88 : 0xDDE2EA, 255);
@@ -184,7 +186,8 @@ static int edit_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
         kb->pressed = -1; edit_open = false; *changed = true; return 0;
     }
     int hit = -1;
-    for (int i = 0; i < 9; i++) if (gfx_rect_contains(edit_rect(i, y), e->x, e->y)) hit = i;
+    int dx = uikb_dx(e->x), dy = uikb_dy(e->y - y);
+    for (int i = 0; i < 9; i++) if (gfx_rect_contains(edit_rect(i), dx, dy)) hit = i;
     if (e->type == GZ_EV_TOUCH_DOWN) {
         kb->pressed = hit; *changed = true;
     } else if (e->type == GZ_EV_TOUCH_MOVE && hit != kb->pressed) {
@@ -206,11 +209,11 @@ void ui_draw_keyboard(gfx_surface *s, const struct ui_keyboard *kb, int y)
     const gfx_font *lf = ui_font(FONT_R17), *sf = ui_font(FONT_B11);
 
     build(kb);
-    gfx_vgradient(s, gfx_r(0, y, UI_W, UI_KB_H), 0xB7BDC7, 0x7E8696, 255);
-    gfx_fill(s, gfx_r(0, y, UI_W, 1), 0x5A606C);
+    gfx_vgradient(s, gfx_r(0, y, ui_w(), uikb_h()), 0xB7BDC7, 0x7E8696, 255);
+    gfx_fill(s, gfx_r(0, y, ui_w(), 1), 0x5A606C);
     for (int i = 0; i < nkeys; i++) {
         const struct key *k = &keys[i];
-        gfx_rect r = gfx_r(k->x, y + k->y, k->w, k->h);
+        gfx_rect r = uikb_rect(gfx_r(k->x, k->y, k->w, k->h), y);
         bool down = kb->pressed == i;
         bool sp = special(k);
         bool lit = sp && k->ch == KEY_SHIFT && kb->shift;
@@ -229,11 +232,12 @@ void ui_draw_keyboard(gfx_surface *s, const struct ui_keyboard *kb, int y)
         const struct key *k = &keys[kb->pressed];
         if (!special(k) && k->ch != ' ') {
             const gfx_font *bf = ui_font(FONT_R24);
-            gfx_rect b = gfx_r(k->x - 6, y + k->y - 40, k->w + 12, 44);
+            gfx_rect kr = uikb_rect(gfx_r(k->x, k->y, k->w, k->h), y);
+            gfx_rect b = gfx_r(kr.x - 6, kr.y - 40, kr.w + 12, 44);
             if (b.x < 1)
                 b.x = 1;
-            if (b.x + b.w > UI_W - 1)
-                b.x = UI_W - 1 - b.w;
+            if (b.x + b.w > ui_w() - 1)
+                b.x = ui_w() - 1 - b.w;
             gfx_round_rect(s, gfx_r(b.x - 1, b.y - 1, b.w + 2, b.h + 2), 8, 0x3C424D, 230);
             gfx_round_rect_vgradient(s, b, 7, 0xFFFFFF, 0xDADDE3, 255);
             gfx_text_center(s, b.x, b.y + 4, b.w, bf, k->label, 0x111111, 255);
@@ -265,7 +269,7 @@ int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
 {
     if (editable == kb && edit_open) return edit_event(kb, e, y, changed);
     if(kb->method==UI_INPUT_HANDWRITING)return uihw_event(kb,e,y,changed);
-    int ky = e->y - y;
+    int ky = uikb_dy(e->y - y);
     int old = kb->pressed;
 
     build(kb);
@@ -273,7 +277,7 @@ int ui_keyboard_event(struct ui_keyboard *kb, const struct gz_input_event *e, in
     switch (e->type) {
     case GZ_EV_TOUCH_DOWN:
     case GZ_EV_TOUCH_MOVE:
-        kb->pressed = (ky >= 0 && ky < UI_KB_H) ? hit(e->x, ky) : -1;
+        kb->pressed = (ky >= 0 && ky < UI_KB_H) ? hit(uikb_dx(e->x), ky) : -1;
         *changed = kb->pressed != old;
         if (e->type == GZ_EV_TOUCH_DOWN && kb->pressed >= 0) {
             audio_sound(AUDIO_SND_KEY);

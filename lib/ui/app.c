@@ -17,6 +17,29 @@ static int16_t touch_x, touch_y;
 static bool deactivate_held;    /* DEACTIVATE waits behind a cancelled touch */
 static bool suspend_next;       /* the next ui_next_event waits for ACTIVATE */
 static bool ink_lift_pending;   /* discard ink if an app did not route the lift */
+static bool resize_held;        /* GZ_EV_APP_RESIZE follows an ACTIVATE */
+
+/* Takes the surface shape SpringBoard gave; true if it changed. The shared
+ * memory holds 240 x 320 pixels, whichever way round. */
+static bool reshape(int w, int h, int stride)
+{
+    if (w <= 0 || h <= 0 || stride < w || stride * h > SB_APP_W * GZ_FB_HEIGHT)
+        return false;
+    if (w == ui.surf.w && h == ui.surf.h && stride == ui.surf.stride)
+        return false;
+    gfx_surface_init(&ui.surf, ui.surf.px, w, h, stride);
+    ui_invalidate_all();
+    return true;
+}
+
+/* On ACTIVATE: SpringBoard reshaped the surface while the app was away. */
+static void check_shape(void)
+{
+    struct sb_shared *sh = ui.shared;
+
+    if (sh->width && reshape((int)sh->width, (int)sh->height, (int)sh->stride))
+        resize_held = true;
+}
 
 void ui_init(int status_style)
 {
@@ -48,6 +71,19 @@ void ui_init(int status_style)
     ui.dirty = gfx_r(0, 0, 0, 0);
 }
 
+void ui_set_orientations(unsigned mask)
+{
+    struct gz_msg m, r;
+
+    memset(&m, 0, sizeof(m));
+    m.w[0] = SB_SET_ORIENTATIONS;
+    m.w[1] = mask;
+    m.w[3] = (uint32_t)gz_getpid();
+    if (gz_send(ui.sb_port, &m, &r) || r.w[0])
+        return;
+    reshape((int)r.w[2], (int)r.w[3], (int)r.w[4]);
+}
+
 bool ui_in_background(void)
 {
     return ui.shared && ui.shared->background != 0;
@@ -76,8 +112,10 @@ static void wait_activate(struct gz_input_event *ev)
         while (sh->tail != sh->head) {
             *ev = sh->ev[sh->tail % SB_RING];
             sh->tail++;
-            if (ev->type == GZ_EV_APP_ACTIVATE)
+            if (ev->type == GZ_EV_APP_ACTIVATE) {
+                check_shape();
                 return;
+            }
         }
         struct gz_msg m;
         gz_recv(ui.port, &m, -1);
@@ -93,6 +131,12 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
         if(uikb_ink_down())uikb_release();
     }
 
+    if (resize_held) {
+        resize_held = false;
+        *ev = (struct gz_input_event){.type = GZ_EV_APP_RESIZE, .x = (int16_t)ui.surf.w,
+                                      .y = (int16_t)ui.surf.h, .time_ms = gz_time_ms()};
+        return 1;
+    }
     if (deactivate_held) {
         deactivate_held = false;
         *ev = (struct gz_input_event){.type = GZ_EV_APP_DEACTIVATE, .time_ms = gz_time_ms()};
@@ -126,8 +170,10 @@ int ui_next_event(struct gz_input_event *ev, int timeout_ms)
                 touch_y = ev->y;
             } else if (ev->type == GZ_EV_TOUCH_UP || ev->type == GZ_EV_TOUCH_CANCEL)
                 touching = false;
-            else if (ev->type == GZ_EV_APP_ACTIVATE)
+            else if (ev->type == GZ_EV_APP_ACTIVATE) {
+                check_shape();
                 ui_invalidate_all();
+            }
             else if (ev->type == GZ_EV_APP_DEACTIVATE) {
                 suspend_next = !bg_running;
                 uitr_release();

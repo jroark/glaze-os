@@ -375,11 +375,11 @@ taskmanager-test: ../tests/native/taskmanager.c ../tests/native/taskmanager_sys.
 	../out/host/taskmanager-test
 .PHONY: taskmanager-test
 
-ui-events-test: ../tests/native/ui_events.c ../tests/native/ui_events_sys.h ../lib/ui/app.c ../lib/ui/list.c $(KEYBOARD)
+ui-events-test: ../tests/native/ui_events.c ../tests/native/ui_events_sys.h ../lib/ui/app.c ../lib/ui/list.c ../lib/ui/input.c $(KEYBOARD)
 	@mkdir -p ../out/host
 	$(CC) $(CFLAGS) -O2 -fsanitize=address,undefined -include ../tests/native/ui_events_sys.h \
 	    -o ../out/host/ui-events-test ../tests/native/ui_events.c ../lib/ui/app.c ../lib/ui/list.c \
-	    $(KEYBOARD) ../lib/ui/widgets.c hostres.c $(GFX)
+	    ../lib/ui/input.c $(KEYBOARD) ../lib/ui/widgets.c hostres.c $(GFX)
 	../out/host/ui-events-test
 .PHONY: ui-events-test
 

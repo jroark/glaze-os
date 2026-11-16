@@ -8,6 +8,8 @@
 #include <glaze/res.h>
 #include <glaze/sb.h>
 
+/* The portrait surface. Apps that draw landscape too lay out from ui_w()
+ * and ui_h() instead (below). */
 #define UI_W        SB_APP_W
 #define UI_H        SB_APP_H
 
@@ -23,9 +25,25 @@ struct ui_app {
 
 extern struct ui_app ui;
 
+/* The surface's current size: UI_W x UI_H (240 x 304) in portrait, 320 x 224
+ * in landscape, 320 or 240 rows full-screen. Outside an app (SpringBoard
+ * drawing libui's widgets) they are the portrait size. */
+static inline int ui_w(void) { return ui.surf.w ? ui.surf.w : UI_W; }
+static inline int ui_h(void) { return ui.surf.w ? ui.surf.h : UI_H; }
+static inline bool ui_landscape(void) { return ui.surf.w > UI_W; }
+
 /* Connects to SpringBoard and maps the app surface; exits on failure. */
 void ui_init(int status_style);
 bool ui_in_background(void);
+/* The orientations the app can draw, SB_ORIENT_PORTRAIT | SB_ORIENT_LANDSCAPE
+ * (docs/os/LANDSCAPE.md). Call once after ui_init and before drawing: it may
+ * reshape ui.surf at once. While the user has landscape on (the switcher
+ * tray's rotate button) the surface is SB_LAND_W x SB_LAND_H. A change while
+ * the app was away reshapes it on return: ui_next_event gives
+ * GZ_EV_APP_ACTIVATE, then GZ_EV_APP_RESIZE (x, y = the new size), the
+ * moment to lay out again. Apps that never call it stay portrait.
+ * An older SpringBoard refuses, which leaves the app portrait. */
+void ui_set_orientations(unsigned mask);
 /* After Home, ui_next_event returns GZ_EV_APP_DEACTIVATE, the moment to
  * save anything unsaved and release shared resources (an audio stream):
  * the next call suspends the app until GZ_EV_APP_ACTIVATE, and a suspended
@@ -212,6 +230,7 @@ int ui_tabbar_hit(int n, int x, int y);
 /* ---- keyboard ----------------------------------------------------------- */
 
 #define UI_KB_H     150
+#define UI_KB_LAND_H 120    /* the same keys, wider and shorter, in landscape */
 #define UI_INPUT_PREF "ui.input_method"
 enum { UI_INPUT_QWERTY, UI_INPUT_HANDWRITING };
 
